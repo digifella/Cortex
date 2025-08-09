@@ -1,0 +1,303 @@
+# Production Docker Compose for Cortex Suite
+version: '3.8'
+
+services:
+  # Nginx Reverse Proxy & Load Balancer
+  nginx:
+    image: nginx:alpine
+    container_name: cortex-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - cortex-ui
+      - cortex-api
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis for Caching & Session Management
+  redis:
+    image: redis:7-alpine
+    container_name: cortex-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # PostgreSQL for User Management & Metadata
+  postgres:
+    image: postgres:15-alpine
+    container_name: cortex-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cortex_suite
+      POSTGRES_USER: cortex_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cortex_user -d cortex_suite"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # External ChromaDB (Persistent Vector Store)
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: cortex-chromadb-prod
+    restart: unless-stopped
+    volumes:
+      - chroma_data_prod:/chroma/chroma
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=8000
+      - CHROMA_SERVER_CORS_ALLOW_ORIGINS=["*"]
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Cortex API (Multiple Instances for Load Balancing)
+  cortex-api-1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.prod.api
+    container_name: cortex-api-1
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes:
+      - cortex_data_prod:/data
+      - cortex_logs_prod:/app/logs
+    environment:
+      - AI_DATABASE_PATH=/data/ai_databases
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://cortex_user:${POSTGRES_PASSWORD}@postgres:5432/cortex_suite
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - WORKER_ID=1
+    env_file:
+      - .env.prod
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  cortex-api-2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.prod.api
+    container_name: cortex-api-2
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes:
+      - cortex_data_prod:/data
+      - cortex_logs_prod:/app/logs
+    environment:
+      - AI_DATABASE_PATH=/data/ai_databases
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://cortex_user:${POSTGRES_PASSWORD}@postgres:5432/cortex_suite
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - WORKER_ID=2
+    env_file:
+      - .env.prod
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Cortex UI (Multiple Instances)
+  cortex-ui-1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.prod.ui
+    container_name: cortex-ui-1
+    restart: unless-stopped
+    depends_on:
+      cortex-api-1:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - cortex_data_prod:/data
+      - cortex_logs_prod:/app/logs
+    environment:
+      - AI_DATABASE_PATH=/data/ai_databases
+      - API_BASE_URL=http://nginx/api
+      - REDIS_URL=redis://redis:6379/1
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    env_file:
+      - .env.prod
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  cortex-ui-2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.prod.ui
+    container_name: cortex-ui-2
+    restart: unless-stopped
+    depends_on:
+      cortex-api-2:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - cortex_data_prod:/data
+      - cortex_logs_prod:/app/logs
+    environment:
+      - AI_DATABASE_PATH=/data/ai_databases
+      - API_BASE_URL=http://nginx/api
+      - REDIS_URL=redis://redis:6379/1
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    env_file:
+      - .env.prod
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Backup & Monitoring Service
+  backup-monitor:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backup
+    container_name: cortex-backup-monitor
+    restart: unless-stopped
+    depends_on:
+      - cortex-api-1
+      - postgres
+    volumes:
+      - cortex_data_prod:/data
+      - backup_data_prod:/backups
+      - postgres_backups:/postgres_backups
+    environment:
+      - BACKUP_SCHEDULE=0 2 * * *
+      - BACKUP_RETENTION_DAYS=30
+      - DATABASE_URL=postgresql://cortex_user:${POSTGRES_PASSWORD}@postgres:5432/cortex_suite
+      - AI_DATABASE_PATH=/data/ai_databases
+      - PROMETHEUS_ENDPOINT=http://prometheus:9090
+    command: |
+      sh -c "
+        # Set up cron for automated backups
+        echo '0 2 * * * /app/backup_script.sh' | crontab -
+        # Start cron daemon
+        crond -f
+      "
+
+  # Prometheus Monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cortex-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+
+  # Grafana Dashboard
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cortex-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3000:3000"
+
+volumes:
+  nginx_logs:
+  redis_data:
+  postgres_data:
+  postgres_backups:
+  chroma_data_prod:
+  cortex_data_prod:
+  cortex_logs_prod:
+  backup_data_prod:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  default:
+    name: cortex-production-network

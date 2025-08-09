@@ -1,0 +1,319 @@
+# **`README.md`**
+
+**Version:** 94.0.0 (GraphRAG Integration Release)
+**Date:** 2025-07-23
+
+**Prelim:**
+Please be aware that the system operates in a WSL2 environment, so all paths should support linux and windows.
+
+### 1. System Status: GraphRAG Integration Complete
+
+This document marks a major milestone with the **Project Cortex Suite** now featuring integrated knowledge graph capabilities. The system can extract entities (people, organizations, projects) and their relationships during ingestion, enabling powerful relationship-based queries.
+
+*   **[NEW] GraphRAG Integration: Entity and Relationship Extraction**
+    *   **Status:** The ingestion pipeline now automatically extracts consultants, clients, projects, and their relationships using spaCy NER and pattern matching. This data is stored in a NetworkX graph alongside the vector embeddings.
+    *   **Capabilities:** The system can now answer queries like "What projects did consultant X work on?", "Who collaborated with person Y?", and "What types of work has client Z requested?"
+
+*   **[RESOLVED] Knowledge Search: Combined Metadata and Collection Scope Search**
+    *   **Status:** Fixed. The search logic constructs native ChromaDB `where` clauses directly.
+
+*   **[RESOLVED] AI Research: Sources Found During Foundational Search**
+    *   **Status:** Fixed. The foundational query functions work correctly.
+
+*   **[RESOLVED] AI Research: Correct UI Step Numbering**
+    *   **Status:** Fixed. UI uses centralized dictionary for step headers.
+
+*   **[RESOLVED] AI Research: Citations in Deep Research Report**
+    *   **Status:** Fixed. Enhanced prompts ensure proper citation formatting.
+
+### 2. MANDATORY: Database Migration (v70.0.0+)
+
+**To resolve critical stability issues and pathing errors, the database structure was updated. If you are upgrading from a version prior to 70.0.0, you MUST perform the following one-time action before first use:**
+
+1.  Navigate to your primary AI databases folder (e.g., `/mnt/f/ai_databases/`).
+2.  **Permanently delete the entire `knowledge_hub_db` directory.**
+3.  The system will automatically recreate this directory with the correct, stable format the next time you run the ingestion process.
+
+### 3. Usage & Licensing Disclaimer
+
+**This system is developed for private, non-commercial use only.** All components are integrated under the assumption of personal, fair-use for research and development on a local machine.
+
+### 4. Introduction
+
+This document provides a comprehensive overview of the **Project Cortex Suite**. The suite is an integrated workbench designed to build a high-quality, human-verified knowledge base with graph-based relationship tracking and use it to produce AI-assisted proposals.
+
+### 5. System Vision: The Knowledge Graph Workflow
+
+The Cortex Suite now incorporates a knowledge graph that captures relationships between people, organizations, projects, and documents. This enables relationship-based queries and enhanced context understanding.
+
+```mermaid
+graph TD
+    subgraph "Phase 1: Knowledge Base Curation with Graph"
+        Z[<b>AI Assisted Research</b><br/>Multi-agent 'Double Diamond' research] --> Y[External Research<br>Folder];
+        Y --> A;
+        A[<b>Knowledge Ingest UI</b><br/>3-stage ingestion with<br/>entity & relationship extraction] --> H((Main Knowledge Base<br/>ChromaDB + Graph));
+        A --> G((Knowledge Graph<br/>NetworkX));
+        I[<b>Knowledge Search UI</b><br/>Vector + Graph queries] -->|Searches & Prunes| H;
+        I -->|Leverages relationships| G;
+        I -->|Curates search results into| J[<b>Working Collections</b>];
+        J --> K[<b>Collection Management UI</b>];
+    end
+
+    subgraph "Phase 2: Proposal Lifecycle Management"
+        subgraph "2a: Template Preparation"
+        T_IN[Raw Document<br>e.g., Client RFP .docx] --> T[<b>Proposal Step 1 Prep UI</b>]
+        T --> T_OUT[<b>Tagged Template .docx</b>]
+        end
+
+        subgraph "2b: Content Generation"
+        L[<b>Proposal Step 2 Make UI</b>] -->|Creates/Loads| M[<b>Proposal State</b>];
+        T_OUT --> N[<b>Proposal Co-pilot UI</b><br/>Uses knowledge + graph context]
+        M --> N
+        N -->|Selects & Uses| J;
+        N -->|Generates from| H;
+        N -->|Context from| G;
+        N --> O[✅ Final Proposal Document];
+        end
+    end
+
+### 6. Installation & Operation
+
+**1. System-Level Dependencies (for Mind Maps):**
+The AI Research Assistant requires the Graphviz system command `dot` to be installed and accessible in the system's PATH.
+-   **Debian/Ubuntu:** `sudo apt-get install graphviz`
+-   **MacOS (Homebrew):** `brew install graphviz`
+-   **Windows:** Download from the official site and add the `bin` directory to your system's `PATH`.
+
+**2. Python Environment (Python 3.11 Required):**
+This system is stabilized on Python 3.11. If you are using a different version, you must set up a 3.11 environment.
+```bash
+# For Ubuntu users, if 3.11 is not available:
+sudo add-apt-repository ppa:deadsnakes/ppa
+sudo apt update
+sudo apt install python3.11 python3.11-venv
+
+# Create and activate the virtual environment
+python3.11 -m venv venv
+source venv/bin/activate
+```
+
+**3. Install Python Dependencies:**
+```bash
+pip install -r requirements.txt```
+# Download spaCy language model for entity extraction
+python -m spacy download en_core_web_sm
+
+**4. Set Up Environment Variables:**
+Create a `.env` file in the project root with your API keys.```# .env file
+# For the AI Research module, choose 'openai', 'ollama', or 'gemini'.
+# Other modules use the settings defined in their respective files.
+# .env file
+LLM_PROVIDER="gemini"  # or "ollama" or "openai"
+OLLAMA_MODEL="mistral:7b-instruct-v0.3-q4_K_M"
+OPENAI_API_KEY="your_openai_api_key_here"
+GEMINI_API_KEY="your_gemini_api_key_here"
+YOUTUBE_API_KEY="your_google_api_key_for_youtube_search"
+GRAPHVIZ_DOT_EXECUTABLE="/usr/bin/dot"
+
+# (Optional) Explicit path to Graphviz 'dot' executable to help resolve mind map issues.
+# Find this path by running `which dot` in your Ubuntu/WSL terminal.
+GRAPHVIZ_DOT_EXECUTABLE="/usr/bin/dot"
+```
+
+**5. Run the Streamlit Application:**```bash
+streamlit run Cortex_Suite.py```
+
+### 7. Version History & Future Roadmap
+
+Entity Extraction
+During ingestion, the system automatically identifies:
+
+People: Consultants, authors, team members
+Organizations: Clients, partners, vendors
+Projects: From document content and thematic tags
+Documents: All ingested files with metadata
+
+Relationship Mapping
+The system tracks relationships such as:
+
+authored: Person → Document
+client_of: Organization → Document
+collaborated_with: Person ↔ Person
+mentioned_in: Entity → Document
+documented_in: Project → Document
+
+Graph Queries (In Development)
+
+Find all projects a consultant worked on
+Identify collaborators on documents
+Track work done for specific clients
+Analyze document type preferences by client
+
+8. Version History & Future Roadmap
+Completed Sprints
+
+Sprint 1-20.5: Core system development through search bugfix. ✅
+Sprint 21: Multi-Modal Knowledge Ingestion (Images) - VLM integration for image description. ✅
+Sprint 22: GraphRAG Foundation - Entity extraction and knowledge graph building during ingestion. ✅ Done
+
+In Progress
+
+Sprint 23: Graph-Enhanced Retrieval - Implement hybrid vector + graph search queries. 📝 Next Up
+
+Planned Sprints
+
+Sprint 24: Graph Visualization - Interactive graph exploration UI
+Sprint 25: Advanced Graph Queries - Complex relationship traversal
+Sprint 26: Agentic Tool Use - [GENERATE_TABLE_FROM_KB] with graph context
+Sprint 27: Full Co-pilot Upgrade with graph-aware generation
+
+9. Troubleshooting
+spaCy Model Download Issues
+If you encounter errors with spaCy, ensure the model is downloaded:
+bashpython -m spacy download en_core_web_sm
+MuPDF Color Profile Warnings
+You may see warnings like MuPDF error: format error: cmsOpenProfileFromMem failed. These are harmless and relate to PDF color profiles. Text extraction continues normally.
+Inspecting the Knowledge Graph
+Use the cortex_inspector tool to examine graph contents:
+bashpython scripts/cortex_inspector.py --db-path /mnt/f/ai_databases --stats
+
+10. Logs and Data Locations
+
+Ingestion Log: logs/ingestion.log - Detailed processing information
+Ingested Files Log: <db_path>/knowledge_hub_db/ingested_files.log - List of processed files
+Knowledge Graph: <db_path>/knowledge_cortex.gpickle - NetworkX graph with entities and relationships
+Vector Store: <db_path>/knowledge_hub_db/ - ChromaDB embeddings
+
+11. Core Components Update
+
+cortex_engine/entity_extractor.py: NEW - Extracts people, organizations, and projects using spaCy NER and pattern matching
+cortex_engine/graph_manager.py: ENHANCED - Now EnhancedGraphManager with relationship queries
+cortex_engine/ingest_cortex.py: v13.0.0 - Integrated entity extraction during analysis phase
+cortex_engine/graph_query.py: NEW (Coming in Sprint 23) - Hybrid vector + graph search
+
+12. Dependencies Update
+Key additions to requirements.txt:
+
+spacy>=3.5.0,<3.8.0 - For entity extraction
+numpy<2.0.0,>=1.22.5 - Pinned for compatibility
+
+The system now builds a comprehensive knowledge graph during ingestion, laying the foundation for powerful relationship-based queries and enhanced context understanding in proposal generation.
+
+#### **Handling `:Zone.Identifier` Files in WSL**
+
+If you see files ending with `:Zone.Identifier`, these are harmless metadata artifacts from Windows. You can safely remove all of them from your project by running the following command from your `cortex_suite` root directory in your WSL terminal:
+
+```bash
+find . -type f -name "*:Zone.Identifier" -delete
+```
+
+This command finds all files (`-type f`) whose names (`-name`) end with `":Zone.Identifier"` and deletes them.
+
+### 8.1. CRITICAL: Windows Batch File Requirements (Docker Distribution)
+
+**⚠️ IMPORTANT:** The `docker/run-cortex.bat` file has specific encoding and formatting requirements that MUST be maintained to prevent distribution failures. These issues have been encountered multiple times and must not be repeated.
+
+#### **Mandatory Requirements:**
+
+1. **File Encoding: ANSI (Windows-1252) ONLY**
+   - ❌ **NOT** UTF-8, UTF-16, or any Unicode encoding
+   - ❌ **NOT** "Unicode text, UTF-8 text" (as shown by `file` command)
+   - ✅ **MUST** be pure ANSI/Windows-1252 encoding
+   - **Validation**: `file docker/run-cortex.bat` should show "ASCII text" or "ISO-8859 text"
+
+2. **Line Endings: CRLF (Windows) ONLY**
+   - ❌ **NOT** LF (Unix/Linux line endings `\n`)
+   - ✅ **MUST** be CRLF (Windows line endings `\r\n`)
+   - **Validation**: `hexdump -C docker/run-cortex.bat | head -5` should show `0d 0a` (CRLF) not just `0a` (LF)
+
+3. **Character Set: Standard ASCII Characters ONLY**
+   - ❌ **NO** Unicode emoji (🚀, ❌, ✅, etc.)
+   - ❌ **NO** Special Unicode characters
+   - ✅ **ONLY** standard ASCII characters (codes 32-126)
+   - **Replace**: Unicode symbols with ASCII equivalents:
+     - `🚀` → `>>>`
+     - `❌` → `ERROR:`
+     - `✅` → `OK:`
+     - `⏳` → `WAIT:`
+     - `📦` → `PACK:`
+
+4. **Logic Complexity: Keep Simple**
+   - ❌ **AVOID** complex nested conditionals
+   - ❌ **AVOID** advanced batch scripting features
+   - ✅ **USE** simple `if %errorlevel% neq 0` patterns
+   - ✅ **USE** basic `echo`, `pause`, `timeout` commands
+   - ✅ **TEST** on actual Windows systems, not WSL
+
+#### **Previous Issues Encountered:**
+- **UTF-8 Encoding**: Caused batch file execution failures on some Windows systems
+- **LF Line Endings**: Prevented proper command parsing on Windows
+- **Unicode Characters**: Displayed as `?` or caused parsing errors in Windows Command Prompt
+- **Complex Logic**: Created unpredictable behavior across different Windows versions
+
+#### **Validation Commands:**
+```bash
+# Check encoding (should show ASCII text, not UTF-8)
+file docker/run-cortex.bat
+
+# Check line endings (should show 0d 0a patterns)
+hexdump -C docker/run-cortex.bat | head -10
+
+# Check for non-ASCII characters
+grep -P '[^\x20-\x7E]' docker/run-cortex.bat || echo "Clean ASCII"
+```
+
+#### **How to Fix When Issues Occur:**
+1. **Convert to ANSI**: Open in Notepad++, Encoding → Convert to ANSI
+2. **Fix Line Endings**: Notepad++, Edit → EOL Conversion → Windows (CR LF)
+3. **Replace Unicode**: Find/replace all Unicode symbols with ASCII equivalents
+4. **Test on Windows**: Always test the actual .bat file on a real Windows system
+
+**📋 Remember**: These requirements apply to ALL Windows batch files in the distribution, not just `run-cortex.bat`.
+
+### 9. Final Code Manifest
+
+-   `Cortex_Suite.py`: Main entrypoint for the unified Streamlit application.
+-   `requirements.txt`: Frozen Python dependencies for a stable Python 3.11 environment.
+-   `.env`: For storing API keys and optional executable paths.
+-   `.gitignore`: Specifies which files and directories to ignore for version control.
+-   `boilerplate.json`: Stores reusable boilerplate text snippets.
+-   `cortex_config.json`: File to store last-used paths and other persistent settings.
+-   `working_collections.json`: Stores user-curated document collections.
+-   `staging_ingestion.json`: A temporary file holding AI-suggested metadata for user review.
+
+-   **`cortex_engine/`**: The core backend logic of the application.
+    -   `__init__.py`: Makes the engine a Python package.
+    -   `boilerplate_manager.py`: Manages boilerplate text snippets.
+    -   `collection_manager.py`: Handles CRUD operations for Working Collections.
+    -   `config.py`: Central configuration for paths, models, and default settings.
+    -   `config_manager.py`: Manages persistent user settings file (`cortex_config.json`).
+    -   `graph_extraction_worker.py`: Subprocess worker for knowledge graph extraction.
+    -   `graph_manager.py`: Manages the knowledge graph file.
+    -   `ingest_cortex.py`: Core ingestion script with validation and progress reporting.
+    -   `instruction_parser.py`: Parses `.docx` files for Cortex instructions.
+    -   `proposal_manager.py`: Manages the lifecycle of proposals.
+    -   `query_cortex.py`: Provides models and prompts for querying the knowledge base.
+    -   `session_state.py`: Manages Streamlit session state.
+    -   `synthesise.py`: Backend for the AI Assisted Research agent.
+    -   `task_engine.py`: Backend for AI task execution in the Proposal Co-pilot.
+    -   `utils.py`: Shared, low-dependency helper functions.
+
+-   **`pages/`**: The individual Streamlit UI pages.
+    -   `1_AI_Assisted_Research.py`: UI for the multi-agent research engine.
+    -   `2_Knowledge_Ingest.py`: UI for the three-stage document ingestion process.
+    -   `3_Knowledge_Search.py`: UI for searching the knowledge base. Includes a robust fix for complex filter combinations.
+    -   `4_Collection_Management.py`: UI for managing Working Collections.
+    -   `5_Proposal_Step_1_Prep.py`: UI for creating proposal templates.
+    -   `6_Proposal_Step_2_Make.py`: UI for creating and loading proposals.
+    -   `Proposal_Copilot.py`: The core UI for drafting proposals.
+
+-   **`scripts/`**: Standalone utility and diagnostic scripts.
+    -   `__init__.py`: Makes scripts a Python package.
+    -   `cortex_inspector.py`: A command-line tool to inspect the knowledge base.
+
+-   **`proposals/`**: Default directory to store all saved proposal data.
+-   **`external_research/`**: Default location for synthesized research notes from the AI Research agent.
+-   **`template_maps/`**: Default directory to store saved progress from the Template Editor.
+-   **`logs/`**: Directory containing log files like `ingestion.log` and `query.log`.
+    -   `ingested_files.log`: Note: This specific log is stored inside the `knowledge_hub_db` directory, not in the main `logs` folder.
+```

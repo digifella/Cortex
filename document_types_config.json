@@ -1,0 +1,89 @@
+{
+    "categories": {
+        "Project Documents": {
+            "types": [
+                "Project Plan",
+                "Technical Documentation",
+                "Final Report",
+                "Draft Report"
+            ],
+            "description": "Project-related deliverables and documentation"
+        },
+        "Business Documents": {
+            "types": [
+                "Proposal/Quote",
+                "Contract/SOW",
+                "Financial Report"
+            ],
+            "description": "Business and financial documents"
+        },
+        "Research & Analysis": {
+            "types": [
+                "Research Paper",
+                "Analysis Report"
+            ],
+            "description": "Research outputs and analytical documents"
+        },
+        "Communications": {
+            "types": [
+                "Email Correspondence",
+                "Meeting Minutes",
+                "Presentation"
+            ],
+            "description": "Communication and meeting-related documents"
+        },
+        "Personal Records": {
+            "types": [
+                "CV",
+                "Bio",
+                "Personal Statement"
+            ],
+            "description": "Personal and professional profiles"
+        },
+        "Meetings": {
+            "types": [
+                "Agenda",
+                "Minutes",
+                "Action Items"
+            ],
+            "description": "Meeting-related documents"
+        },
+        "Other": {
+            "types": [
+                "Other",
+                "Template",
+                "Reference Material"
+            ],
+            "description": "Miscellaneous document types"
+        }
+    },
+    "type_mappings": {
+        "bio": "CV",
+        "biography": "CV",
+        "curriculum vitae": "CV",
+        "resume": "CV",
+        "agenda": "Meeting Minutes",
+        "proposal": "Proposal/Quote",
+        "quote": "Proposal/Quote",
+        "quotation": "Proposal/Quote",
+        "contract": "Contract/SOW",
+        "statement of work": "Contract/SOW",
+        "sow": "Contract/SOW",
+        "plan": "Project Plan",
+        "technical": "Technical Documentation",
+        "documentation": "Technical Documentation",
+        "final report": "Final Report",
+        "draft report": "Draft Report",
+        "case study": "Case Study / Trophy",
+        "trophy": "Case Study / Trophy",
+        "presentation": "Presentation",
+        "email": "Email Correspondence",
+        "correspondence": "Email Correspondence",
+        "financial": "Financial Report",
+        "research": "Research Paper",
+        "minutes": "Meeting Minutes",
+        "action items": "Meeting Minutes"
+    },
+    "created_at": "2025-07-26T13:55:18.733074",
+    "modified_at": "2025-07-26T15:43:59.379821"
+}

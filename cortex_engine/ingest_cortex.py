@@ -1,0 +1,633 @@
+# ## File: ingest_cortex.py
+# Version: 13.0.0 (GraphRAG Integration by Claude Opus)
+# Date: 2025-07-23
+# Purpose: Core ingestion script for Project Cortex with integrated knowledge graph extraction.
+#          - FEATURE (v13.0.0): Integrated entity extraction and knowledge graph building
+#            during the ingestion process. The system now extracts people, organizations,
+#            projects, and their relationships while maintaining backward compatibility.
+
+import os
+import sys
+os.environ['ANONYMIZED_TELEMETRY'] = 'False'
+
+import argparse
+import json
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import List, Dict, Optional, Literal, Tuple
+import re
+
+from pydantic import BaseModel, Field, ValidationError
+from llama_index.core import Document
+from llama_index.core.settings import Settings
+from llama_index.llms.ollama import Ollama
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.vector_stores.chroma import ChromaVectorStore
+from llama_index.core import VectorStoreIndex, StorageContext
+import chromadb
+from chromadb.config import Settings as ChromaSettings
+import hashlib
+
+from llama_index.readers.file import (
+    DocxReader,
+    PptxReader,
+    PyMuPDFReader,
+    FlatReader,
+    UnstructuredReader
+)
+
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+from cortex_engine.config import INGESTION_LOG_PATH, STAGING_INGESTION_FILE, INGESTED_FILES_LOG, COLLECTION_NAME, EMBED_MODEL
+from cortex_engine.utils import get_file_hash
+from cortex_engine.query_cortex import describe_image_with_vlm_for_ingestion
+from cortex_engine.entity_extractor import EntityExtractor, ExtractedEntity, ExtractedRelationship
+from cortex_engine.graph_manager import EnhancedGraphManager
+from cortex_engine.batch_manager import BatchState
+
+LOG_FILE = INGESTION_LOG_PATH
+STAGING_FILE = STAGING_INGESTION_FILE
+COLLECTIONS_FILE = str(project_root / "working_collections.json")
+
+# Define supported image extensions
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+
+os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+
+def initialize_script():
+    """Sets up robust logging and configures LlamaIndex models."""
+    log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    root_logger = logging.getLogger()
+
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
+
+    root_logger.setLevel(logging.INFO)
+
+    file_handler = logging.FileHandler(LOG_FILE, mode='a', encoding='utf-8')
+    file_handler.setFormatter(log_formatter)
+    root_logger.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(log_formatter)
+    root_logger.addHandler(console_handler)
+
+    logging.info("--- Script Initialized: Configuring models... ---")
+    Settings.llm = Ollama(model="mistral", request_timeout=120.0)
+    Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+    logging.info(f"Models configured (Embed: {EMBED_MODEL}).")
+
+class RichMetadata(BaseModel):
+    document_type: Literal[
+        "Project Plan", "Technical Documentation", "Proposal/Quote", "Case Study / Trophy",
+        "Final Report", "Draft Report", "Presentation", "Contract/SOW",
+        "Meeting Minutes", "Financial Report", "Research Paper", "Email Correspondence", "Image/Diagram", "Other"
+    ] = Field(..., description="The primary category of the document.")
+    proposal_outcome: Literal["Won", "Lost", "Pending", "N/A"] = Field(..., description="The outcome of the proposal, if applicable.")
+    summary: str = Field(..., description="A concise, 1-3 sentence summary of the document's content and purpose.")
+    thematic_tags: List[str] = Field(default_factory=list, description="A list of 3-5 key themes, topics, or technologies discussed.")
+
+class DocumentMetadata(BaseModel):
+    doc_id: str
+    doc_posix_path: str
+    file_name: str
+    last_modified_date: str
+    rich_metadata: Optional[RichMetadata] = None
+    exclude_from_final: bool = False
+    extracted_entities: List[Dict] = Field(default_factory=list)
+    extracted_relationships: List[Dict] = Field(default_factory=list)
+
+def load_processed_files_log(log_path: str) -> Dict[str, str]:
+    if not os.path.exists(log_path): return {}
+    with open(log_path, 'r') as f:
+        try:
+            log_data = json.load(f)
+            return {k: (v[0] if isinstance(v, list) else v) for k, v in log_data.items()}
+        except json.JSONDecodeError: return {}
+
+def write_to_processed_log(log_path: str, file_path: str, doc_id: str):
+    """Write a processed file entry to the log."""
+    processed_files = {}
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, 'r') as f:
+                processed_files = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            processed_files = {}
+    
+    processed_files[file_path] = doc_id
+    
+    try:
+        with open(log_path, 'w') as f:
+            json.dump(processed_files, f, indent=2)
+    except IOError as e:
+        logging.error(f"Failed to write to processed log: {e}")
+
+def manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
+    documents = []
+    reader_map = {".pdf": PyMuPDFReader(), ".docx": DocxReader(), ".pptx": PptxReader(), 
+                  ".doc": UnstructuredReader(), ".ppt": UnstructuredReader()}
+    default_reader = FlatReader()
+    
+    # Suppress PyMuPDF warnings
+    import fitz
+    fitz.TOOLS.mupdf_display_errors(False)
+    
+    for file_path in file_paths:
+        try:
+            path = Path(file_path)
+            extension = path.suffix.lower()
+            
+            # Handle image files using the VLM (if enabled)
+            if extension in IMAGE_EXTENSIONS:
+                # Check if image processing should be skipped
+                skip_images = getattr(args, 'skip_image_processing', False) if hasattr(args, 'skip_image_processing') else False
+                
+                if skip_images:
+                    logging.info(f"Skipping image processing for '{file_path}' (skip_image_processing enabled)")
+                    # Create a basic document with filename info only
+                    doc = Document(text=f"Image file: {path.name} (processing skipped)")
+                    doc.metadata['file_path'] = str(path.as_posix())
+                    doc.metadata['file_name'] = path.name
+                    doc.metadata['source_type'] = 'image_skipped'
+                    documents.append(doc)
+                    continue
+                else:
+                    logging.info(f"Loading '{file_path}' with VLM Image Processor")
+                    try:
+                        description = describe_image_with_vlm_for_ingestion(file_path)
+                        doc = Document(text=description)
+                        doc.metadata['file_path'] = str(path.as_posix())
+                        doc.metadata['file_name'] = path.name
+                        doc.metadata['source_type'] = 'image'
+                        documents.append(doc)
+                        continue
+                    except Exception as e:
+                        logging.error(f"VLM processing failed for '{file_path}': {e}")
+                        # Fall back to skipping with error note
+                        doc = Document(text=f"Image file: {path.name} (VLM processing failed: {str(e)})")
+                        doc.metadata['file_path'] = str(path.as_posix())
+                        doc.metadata['file_name'] = path.name
+                        doc.metadata['source_type'] = 'image_error'
+                        documents.append(doc)
+                        continue
+
+            # Original text-based document handling
+            reader = reader_map.get(extension, default_reader)
+            logging.info(f"Loading '{file_path}' with reader: {reader.__class__.__name__}")
+            
+            # For PDFs, add extra error handling
+            if isinstance(reader, PyMuPDFReader):
+                try:
+                    docs_from_file = reader.load_data(file_path=path)
+                except Exception as pdf_error:
+                    # If PDF fails completely, log it but continue
+                    if "cmsOpenProfileFromMem" not in str(pdf_error):
+                        logging.warning(f"PDF processing warning for {path.name}: {pdf_error}")
+                    docs_from_file = reader.load_data(file_path=path)
+            elif isinstance(reader, UnstructuredReader):
+                # UnstructuredReader needs file_path parameter like PyMuPDFReader
+                try:
+                    docs_from_file = reader.load_data(file_path=path)
+                except Exception as unstructured_error:
+                    logging.warning(f"UnstructuredReader processing warning for {path.name}: {unstructured_error}")
+                    # Create error document if UnstructuredReader fails
+                    docs_from_file = [Document(
+                        text=f"Error processing old Office document: {path.name}. Reason: {unstructured_error}",
+                        metadata={'file_path': str(path.as_posix()), 'file_name': path.name, 'source_type': 'document_error'}
+                    )]
+            else:
+                try:
+                    docs_from_file = reader.load_data(file=path)
+                except OSError as wmf_error:
+                    if "cannot find loader for this WMF file" in str(wmf_error):
+                        logging.warning(f"WMF image error in {path.name}, attempting text-only extraction: {wmf_error}")
+                        # For PowerPoint files with WMF image issues, try alternative extraction
+                        if isinstance(reader, PptxReader):
+                            try:
+                                # Try to extract just text content without images
+                                from pptx import Presentation
+                                prs = Presentation(path)
+                                text_content = []
+                                for slide in prs.slides:
+                                    for shape in slide.shapes:
+                                        if hasattr(shape, "text") and shape.text.strip():
+                                            text_content.append(shape.text.strip())
+                                
+                                if text_content:
+                                    combined_text = "\n\n".join(text_content)
+                                    docs_from_file = [Document(
+                                        text=f"PowerPoint content (text-only extraction due to WMF image issues):\n\n{combined_text}",
+                                        metadata={'file_path': str(path.as_posix()), 'file_name': path.name, 'source_type': 'document_partial'}
+                                    )]
+                                else:
+                                    docs_from_file = [Document(
+                                        text=f"PowerPoint file processed but no extractable text found: {path.name}",
+                                        metadata={'file_path': str(path.as_posix()), 'file_name': path.name, 'source_type': 'document_partial'}
+                                    )]
+                            except Exception as pptx_error:
+                                logging.error(f"Alternative PowerPoint extraction also failed for {path.name}: {pptx_error}")
+                                docs_from_file = [Document(
+                                    text=f"PowerPoint file could not be processed: {path.name}. WMF image and text extraction both failed.",
+                                    metadata={'file_path': str(path.as_posix()), 'file_name': path.name, 'source_type': 'document_error'}
+                                )]
+                        else:
+                            # For non-PowerPoint files with WMF issues, create error document
+                            docs_from_file = [Document(
+                                text=f"Document processing failed due to WMF image issues: {path.name}",
+                                metadata={'file_path': str(path.as_posix()), 'file_name': path.name, 'source_type': 'document_error'}
+                            )]
+                    else:
+                        raise wmf_error
+                
+            for doc in docs_from_file:
+                doc.metadata['file_path'] = str(path.as_posix())
+                doc.metadata['file_name'] = path.name
+                doc.metadata['source_type'] = 'document'
+            documents.extend(docs_from_file)
+            
+        except Exception as e:
+            logging.error(f"Failed to load file {file_path}: {e}", exc_info=True)
+            documents.append(Document(
+                text=f"Error reading this document. Could not load content from {Path(file_path).name}. Reason: {e}",
+                metadata={'file_path': str(Path(file_path).as_posix()), 'file_name': Path(file_path).name}
+            ))
+    return documents
+
+def extract_entities_and_relationships(doc_text: str, metadata: Dict, entity_extractor: EntityExtractor) -> Tuple[List[Dict], List[Dict]]:
+    """Extract entities and relationships from document and convert to serializable format."""
+    try:
+        entities, relationships = entity_extractor.extract_entities_and_relationships(doc_text, metadata)
+        
+        # Convert to dictionaries for JSON serialization
+        entities_dict = [entity.model_dump() for entity in entities]
+        relationships_dict = [rel.model_dump() for rel in relationships]
+        
+        return entities_dict, relationships_dict
+    except Exception as e:
+        logging.error(f"Failed to extract entities: {e}")
+        return [], []
+
+def analyze_documents(include_paths: List[str], fresh_start: bool, args=None):
+    logging.info(f"--- Starting Stage 2: Document Analysis with Graph Extraction (Cortex v13.0.0) ---")
+    
+    # Initialize batch manager if db_path is available
+    batch_manager = None
+    if hasattr(args, 'db_path') and args.db_path:
+        batch_manager = BatchState(args.db_path)
+        
+        # Handle resume logic
+        if not fresh_start:
+            batch_id, files_to_process, completed_count = batch_manager.resume_or_create_batch(include_paths)
+            if not files_to_process:
+                logging.info("No files to process - all files already completed")
+                return
+            
+            logging.info(f"Batch {batch_id}: Processing {len(files_to_process)} files ({completed_count} already completed)")
+            include_paths = files_to_process
+        else:
+            # Fresh start - clear any existing batch
+            batch_manager.clear_batch()
+            batch_manager.create_batch(include_paths)
+    
+    if fresh_start and os.path.exists(STAGING_FILE): os.remove(STAGING_FILE)
+    
+    # Initialize entity extractor
+    entity_extractor = EntityExtractor()
+    
+    # Check memory and implement chunked processing for large batches
+    if len(include_paths) > 1000:
+        logging.warning(f"Large batch detected ({len(include_paths)} files). Consider processing in smaller chunks to avoid memory issues.")
+    
+    docs = manual_load_documents(include_paths, args)
+    logging.info(f"Loaded {len(docs)} document objects from {len(include_paths)} files.")
+    unique_docs = list({doc.metadata['file_path']: doc for doc in docs}.values())
+    logging.info(f"--- Found {len(unique_docs)} unique files to process. ---")
+    
+    # Memory check
+    try:
+        import psutil
+        memory_percent = psutil.virtual_memory().percent
+        if memory_percent > 80:
+            logging.warning(f"High memory usage detected: {memory_percent}%. Consider reducing batch size.")
+    except ImportError:
+        pass  # psutil not available
+
+    staged_docs = []
+    schema_json_str = json.dumps(RichMetadata.model_json_schema(), indent=2)
+    prompt_lines = [
+        "Analyze the document content and its file path to return a single, valid JSON object that strictly conforms to this Pydantic schema:", "```json", "{schema}", "```", "---",
+        "**SPECIAL INSTRUCTIONS:**",
+        '- If the source is an image (`source_type` is "image"), you **MUST** set `document_type` to "Image/Diagram".',
+        '- If the file is a `.pptx`, you **MUST** set `document_type` to "Presentation".',
+        '- If the `file_path` contains "trophy" or the filename mentions "Case Study", you **MUST** set `document_type` to "Case Study / Trophy".',
+        '- If the filename contains the word "Final", you should strongly prefer the "Final Report" type.', '- If the filename contains the word "Draft", you should strongly prefer the "Draft Report" type.',
+        '- If no other category seems appropriate, you **MUST** use "Other" as a fallback.', "---", "File Path: {file_path}", "Source Type: {source_type}", "Document Content (first 8000 characters):",
+        "-----------------", "{text}", "-----------------", "IMPORTANT: Your response must be ONLY the JSON object itself, with no extra text, explanations, or wrapper keys."
+    ]
+    metadata_prompt_template = "\n".join(prompt_lines)
+
+    for i, doc in enumerate(unique_docs):
+        # Check for pause request
+        if batch_manager and batch_manager.is_paused():
+            logging.info("Batch processing paused by user request")
+            break
+            
+        rich_metadata = None
+        file_path_str, file_name = doc.metadata.get('file_path', ''), doc.metadata.get('file_name', 'Unknown File')
+        source_type = doc.metadata.get('source_type', 'document')
+        logging.info(f"--- ({i+1}/{len(unique_docs)}) Analyzing: {file_name} ({source_type.upper()}) ---")
+        
+        # Print machine-readable progress for the UI
+        print(f"CORTEX_PROGRESS::{i+1}/{len(unique_docs)}::{file_name}", flush=True)
+        
+        try:
+            if not doc.text.strip(): raise ValueError("Document is empty or could not be read.")
+            prompt = metadata_prompt_template.format(schema=schema_json_str, text=doc.get_content()[:8000], file_path=file_path_str, source_type=source_type)
+            logging.info("Sending prompt to LLM for metadata extraction...")
+            response_str = str(Settings.llm.complete(prompt))
+            logging.info("Received raw response from LLM. Cleaning and parsing JSON...")
+            json_match = re.search(r'\{.*\}', response_str, re.DOTALL)
+            if not json_match:
+                error_snippet = response_str.strip().replace('\n', ' ')[:200]
+                logging.error(f"LLM did not return valid JSON for {file_name}. Response: {error_snippet}...")
+                raise ValueError("LLM did not return a valid JSON object.")
+
+            clean_json_str = json_match.group(0)
+            metadata_json = json.loads(clean_json_str)
+
+            # Normalize common validation fields before Pydantic
+            if 'proposal_outcome' in metadata_json and isinstance(metadata_json['proposal_outcome'], str):
+                metadata_json['proposal_outcome'] = metadata_json['proposal_outcome'].title()
+
+            try: 
+                rich_metadata = RichMetadata.model_validate(metadata_json)
+            except ValidationError as e:
+                logging.warning(f"Initial validation failed for {file_name}. Retrying with nested key check...")
+                if isinstance(metadata_json, dict) and len(metadata_json) == 1:
+                    nested_key = list(metadata_json.keys())[0]
+                    if isinstance(metadata_json[nested_key], dict): 
+                        rich_metadata = RichMetadata.model_validate(metadata_json[nested_key])
+                    else: 
+                        raise e
+                else: 
+                    raise e
+            logging.info(f"Successfully parsed and validated metadata for {file_name}.")
+            
+            # Extract entities and relationships
+            logging.info(f"Extracting entities and relationships from {file_name}...")
+            entities_dict, relationships_dict = extract_entities_and_relationships(
+                doc.get_content()[:8000],
+                {
+                    'document_type': rich_metadata.document_type,
+                    'file_name': file_name,
+                    'summary': rich_metadata.summary,
+                    'thematic_tags': rich_metadata.thematic_tags
+                },
+                entity_extractor
+            )
+            logging.info(f"Extracted {len(entities_dict)} entities and {len(relationships_dict)} relationships.")
+            
+        except Exception as e:
+            logging.error(f"CRITICAL ERROR analyzing {file_name}: {e}", exc_info=True)
+            # Record error in batch manager
+            if batch_manager:
+                batch_manager.record_error(file_path_str, str(e))
+            
+            default_doc_type = "Image/Diagram" if source_type == 'image' else 'Other'
+            rich_metadata = RichMetadata(
+                document_type=default_doc_type, 
+                proposal_outcome="N/A", 
+                summary=f"ERROR: Could not analyze document. Reason: {e}", 
+                thematic_tags=["error", "analysis-failed"]
+            )
+            entities_dict = []
+            relationships_dict = []
+
+        doc_meta = DocumentMetadata(
+            doc_id=get_file_hash(file_path_str), 
+            doc_posix_path=Path(file_path_str).as_posix(),
+            file_name=doc.metadata.get('file_name'), 
+            last_modified_date=str(datetime.fromtimestamp(os.path.getmtime(file_path_str))),
+            rich_metadata=rich_metadata,
+            extracted_entities=entities_dict,
+            extracted_relationships=relationships_dict
+        )
+        staged_docs.append(doc_meta.model_dump())
+        
+        # Update batch progress for successfully processed file
+        if batch_manager:
+            batch_manager.update_progress(file_path_str)
+
+    with open(STAGING_FILE, 'w') as f: 
+        json.dump(staged_docs, f, indent=2)
+    logging.info(f"--- Analysis complete. {len(staged_docs)} documents written to staging file. ---")
+
+def finalize_ingestion(db_path: str, args=None):
+    logging.info(f"--- Starting Stage 3: Finalize from Staging with Graph Building (Cortex v13.0.0) ---")
+    if not os.path.exists(STAGING_FILE): 
+        logging.error("Staging file not found.")
+        return
+    
+    chroma_db_path = os.path.join(db_path, "knowledge_hub_db")
+    os.makedirs(chroma_db_path, exist_ok=True)
+    
+    # Initialize graph manager
+    graph_file_path = os.path.join(db_path, "knowledge_cortex.gpickle")
+    graph_manager = EnhancedGraphManager(graph_file_path)
+    
+    with open(STAGING_FILE, 'r') as f: 
+        docs_to_process = [DocumentMetadata(**data) for data in json.load(f)]
+
+    docs_to_index_paths, metadata_map, doc_ids_to_add_to_default = [], {}, []
+    processed_log_path = os.path.join(chroma_db_path, INGESTED_FILES_LOG)
+    
+    for doc_meta in docs_to_process:
+        if doc_meta.exclude_from_final:
+            logging.info(f"User excluded {doc_meta.file_name}. Skipping.")
+            write_to_processed_log(processed_log_path, doc_meta.doc_posix_path, doc_meta.doc_id)
+            continue
+        if doc_meta.rich_metadata and "ERROR:" in doc_meta.rich_metadata.summary:
+            logging.warning(f"Skipping finalization for {doc_meta.file_name} due to prior analysis error.")
+            continue
+        
+        docs_to_index_paths.append(doc_meta.doc_posix_path)
+        metadata_map[doc_meta.doc_posix_path] = doc_meta
+        doc_ids_to_add_to_default.append(doc_meta.doc_id)
+        
+        # Add document to graph
+        logging.info(f"Adding {doc_meta.file_name} to knowledge graph...")
+        graph_manager.add_entity(
+            doc_meta.doc_id,
+            'Document',
+            file_name=doc_meta.file_name,
+            document_type=doc_meta.rich_metadata.document_type if doc_meta.rich_metadata else 'Unknown',
+            summary=doc_meta.rich_metadata.summary if doc_meta.rich_metadata else '',
+            last_modified=doc_meta.last_modified_date,
+            posix_path=doc_meta.doc_posix_path
+        )
+        
+        # Add entities and relationships to graph
+        entity_map = {}  # Track entity names to node IDs
+        
+        for entity_dict in doc_meta.extracted_entities:
+            entity_id = f"{entity_dict['entity_type']}:{entity_dict['name']}"
+            entity_map[entity_dict['name']] = entity_id
+            
+            # Add entity if it doesn't exist
+            if entity_id not in graph_manager.graph:
+                graph_manager.add_entity(
+                    entity_id,
+                    entity_dict['entity_type'],
+                    name=entity_dict['name'],
+                    aliases=entity_dict.get('aliases', [])
+                )
+            
+            # Link entity to document
+            if entity_dict['entity_type'] == 'person':
+                graph_manager.add_relationship(
+                    entity_id,
+                    doc_meta.doc_id,
+                    'authored'
+                )
+            elif entity_dict['entity_type'] == 'organization':
+                graph_manager.add_relationship(
+                    entity_id,
+                    doc_meta.doc_id,
+                    'client_of'
+                )
+            else:
+                graph_manager.add_relationship(
+                    entity_id,
+                    doc_meta.doc_id,
+                    'mentioned_in'
+                )
+        
+        # Add extracted relationships
+        for rel_dict in doc_meta.extracted_relationships:
+            source_id = entity_map.get(rel_dict['source'], rel_dict['source'])
+            target_id = entity_map.get(rel_dict['target'], rel_dict['target'])
+            
+            # Handle special case where target might be the document
+            if rel_dict['target'] == doc_meta.file_name:
+                target_id = doc_meta.doc_id
+            
+            graph_manager.add_relationship(
+                source_id,
+                target_id,
+                rel_dict['relationship_type'],
+                context=rel_dict.get('context', '')
+            )
+
+    if not docs_to_index_paths:
+        logging.warning("No new, valid documents to ingest. Finalization complete.")
+        if os.path.exists(STAGING_FILE): 
+            os.remove(STAGING_FILE)
+        return
+
+    # Save the graph
+    graph_manager.save_graph()
+    logging.info(f"Knowledge graph saved to {graph_file_path}")
+
+    # Continue with regular vector indexing
+    documents_for_indexing = manual_load_documents(docs_to_index_paths, args)
+    for doc in documents_for_indexing:
+        path_key = doc.metadata['file_path']
+        if path_key in metadata_map:
+            doc_meta = metadata_map[path_key]
+            doc.doc_id = doc_meta.doc_id
+            flat_metadata = {
+                "doc_id": doc_meta.doc_id, 
+                "file_name": doc_meta.file_name, 
+                "doc_posix_path": doc_meta.doc_posix_path, 
+                "last_modified_date": doc_meta.last_modified_date
+            }
+            if doc_meta.rich_metadata:
+                flat_metadata.update(doc_meta.rich_metadata.model_dump())
+                flat_metadata['thematic_tags'] = ', '.join(flat_metadata.get('thematic_tags', []))
+            doc.metadata = flat_metadata
+
+    db_settings = ChromaSettings(anonymized_telemetry=False)
+    chroma_client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+    chroma_collection = chroma_client.get_or_create_collection(COLLECTION_NAME)
+    vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    index = VectorStoreIndex.from_documents(documents_for_indexing, storage_context=storage_context, show_progress=True)
+    logging.info(f"Persisting index to disk at {chroma_db_path}...")
+    index.storage_context.persist(persist_dir=chroma_db_path)
+    
+    for doc in documents_for_indexing: 
+        write_to_processed_log(processed_log_path, doc.metadata['doc_posix_path'], doc.metadata['doc_id'])
+    os.remove(STAGING_FILE)
+
+    if doc_ids_to_add_to_default:
+        logging.info(f"Adding {len(doc_ids_to_add_to_default)} new documents to the 'default' collection.")
+        try:
+            collections_data = {}
+            if os.path.exists(COLLECTIONS_FILE):
+                with open(COLLECTIONS_FILE, 'r') as f: 
+                    collections_data = json.load(f)
+            if "default" not in collections_data: 
+                collections_data["default"] = {"name": "default", "doc_ids": []}
+            existing_ids = set(collections_data["default"].get("doc_ids", []))
+            new_ids_added = 0
+            for doc_id in doc_ids_to_add_to_default:
+                if doc_id not in existing_ids: 
+                    collections_data["default"]["doc_ids"].append(doc_id)
+                    existing_ids.add(doc_id)
+                    new_ids_added += 1
+            if new_ids_added > 0:
+                with open(COLLECTIONS_FILE, 'w') as f: 
+                    json.dump(collections_data, f, indent=4)
+                logging.info(f"Successfully updated 'default' collection.")
+        except Exception as e: 
+            logging.error(f"Could not automatically add documents to default collection: {e}")
+    
+    logging.info("--- Finalization complete. Knowledge base and graph are up to date. ---")
+
+def main():
+    parser = argparse.ArgumentParser(description="Cortex Ingestion Engine with GraphRAG")
+    parser.add_argument("--db-path", type=str, required=True)
+    parser.add_argument("--include", type=str, nargs='*')
+    parser.add_argument("--analyze-only", action="store_true")
+    parser.add_argument("--finalize-from-staging", action="store_true")
+    parser.add_argument("--fresh", action="store_true")
+    parser.add_argument("--skip-image-processing", action="store_true", 
+                       help="Skip VLM image processing for faster ingestion")
+    parser.add_argument("--resume", action="store_true",
+                       help="Resume from existing batch state (opposite of --fresh)")
+    args = parser.parse_args()
+
+    initialize_script()
+
+    try:
+        if args.analyze_only:
+            if not args.include: 
+                logging.error("--include paths are required.")
+                sys.exit(1)
+            # Resume takes precedence over fresh
+            fresh_start = args.fresh and not args.resume
+            analyze_documents(args.include, fresh_start, args)
+        elif args.finalize_from_staging:
+            finalize_ingestion(args.db_path, args)
+        else:
+            logging.error("Specify either --analyze-only or --finalize-from-staging.")
+            sys.exit(1)
+    except KeyboardInterrupt:
+        logging.info("Process interrupted by user (Ctrl+C)")
+        sys.exit(0)
+    except Exception as e:
+        logging.error(f"CRITICAL ERROR: Batch processing failed with exception: {e}", exc_info=True)
+        # Try to save any progress made so far
+        try:
+            if hasattr(args, 'db_path') and args.db_path:
+                batch_manager = BatchState(args.db_path)
+                batch_manager.record_error("SYSTEM_CRASH", f"Critical system error: {e}")
+        except Exception as save_error:
+            logging.error(f"Failed to save error state: {save_error}")  # Log but don't re-raise
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

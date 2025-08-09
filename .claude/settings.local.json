@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(chmod:*)",
+      "Bash(docker build:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker:*)",
+      "Bash(getent:*)",
+      "Bash(groups)",
+      "Bash(newgrp:*)",
+      "Bash(systemctl status:*)",
+      "Bash(wsl:*)",
+      "Bash(ls:*)",
+      "Bash(./deploy.sh)",
+      "Bash(./deploy.sh:*)",
+      "Bash(cp:*)",
+      "Bash(rm:*)",
+      "Bash(zip:*)",
+      "Bash(tar:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(cat:*)",
+      "Bash(timeout:*)",
+      "Bash(unix2dos:*)",
+      "Bash(sed:*)",
+      "Bash(diff:*)",
+      "Bash(mkdir:*)",
+      "Bash(ollama list:*)",
+      "Bash(dos2unix:*)",
+      "Bash(mv:*)",
+      "Bash(touch:*)"
+    ],
+    "deny": []
+  }
+}

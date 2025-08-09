@@ -1,0 +1,164 @@
+# Docker Compose for Cortex Suite - Multi-Container Setup
+version: '3.8'
+
+services:
+  # Ollama Service for Local LLM
+  ollama:
+    image: ollama/ollama:latest
+    container_name: cortex-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_ORIGINS=*
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles:
+      - gpu
+      - cpu
+
+  # ChromaDB Vector Database
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: cortex-chromadb
+    restart: unless-stopped
+    volumes:
+      - chroma_data:/chroma/chroma
+    ports:
+      - "8001:8000"
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Cortex API Service
+  cortex-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: cortex-api
+    restart: unless-stopped
+    depends_on:
+      chromadb:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    volumes:
+      - cortex_data:/data
+      - cortex_logs:/app/logs
+    ports:
+      - "8000:8000"  
+    environment:
+      - AI_DATABASE_PATH=/data/ai_databases
+      - KNOWLEDGE_SOURCE_PATH=/data/knowledge_base
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Cortex Streamlit UI
+  cortex-ui:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ui
+    container_name: cortex-ui
+    restart: unless-stopped
+    depends_on:
+      cortex-api:
+        condition: service_healthy
+    volumes:
+      - cortex_data:/data
+      - cortex_logs:/app/logs
+    ports:
+      - "8501:8501"
+    environment:
+      - AI_DATABASE_PATH=/data/ai_databases
+      - KNOWLEDGE_SOURCE_PATH=/data/knowledge_base
+      - API_BASE_URL=http://cortex-api:8000
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Model Initialization Service (runs once)
+  model-init:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.init
+    container_name: cortex-model-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+    command: |
+      sh -c "
+        echo 'Pulling Ollama models...'
+        curl -X POST http://ollama:11434/api/pull -d '{\"name\":\"mistral:7b-instruct-v0.3-q4_K_M\"}'
+        curl -X POST http://ollama:11434/api/pull -d '{\"name\":\"mistral-small3.2\"}'
+        echo 'Models pulled successfully'
+      "
+    restart: "no"
+
+  # Backup Service (optional)
+  backup-service:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backup
+    container_name: cortex-backup
+    restart: unless-stopped
+    depends_on:
+      - cortex-api
+    volumes:
+      - cortex_data:/data
+      - backup_data:/backups
+    environment:
+      - BACKUP_SCHEDULE=0 2 * * *  # Daily at 2 AM
+      - BACKUP_RETENTION_DAYS=30
+      - AI_DATABASE_PATH=/data/ai_databases
+    profiles:
+      - backup
+
+volumes:
+  ollama_data:
+    driver: local
+  chroma_data:
+    driver: local
+  cortex_data:
+    driver: local
+  cortex_logs:
+    driver: local
+  backup_data:
+    driver: local
+
+networks:
+  default:
+    name: cortex-network

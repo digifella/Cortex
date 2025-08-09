@@ -1,0 +1,36 @@
+# Python environments
+venv/
+.venv/
+
+# Python cache and build
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Node/JS (if present)
+node_modules/
+dist/
+build/
+.npm/
+.yarn/
+
+# General OS/editor files
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
+.cache/
+coverage/
+logs/
+
+# Large or generated data
+data/
+datasets/
+models/
+checkpoints/
