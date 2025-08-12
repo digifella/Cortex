@@ -70,6 +70,15 @@ def load_system(_db_path):
         if not os.path.isdir(chroma_db_path): # Use isdir for better checking
             st.error(f"ChromaDB path not found. Please run an ingestion process. Path checked: '{chroma_db_path}'"); st.stop()
         try:
+            # Check if Ollama is available for proposal copilot
+            from cortex_engine.utils.ollama_utils import check_ollama_service, format_ollama_error_for_user
+            
+            is_running, error_msg = check_ollama_service()
+            if not is_running:
+                st.error("🚫 **Proposal Copilot Unavailable**")
+                st.markdown(format_ollama_error_for_user("Proposal Copilot", error_msg))
+                st.stop()
+            
             Settings.llm = Ollama(model=LLM_MODEL, request_timeout=300.0)
             Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL, device="cuda")
             db_settings = ChromaSettings(anonymized_telemetry=False)

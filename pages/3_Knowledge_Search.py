@@ -98,7 +98,17 @@ def load_base_index(db_path, model_provider, api_key=None):
     chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
     if not os.path.isdir(chroma_db_path): st.warning(f"🧠 Knowledge base directory not found at '{chroma_db_path}'."); return None, None
     try:
-        Settings.llm = Ollama(model="mistral", request_timeout=120.0)
+        # Check if Ollama is available
+        from cortex_engine.utils.ollama_utils import check_ollama_service, get_ollama_status_message
+        
+        is_running, error_msg = check_ollama_service()
+        if not is_running:
+            st.warning(f"⚠️ {get_ollama_status_message(is_running, error_msg)}")
+            st.info("📋 **Limited functionality:** Vector search available, but AI-powered query enhancement is disabled.")
+            Settings.llm = None
+        else:
+            Settings.llm = Ollama(model="mistral", request_timeout=120.0)
+        
         Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
         db_settings = ChromaSettings(anonymized_telemetry=False)
         db = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
@@ -106,7 +116,11 @@ def load_base_index(db_path, model_provider, api_key=None):
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
         storage_context = StorageContext.from_defaults(vector_store=vector_store, persist_dir=chroma_db_path)
         index = load_index_from_storage(storage_context)
-        st.success(f"✅ Knowledge base loaded successfully from '{chroma_db_path}'.")
+        
+        if Settings.llm:
+            st.success(f"✅ Knowledge base loaded successfully from '{chroma_db_path}' with full AI capabilities.")
+        else:
+            st.success(f"✅ Knowledge base loaded from '{chroma_db_path}' (basic search mode).")
         return index, chroma_collection
     except Exception as e:
         st.error(f"Backend initialization failed: {e}")

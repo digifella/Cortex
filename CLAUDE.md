@@ -61,6 +61,9 @@ sudo apt-get install graphviz
 # Install Ollama for local LLM support
 curl -fsSL https://ollama.ai/install.sh | sh
 
+# Download required NLTK data for document processing
+python -c "import nltk; nltk.download('averaged_perceptron_tagger'); nltk.download('punkt'); nltk.download('punkt_tab'); nltk.download('stopwords'); nltk.download('wordnet'); nltk.download('omw-1.4')"
+
 # For other systems, see README.md section 6
 ```
 
@@ -129,6 +132,7 @@ GRAPHVIZ_DOT_EXECUTABLE="/usr/bin/dot"
   - `logging_utils.py` - Standardized logging configuration
   - `config_utils.py` - Configuration validation utilities
   - `file_utils.py` - File operations and hashing
+  - `ollama_utils.py` - Ollama service connection and error handling
 
 ### UI Pages (`pages/`)
 - `1_AI_Assisted_Research.py` - Multi-agent research system

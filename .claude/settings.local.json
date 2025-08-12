@@ -30,7 +30,10 @@
       "Bash(ollama list:*)",
       "Bash(dos2unix:*)",
       "Bash(mv:*)",
-      "Bash(touch:*)"
+      "Bash(touch:*)",
+      "Bash(curl:*)",
+      "Bash(source:*)",
+      "Bash(git add:*)"
     ],
     "deny": []
   }

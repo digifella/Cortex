@@ -104,7 +104,7 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
         st.markdown("**📋 Document View Controls**")
         
         # Filter and search controls
-        filter_col1, filter_col2, filter_col3 = st.columns([2, 1, 1])
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns([1.5, 1, 1, 1.5])
         
         with filter_col1:
             search_filter = st.text_input(
@@ -149,6 +149,19 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
             if per_page != st.session_state[f'{view_key}_per_page']:
                 st.session_state[f'{view_key}_per_page'] = per_page
                 st.session_state[f'{view_key}_page'] = 0  # Reset to first page
+                
+        with filter_col4:
+            # Bulk action controls
+            st.markdown("**📦 Bulk Actions**")
+            all_available_collections = [name for name in collection_mgr.get_collection_names() if name != collection_name]
+            if all_available_collections:
+                bulk_target_collection = st.selectbox(
+                    "Add all visible to:",
+                    options=[""] + all_available_collections,
+                    key=f"bulk_add_to_collection_{collection_name}",
+                    format_func=lambda x: "Select collection..." if x == "" else x,
+                    help="Add all visible documents to another collection"
+                )
         
         # Sort controls
         sort_col1, sort_col2 = st.columns([1, 1])
@@ -265,7 +278,7 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
     # Display documents
     if page_docs:
         # Column headers
-        header_col1, header_col2, header_col3, header_col4, header_col5 = st.columns([3, 2, 1.5, 1.5, 0.5])
+        header_col1, header_col2, header_col3, header_col4, header_col5, header_col6 = st.columns([2.5, 2, 1.5, 1.5, 0.8, 0.5])
         
         with header_col1:
             st.markdown("**📄 Document Name**")
@@ -276,13 +289,15 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
         with header_col4:
             st.markdown("**📅 Modified**")
         with header_col5:
+            st.markdown("**📥 Add To**")
+        with header_col6:
             st.markdown("**🗑️**")
         
         st.markdown("---")
         
         # Display each document
         for doc_id, meta in page_docs:
-            doc_col1, doc_col2, doc_col3, doc_col4, doc_col5 = st.columns([3, 2, 1.5, 1.5, 0.5])
+            doc_col1, doc_col2, doc_col3, doc_col4, doc_col5, doc_col6 = st.columns([2.5, 2, 1.5, 1.5, 0.8, 0.5])
             
             with doc_col1:
                 file_name = meta.get('file_name', 'N/A')
@@ -291,7 +306,7 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
             with doc_col2:
                 file_path = meta.get('doc_posix_path', 'N/A')
                 # Truncate long paths for display
-                display_path = file_path if len(file_path) <= 40 else f"...{file_path[-37:]}"
+                display_path = file_path if len(file_path) <= 35 else f"...{file_path[-32:]}"
                 st.markdown(f"`{display_path}`")
             
             with doc_col3:
@@ -327,12 +342,42 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
                         st.markdown('N/A')
                 except:
                     st.markdown('N/A')
-            
+                    
             with doc_col5:
+                # Add to collection functionality
+                available_collections = [name for name in collection_mgr.get_collection_names() if name != collection_name]
+                if available_collections:
+                    selected_collection = st.selectbox(
+                        "Add to:",
+                        options=[""] + available_collections,
+                        key=f"add_to_collection_{doc_id}_{collection_name}",
+                        format_func=lambda x: "Select collection..." if x == "" else x,
+                        label_visibility="collapsed"
+                    )
+                    if selected_collection and st.button("📥", key=f"add_{doc_id}_to_{selected_collection}", help=f"Add '{file_name}' to '{selected_collection}'"):
+                        collection_mgr.add_to_collection(selected_collection, [doc_id])
+                        st.toast(f"Added '{file_name}' to '{selected_collection}'.")
+                        st.rerun()
+            
+            with doc_col6:
                 if st.button("❌", key=f"remove_{doc_id}_from_{collection_name}_enhanced", help=f"Remove '{file_name}' from collection"):
                     collection_mgr.remove_from_collection(collection_name, [doc_id])
                     st.toast(f"Removed '{file_name}' from '{collection_name}'.")
                     st.rerun()
+        
+        # Bulk action execution
+        if page_docs:
+            st.divider()
+            bulk_col1, bulk_col2, bulk_col3 = st.columns([2, 1, 2])
+            with bulk_col2:
+                all_available_collections = [name for name in collection_mgr.get_collection_names() if name != collection_name]
+                if all_available_collections:
+                    bulk_target = st.session_state.get(f"bulk_add_to_collection_{collection_name}", "")
+                    if bulk_target and st.button(f"📥 Add Visible ({len(page_docs)}) to '{bulk_target}'", key=f"execute_bulk_add_{collection_name}", use_container_width=True):
+                        doc_ids_to_add = [doc_id for doc_id, meta in page_docs]
+                        collection_mgr.add_to_collection(bulk_target, doc_ids_to_add)
+                        st.toast(f"Added {len(doc_ids_to_add)} documents to '{bulk_target}'.")
+                        st.rerun()
         
         # Show additional pagination at bottom if needed
         if total_pages > 1:

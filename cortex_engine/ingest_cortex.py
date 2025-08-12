@@ -75,7 +75,19 @@ def initialize_script():
     root_logger.addHandler(console_handler)
 
     logging.info("--- Script Initialized: Configuring models... ---")
-    Settings.llm = Ollama(model="mistral", request_timeout=120.0)
+    
+    # Check if Ollama is available before configuring
+    from cortex_engine.utils.ollama_utils import check_ollama_service, format_ollama_error_for_user
+    
+    is_running, error_msg = check_ollama_service()
+    if not is_running:
+        logging.warning(f"Ollama service not available: {error_msg}")
+        logging.warning("AI-enhanced metadata extraction will be disabled. Documents will be processed with basic metadata only.")
+        Settings.llm = None  # Will be handled in analysis function
+    else:
+        Settings.llm = Ollama(model="mistral", request_timeout=120.0)
+        logging.info("Ollama connected successfully")
+    
     Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
     logging.info(f"Models configured (Embed: {EMBED_MODEL}).")
 
@@ -344,50 +356,67 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None):
         print(f"CORTEX_PROGRESS::{i+1}/{len(unique_docs)}::{file_name}", flush=True)
         
         try:
-            if not doc.text.strip(): raise ValueError("Document is empty or could not be read.")
-            prompt = metadata_prompt_template.format(schema=schema_json_str, text=doc.get_content()[:8000], file_path=file_path_str, source_type=source_type)
-            logging.info("Sending prompt to LLM for metadata extraction...")
-            response_str = str(Settings.llm.complete(prompt))
-            logging.info("Received raw response from LLM. Cleaning and parsing JSON...")
-            json_match = re.search(r'\{.*\}', response_str, re.DOTALL)
-            if not json_match:
-                error_snippet = response_str.strip().replace('\n', ' ')[:200]
-                logging.error(f"LLM did not return valid JSON for {file_name}. Response: {error_snippet}...")
-                raise ValueError("LLM did not return a valid JSON object.")
+            if not doc.text.strip(): 
+                raise ValueError("Document is empty or could not be read.")
+            
+            # Check if Ollama LLM is available
+            if Settings.llm is None:
+                logging.info(f"Ollama not available - using basic metadata for {file_name}")
+                # Create basic metadata when Ollama is not available
+                rich_metadata = RichMetadata(
+                    document_type="Other",
+                    proposal_outcome="N/A", 
+                    summary=f"Document processed without AI analysis (Ollama unavailable). File: {file_name}",
+                    thematic_tags=["basic-processing", "no-ai-analysis"]
+                )
+            else:
+                prompt = metadata_prompt_template.format(schema=schema_json_str, text=doc.get_content()[:8000], file_path=file_path_str, source_type=source_type)
+                logging.info("Sending prompt to LLM for metadata extraction...")
+                response_str = str(Settings.llm.complete(prompt))
+                logging.info("Received raw response from LLM. Cleaning and parsing JSON...")
+                json_match = re.search(r'\{.*\}', response_str, re.DOTALL)
+                if not json_match:
+                    error_snippet = response_str.strip().replace('\n', ' ')[:200]
+                    logging.error(f"LLM did not return valid JSON for {file_name}. Response: {error_snippet}...")
+                    raise ValueError("LLM did not return a valid JSON object.")
+                
+                clean_json_str = json_match.group(0)
+                metadata_json = json.loads(clean_json_str)
 
-            clean_json_str = json_match.group(0)
-            metadata_json = json.loads(clean_json_str)
+                # Normalize common validation fields before Pydantic
+                if 'proposal_outcome' in metadata_json and isinstance(metadata_json['proposal_outcome'], str):
+                    metadata_json['proposal_outcome'] = metadata_json['proposal_outcome'].title()
 
-            # Normalize common validation fields before Pydantic
-            if 'proposal_outcome' in metadata_json and isinstance(metadata_json['proposal_outcome'], str):
-                metadata_json['proposal_outcome'] = metadata_json['proposal_outcome'].title()
-
-            try: 
-                rich_metadata = RichMetadata.model_validate(metadata_json)
-            except ValidationError as e:
-                logging.warning(f"Initial validation failed for {file_name}. Retrying with nested key check...")
-                if isinstance(metadata_json, dict) and len(metadata_json) == 1:
-                    nested_key = list(metadata_json.keys())[0]
-                    if isinstance(metadata_json[nested_key], dict): 
-                        rich_metadata = RichMetadata.model_validate(metadata_json[nested_key])
-                    else: 
+                try: 
+                    rich_metadata = RichMetadata.model_validate(metadata_json)
+                except ValidationError as e:
+                    logging.warning(f"Initial validation failed for {file_name}. Retrying with nested key check...")
+                    if isinstance(metadata_json, dict) and len(metadata_json) == 1:
+                        nested_key = list(metadata_json.keys())[0]
+                        if isinstance(metadata_json[nested_key], dict): 
+                            rich_metadata = RichMetadata.model_validate(metadata_json[nested_key])
+                        else: 
+                            raise e
+                    else:
                         raise e
-                else: 
-                    raise e
             logging.info(f"Successfully parsed and validated metadata for {file_name}.")
             
             # Extract entities and relationships
             logging.info(f"Extracting entities and relationships from {file_name}...")
-            entities_dict, relationships_dict = extract_entities_and_relationships(
-                doc.get_content()[:8000],
-                {
-                    'document_type': rich_metadata.document_type,
-                    'file_name': file_name,
-                    'summary': rich_metadata.summary,
-                    'thematic_tags': rich_metadata.thematic_tags
-                },
-                entity_extractor
-            )
+            if rich_metadata is not None:
+                entities_dict, relationships_dict = extract_entities_and_relationships(
+                    doc.get_content()[:8000],
+                    {
+                        'document_type': rich_metadata.document_type,
+                        'file_name': file_name,
+                        'summary': rich_metadata.summary,
+                        'thematic_tags': rich_metadata.thematic_tags
+                    },
+                    entity_extractor
+                )
+            else:
+                logging.warning(f"Skipping entity extraction for {file_name} - metadata is None")
+                entities_dict, relationships_dict = {}, {}
             logging.info(f"Extracted {len(entities_dict)} entities and {len(relationships_dict)} relationships.")
             
         except Exception as e:

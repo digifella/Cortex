@@ -78,19 +78,31 @@ def setup_models():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     try:
-        # Knowledge Base operations MUST be local
-        Settings.llm = Ollama(
-            model=KB_LLM_MODEL, 
-            request_timeout=300.0,
-            temperature=0.1,  # Very low temperature for factual retrieval
-        )
+        # Check if Ollama is available first
+        from cortex_engine.utils.ollama_utils import check_ollama_service
+        
+        is_running, error_msg = check_ollama_service()
+        if not is_running:
+            logger.warning(f"⚠️ Ollama service not available: {error_msg}")
+            logger.warning("   Knowledge Base will operate in limited mode (vector search only)")
+            Settings.llm = None
+        else:
+            # Knowledge Base operations MUST be local when available
+            Settings.llm = Ollama(
+                model=KB_LLM_MODEL, 
+                request_timeout=300.0,
+                temperature=0.1,  # Very low temperature for factual retrieval
+            )
+            logger.info(f"✅ KB models configured (LOCAL): LLM={KB_LLM_MODEL}, Embed={EMBED_MODEL}, Device={device}")
+        
         Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL, device=device)
         
-        logger.info(f"✅ KB models configured (LOCAL): LLM={KB_LLM_MODEL}, Embed={EMBED_MODEL}, Device={device}")
     except Exception as e:
-        logger.error(f"❌ CRITICAL: Failed to configure local KB models: {e}")
-        logger.error("   Knowledge Base operations require local models. Please ensure Ollama is running.")
-        raise RuntimeError(f"Local models required for KB operations but failed to load: {KB_LLM_MODEL}")
+        logger.error(f"❌ CRITICAL: Failed to configure KB models: {e}")
+        if Settings.llm is None:
+            logger.info("   Falling back to basic vector search without AI enhancements")
+        else:
+            raise RuntimeError(f"Failed to configure KB models: {e}")
 
 
 # --- SPRINT 21: VLM Utility for Ingestion ---

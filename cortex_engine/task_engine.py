@@ -109,6 +109,15 @@ class TaskExecutionEngine:
     def _setup_proposal_llm(self):
         """Configure LLM specifically optimized for proposal generation (LOCAL ONLY)."""
         try:
+            # Check if Ollama is available first
+            from cortex_engine.utils.ollama_utils import check_ollama_service
+            
+            is_running, error_msg = check_ollama_service()
+            if not is_running:
+                logger.error(f"❌ CRITICAL: Ollama service not available for proposal generation: {error_msg}")
+                logger.error("❌ Proposal generation requires Ollama to be running locally for privacy and control.")
+                raise Exception(f"Ollama service unavailable: {error_msg}")
+            
             # ENFORCE LOCAL-ONLY: Proposals MUST run locally for privacy/control
             proposal_llm = Ollama(
                 model=PROPOSAL_LLM_MODEL,

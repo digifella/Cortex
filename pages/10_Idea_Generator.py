@@ -59,6 +59,16 @@ def load_vector_index(db_path):
             return None
         
         logger.info("Configuring models...")
+        
+        # Check if Ollama is available for idea generation
+        from cortex_engine.utils.ollama_utils import check_ollama_service, format_ollama_error_for_user
+        
+        is_running, error_msg = check_ollama_service()
+        if not is_running:
+            st.error("🚫 **Idea Generator Unavailable**")
+            st.markdown(format_ollama_error_for_user("Idea Generation", error_msg))
+            st.stop()
+        
         # Configure models
         Settings.llm = Ollama(model="mistral", request_timeout=120.0)
         Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)

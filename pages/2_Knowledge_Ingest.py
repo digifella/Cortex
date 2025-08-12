@@ -512,14 +512,14 @@ def render_batch_processing_ui():
             if batch_status["active"] and batch_status["remaining"] > 0:
                 # For active batches with stored config, use automatic resume
                 if batch_status.get("has_scan_config", False):
-                    if st.button("▶️ Auto Resume", type="primary", use_container_width=True):
+                    if st.button("▶️ Auto Resume", type="primary", use_container_width=True, key="auto_resume_batch"):
                         if auto_resume_from_batch_config(batch_manager):
                             st.rerun()
                         else:
                             st.error("❌ Auto-resume failed. Check logs.")
                 else:
                     # Fallback for batches without stored config
-                    if st.button("▶️ Resume Processing", type="primary", use_container_width=True):
+                    if st.button("▶️ Resume Processing", type="primary", use_container_width=True, key="resume_processing_fallback"):
                         # Validate files_to_process before starting
                         if not files_to_process:
                             st.error("❌ No files to process. Please check your file selection or batch state.")
@@ -555,7 +555,7 @@ def render_batch_processing_ui():
                             logger.error(f"Failed to start subprocess: {e}")
             else:
                 # New batch
-                if st.button("🚀 Start Batch Processing", type="primary", use_container_width=True):
+                if st.button("🚀 Start Batch Processing", type="primary", use_container_width=True, key="start_batch_processing"):
                     # Validate files_to_process before starting
                     if not files_to_process:
                         st.error("❌ No files to process. Please check your file selection or batch state.")
@@ -700,9 +700,15 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
             st.warning("⏸️ Batch processing is **PAUSED**")
     else:
         st.info(f"🔄 Batch processing active (Started: {batch_status['started_at'][:19]})")
+    
+    # Show error information if there are errors
+    if batch_status.get('error_count', 0) > 0:
+        st.error(f"⚠️ **{batch_status['error_count']} errors encountered.** " + 
+                f"Progress: {batch_status['completed']}/{batch_status['total_files']} files completed. " +
+                "Check logs for details or clear batch to restart with fresh setup.")
 
     # Consolidated action buttons
-    col1, col2 = st.columns(2)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         # Dynamic resume button
@@ -714,7 +720,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
         else:
             button_text = "▶️ Resume Processing"
             
-        if st.button(button_text, type="primary", use_container_width=True):
+        if st.button(button_text, type="primary", use_container_width=True, key="resume_processing_main"):
             # If starting a new session, reset the session counter
             if batch_status.get('auto_pause_after_chunks') and batch_status.get('paused', False):
                 if batch_status.get('chunks_processed_in_session', 0) >= batch_status.get('auto_pause_after_chunks', 0):
@@ -731,6 +737,48 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
             batch_manager.clear_batch()
             st.success("Batch cleared")
             st.rerun()
+            
+    with col3:
+        if st.button("📋 View Ingestion Logs", key="view_logs_batch", use_container_width=True):
+            st.session_state.show_logs = True
+            st.rerun()
+            
+    with col4:
+        if st.button("⬅️ Back to Config", key="back_to_config_batch", use_container_width=True):
+            batch_manager.clear_batch()
+            initialize_state(force_reset=True)
+            st.rerun()
+    
+    # Show ingestion logs if requested
+    if st.session_state.get("show_logs", False):
+        st.markdown("---")
+        st.subheader("📋 Recent Ingestion Logs")
+        
+        ingestion_log_path = Path(__file__).parent.parent / "logs" / "ingestion.log"
+        if ingestion_log_path.exists():
+            try:
+                with open(ingestion_log_path, 'r') as log_file:
+                    log_content = log_file.read()
+                    if log_content.strip():
+                        # Show last 50 lines
+                        log_lines = log_content.strip().split('\n')
+                        recent_lines = log_lines[-50:] if len(log_lines) > 50 else log_lines
+                        
+                        log_col1, log_col2 = st.columns([3, 1])
+                        with log_col1:
+                            st.code('\n'.join(recent_lines), language='text', line_numbers=True)
+                        with log_col2:
+                            if st.button("❌ Hide Logs", key="hide_logs"):
+                                st.session_state.show_logs = False
+                                st.rerun()
+                            if st.button("🔄 Refresh Logs", key="refresh_logs"):
+                                st.rerun()
+                    else:
+                        st.info("No log entries found.")
+            except Exception as e:
+                st.error(f"Error reading logs: {e}")
+        else:
+            st.warning("Ingestion log file not found.")
     
     # Show processing configuration options for all active batches
     st.markdown("---")
@@ -855,8 +903,37 @@ def auto_resume_from_batch_config(batch_manager: BatchState) -> bool:
     try:
         scan_config = batch_manager.get_scan_config()
         if not scan_config:
-            st.error("❌ No scan configuration found in batch state")
+            # Try to recover from staging file if scan config is missing
+            st.warning("⚠️ No scan configuration found in batch state")
+            return try_resume_from_staging_file(batch_manager)
+            
+        return resume_from_scan_config(batch_manager, scan_config)
+    except Exception as e:
+        st.error(f"❌ Auto-resume failed: {e}")
+        return False
+
+def try_resume_from_staging_file(batch_manager: BatchState) -> bool:
+    """Try to resume processing using existing staging file"""
+    try:
+        staging_file = Path(__file__).parent.parent / "staging_ingestion.json"
+        if not staging_file.exists():
+            st.error("❌ No staging file found to resume from")
             return False
+        
+        st.info("🔄 Found existing staging file - attempting to resume from metadata review stage")
+        
+        # Switch to metadata review stage to process the staging file
+        st.session_state.ingestion_stage = "metadata_review"
+        st.success("✅ Resumed from staging file - please review and approve the metadata below")
+        return True
+        
+    except Exception as e:
+        st.error(f"❌ Failed to resume from staging file: {e}")
+        return False
+
+def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> bool:
+    """Resume using stored scan configuration"""
+    try:
         
         # Restore session state from batch configuration
         st.session_state.knowledge_source_path = scan_config.get("knowledge_source_path", "")
@@ -1310,6 +1387,9 @@ def render_metadata_review_ui():
     # In batch mode, automatically proceed with valid documents
     batch_mode = st.session_state.get("batch_ingest_mode", False) or st.session_state.get("batch_mode_active", False)
     
+    # Debug info for troubleshooting
+    if batch_mode:
+        st.info(f"🔧 **Debug:** Batch mode detected - batch_ingest_mode: {st.session_state.get('batch_ingest_mode', False)}, batch_mode_active: {st.session_state.get('batch_mode_active', False)}")
     
     if batch_mode:
         # Check if we've already processed this batch (prevent re-processing on UI refresh)
@@ -1352,8 +1432,40 @@ def render_metadata_review_ui():
             # Already processed, show progress or completion message
             st.info("🚀 **Batch Mode:** Processing has been initiated automatically.")
             return
+    else:
+        # Non-batch mode - show manual controls
+        st.info(f"📋 **Manual Mode:** Please review the metadata below and proceed when ready.")
 
     st.info(f"Please review and approve the metadata for the **{len(edited_files)}** document(s) below.")
+    
+    # Add quick proceed option for users who want to skip review
+    valid_docs_count = len([doc for doc in edited_files if not doc.get('exclude_from_final', False)])
+    if valid_docs_count > 0:
+        st.info(f"💡 **Quick Option:** Skip detailed review and proceed with {valid_docs_count} valid documents")
+        if st.button("⚡ Skip Review & Proceed to Finalization", type="secondary", key="quick_proceed"):
+            # Auto-proceed to finalization
+            final_files_to_process = st.session_state.edited_staged_files
+            doc_ids_to_ingest = [doc['doc_id'] for doc in final_files_to_process if not doc.get('exclude_from_final')]
+            st.session_state.last_ingested_doc_ids = doc_ids_to_ingest
+            with open(STAGING_INGESTION_FILE, 'w') as f: 
+                json.dump(final_files_to_process, f, indent=2)
+
+            wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+            if not wsl_db_path or not Path(wsl_db_path).exists():
+                st.error(f"Database path is invalid or does not exist: {wsl_db_path}")
+                st.stop()
+
+            st.session_state.log_messages = ["Finalizing ingestion..."]
+            st.session_state.ingestion_stage = "finalizing"
+            command = [sys.executable, "-m", "cortex_engine.ingest_cortex", "--finalize-from-staging", "--db-path", wsl_db_path]
+            
+            if st.session_state.get("skip_image_processing", False):
+                command.append("--skip-image-processing")
+                
+            st.session_state.ingestion_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+            st.rerun()
+    
+    st.markdown("---")
 
     page = st.session_state.review_page
     start_idx, end_idx = page * REVIEW_PAGE_SIZE, (page + 1) * REVIEW_PAGE_SIZE
@@ -1414,9 +1526,24 @@ def render_metadata_review_ui():
     nav_cols[2].write(f"Page {page + 1} of {total_pages}")
 
     st.divider()
+    
+    # Show summary of valid vs error documents
+    valid_docs = [doc for doc in edited_files if not doc.get('exclude_from_final', False)]
+    error_docs = [doc for doc in edited_files if doc.get('exclude_from_final', False)]
+    
+    if error_docs:
+        st.warning(f"⚠️ {len(error_docs)} documents had errors and will be excluded. {len(valid_docs)} documents are ready for ingestion.")
+    else:
+        st.success(f"✅ All {len(valid_docs)} documents are ready for ingestion.")
+    
     action_cols = st.columns(2)
     if action_cols[0].button("⬅️ Cancel and Go Back", use_container_width=True): initialize_state(force_reset=True); st.rerun()
-    if action_cols[1].button("✅ Finalize Approved Documents", use_container_width=True, type="primary"):
+    
+    # Always show finalize button if there are valid documents
+    finalize_enabled = len(valid_docs) > 0
+    button_text = f"✅ Finalize {len(valid_docs)} Approved Documents" if finalize_enabled else "❌ No Valid Documents to Finalize"
+    
+    if action_cols[1].button(button_text, use_container_width=True, type="primary", disabled=not finalize_enabled):
         final_files_to_process = st.session_state.edited_staged_files
         doc_ids_to_ingest = [doc['doc_id'] for doc in final_files_to_process if not doc.get('exclude_from_final')]
         st.session_state.last_ingested_doc_ids = doc_ids_to_ingest
@@ -1702,8 +1829,38 @@ def render_document_type_management():
         st.session_state.show_maintenance = False
         st.rerun()
 
+def check_recovery_needed():
+    """Check if recovery is actually needed and return issues found."""
+    try:
+        config_manager = ConfigManager()
+        config = config_manager.get_config()
+        db_path = config.get("ai_database_path", "")
+        
+        if not db_path:
+            return False, []
+        
+        recovery_manager = IngestionRecoveryManager(db_path)
+        analysis = recovery_manager.analyze_ingestion_state()
+        
+        issues = []
+        if analysis.get("statistics", {}).get("orphaned_count", 0) > 0:
+            issues.append(f"Found {analysis['statistics']['orphaned_count']} orphaned documents")
+        
+        if analysis.get("statistics", {}).get("broken_collections", 0) > 0:
+            issues.append(f"Found {analysis['statistics']['broken_collections']} broken collections")
+        
+        # Check for recent failed ingestions
+        if "recommendations" in analysis and analysis["recommendations"]:
+            issues.extend(analysis["recommendations"][:2])  # Show first 2 recommendations
+        
+        return len(issues) > 0, issues
+        
+    except Exception as e:
+        logger.error(f"Recovery check failed: {e}")
+        return False, []
+
 def render_recovery_section():
-    """Render the ingestion recovery and repair section."""
+    """Render the ingestion recovery and repair section only when needed."""
     try:
         # Get database path
         config_manager = ConfigManager()
@@ -1713,128 +1870,148 @@ def render_recovery_section():
         if not db_path:
             return  # No database configured, skip recovery section
         
-        # Check if we should expand by default (if there are potential issues)
-        should_expand = False
-        try:
-            # Quick check for orphaned documents
-            if db_path:
-                wsl_db_path = convert_windows_to_wsl_path(db_path)
-                chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
-                ingested_log_path = os.path.join(chroma_db_path, "ingested_files.log")
-                
-                if os.path.exists(ingested_log_path):
-                    with open(ingested_log_path, 'r') as f:
-                        log_data = json.load(f)
-                    # If there are many ingested files, suggest recovery might be needed
-                    if len(log_data) > 100:
-                        should_expand = True
-        except:
-            pass
+        # Check if recovery is needed or if user explicitly wants to see it
+        recovery_needed, issues = check_recovery_needed()
+        show_maintenance = st.session_state.get("show_recovery_maintenance", False)
         
-        with st.expander("🔧 Ingestion Recovery & Repair", expanded=should_expand):
-            st.markdown("""
-            **Recover from failed ingestions** or **repair inconsistencies** in your knowledge base.
-            Use this when ingestion processes are interrupted or documents seem to be missing.
-            """)
-            
-            recovery_manager = IngestionRecoveryManager(db_path)
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("#### 🔍 Analyze Current State")
-                if st.button("🔍 Analyze Ingestion State", use_container_width=True):
-                    with st.spinner("🔄 Analyzing knowledge base state..."):
-                        analysis = recovery_manager.analyze_ingestion_state()
-                        st.session_state.recovery_analysis = analysis
+        # Show alert if recovery is needed
+        if recovery_needed and not show_maintenance:
+            with st.container():
+                st.warning(f"⚠️ **Database maintenance may be needed:** {', '.join(issues[:2])}")
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    if st.button("🔧 **Open Recovery Tools**", type="primary", use_container_width=True):
+                        st.session_state.show_recovery_maintenance = True
                         st.rerun()
+                with col2:
+                    if st.button("🚫 Dismiss (Hide Until Next Issue)", use_container_width=True):
+                        st.session_state.recovery_dismissed = True
+                        st.rerun()
+        
+        # Show maintenance tools access when no issues but tools requested
+        elif not recovery_needed and not show_maintenance and not st.session_state.get("recovery_dismissed", False):
+            # Provide discrete access to recovery tools
+            if st.button("🛠️ Database Maintenance & Recovery Tools", use_container_width=True, help="Access advanced database repair and recovery features"):
+                st.session_state.show_recovery_maintenance = True
+                st.rerun()
+        
+        # Show maintenance tools if requested or recovery is needed
+        if show_maintenance or (recovery_needed and not st.session_state.get("recovery_dismissed", False)):
+            with st.expander("🔧 Database Recovery & Maintenance", expanded=True):
+                st.markdown("""
+                **Recover from failed ingestions** or **repair inconsistencies** in your knowledge base.
+                Use this when ingestion processes are interrupted or documents seem to be missing.
+                """)
                 
-                if "recovery_analysis" in st.session_state:
-                    analysis = st.session_state.recovery_analysis
-                    
-                    # Show key statistics
-                    if "statistics" in analysis:
-                        stats = analysis["statistics"]
-                        stat_col1, stat_col2, stat_col3 = st.columns(3)
-                        with stat_col1:
-                            st.metric("📁 Ingested Files", stats.get("ingested_files_count", 0))
-                        with stat_col2:
-                            st.metric("📄 KB Documents", stats.get("chromadb_docs_count", 0))
-                        with stat_col3:
-                            st.metric("🚨 Orphaned", stats.get("orphaned_count", 0))
-                    
-                    # Show issues found
-                    if analysis.get("issues_found"):
-                        st.warning("**Issues Found:**")
-                        for issue in analysis["issues_found"]:
-                            st.write(f"• {issue}")
-                    else:
-                        st.success("✅ No issues detected")
-            
-            with col2:
-                st.markdown("#### 🛠️ Recovery Actions")
+                recovery_manager = IngestionRecoveryManager(db_path)
                 
-                # Quick recovery collection creation
-                if st.button("🚀 Quick Recovery: Create Collection from Recent Files", use_container_width=True):
-                    collection_name = st.text_input("Collection name:", value="recovered_files", key="quick_recovery_name")
-                    
-                    if collection_name:
-                        with st.spinner(f"🔄 Creating recovery collection '{collection_name}'..."):
-                            result = recovery_manager.create_recovery_collection_from_recent(collection_name, hours_back=24)
-                            
-                            if result["status"] == "success":
-                                st.success(f"✅ Created '{collection_name}' with {result['documents_added']} documents!")
-                            else:
-                                st.error(f"❌ Recovery failed: {result.get('error', 'Unknown error')}")
+                col1, col2 = st.columns(2)
                 
-                # Orphaned document recovery
-                if st.session_state.get("recovery_analysis", {}).get("statistics", {}).get("orphaned_count", 0) > 0:
-                    st.markdown("**Orphaned Documents Detected**")
-                    orphaned_count = st.session_state.recovery_analysis["statistics"]["orphaned_count"]
-                    collection_name = st.text_input(f"Recover {orphaned_count} orphaned documents to collection:", 
-                                                   value="recovered_orphaned", key="orphaned_recovery_name")
+                with col1:
+                    st.markdown("#### 🔍 Analyze Current State")
+                    if st.button("🔍 Analyze Ingestion State", use_container_width=True, key="analyze_recovery_state"):
+                        with st.spinner("🔄 Analyzing knowledge base state..."):
+                            analysis = recovery_manager.analyze_ingestion_state()
+                            st.session_state.recovery_analysis = analysis
+                            st.rerun()
                     
-                    if st.button(f"🔄 Recover {orphaned_count} Documents", use_container_width=True):
+                    if "recovery_analysis" in st.session_state:
+                        analysis = st.session_state.recovery_analysis
+                        
+                        # Show key statistics
+                        if "statistics" in analysis:
+                            stats = analysis["statistics"]
+                            stat_col1, stat_col2, stat_col3 = st.columns(3)
+                            with stat_col1:
+                                st.metric("📁 Ingested Files", stats.get("ingested_files_count", 0))
+                            with stat_col2:
+                                st.metric("📄 KB Documents", stats.get("chromadb_docs_count", 0))
+                            with stat_col3:
+                                st.metric("🚨 Orphaned", stats.get("orphaned_count", 0))
+                        
+                        # Show issues found
+                        if analysis.get("issues_found"):
+                            st.warning("**Issues Found:**")
+                            for issue in analysis["issues_found"]:
+                                st.write(f"• {issue}")
+                        else:
+                            st.success("✅ No issues detected")
+                
+                with col2:
+                    st.markdown("#### 🛠️ Recovery Actions")
+                    
+                    # Quick recovery collection creation
+                    if st.button("🚀 Quick Recovery: Create Collection from Recent Files", use_container_width=True, key="quick_recovery_recent"):
+                        collection_name = st.text_input("Collection name:", value="recovered_files", key="quick_recovery_name")
+                        
                         if collection_name:
-                            with st.spinner("🔄 Recovering orphaned documents..."):
-                                result = recovery_manager.recover_orphaned_documents(collection_name)
+                            with st.spinner(f"🔄 Creating recovery collection '{collection_name}'..."):
+                                result = recovery_manager.create_recovery_collection_from_recent(collection_name, hours_back=24)
                                 
                                 if result["status"] == "success":
-                                    st.success(f"✅ Recovered {result['recovered_count']} documents to '{collection_name}'!")
+                                    st.success(f"✅ Created '{collection_name}' with {result['documents_added']} documents!")
                                 else:
                                     st.error(f"❌ Recovery failed: {result.get('error', 'Unknown error')}")
-                
-                # Collection repair
-                if st.button("🔧 Auto-Repair Collections", use_container_width=True):
-                    with st.spinner("🔄 Repairing collection inconsistencies..."):
-                        result = recovery_manager.auto_repair_collections()
-                        
-                        if result["status"] == "success":
-                            if result["collections_cleaned"] > 0:
-                                st.success(f"✅ Repaired {result['collections_cleaned']} collections, removed {result['invalid_refs_removed']} invalid references")
-                            else:
-                                st.info("✅ No repairs needed - all collections are consistent")
-                        else:
-                            st.error(f"❌ Repair failed: {result.get('error', 'Unknown error')}")
-            
-            # Show recommendations if available
-            if st.session_state.get("recovery_analysis", {}).get("recommendations"):
-                st.markdown("---")
-                st.markdown("#### 💡 Recommended Actions")
-                recommendations = st.session_state.recovery_analysis["recommendations"]
-                
-                for rec in recommendations:
-                    priority_color = {"high": "🔴", "medium": "🟡", "low": "🟢"}
-                    priority_icon = priority_color.get(rec["priority"], "🔵")
                     
-                    st.markdown(f"{priority_icon} **{rec['description']}**")
-                    st.caption(rec["details"])
-            
-            # Clear analysis button
-            if "recovery_analysis" in st.session_state:
-                if st.button("🗑️ Clear Analysis", type="secondary"):
-                    del st.session_state.recovery_analysis
-                    st.rerun()
+                    # Orphaned document recovery
+                    if st.session_state.get("recovery_analysis", {}).get("statistics", {}).get("orphaned_count", 0) > 0:
+                        st.markdown("**Orphaned Documents Detected**")
+                        orphaned_count = st.session_state.recovery_analysis["statistics"]["orphaned_count"]
+                        collection_name = st.text_input(f"Recover {orphaned_count} orphaned documents to collection:", 
+                                                       value="recovered_orphaned", key="orphaned_recovery_name")
+                        
+                        if st.button(f"🔄 Recover {orphaned_count} Documents", use_container_width=True, key="recover_orphaned_docs"):
+                            if collection_name:
+                                with st.spinner("🔄 Recovering orphaned documents..."):
+                                    result = recovery_manager.recover_orphaned_documents(collection_name)
+                                    
+                                    if result["status"] == "success":
+                                        st.success(f"✅ Recovered {result['recovered_count']} documents to '{collection_name}'!")
+                                    else:
+                                        st.error(f"❌ Recovery failed: {result.get('error', 'Unknown error')}")
+                    
+                    # Collection repair
+                    if st.button("🔧 Auto-Repair Collections", use_container_width=True, key="auto_repair_collections"):
+                        with st.spinner("🔄 Repairing collection inconsistencies..."):
+                            result = recovery_manager.auto_repair_collections()
+                            
+                            if result["status"] == "success":
+                                if result["collections_cleaned"] > 0:
+                                    st.success(f"✅ Repaired {result['collections_cleaned']} collections, removed {result['invalid_refs_removed']} invalid references")
+                                else:
+                                    st.info("✅ No repairs needed - all collections are consistent")
+                            else:
+                                st.error(f"❌ Repair failed: {result.get('error', 'Unknown error')}")
+                
+                # Show recommendations if available
+                if st.session_state.get("recovery_analysis", {}).get("recommendations"):
+                    st.markdown("---")
+                    st.markdown("#### 💡 Recommended Actions")
+                    recommendations = st.session_state.recovery_analysis["recommendations"]
+                    
+                    for rec in recommendations:
+                        priority_color = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+                        priority_icon = priority_color.get(rec["priority"], "🔵")
+                        
+                        st.markdown(f"{priority_icon} **{rec['description']}**")
+                        st.caption(rec["details"])
+                
+                # Controls at the bottom
+                st.markdown("---")
+                control_col1, control_col2, control_col3 = st.columns(3)
+                
+                with control_col1:
+                    if "recovery_analysis" in st.session_state:
+                        if st.button("🗑️ Clear Analysis", type="secondary", use_container_width=True):
+                            del st.session_state.recovery_analysis
+                            st.rerun()
+                
+                with control_col3:
+                    if st.button("✅ Close Recovery Tools", type="primary", use_container_width=True):
+                        st.session_state.show_recovery_maintenance = False
+                        if "recovery_analysis" in st.session_state:
+                            del st.session_state.recovery_analysis
+                        st.rerun()
     
     except Exception as e:
         logger.error(f"Recovery section render failed: {e}")
@@ -1848,11 +2025,26 @@ st.caption(f"Manage the knowledge base by ingesting new documents. App Version: 
 # Add help system
 help_system.show_help_menu()
 
+# Check and display Ollama status prominently
+try:
+    from cortex_engine.utils.ollama_utils import check_ollama_service, get_ollama_status_message, get_ollama_instructions
+    
+    is_running, error_msg = check_ollama_service()
+    if not is_running:
+        st.warning(f"⚠️ {get_ollama_status_message(is_running, error_msg)}")
+        with st.expander("ℹ️ **Important: Limited AI Functionality**", expanded=False):
+            st.info("**Impact:** Documents will be processed with basic metadata only. AI-enhanced analysis, summaries, and tagging will be unavailable.")
+            st.markdown(get_ollama_instructions())
+    else:
+        st.success("✅ Ollama service is running - Full AI capabilities available")
+except Exception as e:
+    st.warning(f"Unable to check Ollama status: {e}")
+
 # Quick Recovery Button for Immediate Access
 st.markdown("---")
 col1, col2, col3 = st.columns([2, 2, 1])
 with col1:
-    if st.button("🚀 **Quick Recovery: Create Collection from Recent Ingest**", type="primary", use_container_width=True):
+    if st.button("🚀 **Quick Recovery: Create Collection from Recent Ingest**", type="primary", use_container_width=True, key="quick_recovery_recent_ingest"):
         try:
             from cortex_engine.collection_manager import WorkingCollectionManager
             from cortex_engine.config_manager import ConfigManager
@@ -2052,7 +2244,7 @@ else:
             """)
         
         with col2:
-            if st.button("🔄 Enable Resume Mode", type="primary", use_container_width=True):
+            if st.button("🔄 Enable Resume Mode", type="primary", use_container_width=True, key="enable_resume_mode"):
                 st.warning("⚠️ **Manual Resume Required**")
                 st.info(f"""
                 The interrupted session ({orphaned_session['completed']}/{orphaned_session['total']} files) was from an older version.
