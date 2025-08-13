@@ -159,6 +159,14 @@ def main():
     # Initialize session state
     if "idea_gen_phase" not in st.session_state:
         st.session_state.idea_gen_phase = "setup"
+    if "selected_themes_for_ideation" not in st.session_state:
+        st.session_state.selected_themes_for_ideation = []
+    if "theme_identification_complete" not in st.session_state:
+        st.session_state.theme_identification_complete = False
+    
+    # Debug info - show current phase (can be removed later)
+    st.sidebar.info(f"🔍 **Debug**: Current phase = `{st.session_state.idea_gen_phase}`")
+    
     
     # Configuration Section
     st.markdown("---")
@@ -169,6 +177,7 @@ def main():
     with col1:
         # Collection Selector
         try:
+            from cortex_engine.collection_manager import WorkingCollectionManager
             collection_mgr = WorkingCollectionManager()
             collection_names = collection_mgr.get_collection_names()
             if collection_names:
@@ -213,10 +222,12 @@ def main():
         st.markdown("---")
         st.subheader("🔍 Collection Analysis & Filtering")
         
-        # Only analyze when user requests it, not automatically
+        # Create IdeaGenerator instance for this section
+        idea_gen_temp = IdeaGenerator(vector_index, graph_manager)
+        
+        # Analyze collection automatically when first selected
         if st.button("🔍 Analyze Collection", type="secondary", use_container_width=True):
             with st.spinner("🔄 Analyzing collection..."):
-                idea_gen_temp = IdeaGenerator(vector_index, graph_manager)
                 collection_analysis = idea_gen_temp.analyze_collection_for_filters(selected_collection)
                 st.session_state.collection_analysis = collection_analysis
                 st.rerun()
@@ -225,17 +236,29 @@ def main():
         collection_analysis = st.session_state.get("collection_analysis", {})
         
         if collection_analysis and "error" not in collection_analysis:
-            # Display collection statistics
-            col1, col2, col3 = st.columns(3)
+            # Show success message
+            st.success("✅ **Collection Analysis Complete!** Your collection has been analyzed and is ready for theme identification.")
+            
+            # Display detailed collection statistics
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 total_docs = collection_analysis.get("total_documents", 0)
                 st.metric("📚 Total Documents", total_docs)
             with col2:
                 doc_types = collection_analysis.get("document_types", [])
                 st.metric("📑 Document Types", len(doc_types))
+                if doc_types:
+                    st.caption(f"Types: {', '.join(doc_types[:3])}{'...' if len(doc_types) > 3 else ''}")
             with col3:
                 tags = collection_analysis.get("thematic_tags", [])
                 st.metric("🏷️ Unique Tags", len(tags))
+                if tags:
+                    st.caption(f"Tags: {', '.join(tags[:3])}{'...' if len(tags) > 3 else ''}")
+            with col4:
+                clients = collection_analysis.get("clients", [])
+                st.metric("🏢 Organizations", len(clients))
+                if clients:
+                    st.caption(f"Found: {', '.join(clients[:2])}{'...' if len(clients) > 2 else ''}")
             
             # Filter Controls
             st.markdown("#### 🎯 Apply Filters (Optional)")
@@ -325,9 +348,9 @@ def main():
             if selected_tags:
                 active_filters.append(f"Tags: {', '.join(selected_tags)}")
             if st.session_state.get("filter_consultant", "Any") != "Any":
-                active_filters.append(f"Consultant: {st.session_state.filter_consultant}")
+                active_filters.append(f"Consultant: {st.session_state.get('filter_consultant', '')}")
             if st.session_state.get("filter_client", "Any") != "Any":
-                active_filters.append(f"Client: {st.session_state.filter_client}")
+                active_filters.append(f"Client: {st.session_state.get('filter_client', '')}")
             
             if active_filters:
                 st.info(f"🎯 **Active Filters:** {' | '.join(active_filters)}")
@@ -356,68 +379,52 @@ def main():
             else:
                 st.caption("ℹ️ No filters applied - analyzing entire collection")
             
-            # Theme Identification Step (after collection analysis & filtering)
+            # Theme Identification Step (only after collection analysis is complete)
             st.markdown("---")
             st.subheader("🎨 Step 1: Theme Identification")
-            st.markdown("Now let's identify the major themes in your collection based on the analysis and any filters applied.")
+            st.markdown("✅ **Collection analyzed successfully!** Now let's identify the major themes in your collection based on the analysis and any filters applied.")
             
-            theme_identification_ready = selected_collection and selected_collection != "default"
+            theme_identification_ready = True  # Analysis is already complete at this point
             
             if st.button("🔍 Identify Major Themes", type="primary", disabled=not theme_identification_ready, use_container_width=True, key="identify_themes_btn"):
                 with st.spinner("🔄 Analyzing collection for major themes..."):
                     try:
                         idea_gen = IdeaGenerator(vector_index, graph_manager)
                         
-                        # Debug: Verify which collection is being used
-                        st.info(f"🔍 Debug: Selected collection = '{selected_collection}'")
+                        # Get collection content for theme analysis
+                        collection_content = idea_gen._get_collection_content(selected_collection, None)
                         
-                        # Get basic collection content for theme analysis
-                        doc_ids = idea_gen.collection_mgr.get_doc_ids_by_name(selected_collection)
-                        st.info(f"📊 Debug: Found {len(doc_ids) if doc_ids else 0} document IDs in collection '{selected_collection}'")
-                        
-                        if doc_ids:
-                            # Get a sample of documents for theme identification
-                            collection_content = idea_gen._get_collection_content(selected_collection, None)
-                            st.info(f"📄 Debug: Retrieved {len(collection_content)} documents for theme analysis")
+                        if collection_content:
                             
-                            # Debug: Show sample of collection content and thematic tags
-                            if collection_content:
-                                st.info(f"🔬 Debug: Analyzing thematic tags from {len(collection_content)} documents...")
-                                
-                                # Show first 3 documents' tags
-                                for i, doc in enumerate(collection_content[:3]):
-                                    title = doc.get('title', 'No title')
-                                    tags = doc.get('metadata', {}).get('thematic_tags', 'No tags')
-                                    st.info(f"📄 Doc {i+1}: '{title}' → Tags: '{tags}'")
-                                
-                                # Count all unique tags to see what we're working with
-                                all_tags = []
-                                for doc in collection_content:
-                                    tags_str = doc.get('metadata', {}).get('thematic_tags', '')
-                                    if tags_str:
-                                        doc_tags = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
-                                        all_tags.extend(doc_tags)
-                                
-                                from collections import Counter
-                                tag_counts = Counter(all_tags)
-                                top_raw_tags = tag_counts.most_common(10)
-                                st.info(f"🏷️ Debug: Top 10 raw tags: {top_raw_tags}")
-                            
-                            # Extract themes using the enhanced theme visualizer
-                            # Use a direct import to avoid any attribute issues
-                            from cortex_engine.theme_visualizer import ThemeNetworkVisualizer
-                            theme_visualizer = ThemeNetworkVisualizer()
-                            theme_analysis = theme_visualizer.extract_themes_from_discovery(
-                                {"themes": [], "opportunities": []}, collection_content
+                            theme_result = idea_gen.generate_intelligent_themes(
+                                collection_content, 
+                                llm_provider
                             )
                             
-                            # Debug: Show theme analysis results
-                            total_themes = len(theme_analysis.get("themes", []))
-                            st.info(f"🎨 Debug: Extracted {total_themes} themes from collection")
-                            
-                            st.session_state.identified_themes = theme_analysis
-                            st.session_state.theme_identification_complete = True
-                            st.rerun()
+                            if "error" in theme_result:
+                                st.error(f"❌ Theme generation failed: {theme_result['error']}")
+                                if "Ollama" in theme_result['error']:
+                                    st.info("💡 **Try using Cloud (Gemini)** if Ollama is not available, or start Ollama service with: `ollama serve`")
+                            else:
+                                themes = theme_result.get("themes", [])
+                                total_themes = len(themes)
+                                st.success(f"✅ Generated {total_themes} intelligent themes using {theme_result.get('llm_provider', 'LLM')}")
+                                
+                                # Show sample themes
+                                if themes:
+                                    st.info(f"🎨 **Sample themes:** {', '.join(themes[:3])}{'...' if len(themes) > 3 else ''}")
+                                
+                                # Store in session state with compatible format for UI
+                                theme_analysis = {
+                                    "themes": [{"theme": theme, "frequency": 1} for theme in themes],
+                                    "total_themes": total_themes,
+                                    "llm_generated": True,
+                                    "llm_provider": theme_result.get('llm_provider')
+                                }
+                                
+                                st.session_state.identified_themes = theme_analysis
+                                st.session_state.theme_identification_complete = True
+                                st.rerun()
                         else:
                             st.error("❌ Selected collection is empty. Please choose a different collection.")
                     except Exception as e:
@@ -483,7 +490,7 @@ def main():
                     
                     with theme_col2:
                         st.markdown("**✅ Selected Themes:**")
-                        if st.session_state.selected_themes_for_ideation:
+                        if st.session_state.get("selected_themes_for_ideation", []):
                             for i, theme in enumerate(st.session_state.selected_themes_for_ideation, 1):
                                 st.markdown(f"{i}. {theme}")
                             
@@ -528,124 +535,38 @@ def main():
                             st.session_state.selected_themes_for_ideation = []
                             st.rerun()
                 
-                # Show advanced theme network visualization
-                if st.session_state.selected_themes_for_ideation:
-                    st.markdown("### 🌐 Theme Relationship Network")
-                    st.markdown("Explore how your selected themes connect and relate to each other:")
+                # Skip theme network visualization (removed due to display issues)
+                # Ready for ideation section
+                # Show a simple theme summary instead of complex network
+                if st.session_state.get("selected_themes_for_ideation", []):
+                    st.markdown("### 🎯 Selected Themes Summary")
+                    st.markdown("**You have selected the following themes for ideation:**")
+                    for i, theme in enumerate(st.session_state.selected_themes_for_ideation, 1):
+                        st.markdown(f"{i}. **{theme}**")
                     
-                    # Layout selection
-                    viz_col1, viz_col2 = st.columns([3, 1])
-                    
-                    with viz_col2:
-                        from cortex_engine.advanced_theme_network import AdvancedThemeNetworkVisualizer
-                        advanced_visualizer = AdvancedThemeNetworkVisualizer()
-                        layout_options = advanced_visualizer.get_layout_options()
-                        
-                        selected_layout = st.selectbox(
-                            "🎨 Layout Style",
-                            options=[opt["value"] for opt in layout_options],
-                            format_func=lambda x: next(opt["label"] for opt in layout_options if opt["value"] == x),
-                            key="theme_layout_selection",
-                            help="Choose how themes are arranged in the network"
-                        )
-                        
-                        # Show layout description
-                        layout_desc = next(opt["description"] for opt in layout_options if opt["value"] == selected_layout)
-                        st.caption(f"💡 {layout_desc}")
-                    
-                    with viz_col1:
-                        try:
-                            # Filter theme data to selected themes only
-                            selected_themes = set(st.session_state.selected_themes_for_ideation)
-                            
-                            # Create filtered theme data with only selected themes
-                            filtered_themes = [
-                                theme_info for theme_info in theme_data.get("themes", [])
-                                if isinstance(theme_info, dict) and theme_info.get("theme", "") in selected_themes
-                            ]
-                            
-                            # Filter cooccurrence data
-                            filtered_cooccurrence = {
-                                pair: weight for pair, weight in theme_data.get("cooccurrence", {}).items()
-                                if pair[0] in selected_themes and pair[1] in selected_themes
-                            }
-                            
-                            # Filter metrics
-                            filtered_metrics = {}
-                            for metric_type, metric_data in theme_data.get("metrics", {}).items():
-                                if isinstance(metric_data, dict):
-                                    filtered_metrics[metric_type] = {
-                                        theme: value for theme, value in metric_data.items()
-                                        if theme in selected_themes
-                                    }
-                                else:
-                                    filtered_metrics[metric_type] = metric_data
-                            
-                            filtered_theme_data = {
-                                "themes": filtered_themes,
-                                "cooccurrence": filtered_cooccurrence,
-                                "metrics": filtered_metrics
-                            }
-                            
-                            # Create the advanced network visualization
-                            network_fig = advanced_visualizer.create_research_rabbit_network(
-                                filtered_theme_data,
-                                layout_algorithm=selected_layout,
-                                max_themes=len(selected_themes)
-                            )
-                            
-                            st.plotly_chart(network_fig, use_container_width=True, key="advanced_theme_network")
-                            
-                        except Exception as e:
-                            logger.error(f"Advanced theme visualization failed: {e}")
-                            st.warning(f"⚠️ Advanced visualization unavailable: {e}")
-                            
-                            # Fallback to basic visualization
-                            try:
-                                from cortex_engine.theme_visualizer import ThemeNetworkVisualizer
-                                basic_visualizer = ThemeNetworkVisualizer()
-                                
-                                if "visualization_data" in theme_data:
-                                    # Filter visualization data to only show selected themes
-                                    selected_themes = set(st.session_state.selected_themes_for_ideation)
-                                    filtered_viz_data = {
-                                        "nodes": [node for node in theme_data["visualization_data"]["nodes"] 
-                                                 if node.get("label") in selected_themes],
-                                        "edges": [edge for edge in theme_data["visualization_data"]["edges"]
-                                                 if edge.get("source") in selected_themes and edge.get("target") in selected_themes]
-                                    }
-                                    
-                                    filtered_theme_data = theme_data.copy()
-                                    filtered_theme_data["visualization_data"] = filtered_viz_data
-                                    
-                                    basic_fig = basic_visualizer.create_interactive_network(
-                                        filtered_theme_data, 
-                                        title=f"Selected Themes Network ({len(selected_themes)} themes)"
-                                    )
-                                    st.plotly_chart(basic_fig, use_container_width=True, key="basic_theme_fallback")
-                                
-                            except Exception as fallback_e:
-                                st.error(f"❌ Theme visualization failed: {fallback_e}")
-                    
-                    # Optional: Show theme importance chart alongside network
-                    if st.checkbox("📊 Show Theme Importance Ranking", key="show_importance_chart"):
-                        try:
-                            importance_fig = advanced_visualizer.create_theme_importance_chart(filtered_themes)
-                            st.plotly_chart(importance_fig, use_container_width=True, key="theme_importance_chart")
-                        except Exception as e:
-                            st.warning(f"Importance chart unavailable: {e}")
+                    # Theme visualization removed due to display issues - using simple list instead
                 
                 # Check if ready for ideation
-                if st.session_state.selected_themes_for_ideation:
+                if st.session_state.get("selected_themes_for_ideation", []):
                     st.markdown("---")
                     st.markdown("### 🚀 Ready for Ideation")
                     st.success(f"✅ {len(st.session_state.selected_themes_for_ideation)} themes selected! You can now proceed with the full ideation process below.")
                 else:
                     st.markdown("---")
                     st.warning("⚠️ Please select at least 2-3 themes above before proceeding to ideation.")
+        
+        elif collection_analysis and "error" in collection_analysis:
+            # Show error message when analysis fails
+            st.error(f"❌ **Analysis Failed:** {collection_analysis.get('error', 'Unknown error occurred during collection analysis.')}")
+            st.info("💡 **Tip:** Try selecting a different collection or check if the collection contains valid documents.")
     
         elif selected_collection and selected_collection != "default":
-            st.info("👆 Click 'Identify Major Themes' to start the ideation process")
+            # Check if analysis has been done
+            collection_analysis = st.session_state.get("collection_analysis", {})
+            if not collection_analysis or "error" in collection_analysis:
+                st.info("👆 **First step:** Click 'Analyze Collection' above to analyze your knowledge collection before identifying themes.")
+            else:
+                st.info("👆 Click 'Identify Major Themes' to start the ideation process")
             return  # Don't show ideation section until themes are identified
     
     else:
@@ -735,19 +656,18 @@ def main():
                 
                 idea_gen = IdeaGenerator(vector_index, graph_manager)
                 problem_results = idea_gen.generate_problem_statements(
-                    collection_name=selected_collection,
-                    selected_themes=selected_themes,
-                    seed_ideas=seed_ideas,
+                    themes=selected_themes,
+                    innovation_goals=innovation_goals,
                     constraints=constraints,
-                    goals=innovation_goals,
-                    llm_provider=llm_provider,
-                    filters=filters if filters else None
+                    llm_provider=llm_provider
                 )
                 st.session_state.problem_statements = problem_results
                 st.session_state.idea_gen_phase = "problems_complete"
-                st.rerun()
+                # Allow natural flow to next phase
             except Exception as e:
-                st.error(f"❌ Error during discovery phase: {e}")
+                st.error(f"❌ Error during problem statement generation: {e}")
+                import traceback
+                st.error(f"**Debug details:** {traceback.format_exc()}")
     
     # Display Problem Statement Results
     if st.session_state.idea_gen_phase == "problems_complete" and "problem_statements" in st.session_state:
@@ -756,83 +676,86 @@ def main():
         
         results = st.session_state.problem_statements
         
-        if isinstance(results, dict):
-            if results.get("status") == "success":
-                # Display analysis metadata
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("📚 Documents Analyzed", results.get("document_count", 0))
-                with col2:
-                    st.metric("🎨 Themes Used", len(results.get("selected_themes", [])))
-                with col3:
-                    st.metric("🤖 Analysis Model", results.get("analysis_model", "Unknown"))
-                
-                # Show selected themes
-                if results.get("selected_themes"):
-                    st.info(f"🎯 **Focus Themes:** {', '.join(results['selected_themes'])}")
-                
-                # Show applied filters if any
-                if results.get("filtered_analysis") and results.get("filters_applied"):
-                    st.info(f"🔍 **Applied Filters:** {results['filters_applied']}")
-                
-                st.markdown("---")
-                
-                # Display problem statements
-                if "problem_statements" in results and results["problem_statements"]:
-                    st.markdown("### 🎯 Problem Statements by Theme")
-                    
-                    problem_statements = results["problem_statements"]
-                    for i, theme_problems in enumerate(problem_statements, 1):
-                        theme = theme_problems.get("theme", f"Theme {i}")
-                        problems = theme_problems.get("problems", [])
-                        
-                        with st.container(border=True):
-                            st.markdown(f"**🎨 {theme}**")
-                            
-                            for j, problem in enumerate(problems, 1):
-                                st.markdown(f"**{j}.** {problem}")
-                            
-                            # Add selection checkbox for each problem
-                            if f"selected_problems_{i}" not in st.session_state:
-                                st.session_state[f"selected_problems_{i}"] = []
-                            
-                            selected_for_theme = st.multiselect(
-                                f"Select problems for ideation",
-                                options=problems,
-                                default=st.session_state[f"selected_problems_{i}"],
-                                key=f"problems_select_{i}_{theme}",
-                                help="Choose which problems to focus on for idea generation"
-                            )
-                            st.session_state[f"selected_problems_{i}"] = selected_for_theme
-                
-                # Summary section
-                if "summary" in results:
-                    st.markdown("### 📋 Analysis Summary")
-                    st.markdown(results["summary"])
-                
-                # Collect all selected problems for next step
-                all_selected_problems = []
-                for i, theme_problems in enumerate(results.get("problem_statements", []), 1):
-                    selected = st.session_state.get(f"selected_problems_{i}", [])
-                    all_selected_problems.extend(selected)
-                
-                st.session_state.selected_problems_for_ideation = all_selected_problems
-                
-                # Next step
-                st.markdown("---")
-                if all_selected_problems:
-                    st.success(f"✅ {len(all_selected_problems)} problem statement(s) selected for ideation!")
-                else:
-                    st.warning("⚠️ Please select at least one problem statement above to proceed to idea generation.")
-            
-            elif results.get("status") == "error":
-                st.error(f"❌ Problem statement generation failed: {results.get('error', 'Unknown error')}")
-            
-            else:
-                st.warning("⚠️ Unexpected response format. Please try again.")
+        # Debug: Show result structure
+        if not isinstance(results, dict):
+            st.error(f"❌ Unexpected response format: Expected dict, got {type(results)}")
+            st.error(f"Raw response: {results}")
+            return
         
-        else:
-            st.error("❌ Invalid response received. Please try again.")
+        if "error" in results:
+            st.error(f"❌ Problem statement generation failed: {results['error']}")
+            return
+            
+        if results.get("status") == "success":
+            # Display analysis metadata
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("📚 Documents Analyzed", results.get("document_count", 0))
+            with col2:
+                st.metric("🎨 Themes Used", len(results.get("selected_themes", [])))
+            with col3:
+                st.metric("🤖 Analysis Model", results.get("analysis_model", "Unknown"))
+            
+            # Show selected themes
+            if results.get("selected_themes"):
+                st.info(f"🎯 **Focus Themes:** {', '.join(results['selected_themes'])}")
+            
+            # Show applied filters if any
+            if results.get("filtered_analysis") and results.get("filters_applied"):
+                st.info(f"📋 **Applied Filters:** {results['filters_applied']}")
+            
+            st.markdown("---")
+            
+            # Display problem statements
+            if "problem_statements" in results and results["problem_statements"]:
+                st.markdown("### 🎯 Problem Statements by Theme")
+                
+                problem_statements = results["problem_statements"]
+                for i, theme_problems in enumerate(problem_statements, 1):
+                    theme = theme_problems.get("theme", f"Theme {i}")
+                    problems = theme_problems.get("problems", [])
+                    
+                    with st.container(border=True):
+                        st.markdown(f"**🎨 {theme}**")
+                        
+                        for j, problem in enumerate(problems, 1):
+                            st.markdown(f"**{j}.** {problem}")
+                        
+                        # Add selection checkbox for each problem
+                        if f"selected_problems_{i}" not in st.session_state:
+                            st.session_state[f"selected_problems_{i}"] = []
+                        
+                        # Filter default values to only include items that exist in current options
+                        current_defaults = [item for item in st.session_state[f"selected_problems_{i}"] if item in problems]
+                        
+                        selected_for_theme = st.multiselect(
+                            f"Select problems for ideation",
+                            options=problems,
+                            default=current_defaults,
+                            key=f"problems_select_{i}_{theme}",
+                            help="Choose which problems to focus on for idea generation"
+                        )
+                        st.session_state[f"selected_problems_{i}"] = selected_for_theme
+            
+            # Summary section
+            if "summary" in results:
+                st.markdown("### 📋 Analysis Summary")
+                st.markdown(results["summary"])
+            
+            # Collect all selected problems for next step
+            all_selected_problems = []
+            for i, theme_problems in enumerate(results.get("problem_statements", []), 1):
+                selected = st.session_state.get(f"selected_problems_{i}", [])
+                all_selected_problems.extend(selected)
+            
+            st.session_state.selected_problems_for_ideation = all_selected_problems
+            
+            # Next step
+            st.markdown("---")
+            if all_selected_problems:
+                st.success(f"✅ {len(all_selected_problems)} problem statement(s) selected for ideation!")
+            else:
+                st.warning("⚠️ Please select at least one problem statement above to proceed to idea generation.")
     
     # Step 3: Idea Generation
     if (st.session_state.get("selected_problems_for_ideation") and 
@@ -916,7 +839,7 @@ def main():
                     
                     st.session_state.generated_ideas = ideas_result
                     st.session_state.idea_gen_phase = "ideas_complete"
-                    st.rerun()
+                    # Allow natural page flow without forcing rerun
                     
                 except Exception as e:
                     st.error(f"❌ Idea generation failed: {e}")
@@ -974,10 +897,92 @@ def main():
                 st.markdown("### 📋 Generation Summary")
                 st.markdown(ideas_result["summary"])
             
+            # Export and Next Steps
+            st.markdown("---")
+            
+            # Export functionality
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("📄 Export Ideas as Markdown", key="export_markdown"):
+                    try:
+                        import tempfile
+                        import os
+                        from datetime import datetime
+                        
+                        # Generate markdown content
+                        markdown_content = f"""# Generated Ideas Report
+Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+## Summary
+- **Total Ideas**: {ideas_result.get('total_ideas', 0)}
+- **Problem Statements**: {len(ideas_result.get('idea_groups', []))}
+- **Creativity Level**: {ideas_result.get('creativity_level', 'N/A')}
+- **LLM Provider**: {ideas_result.get('llm_provider', 'N/A')}
+
+"""
+                        
+                        for i, group in enumerate(ideas_result.get("idea_groups", []), 1):
+                            problem = group.get("problem_statement", f"Problem {i}")
+                            ideas = group.get("ideas", [])
+                            
+                            markdown_content += f"""## Problem {i}: {problem}
+
+"""
+                            
+                            for j, idea in enumerate(ideas, 1):
+                                if isinstance(idea, dict):
+                                    title = idea.get("title", f"Idea {j}")
+                                    description = idea.get("description", "No description")
+                                    implementation = idea.get("implementation", "")
+                                    impact = idea.get("impact", "")
+                                    
+                                    markdown_content += f"""### {j}. {title}
+
+**Description:** {description}
+
+"""
+                                    if implementation:
+                                        markdown_content += f"**Implementation:** {implementation}\n\n"
+                                    if impact:
+                                        markdown_content += f"**Impact:** {impact}\n\n"
+                                else:
+                                    markdown_content += f"### {j}. {idea}\n\n"
+                            
+                            markdown_content += "---\n\n"
+                        
+                        # Create download
+                        st.download_button(
+                            label="Download Markdown Report",
+                            data=markdown_content,
+                            file_name=f"idea_generation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                            mime="text/markdown",
+                            key="download_markdown"
+                        )
+                        
+                    except Exception as e:
+                        st.error(f"Export failed: {e}")
+            
+            with col2:
+                if st.button("🔄 Generate New Ideas", key="generate_new"):
+                    # Reset to problem selection phase more gracefully
+                    st.session_state.idea_gen_phase = "problems_complete"
+                    if "generated_ideas" in st.session_state:
+                        del st.session_state.generated_ideas
+                    st.rerun()
+            
             # Next steps
             st.markdown("---")
             st.success("🎉 **Idea generation complete!** You now have innovative solutions for your selected problem statements.")
-            st.info("💡 **Next Steps:** Review the ideas, select the most promising ones, and consider developing them into detailed proposals or implementation plans.")
+            
+            # More actionable next steps
+            st.markdown("### 🚀 Next Steps")
+            st.markdown("""
+            1. **📋 Review & Prioritize**: Evaluate each idea's feasibility, impact, and alignment with your goals
+            2. **📄 Export Ideas**: Use the export button above to save your ideas for further development  
+            3. **💡 Develop Concepts**: Select the most promising ideas for detailed concept development
+            4. **🔗 Integration**: Consider how these ideas could integrate with existing knowledge from your collection
+            5. **📈 Implementation**: Create action plans and timelines for your selected ideas
+            """)
             
         else:
             st.error(f"❌ Idea generation failed: {ideas_result.get('error', 'Unknown error')}")

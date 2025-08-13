@@ -1851,7 +1851,12 @@ def check_recovery_needed():
         
         # Check for recent failed ingestions
         if "recommendations" in analysis and analysis["recommendations"]:
-            issues.extend(analysis["recommendations"][:2])  # Show first 2 recommendations
+            # Convert recommendation dicts to string descriptions
+            for rec in analysis["recommendations"][:2]:
+                if isinstance(rec, dict):
+                    issues.append(rec.get("description", "Recovery action needed"))
+                else:
+                    issues.append(str(rec))
         
         return len(issues) > 0, issues
         
