@@ -305,6 +305,18 @@ class IdeaGenerator:
         try:
             logger.info(f"Starting intelligent theme generation using {llm_provider}")
             
+            # Use new unified LLM service
+            from ..llm_service import create_llm_service
+            from ..exceptions import ModelError
+            
+            service_manager = create_llm_service("ideation", llm_provider)
+            
+            try:
+                llm = service_manager.get_llm()
+            except ModelError as e:
+                logger.error(f"LLM initialization failed: {e}")
+                return {"error": str(e)}
+            
             # Prepare document summaries for LLM analysis
             doc_summaries = []
             for doc in collection_docs[:10]:  # Limit to first 10 docs to avoid token limits
@@ -319,29 +331,6 @@ class IdeaGenerator:
             
             # Create the LLM prompt
             prompt = self._create_theme_analysis_prompt(doc_summaries)
-            
-            # Get LLM response
-            from cortex_engine.utils.ollama_utils import check_ollama_service
-            
-            if llm_provider == "Local (Ollama)":
-                is_running, error_msg = check_ollama_service()
-                if not is_running:
-                    logger.warning(f"Ollama not available: {error_msg}")
-                    return {"error": f"Ollama service not available: {error_msg}"}
-                
-                from llama_index.llms.ollama import Ollama
-                llm = Ollama(model="mistral", request_timeout=120.0)
-                
-            elif llm_provider == "Cloud (Gemini)":
-                # TODO: Implement Gemini LLM
-                return {"error": "Gemini integration not yet implemented for theme generation"}
-                
-            elif llm_provider == "Cloud (OpenAI)":
-                # TODO: Implement OpenAI LLM
-                return {"error": "OpenAI integration not yet implemented for theme generation"}
-            
-            else:
-                return {"error": f"Unknown LLM provider: {llm_provider}"}
             
             logger.info("Sending theme analysis request to LLM...")
             response = llm.complete(prompt)
@@ -463,26 +452,17 @@ THEMES:"""
             # Create the LLM prompt for problem statement generation
             prompt = self._create_problem_statement_prompt(themes, innovation_goals, constraints)
             
-            # Get LLM response
-            from cortex_engine.utils.ollama_utils import check_ollama_service
+            # Use new unified LLM service
+            from ..llm_service import create_llm_service
+            from ..exceptions import ModelError
             
-            if llm_provider == "Local (Ollama)":
-                is_running, error_msg = check_ollama_service()
-                if not is_running:
-                    logger.warning(f"Ollama not available: {error_msg}")
-                    return {"error": f"Ollama service not available: {error_msg}"}
-                
-                from llama_index.llms.ollama import Ollama
-                llm = Ollama(model="mistral", request_timeout=120.0)
-                
-            elif llm_provider == "Cloud (Gemini)":
-                return {"error": "Gemini integration not yet implemented for problem statement generation"}
-                
-            elif llm_provider == "Cloud (OpenAI)":
-                return {"error": "OpenAI integration not yet implemented for problem statement generation"}
+            service_manager = create_llm_service("ideation", llm_provider)
             
-            else:
-                return {"error": f"Unknown LLM provider: {llm_provider}"}
+            try:
+                llm = service_manager.get_llm()
+            except ModelError as e:
+                logger.error(f"LLM initialization failed: {e}")
+                return {"error": str(e)}
             
             logger.info("Sending problem statement generation request to LLM...")
             response = llm.complete(prompt)
@@ -708,26 +688,17 @@ PROBLEM STATEMENTS:"""
                 creativity_level, focus_areas, include_implementation
             )
             
-            # Get LLM response
-            from cortex_engine.utils.ollama_utils import check_ollama_service
+            # Use new unified LLM service
+            from ..llm_service import create_llm_service
+            from ..exceptions import ModelError
             
-            if llm_provider == "Local (Ollama)":
-                is_running, error_msg = check_ollama_service()
-                if not is_running:
-                    logger.warning(f"Ollama not available: {error_msg}")
-                    return {"error": f"Ollama service not available: {error_msg}"}
-                
-                from llama_index.llms.ollama import Ollama
-                llm = Ollama(model="mistral", request_timeout=180.0)
-                
-            elif llm_provider == "Cloud (Gemini)":
-                return {"error": "Gemini integration not yet implemented for idea generation"}
-                
-            elif llm_provider == "Cloud (OpenAI)":
-                return {"error": "OpenAI integration not yet implemented for idea generation"}
+            service_manager = create_llm_service("ideation", llm_provider)
             
-            else:
-                return {"error": f"Unknown LLM provider: {llm_provider}"}
+            try:
+                llm = service_manager.get_llm()
+            except ModelError as e:
+                logger.error(f"LLM initialization failed: {e}")
+                return {"error": str(e)}
             
             logger.info("Sending idea generation request to LLM...")
             response = llm.complete(prompt)

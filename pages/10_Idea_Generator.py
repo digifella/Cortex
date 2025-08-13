@@ -195,13 +195,10 @@ def main():
             selected_collection = None
     
     with col2:
-        # Model Selector
-        llm_provider = st.selectbox(
-            "🤖 Select LLM Provider", 
-            options=["Local (Ollama)", "Cloud (Gemini)", "Cloud (OpenAI)"], 
-            key="llm_provider",
-            help="Choose the AI model to power the ideation process"
-        )
+        # Use standardized LLM provider selector
+        from cortex_engine.ui_components import llm_provider_selector
+        llm_provider, llm_status = llm_provider_selector("ideation", "idea_gen", 
+                                                        "Choose the AI model to power the ideation process")
     
     # Clear any existing automatic analysis if collection changes
     if "last_selected_collection" not in st.session_state:
