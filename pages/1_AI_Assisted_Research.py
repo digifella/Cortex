@@ -184,24 +184,43 @@ if current_step == "start":
             key="research_topic_input"
         )
     with col2:
-        llm_choice = st.selectbox(
-            "**AI Provider:**",
-            ["🌩️ Gemini (Cloud - More Capable)", "🏠 Local Mistral (Fast & Private)"],
-            help="Gemini: More powerful but requires internet. Local: Private and fast.",
-            key="research_llm_choice"
-        )
+        # Use standardized LLM provider selector with error handling
+        from cortex_engine.ui_components import llm_provider_selector
+        
+        try:
+            provider_display, llm_status = llm_provider_selector("research", "research_ai", 
+                                                                "Choose between cloud power or local privacy for research")
+            
+            # Convert display name to legacy format for compatibility with synthesise.py
+            if "Gemini" in provider_display:
+                provider = "gemini"
+            elif "OpenAI" in provider_display:
+                provider = "openai"
+            else:
+                provider = "ollama"
+            
+            # Store provider choice in session state for legacy compatibility
+            st.session_state.research_provider = provider
+            
+            # Show detailed error if LLM service not available
+            if llm_status["status"] == "error":
+                st.error(f"⚠️ **LLM Service Issue**: {llm_status['message']}")
+                if "GEMINI_API_KEY" in llm_status["message"]:
+                    st.info("💡 **Setup Required**: Add your Gemini API key to the `.env` file in your project root:")
+                    st.code('GEMINI_API_KEY="your_gemini_api_key_here"')
+                    st.info("🔗 **Get API Key**: Visit [Google AI Studio](https://makersuite.google.com/app/apikey)")
+                provider = None  # Disable research when LLM unavailable
+                
+        except Exception as e:
+            st.error(f"❌ LLM Provider configuration error: {e}")
+            provider = None
+    # Disable button if no research topic or LLM provider unavailable
+    research_disabled = not research_topic or provider is None
     
-    # Set provider based on choice
-    if "Gemini" in llm_choice:
-        provider = "gemini"
-        st.info("🌩️ Using **Gemini** for enhanced research capabilities")
-    else:
-        provider = "ollama" 
-        st.info("🏠 Using **Local Mistral** for private research")
+    if provider is None and research_topic:
+        st.warning("⚠️ **Research disabled**: Please configure a working LLM provider above to continue.")
     
-    # Store provider choice in session state
-    st.session_state.research_provider = provider
-    if st.button("💎 Start Diamond 1: Find Foundational Sources", disabled=not research_topic, type="primary"):
+    if st.button("💎 Start Diamond 1: Find Foundational Sources", disabled=research_disabled, type="primary"):
         st.session_state.research_topic = research_topic
         st.session_state.research_log = [f"--- Starting New Research on '{st.session_state.research_topic}' ---"]
         with st.spinner("AI is generating queries for foundational papers..."):
