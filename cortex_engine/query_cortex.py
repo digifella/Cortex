@@ -143,6 +143,13 @@ def describe_image_with_vlm_for_ingestion(image_path: str) -> str:
         print(f"  -> {error_msg}")
         return error_msg
     except Exception as e:
-        error_msg = f"VLM Error: An unexpected error occurred while processing {image_path}. Is Ollama running and the '{VLM_MODEL}' model pulled? Error: {e}"
+        # Check for specific 404 error indicating missing model
+        if "404" in str(e) or "not found" in str(e).lower():
+            error_msg = f"VLM Error: Model '{VLM_MODEL}' not found. Please install with: ollama pull {VLM_MODEL}"
+            logger.error(f"Missing VLM model detected for {image_path}: {error_msg}")
+        else:
+            error_msg = f"VLM Error: An unexpected error occurred while processing {image_path}. Is Ollama running and the '{VLM_MODEL}' model pulled? Error: {e}"
+            logger.error(f"VLM processing failed for {image_path}: {error_msg}")
+        
         print(f"  -> {error_msg}")
         return error_msg

@@ -133,6 +133,7 @@ GRAPHVIZ_DOT_EXECUTABLE="/usr/bin/dot"
   - `config_utils.py` - Configuration validation utilities
   - `file_utils.py` - File operations and hashing
   - `ollama_utils.py` - Ollama service connection and error handling
+  - `model_checker.py` - Model availability validation and user notifications
 
 ### UI Pages (`pages/`)
 - `1_AI_Assisted_Research.py` - Multi-agent research system
@@ -154,6 +155,16 @@ GRAPHVIZ_DOT_EXECUTABLE="/usr/bin/dot"
 - **Standardized Logging**: All modules now use consistent logging instead of mixed print statements  
 - **Exception Hierarchy**: Implemented structured exception handling with `cortex_engine/exceptions.py`
 - **Path Handling**: Unified cross-platform path conversion logic
+
+#### Model Availability & Error Handling (v39.2.0+)
+- **Pre-flight Model Checking**: Validates required models before ingestion starts
+- **System Status Dashboard**: Real-time model availability in main page sidebar
+- **User-Friendly Error Messages**: Clear instructions for missing models with installation commands
+- **Graceful Fallbacks**: Option to skip image processing if VLM unavailable
+- **Warning Suppression**: Cleaned up logs by filtering harmless library warnings
+- **Encoding Error Handling**: Robust handling of binary files and unsupported formats
+- **Enhanced File Filtering**: Updated exclusions (added .key, .swf; removed .ppt/.pptx)
+- **Progress Monitoring**: Real-time file scanning progress with time estimates
 
 #### Idea Generator Feature (v39.1.0+)
 - **Complete Double Diamond Implementation**: All four phases (Discover, Define, Develop, Deliver) fully operational

@@ -69,7 +69,7 @@ DEFAULT_EXCLUSION_PATTERNS_STR = (
     # Web & code files
     "*.css\n*.html\n*.js\n*.py\n*.json\n"
     # Data & archives
-    "*.xls\n*.xlsx\n*.csv\n*.zip\n*.ppt\n*.pptx\n"
+    "*.xls\n*.xlsx\n*.csv\n*.zip\n"
     # Multimedia files (excluding images)
     "*.mp4\n*.mov\n*.avi\n*.mp3\n*.wav\n*.raf\n"
     # Business document types to ignore by default

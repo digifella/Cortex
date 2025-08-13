@@ -13,6 +13,16 @@ os.environ['ANONYMIZED_TELEMETRY'] = 'False'
 import argparse
 import json
 import logging
+import warnings
+
+# Suppress common warnings that don't affect functionality
+warnings.filterwarnings("ignore", message=".*attention_mask.*")
+warnings.filterwarnings("ignore", message=".*pad_token_id.*")
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
+
+# Reduce verbosity of specific loggers that tend to be noisy
+logging.getLogger("unstructured").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Literal, Tuple
@@ -204,7 +214,10 @@ def manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
                 try:
                     docs_from_file = reader.load_data(file_path=path)
                 except Exception as unstructured_error:
-                    logging.warning(f"UnstructuredReader processing warning for {path.name}: {unstructured_error}")
+                    # Many UnstructuredReader warnings are harmless parsing issues - only log real errors
+                    error_str = str(unstructured_error).lower()
+                    if not any(x in error_str for x in ['warning', 'deprecation', 'future']):
+                        logging.warning(f"UnstructuredReader processing issue for {path.name}: {unstructured_error}")
                     # Create error document if UnstructuredReader fails
                     docs_from_file = [Document(
                         text=f"Error processing old Office document: {path.name}. Reason: {unstructured_error}",
@@ -213,6 +226,13 @@ def manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
             else:
                 try:
                     docs_from_file = reader.load_data(file=path)
+                except UnicodeDecodeError as encoding_error:
+                    logging.warning(f"Encoding error for {path.name} - file appears to be binary or uses unsupported encoding: {encoding_error}")
+                    # Create an informational document noting the file couldn't be processed
+                    docs_from_file = [Document(
+                        text=f"File could not be processed due to encoding issues: {path.name}. This file may be binary or use unsupported text encoding.",
+                        metadata={'file_path': str(path.as_posix()), 'file_name': path.name, 'source_type': 'document_error'}
+                    )]
                 except OSError as wmf_error:
                     if "cannot find loader for this WMF file" in str(wmf_error):
                         logging.warning(f"WMF image error in {path.name}, attempting text-only extraction: {wmf_error}")

@@ -12,6 +12,7 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from cortex_engine.help_system import help_system
+from cortex_engine.utils.model_checker import model_checker
 
 # --- Page Setup ---
 st.set_page_config(
@@ -50,6 +51,30 @@ This unified interface provides a seamless workflow from initial research to fin
 """)
 
 st.divider()
+
+# Add model status check in sidebar
+with st.sidebar:
+    st.markdown("---")
+    st.subheader("🔧 System Status")
+    
+    # Quick model availability check
+    ingestion_check = model_checker.check_ingestion_requirements(include_images=True)
+    research_check = model_checker.check_research_requirements()
+    
+    if ingestion_check["can_proceed"]:
+        st.success("✅ Ingestion: Ready")
+    else:
+        st.error("❌ Ingestion: Missing models")
+        with st.expander("View Details"):
+            st.markdown(model_checker.format_status_message(ingestion_check))
+    
+    if research_check["local_research_available"]:
+        st.success("✅ Research: Ready")
+    elif research_check["ollama_running"]:
+        st.warning("⚠️ Research: Cloud only")
+        st.caption("Local research model not available")
+    else:
+        st.error("❌ Research: Ollama down")
 
 # Add help system
 help_system.show_help_menu()

@@ -17,6 +17,7 @@ from fnmatch import fnmatch
 from collections import defaultdict
 from datetime import datetime
 from typing import List
+import time
 
 import fitz
 import docx
@@ -27,6 +28,7 @@ sys.path.insert(0, str(project_root))
 
 # Import centralized utilities
 from cortex_engine.utils import convert_windows_to_wsl_path, get_logger
+from cortex_engine.utils.model_checker import model_checker
 from cortex_engine.config import STAGING_INGESTION_FILE, INGESTED_FILES_LOG, DEFAULT_EXCLUSION_PATTERNS_STR
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.ingest_cortex import RichMetadata
@@ -72,10 +74,14 @@ UNSUPPORTED_EXTENSIONS = {
     '.mp3', '.wav', '.aac', '.flac', '.ogg', '.wma', '.m4a', '.opus',
     # Archives & Compressed
     '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.cab', '.dmg', '.iso',
+    # Interactive media
+    '.swf',
     # Email files (Outlook message files are typically binary)
     '.msg', '.eml', '.pst', '.ost',
     # Office binary formats (use newer XML formats instead)
     '.xls', '.xlsx', '.xlsm', '.pptm', '.potm', '.ppsm',
+    # Keynote and other Apple formats
+    '.key', '.numbers', '.pages',
     # Executables & System
     '.exe', '.msi', '.app', '.deb', '.rpm', '.pkg', '.run', '.bin', '.com', '.bat', '.cmd', '.sh',
     # Temporary & Cache files
@@ -228,27 +234,80 @@ def scan_for_files(selected_dirs: List[str]):
             try: ingested_files = json.load(f)
             except json.JSONDecodeError: pass
 
+    # Enhanced file scanning with progress monitoring
     all_files = []
-    for dir_path in selected_dirs:
+    
+    # Create progress containers
+    scan_progress_container = st.empty()
+    file_count_container = st.empty()
+    
+    total_dirs_to_scan = len(selected_dirs)
+    total_scan_start = time.time()
+    
+    for dir_idx, dir_path in enumerate(selected_dirs, 1):
         wsl_dir_path = convert_windows_to_wsl_path(dir_path)
-        all_files.extend([p for p in Path(wsl_dir_path).rglob('*') if p.is_file()])
+        dir_name = Path(dir_path).name
+        
+        # Update progress display
+        scan_progress_container.info(f"🔍 **Scanning directory {dir_idx}/{total_dirs_to_scan}**: {dir_name}")
+        
+        try:
+            path_obj = Path(wsl_dir_path)
+            if not path_obj.exists():
+                st.warning(f"⚠️ Directory not found: {dir_path}")
+                continue
+                
+            # Count files in directory first (for better progress indication)
+            dir_files = []
+            file_count = 0
+            
+            # Use iterative approach with progress updates
+            start_time = time.time()
+            for file_path in path_obj.rglob('*'):
+                if file_path.is_file():
+                    dir_files.append(file_path)
+                    file_count += 1
+                    
+                    # Update file count every 50 files (more frequent updates)
+                    if file_count % 50 == 0:
+                        elapsed = time.time() - start_time
+                        file_count_container.text(f"📁 **{dir_name}**: {file_count} files found ({elapsed:.1f}s elapsed)...")
+            
+            all_files.extend(dir_files)
+            file_count_container.success(f"✅ **{dir_name}**: {file_count} files found")
+            
+        except Exception as e:
+            st.error(f"❌ Error scanning {dir_path}: {str(e)}")
+            continue
+    
+    total_scan_time = time.time() - total_scan_start
+    scan_progress_container.success(f"🎉 **Scan complete!** Found {len(all_files)} total files across {total_dirs_to_scan} directories in {total_scan_time:.1f}s")
 
+    # Apply initial filtering with progress updates
+    filter_progress_container = st.empty()
+    filter_progress_container.info("🔍 **Applying filters and exclusions...**")
+    
     candidate_files = [f.as_posix() for f in all_files if f.as_posix() not in ingested_files and f.suffix.lower() not in UNSUPPORTED_EXTENSIONS]
+    filter_progress_container.text(f"📋 After excluding unsupported formats: {len(candidate_files)} files")
 
     if st.session_state.filter_exclude_common:
         exclude_keywords = [
             "working", "temp", "archive", "ignore", "backup", "node_modules",
-            ".git", "exclude", "draft", "invoice", "timesheet", "contract", "receipt"
+            ".git", "exclude", "draft", "invoice", "timesheet", "contract", "receipt",
+            "data", "prezi.app"
         ]
         candidate_files = [f for f in candidate_files if not any(k in part.lower() for k in exclude_keywords for part in Path(f).parts)]
+        filter_progress_container.text(f"📋 After excluding common folders: {len(candidate_files)} files")
 
     if st.session_state.enable_pattern_exclusion:
         patterns = [p.strip() for p in st.session_state.exclude_patterns_input.split('\n') if p.strip()]
         candidate_files = [f for f in candidate_files if not any(fnmatch(Path(f).name, p) for p in patterns)]
+        filter_progress_container.text(f"📋 After pattern exclusions: {len(candidate_files)} files")
 
     if st.session_state.filter_prefer_docx:
         docx_stems = {Path(f).stem for f in candidate_files if f.lower().endswith('.docx')}
         candidate_files = [f for f in candidate_files if not (f.lower().endswith('.pdf') and Path(f).stem in docx_stems)]
+        filter_progress_container.text(f"📋 After preferring .docx over .pdf: {len(candidate_files)} files")
 
     if st.session_state.filter_deduplicate:
         grouped_files = defaultdict(list)
@@ -257,6 +316,10 @@ def scan_for_files(selected_dirs: List[str]):
             normalized = re.sub(pattern, "", Path(f_path).stem, flags=re.IGNORECASE).strip()
             grouped_files[normalized].append(f_path)
         candidate_files = [max(file_list, key=lambda f: Path(f).stat().st_mtime) if len(file_list) > 1 else file_list[0] for _, file_list in grouped_files.items()]
+        filter_progress_container.text(f"📋 After deduplication: {len(candidate_files)} files")
+    
+    # Final summary
+    filter_progress_container.success(f"✅ **Filtering complete!** {len(candidate_files)} files ready for processing")
 
     st.session_state.files_to_review = sorted(candidate_files)
     st.session_state.file_selections = {fp: True for fp in st.session_state.files_to_review}
@@ -951,9 +1014,9 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
             st.error("❌ No directories found in original scan configuration")
             return False
             
-        # Perform the scan with original configuration
-        with st.spinner(f"🔄 Restoring original scan configuration and processing {len(selected_dirs)} directories..."):
-            scan_for_files(selected_dirs)
+        # Perform the scan with original configuration and enhanced progress monitoring
+        st.info(f"🔄 Restoring original scan configuration and processing {len(selected_dirs)} directories...")
+        scan_for_files(selected_dirs)
         
         # Get the files that were found and start processing immediately
         files_to_process = st.session_state.get("files_to_review", [])
@@ -1135,8 +1198,40 @@ def render_config_and_scan_ui():
                 st.session_state.current_scan_config = {}
             st.session_state.current_scan_config.update(scan_config)
             
-            with st.spinner("Applying filters and scanning for documents and images..."):
-                scan_for_files(selected_to_scan)
+            # Check model availability before scanning
+            include_images = not st.session_state.get("skip_image_processing", False)
+            model_check = model_checker.check_ingestion_requirements(include_images=include_images)
+            
+            if not model_check["can_proceed"]:
+                st.error("❌ **Cannot proceed with ingestion - Missing required models**")
+                st.markdown(model_checker.format_status_message(model_check))
+                
+                # Show quick fix options
+                if model_check["missing_models"]:
+                    st.markdown("### Quick Fix Options:")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("**Option 1: Install missing models**")
+                        for cmd in model_checker.get_model_installation_commands(model_check["missing_models"]):
+                            st.code(cmd, language="bash")
+                    
+                    with col2:
+                        if "llava" in model_check["missing_models"]:
+                            st.markdown("**Option 2: Skip image processing**")
+                            if st.button("🚀 Continue without image analysis", type="secondary"):
+                                st.session_state.skip_image_processing = True
+                                st.rerun()
+                return
+            
+            # Show successful model check
+            if model_check["warnings"]:
+                st.warning(model_checker.format_status_message(model_check))
+            else:
+                st.success("✅ All required models available - proceeding with ingestion")
+            
+            # Start file scanning with enhanced progress monitoring (no spinner to allow progress updates to show)
+            scan_for_files(selected_to_scan)
             st.rerun()
         else:
             if not is_knowledge_path_valid: st.error(f"Root Source Path is not valid.")
