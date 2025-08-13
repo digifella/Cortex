@@ -37,7 +37,11 @@ from llama_index.core.llms import LLM
 # --- Configuration & Schemas ---
 OUTPUT_DIR = Path(__file__).parent.parent / "external_research"
 OUTPUT_DIR.mkdir(exist_ok=True)
-load_dotenv()
+
+# Load .env from project root
+project_root = Path(__file__).parent.parent
+env_path = project_root / ".env"
+load_dotenv(env_path)
 
 # RESTORED from v3.1.0 to fix regression
 class FoundationalQueries(BaseModel):
