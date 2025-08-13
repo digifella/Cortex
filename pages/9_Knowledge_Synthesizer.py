@@ -29,17 +29,32 @@ selected_collection = st.selectbox("Choose a collection to synthesize from:", co
 # --- LLM Provider Selection ---
 
 st.subheader("2. Configure AI Model")
-llm_choice = st.selectbox(
-    "AI Provider:",
-    ["🌩️ Gemini (Cloud - More Capable)", "🏠 Local Mistral (Fast & Private)"],
-    help="Gemini: More powerful but requires internet. Local: Private and fast.",
-    key="synthesis_llm_choice"
-)
 
-if "Gemini" in llm_choice:
-    provider = "gemini"
-else:
-    provider = "ollama"
+# Use standardized LLM provider selector
+from cortex_engine.ui_components import llm_provider_selector
+
+try:
+    provider_display, llm_status = llm_provider_selector("research", "synthesis", 
+                                                        "Choose your AI provider for knowledge synthesis")
+    
+    # Convert display name to legacy format for compatibility
+    if "Gemini" in provider_display:
+        provider = "gemini"
+    elif "OpenAI" in provider_display:
+        provider = "openai"
+    else:
+        provider = "ollama"
+    
+    # Show detailed error if LLM service not available
+    if llm_status["status"] == "error":
+        st.error(f"⚠️ **LLM Service Issue**: {llm_status['message']}")
+        if "GEMINI_API_KEY" in llm_status["message"]:
+            st.info("💡 **Setup Required**: Add your Gemini API key to the `.env` file")
+        provider = None
+        
+except Exception as e:
+    st.error(f"❌ LLM Provider configuration error: {e}")
+    provider = None
 
 # --- Seed Ideas ---
 
@@ -53,7 +68,13 @@ seed_ideas = st.text_area(
 # --- Synthesis Button ---
 
 st.divider()
-if st.button("✨ Synthesize New Ideas", type="primary", disabled=not selected_collection):
+# Disable synthesis if no collection or provider unavailable
+synthesis_disabled = not selected_collection or provider is None
+
+if provider is None and selected_collection:
+    st.warning("⚠️ **Synthesis disabled**: Please configure a working LLM provider above to continue.")
+
+if st.button("✨ Synthesize New Ideas", type="primary", disabled=synthesis_disabled):
     if not seed_ideas:
         st.error("Please provide some seed ideas to start the synthesis process.")
     else:
