@@ -14,6 +14,9 @@ Cortex Suite is a complete AI-powered knowledge management and proposal generati
 - 🔒 **Anonymizes documents** by replacing names, companies, and sensitive info with generic placeholders
 - 💾 **Backs up data** with Windows path management
 - 🔧 **Offers REST API** for external integrations
+- 🤖 **NEW: Intelligent Model Management** - Automatically detects and guides model installation
+- 📊 **NEW: System Status Dashboard** - Real-time monitoring of AI model availability
+- ⚡ **NEW: Enhanced Error Handling** - Clear guidance when models are missing
 
 ## 📁 Files to Share
 
@@ -47,7 +50,19 @@ cortex-suite/
 
 2. **Extract files** to a folder on your computer
 
-3. **Run Cortex Suite**:
+3. **Run Cortex Suite** (Two options):
+
+### Option A: Enhanced Setup with Model Management (Recommended)
+   - **Linux/Mac**: `cd docker && ./run-cortex-with-models.sh`
+   - **Windows**: Run `docker/run-cortex-with-models.sh` in Git Bash or WSL
+   - ✅ **Automatically checks and installs required AI models**
+   - ✅ **Interactive setup for optional models (vision, enhanced proposals)**
+   - ✅ **System status validation**
+
+### Option B: Quick Setup (Original)
+   - **Windows**: Double-click `docker/run-cortex.bat`
+   - **Linux/Mac**: Double-click `docker/run-cortex.sh`
+   - ⚠️ **May require manual model installation later**
    - **Windows**: Double-click `docker/run-cortex.bat`
    - **Mac/Linux**: Double-click `docker/run-cortex.sh`
 
