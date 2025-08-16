@@ -1,6 +1,6 @@
 # ## File: Cortex_Suite.py
-# Version: v2.0.0 (Service-First Architecture)
-# Date: 2025-08-16
+# Version: 71.2.0 (Comprehensive Help System)
+# Date: 2025-07-15
 # Purpose: A central Streamlit launchpad for the integrated Cortex Suite.
 
 import streamlit as st
@@ -34,7 +34,7 @@ except Exception:
 if not setup_complete:
     # Show setup progress page
     st.title("🔧 Cortex Suite Setup in Progress")
-    st.caption("Version v2.0.0 - Initial Setup")
+    st.caption("Version 71.2.0 - Initial Setup")
     
     # Progress bar
     progress_percent = setup_info.get("progress_percent", 0)
@@ -96,7 +96,7 @@ if not setup_complete:
 else:
     # Normal main page
     st.title("🚀 Welcome to the Project Cortex Suite")
-    st.caption("Version v2.0.0 (Service-First Architecture)")
+    st.caption("Version 71.2.0 (Comprehensive Help System)")
 
 st.markdown("""
 This is the central hub for the Cortex Suite, an integrated workbench for building a knowledge base and using it for AI-assisted proposal development.
@@ -197,18 +197,6 @@ st.info("To get started, click on one of the pages in the navigation sidebar.")
 st.divider()
 
 # Attribution footer
-# Latest code changes footer
-st.markdown("---")
-st.markdown(
-    """
-    <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
-        <strong>🕒 Latest Code Changes:</strong> 2025-08-16<br>
-        <em>Service-First Architecture, Real-time Setup Progress, Cross-platform Docker Distribution</em>
-    </div>
-    """, 
-    unsafe_allow_html=True
-)
-
 st.markdown("""
 <div style="text-align: center; padding: 20px; background-color: #f0f2f6; border-radius: 5px; margin-top: 20px;">
     <p style="margin: 0; color: #666; font-size: 14px;">

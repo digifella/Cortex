@@ -74,6 +74,14 @@ python scripts/cortex_inspector.py --db-path /mnt/f/ai_databases --stats
 
 # Clean up Windows metadata files in WSL
 find . -type f -name "*:Zone.Identifier" -delete
+
+# Fix Windows batch file line endings after editing in WSL
+sed -i 's/$/\r/' docker/run-cortex.bat
+
+# Fix Windows Docker build context issues
+# Ensure .dockerignore excludes Windows system folders
+echo '$RECYCLE.BIN/' >> docker/.dockerignore
+echo 'System Volume Information/' >> docker/.dockerignore
 ```
 
 ## Configuration
@@ -147,6 +155,135 @@ GRAPHVIZ_DOT_EXECUTABLE="/usr/bin/dot"
 
 ## Development Notes
 
+### Distribution & Versioning Standards
+
+#### Docker Distribution Rules
+- **Single .dockerignore**: Keep ONLY in `/docker/.dockerignore` (remove any from project root)
+- **Minimal Documentation**: Only `/docker/README.md` needed (remove FRIEND_INSTALL_GUIDE.md, DISTRIBUTION_PACKAGE.md, etc.)
+- **Clean Package**: Exclude ALL user data, databases, proposals, external_research, logs, media files
+- **Fresh Installation**: Every Docker deployment creates completely fresh databases and configurations
+
+#### Page Versioning Standard
+All Streamlit pages must follow this format:
+```python
+# [Page Name] Page
+# Version: v1.0.0  
+# [Brief description]
+
+import streamlit as st
+# ... other imports ...
+
+st.set_page_config(page_title="Page Title", layout="wide")
+
+# Page configuration
+PAGE_VERSION = "v1.0.0"
+
+# ... page logic ...
+
+st.title("📊 Page Title")
+st.caption(f"Page Version: {PAGE_VERSION}")
+```
+
+**Version Numbering Rules:**
+- Major version (v1.x.x): Synchronized across all pages for major releases
+- Minor version (vx.1.x): Individual page increments for features
+- Patch version (vx.x.1): Individual page increments for bug fixes
+
+#### Distribution File Structure
+```
+docker/
+├── README.md                 # Single consolidated guide
+├── .dockerignore            # Excludes user data/Windows folders  
+├── run-cortex.bat          # Windows installer
+├── run-cortex.sh           # Unix installer
+├── Dockerfile              # Build instructions
+├── docker-compose.yml      # Container orchestration
+├── .env.example            # Configuration template
+└── requirements.txt        # Python dependencies (REQUIRED for Docker build)
+```
+
+**CRITICAL**: When creating distribution packages, ensure these core files are copied to the distribution directory:
+
+#### Required Files
+- `requirements.txt` - Python dependencies needed by Dockerfile
+- `Cortex_Suite.py` - Main application entry point (includes setup progress page)
+- `Dockerfile` - Container build instructions (service-first architecture)
+- `.env.example` - Configuration template
+- `run-cortex-FIXED.bat` - Windows launcher script (with persistent volumes)
+
+#### Required Directories (copy entire directories)
+- `api/` - API server module (FastAPI endpoints with graceful model handling)
+- `cortex_engine/` - Core business logic and data processing
+  - **INCLUDES**: `system_status.py` for real-time setup monitoring
+- `pages/` - Streamlit page components
+- `scripts/` - Utility scripts (optional but recommended)
+
+#### Docker Distribution Checklist
+When preparing a Docker distribution for Windows:
+
+1. **Create target directory** (e.g., `E:\Docker_Cortex`)
+
+2. **Copy root files:**
+   ```
+   requirements.txt
+   Cortex_Suite.py  
+   Dockerfile
+   .env.example
+   run-cortex-FIXED.bat
+   ```
+
+3. **Copy complete directories:**
+   ```
+   api/           (entire directory with all subdirectories)
+   cortex_engine/ (entire directory with all subdirectories)  
+   pages/         (entire directory with all subdirectories)
+   scripts/       (optional - utility scripts)
+   ```
+
+4. **Verify structure:**
+   ```
+   E:\Docker_Cortex\
+   ├── Cortex_Suite.py
+   ├── Dockerfile  
+   ├── requirements.txt
+   ├── .env.example
+   ├── run-cortex-FIXED.bat
+   ├── api\
+   │   ├── __init__.py
+   │   ├── main.py
+   │   └── README.md
+   ├── cortex_engine\
+   │   ├── __init__.py
+   │   ├── config.py
+   │   ├── [all other .py files]
+   │   └── utils\
+   └── pages\
+       ├── 1_AI_Assisted_Research.py
+       ├── 2_Knowledge_Ingest.py
+       └── [all other page files]
+   ```
+
+5. **Missing any of these files/directories will cause:**
+   - `requirements.txt` missing → Docker build fails
+   - `api/` missing → `ModuleNotFoundError: No module named 'api'`
+   - `cortex_engine/` missing → Import errors for core functionality
+   - `cortex_engine/system_status.py` missing → Setup progress page fails
+   - `pages/` missing → Streamlit navigation fails
+   - `Cortex_Suite.py` missing → Application won't start
+
+6. **New User Experience (Service-First Architecture):**
+   - **10 seconds**: Web interface becomes accessible
+   - **Setup Progress Page**: Shows real-time download status and system health
+   - **Background Downloads**: 20GB of AI models download while interface is usable
+   - **Progressive Activation**: Features enable automatically as models become available
+   - **No Command Line Waiting**: Users interact with professional web interface instead of terminal logs
+
+### Critical Windows Batch File Lessons Learned
+1. **Multi-line If Statements**: Windows batch files cannot reliably parse multi-line if statements with parentheses. Use `goto` labels instead.
+2. **ErrorLevel Overwriting**: Commands like `del`, `copy`, etc. overwrite the `%errorlevel%` variable. Always check `errorlevel` immediately after the command you care about.
+3. **Docker Build Context on Windows**: When building from Windows paths, Docker may include system folders like `$RECYCLE.BIN`. Use `.dockerignore` in the build context directory (not just the docker subdirectory).
+4. **Container Detection Logic**: `findstr` returns errorlevel 1 when NO match is found, errorlevel 0 when match IS found. Logic should be `if not errorlevel 1` for "found" conditions.
+
 ### Recent Architectural Improvements (v39.0.0+)
 - **Hybrid Model Architecture**: Optimal model selection per task type
   - **Local Only**: Proposals (`mistral-small3.2`), KB operations, embeddings  
@@ -155,6 +292,16 @@ GRAPHVIZ_DOT_EXECUTABLE="/usr/bin/dot"
 - **Standardized Logging**: All modules now use consistent logging instead of mixed print statements  
 - **Exception Hierarchy**: Implemented structured exception handling with `cortex_engine/exceptions.py`
 - **Path Handling**: Unified cross-platform path conversion logic
+
+#### Service-First Architecture (v71.3.0+)
+- **Immediate Web Access**: Streamlit and API start within 10 seconds, regardless of model download status
+- **Background Model Downloads**: AI models (20GB total) download in background while interface is accessible
+- **Real-time Setup Progress**: Live progress tracking with service status, model download progress, and error reporting
+- **Progressive Feature Enablement**: Basic features work immediately, AI features activate as models become available
+- **Professional Setup Experience**: Users see branded setup progress page instead of waiting at command line
+- **System Status Monitoring**: `cortex_engine/system_status.py` provides real-time health checks for all components
+- **Docker Volume Persistence**: AI models persist between container rebuilds via `cortex_ollama` volume
+- **Enhanced User Experience**: No more 30-minute waits - users can explore interface immediately while setup completes
 
 #### Model Availability & Error Handling (v39.2.0+)
 - **Pre-flight Model Checking**: Validates required models before ingestion starts
@@ -174,11 +321,47 @@ GRAPHVIZ_DOT_EXECUTABLE="/usr/bin/dot"
 - **Phase Navigation**: Seamless flow through the ideation process with context preservation
 - **Collection Integration**: Works with existing working collections for knowledge-based idea generation
 
+#### Windows Distribution & Docker Issues (v39.3.0+)
+- **Batch File Syntax Fixes**: Resolved multi-line if statement parsing errors by using goto labels instead of parenthetical blocks
+- **Error Level Handling**: Fixed container detection logic where `del` commands were overwriting `errorlevel` values from `findstr`
+- **Docker Build Context**: Resolved Windows `$RECYCLE.BIN` access denied errors by dynamically copying `.dockerignore` to parent build context
+- **Line Ending Issues**: Standardized CRLF handling for Windows batch file compatibility
+- **Container Detection**: Fixed backwards logic in Docker container existence checking
+
 #### Planned Enhancements (Sprints 4-7):
 - **Smart Filtering**: Metadata-based collection filtering (document types, clients, outcomes)
 - **Theme Visualization**: Interactive network graphs showing theme relationships and connections
 - **Visual Sparks**: Image upload and VLM integration for visual concept inspiration
 - **Advanced Analytics**: Entity relationship analysis and knowledge cluster detection
+
+### System Status Monitoring
+
+The `cortex_engine/system_status.py` module provides comprehensive real-time monitoring:
+
+#### Features
+- **Service Health Checks**: Monitors Ollama, API server, and Streamlit status
+- **Model Availability**: Tracks which AI models are installed vs. downloading
+- **Setup Progress**: Calculates overall completion percentage
+- **Error Detection**: Reports connection issues, missing dependencies, etc.
+- **Auto-Refresh**: Updates every 30 seconds during setup
+
+#### Usage in Components
+```python
+from cortex_engine.system_status import system_status
+
+# Get overall setup progress
+progress_info = system_status.get_setup_progress()
+setup_complete = progress_info["setup_complete"]
+progress_percent = progress_info["progress_percent"]
+
+# Get detailed system health
+health = system_status.get_system_health()
+```
+
+#### Integration Points
+- **Main App**: `Cortex_Suite.py` uses this for the setup progress page
+- **All Pages**: Can check if AI features are available before showing AI-dependent UI
+- **API Endpoints**: Can provide system status via REST API for external monitoring
 
 ### Database Migration
 If upgrading from versions prior to 70.0.0, delete the entire `knowledge_hub_db` directory to trigger recreation with the stable format.
@@ -188,6 +371,10 @@ If upgrading from versions prior to 70.0.0, delete the entire `knowledge_hub_db`
 - **spaCy model errors**: Ensure `en_core_web_sm` model is downloaded
 - **Path issues in WSL**: All paths support both Linux and Windows formats
 - **Import errors**: Use `from cortex_engine.utils import <function>` for utility functions
+- **Windows batch file line ending errors**: When editing `.bat` files in WSL, ensure proper CRLF line endings with `sed -i 's/$/\r/' filename.bat`
+- **Windows batch file multi-line if statements**: Use `goto` labels instead of multi-line `if (...) { }` syntax, which causes "unexpected" parser errors
+- **Windows batch file errorlevel checking**: Check `errorlevel` immediately after the command you care about - other commands like `del` will overwrite the errorlevel value
+- **Windows Docker build context issues**: When building from Windows directories (e.g., `E:\Docker_Cortex`), Docker may try to include Windows system folders like `$RECYCLE.BIN`, causing "Access is denied" errors. Solution: Copy `.dockerignore` to the parent build context directory before building
 
 ### Logging Locations
 - **Ingestion**: `logs/ingestion.log`
