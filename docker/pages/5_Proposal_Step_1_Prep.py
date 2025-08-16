@@ -1,12 +1,13 @@
 # ## File: pages/5_Proposal_Step_1.py
-# Version: v1.1.0
-# Date: 2025-08-16
+# Version: 27.0.0 (Corrected Placeholder Parsing)
+# Date: 2025-07-15
 # Purpose: An interactive UI to tag document placeholders.
-#          - MAJOR REWRITE (v1.1.0): The parsing logic has been entirely rewritten
+#          - CRITICAL FIX (v27.0.0): The parsing logic has been entirely rewritten
 #            to correctly handle placeholder paragraphs. The editor now identifies
 #            a heading, and then presents EVERY subsequent paragraph (including empty
 #            ones) as a taggable item, resolving the "missing sections" bug.
-#            Template processing logic was updated to match the new parsing logic.
+#          - FIX (v27.0.0): The template processing logic was updated to match the
+#            new parsing logic, ensuring correct replacement of all items.
 
 import streamlit as st
 import sys
@@ -209,7 +210,7 @@ def load_progress(map_file_path):
 
 # --- Streamlit UI Layout ---
 st.title("📝 6. Template Editor")
-st.caption("Version v1.1.0 - Corrected Placeholder Parsing")
+st.caption("Version 27.0.0 - Corrected Placeholder Parsing")
 
 initialize_state()
 

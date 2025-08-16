@@ -1,9 +1,9 @@
 # ## File: pages/2_Knowledge_Ingest.py
-# Version: v1.2.0
-# Date: 2025-08-16
+# Version: 39.0.0 (Utilities Refactor)
+# Date: 2025-07-23
 # Purpose: GUI for knowledge base ingestion.
-#          - MAJOR FEATURES (v1.2.0): Comprehensive help system, model availability checking,
-#            enhanced error handling with user-friendly notifications, and robust file processing.
+#          - REFACTOR (v39.0.0): Updated to use centralized utilities for path handling,
+#            logging, and error handling. Removed code duplication.
 
 import streamlit as st
 import os
@@ -2120,7 +2120,7 @@ def render_recovery_section():
 # --- Main App Logic ---
 initialize_state()
 st.title("2. Knowledge Ingest")
-st.caption(f"Manage the knowledge base by ingesting new documents. App Version: v1.2.0")
+st.caption(f"Manage the knowledge base by ingesting new documents. App Version: v39.2.0 (Comprehensive Help System)")
 
 # Add help system
 help_system.show_help_menu()

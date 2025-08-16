@@ -1,6 +1,6 @@
 # ## File: pages/8_Document_Anonymizer.py
-# Version: v1.0.0
-# Date: 2025-08-16
+# Version: 1.0.0
+# Date: 2025-07-30
 # Purpose: GUI for document anonymization functionality.
 #          Processes documents to replace identifying information with generic placeholders.
 

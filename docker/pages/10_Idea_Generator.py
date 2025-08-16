@@ -1,7 +1,5 @@
 """
 Idea Generator - Novel Concept Synthesis from Knowledge Collections
-Version: v1.1.0
-Date: 2025-08-16
 
 This module implements the Idea Generator feature that guides users through a structured
 ideation process based on the Double Diamond methodology (Discover, Define, Develop, Deliver).
@@ -41,9 +39,6 @@ from chromadb.config import Settings as ChromaSettings
 import os
 
 logger = get_logger(__name__)
-
-# Page configuration
-PAGE_VERSION = "v1.1.0"
 
 def load_vector_index(db_path):
     """Load the vector index from the knowledge base."""
@@ -118,7 +113,6 @@ def main():
     initialize_app_session_state()
     
     st.title("💡 Idea Generator")
-    st.caption(f"Page Version: {PAGE_VERSION}")
     st.markdown("### Transform your knowledge into innovative concepts")
     
     st.markdown("""

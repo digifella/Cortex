@@ -1,9 +1,10 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v1.1.0
-# Date: 2025-08-16
+# Version: 21.0.0 (Utilities Refactor)
+# Date: 2025-07-23
 # Purpose: A UI for searching the knowledge base, managing collections,
 #          and deleting documents from the KB.
-#          - FEATURE (v1.1.0): Native ChromaDB filtering capabilities and centralized utilities integration.
+#          - REFACTOR (v21.0.0): Updated to use centralized utilities for path handling,
+#            logging, and error handling. Removed code duplication.
 
 import streamlit as st
 from llama_index.core import (
@@ -37,7 +38,7 @@ from cortex_engine.config import COLLECTION_NAME, INGESTED_FILES_LOG, EMBED_MODE
 from cortex_engine.help_system import help_system
 
 # --- App Config ---
-PAGE_VERSION = "v1.1.0"
+PAGE_VERSION = "v1.0.0"
 logger = get_logger(__name__)
 
 # --- Constants ---

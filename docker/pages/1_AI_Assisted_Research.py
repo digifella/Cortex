@@ -1,6 +1,5 @@
 # AI-Assisted Research Page
-# Version: v1.1.0
-# Date: 2025-08-16
+# Version: v1.0.0
 # Multi-agent research and synthesis engine UI
 
 import streamlit as st
@@ -27,7 +26,7 @@ from cortex_engine.synthesise import (
 st.set_page_config(page_title="Cortex AI Research Assistant", layout="wide")
 
 # Page configuration
-PAGE_VERSION = "v1.1.0"
+PAGE_VERSION = "v1.0.0"
 
 # --- Initialize Session State ---
 def initialize_session_state():

@@ -1,9 +1,4 @@
 
-# Knowledge Synthesizer Page
-# Version: v1.0.0
-# Date: 2025-08-16
-# Purpose: Synthesize knowledge from selected collections
-
 import streamlit as st
 import sys
 from pathlib import Path
@@ -17,11 +12,7 @@ from cortex_engine.knowledge_synthesizer import run_synthesis
 
 st.set_page_config(page_title="Knowledge Synthesizer", layout="wide")
 
-# Page configuration
-PAGE_VERSION = "v1.0.0"
-
 st.title("🧠 Knowledge Synthesizer")
-st.caption(f"Page Version: {PAGE_VERSION}")
 
 # --- Collection Selection ---
 

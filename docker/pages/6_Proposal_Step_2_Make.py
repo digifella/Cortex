@@ -1,8 +1,8 @@
 # ## File: pages/6_Proposal_Step_2_Make.py
-# Version: v1.0.1
-# Date: 2025-08-16
+# Version: 2.2.0 (Add Delete Confirmation)
+# Date: 2025-07-15
 # Purpose: A central hub for creating, loading, and managing proposals.
-#          - FEATURE (v1.0.1): Added a confirmation step before deleting a
+#          - FEATURE (v2.2.0): Added a confirmation step before deleting a
 #            proposal to prevent accidental data loss.
 
 import streamlit as st

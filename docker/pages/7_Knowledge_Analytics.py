@@ -1,7 +1,5 @@
 """
 Knowledge Analytics Dashboard - Comprehensive analytics and insights for the Cortex Suite
-Version: v1.0.0
-Date: 2025-08-16
 """
 
 import streamlit as st
@@ -26,9 +24,6 @@ from cortex_engine.utils.path_utils import convert_windows_to_wsl_path
 
 # Configure logging
 logger = get_logger(__name__)
-
-# Page configuration
-PAGE_VERSION = "v1.0.0"
 
 st.set_page_config(
     page_title="Knowledge Analytics",
@@ -377,7 +372,6 @@ class KnowledgeAnalytics:
 def main():
     """Main dashboard interface"""
     st.title("📊 Knowledge Analytics Dashboard")
-    st.caption(f"Page Version: {PAGE_VERSION}")
     st.markdown("Comprehensive insights and analytics for your Cortex Suite knowledge base")
     
     # Initialize configuration

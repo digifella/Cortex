@@ -1,8 +1,8 @@
 # ## File: pages/4_Collection_Management.py
-# Version: v1.0.1
-# Date: 2025-08-16
+# Version: 7.0.0 (Utilities Refactor)
+# Date: 2025-07-23
 # Purpose: A UI for managing Working Collections.
-#          - REFACTOR (v1.0.1): Updated to use centralized utilities for path handling,
+#          - REFACTOR (v7.0.0): Updated to use centralized utilities for path handling,
 #            logging, and error handling. Removed code duplication.
 
 import streamlit as st
