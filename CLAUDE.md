@@ -28,6 +28,17 @@ The Cortex Suite is a Streamlit-based AI-powered knowledge management and propos
 
 ## Development Commands
 
+### ⚠️ IMPORTANT REMINDERS FOR DEVELOPERS
+
+**Before making ANY code changes, remember:**
+1. 🗓️ **Update footer date** in `Cortex_Suite.py` with current date  
+2. 📝 **Increment version numbers** appropriately in changed files
+3. 💾 **Commit to git** with descriptive message after changes
+4. 🐳 **Sync Docker directory** with updated files  
+5. 📤 **Push Docker sync** to git as separate commit
+
+**See "Development Workflow & Synchronization" section below for detailed steps.**
+
 ### Environment Setup
 ```bash
 # Create Python 3.11 virtual environment
@@ -163,11 +174,21 @@ GRAPHVIZ_DOT_EXECUTABLE="/usr/bin/dot"
 - **Clean Package**: Exclude ALL user data, databases, proposals, external_research, logs, media files
 - **Fresh Installation**: Every Docker deployment creates completely fresh databases and configurations
 
-#### Page Versioning Standard
+#### Version Numbering Standards (v2.0.0+)
+
+**IMPORTANT**: All version numbers follow semantic versioning with "v" prefix (e.g., v1.0.0, v2.1.3)
+
+##### Main Application Versioning
+- **v1.x.x**: Initial stable release
+- **v2.x.x**: Service-First Architecture (major refactor)
+- **v3.x.x+**: Future major architectural changes
+
+##### Page Versioning Standard
 All Streamlit pages must follow this format:
 ```python
 # [Page Name] Page
 # Version: v1.0.0  
+# Date: 2025-08-16
 # [Brief description]
 
 import streamlit as st
@@ -181,13 +202,15 @@ PAGE_VERSION = "v1.0.0"
 # ... page logic ...
 
 st.title("📊 Page Title")
-st.caption(f"Page Version: {PAGE_VERSION}")
+st.caption(f"Version: {PAGE_VERSION}")
 ```
 
-**Version Numbering Rules:**
-- Major version (v1.x.x): Synchronized across all pages for major releases
-- Minor version (vx.1.x): Individual page increments for features
-- Patch version (vx.x.1): Individual page increments for bug fixes
+**Page Version Numbering Rules:**
+- **v1.0.0**: Baseline functionality or new pages
+- **v1.0.1**: Bug fixes, minor improvements, code organization
+- **v1.1.0**: New features or significant enhancements  
+- **v1.2.0**: Major feature additions or multiple enhancements
+- **v2.0.0+**: Major architectural changes (rare - usually follows main app versioning)
 
 #### Distribution File Structure
 ```
@@ -362,6 +385,73 @@ health = system_status.get_system_health()
 - **Main App**: `Cortex_Suite.py` uses this for the setup progress page
 - **All Pages**: Can check if AI features are available before showing AI-dependent UI
 - **API Endpoints**: Can provide system status via REST API for external monitoring
+
+## Development Workflow & Synchronization
+
+### Code Changes Workflow
+
+**CRITICAL**: Follow this workflow for ALL significant code changes:
+
+#### 1. Update Footer Date
+When making code changes, update the main app footer in `Cortex_Suite.py`:
+```python
+# Latest code changes footer
+st.markdown(
+    """
+    <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
+        <strong>🕒 Latest Code Changes:</strong> YYYY-MM-DD<br>
+        <em>Brief description of changes</em>
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
+```
+
+#### 2. Update Version Numbers
+- **Pages with changes**: Increment version appropriately (v1.0.1 → v1.0.2 for bugs, v1.0.0 → v1.1.0 for features)
+- **Main app**: Increment for architectural changes (v2.0.0 → v2.1.0 for features, v2.0.0 → v3.0.0 for major refactor)
+- **Update date**: Change date in all modified files to current date
+
+#### 3. Git Synchronization
+```bash
+# Stage all changes
+git add .
+
+# Commit with descriptive message
+git commit -m "feat: Brief description of changes
+
+Detailed description of what was changed and why
+
+🎯 Generated with Claude Code
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+
+# Push to remote
+git push origin main
+```
+
+#### 4. Docker Distribution Sync
+After committing to git, sync the Docker distribution:
+```bash
+# Copy updated files to Docker directory
+cp Cortex_Suite.py docker/
+cp -r pages/* docker/pages/
+cp -r api/* docker/api/
+cp -r cortex_engine/* docker/cortex_engine/
+
+# Commit Docker updates
+git add docker/
+git commit -m "sync: Update Docker distribution with latest changes"
+git push origin main
+```
+
+#### 5. Verification Checklist
+- [ ] Footer date updated to current date
+- [ ] Version numbers incremented appropriately  
+- [ ] All modified files have current date
+- [ ] Changes committed to git with descriptive message
+- [ ] Docker subdirectory synchronized
+- [ ] Docker sync committed to git
 
 ### Database Migration
 If upgrading from versions prior to 70.0.0, delete the entire `knowledge_hub_db` directory to trigger recreation with the stable format.
