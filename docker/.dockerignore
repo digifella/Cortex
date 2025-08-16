@@ -1,14 +1,77 @@
-# .dockerignore for Cortex Suite
+# ========================================
+# DOCKER DISTRIBUTION BUILD - MINIMAL PACKAGE
+# BLOCKLIST APPROACH: Exclude only large/unnecessary files
+# ========================================
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
+# CRITICAL: Exclude MASSIVE directories that cause 10GB+ transfers
+venv/
+env/
+.venv/
+ENV/
+"E:/
+"E:
+"E:/*
+E:/
+F:/
+
+# USER DATA - NEVER INCLUDE IN DISTRIBUTION
+working_collections.json
+cortex_config.json
+boilerplate.json
+query.log
+current_env_freeze.txt
+
+# DATABASES & KNOWLEDGE BASE - CREATE FRESH ON TARGET
+**/knowledge_hub_db/
+**/knowledge_cortex.gpickle
+**/*.sqlite3
+**/*.db
+
+# USER RESEARCH & DOCUMENTS - PRIVATE DATA  
+external_research/
+proposals/
+template_maps/
+logs/
+
+# USER UPLOADED MEDIA - PRIVATE CONTENT
+*.pdf
+*.docx
+*.doc
+*.ppt
+*.pptx
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.avi
+*.mov
+*.wmf
+Screenshot*
+image.*
+
+# WINDOWS SYSTEM & MOUNTED DRIVES
+$RECYCLE.BIN/
+System Volume Information/
+pagefile.sys
+hiberfil.sys
+swapfile.sys
+OneDrive*/
+*OneDrive*/
+**/OneDrive*/
+*/OneDrive*/
+
+# DEVELOPMENT & BUILD ARTIFACTS
+.git/
+.gitignore
 dist/
+build/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+develop-eggs/
 downloads/
 eggs/
 .eggs/
@@ -22,59 +85,50 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual environments
-venv/
-env/
-ENV/
-
-# IDE
+# DEVELOPMENT TOOLS
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+tests/
+test_*
+*_test.py
 
-# OS
-.DS_Store
-Thumbs.db
+# TEMPORARY FILES
+tmp/
+temp/
 *.tmp
-
-# Git
-.git/
-.gitignore
-
-# Data directories (will be mounted as volumes)
-ai_databases/
-knowledge_base/
-backups/
-
-# Logs
-logs/
+*.temp
 *.log
 
-# Config files with secrets
-.env
-secrets/
-
-# Docker
-docker/
-Dockerfile*
-docker-compose*.yml
-
-# Documentation
-*.md
-docs/
-
-# Test files
-htmlcov/
-.coverage
-.pytest_cache/
-.tox/
-
-# Temporary files
-temp/
-tmp/
-staging/
-
-# Windows metadata
+# OS FILES
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 *:Zone.Identifier
+Desktop.ini
+
+# DISTRIBUTION & BACKUP FILES
+create-distribution.py
+cortex_suite-src-backup-*.tgz
+all_code_context.txt
+
+# DOCUMENTATION (large markdown files not needed in container)
+DEPLOYMENT_*.md
+IMPROVEMENT_*.md
+INNOVATION_*.md
+KNOWLEDGE_*.md
+WORK_*.md
+CLAUDE.md
+README.md
+GEMINI.md
+Idea_Generator.md
+
+# DEVELOPMENT SCRIPTS NOT NEEDED IN PRODUCTION
+setup_mistral_small.sh
+run_tests.py

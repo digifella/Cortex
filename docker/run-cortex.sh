@@ -64,7 +64,7 @@ fi
 # Build the image
 echo "🔨 Building Cortex Suite (this may take a while)..."
 echo "    This includes downloading Python packages and system dependencies..."
-if ! docker build -t cortex-suite -f Dockerfile ..; then
+if ! docker build -t cortex-suite -f Dockerfile .; then
     echo "❌ Build failed! This could be due to:"
     echo "   • Network connectivity issues"
     echo "   • Insufficient disk space (need ~10GB)"
@@ -83,6 +83,7 @@ docker run -d \
     -p 8000:8000 \
     -v cortex_data:/home/cortex/data \
     -v cortex_logs:/home/cortex/app/logs \
+    -v cortex_ollama:/home/cortex/.ollama \
     --env-file .env \
     --restart unless-stopped \
     cortex-suite
@@ -134,3 +135,7 @@ echo "   Remove:  docker stop cortex-suite && docker rm cortex-suite"
 echo ""
 echo "💡 Your data is safely stored in Docker volumes and will persist"
 echo "   between stops and starts!"
+echo ""
+echo "📦 NOTE: AI models are downloading in the background. The interface is"
+echo "   accessible immediately, with full AI features activating as"
+echo "   downloads complete (15-30 minutes for first-time setup)."

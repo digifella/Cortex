@@ -29,7 +29,10 @@ WORKDIR /home/cortex/app
 COPY --chown=cortex:cortex requirements.txt .
 
 # Install Python dependencies
-RUN pip install --no-cache-dir --user -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Add user's local bin to PATH for installed packages
+ENV PATH="/home/cortex/.local/bin:$PATH"
 
 # Download spaCy model
 RUN python -m spacy download en_core_web_sm
@@ -52,7 +55,7 @@ ENV OLLAMA_MODEL=mistral:7b-instruct-v0.3-q4_K_M
 # Expose ports
 EXPOSE 8501 8000
 
-# Create startup script with improved logging and error handling
+# Create startup script with service-first architecture
 RUN echo '#!/bin/bash\n\
 set -e\n\
 \n\
@@ -64,7 +67,7 @@ echo "🤖 Starting Ollama service..."\n\
 ollama serve &\n\
 OLLAMA_PID=$!\n\
 \n\
-# Wait for Ollama to be ready\n\
+# Wait for Ollama to be ready (quick check)\n\
 echo "⏳ Waiting for Ollama to initialize..."\n\
 for i in {1..30}; do\n\
     if curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then\n\
@@ -72,75 +75,58 @@ for i in {1..30}; do\n\
         break\n\
     fi\n\
     if [ $i -eq 30 ]; then\n\
-        echo "❌ Ollama failed to start"\n\
-        exit 1\n\
+        echo "⚠️ Ollama taking longer than expected, continuing..."\n\
+        break\n\
     fi\n\
     sleep 2\n\
 done\n\
 \n\
-# Pull required models if they do not exist\n\
-echo "📦 Checking AI models..."\n\
-if ! ollama list | grep -q "mistral:7b-instruct-v0.3-q4_K_M"; then\n\
-    echo "⬇️ Downloading Mistral model (this may take a few minutes)..."\n\
-    ollama pull mistral:7b-instruct-v0.3-q4_K_M\n\
-fi\n\
-\n\
-if ! ollama list | grep -q "mistral-small3.2"; then\n\
-    echo "⬇️ Downloading Mistral Small model..."\n\
-    ollama pull mistral-small3.2\n\
-fi\n\
-\n\
-echo "✅ All models ready!"\n\
-\n\
-# Start API server in background\n\
+# Start API server immediately (will handle missing models gracefully)\n\
 echo "🔗 Starting API server..."\n\
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1 &\n\
 API_PID=$!\n\
 \n\
-# Wait for API to be ready\n\
-echo "⏳ Waiting for API to be ready..."\n\
-for i in {1..30}; do\n\
-    if curl -s http://localhost:8000/health >/dev/null 2>&1; then\n\
-        echo "✅ API is ready!"\n\
-        break\n\
-    fi\n\
-    if [ $i -eq 30 ]; then\n\
-        echo "⚠️ API may still be starting..."\n\
-        break\n\
-    fi\n\
-    sleep 2\n\
-done\n\
-\n\
-# Start Streamlit app\n\
+# Start Streamlit app immediately (with setup progress page)\n\
 echo "🖥️ Starting Streamlit UI..."\n\
 streamlit run Cortex_Suite.py --server.port 8501 --server.address 0.0.0.0 --server.enableCORS false --server.enableXsrfProtection false &\n\
 STREAMLIT_PID=$!\n\
 \n\
-# Wait for Streamlit to be ready\n\
-echo "⏳ Waiting for UI to be ready..."\n\
-for i in {1..20}; do\n\
-    if curl -s http://localhost:8501/_stcore/health >/dev/null 2>&1; then\n\
-        echo "✅ Streamlit UI is ready!"\n\
-        break\n\
-    fi\n\
-    if [ $i -eq 20 ]; then\n\
-        echo "⚠️ UI may still be starting..."\n\
-        break\n\
-    fi\n\
-    sleep 3\n\
-done\n\
+# Wait for services to be ready\n\
+echo "⏳ Waiting for services to start..."\n\
+sleep 10\n\
 \n\
 echo ""\n\
-echo "🎉 Cortex Suite is now running!"\n\
+echo "🎉 Cortex Suite is now accessible!"\n\
 echo "🌐 Access at: http://localhost:8501"\n\
 echo "🔗 API docs: http://localhost:8000/docs"\n\
+echo "📦 AI models will download in background..."\n\
 echo ""\n\
+\n\
+# Download models in background (non-blocking)\n\
+{\n\
+    echo "📦 Starting AI model downloads..."\n\
+    if ! ollama list 2>/dev/null | grep -q "mistral:7b-instruct-v0.3-q4_K_M"; then\n\
+        echo "⬇️ Downloading Mistral model (4.4GB)..."\n\
+        ollama pull mistral:7b-instruct-v0.3-q4_K_M\n\
+        echo "✅ Mistral model ready!"\n\
+    fi\n\
+    \n\
+    if ! ollama list 2>/dev/null | grep -q "mistral-small3.2"; then\n\
+        echo "⬇️ Downloading Mistral Small model (15GB)..."\n\
+        ollama pull mistral-small3.2\n\
+        echo "✅ Mistral Small model ready!"\n\
+    fi\n\
+    \n\
+    echo "🎯 All AI models are now ready!"\n\
+    echo "🚀 Full functionality is now available at http://localhost:8501"\n\
+} &\n\
+MODEL_DOWNLOAD_PID=$!\n\
 \n\
 # Function to handle shutdown\n\
 cleanup() {\n\
     echo ""\n\
     echo "🛑 Shutting down Cortex Suite..."\n\
-    kill $OLLAMA_PID $API_PID $STREAMLIT_PID 2>/dev/null || true\n\
+    kill $OLLAMA_PID $API_PID $STREAMLIT_PID $MODEL_DOWNLOAD_PID 2>/dev/null || true\n\
     echo "✅ Shutdown complete"\n\
     exit 0\n\
 }\n\
