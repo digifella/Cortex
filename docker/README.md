@@ -41,6 +41,33 @@ chmod +x run-cortex.sh
 - 10GB free disk space
 - Internet connection for initial setup
 
+## 🔐 IMPORTANT: Environment Setup (Required)
+
+**BEFORE FIRST RUN**: You must create your environment configuration:
+
+```bash
+# Copy the example environment file
+cp .env.example .env
+
+# Edit .env with your API keys (optional for local-only usage)
+nano .env  # or use any text editor
+```
+
+### Required for Cloud AI Features (Optional):
+If you want to use cloud AI providers for research (instead of local models only):
+
+```bash
+# Add your API keys to .env file:
+OPENAI_API_KEY=your_actual_openai_key_here
+GEMINI_API_KEY=your_actual_gemini_key_here
+YOUTUBE_API_KEY=your_actual_youtube_key_here
+```
+
+⚠️ **SECURITY NOTE**: 
+- Never commit `.env` files to version control
+- The `.env` file contains your API keys and should remain private
+- For local-only usage, you can use the default ollama settings
+
 ## What Gets Created Fresh
 
 Every installation creates a completely fresh environment:

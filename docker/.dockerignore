@@ -14,7 +14,9 @@ ENV/
 E:/
 F:/
 
-# USER DATA - NEVER INCLUDE IN DISTRIBUTION
+# USER DATA & SECRETS - NEVER INCLUDE IN DISTRIBUTION
+.env
+.env.local
 working_collections.json
 cortex_config.json
 boilerplate.json

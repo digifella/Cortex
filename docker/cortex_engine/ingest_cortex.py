@@ -52,6 +52,9 @@ sys.path.insert(0, str(project_root))
 
 from cortex_engine.config import INGESTION_LOG_PATH, STAGING_INGESTION_FILE, INGESTED_FILES_LOG, COLLECTION_NAME, EMBED_MODEL
 from cortex_engine.utils import get_file_hash
+from cortex_engine.utils.logging_utils import get_logger
+
+logger = get_logger(__name__)
 from cortex_engine.query_cortex import describe_image_with_vlm_for_ingestion
 from cortex_engine.entity_extractor import EntityExtractor, ExtractedEntity, ExtractedRelationship
 from cortex_engine.graph_manager import EnhancedGraphManager
@@ -146,6 +149,132 @@ def write_to_processed_log(log_path: str, file_path: str, doc_id: str):
             json.dump(processed_files, f, indent=2)
     except IOError as e:
         logging.error(f"Failed to write to processed log: {e}")
+
+def get_document_content(file_path: str, skip_image_processing: bool = False) -> Dict:
+    """Extract content from a single document file
+    
+    Returns:
+        Dict with keys: 'content' (str), 'metadata' (dict), 'source_type' (str)
+    """
+    from cortex_engine.query_cortex import describe_image_with_vlm_for_ingestion
+    
+    path = Path(file_path)
+    extension = path.suffix.lower()
+    
+    # Set up readers
+    reader_map = {".pdf": PyMuPDFReader(), ".docx": DocxReader(), ".pptx": PptxReader(), 
+                  ".doc": UnstructuredReader(), ".ppt": UnstructuredReader()}
+    default_reader = FlatReader()
+    
+    try:
+        # Handle image files using the VLM (if enabled)
+        if extension in IMAGE_EXTENSIONS:
+            if skip_image_processing:
+                return {
+                    'content': f"Image file: {path.name} (processing skipped)",
+                    'metadata': {'file_path': str(path.as_posix()), 'file_name': path.name},
+                    'source_type': 'image_skipped'
+                }
+            else:
+                try:
+                    description = describe_image_with_vlm_for_ingestion(file_path)
+                    return {
+                        'content': description,
+                        'metadata': {'file_path': str(path.as_posix()), 'file_name': path.name},
+                        'source_type': 'image'
+                    }
+                except Exception as e:
+                    return {
+                        'content': f"Image file: {path.name} (VLM processing failed: {str(e)})",
+                        'metadata': {'file_path': str(path.as_posix()), 'file_name': path.name},
+                        'source_type': 'image_error'
+                    }
+
+        # Text-based document handling
+        reader = reader_map.get(extension, default_reader)
+        
+        # Handle different reader types with error handling
+        if isinstance(reader, PyMuPDFReader):
+            try:
+                docs_from_file = reader.load_data(file_path=path)
+            except Exception as pdf_error:
+                if "cmsOpenProfileFromMem" not in str(pdf_error):
+                    logger.warning(f"PDF processing warning for {path.name}: {pdf_error}")
+                docs_from_file = reader.load_data(file_path=path)
+        elif isinstance(reader, UnstructuredReader):
+            try:
+                docs_from_file = reader.load_data(file_path=path)
+            except Exception as unstructured_error:
+                error_str = str(unstructured_error).lower()
+                if not any(x in error_str for x in ['warning', 'deprecation', 'future']):
+                    logger.warning(f"UnstructuredReader processing issue for {path.name}: {unstructured_error}")
+                docs_from_file = [Document(
+                    text=f"Error processing old Office document: {path.name}. Reason: {unstructured_error}",
+                    metadata={'file_path': str(path.as_posix()), 'file_name': path.name, 'source_type': 'document_error'}
+                )]
+        else:
+            try:
+                docs_from_file = reader.load_data(file=path)
+            except UnicodeDecodeError as encoding_error:
+                logger.warning(f"Encoding error for {path.name}: {encoding_error}")
+                docs_from_file = [Document(
+                    text=f"File could not be processed due to encoding issues: {path.name}",
+                    metadata={'file_path': str(path.as_posix()), 'file_name': path.name, 'source_type': 'document_error'}
+                )]
+            except OSError as wmf_error:
+                if "cannot find loader for this WMF file" in str(wmf_error):
+                    logger.warning(f"WMF image error in {path.name}: {wmf_error}")
+                    docs_from_file = [Document(
+                        text=f"Document processing failed due to WMF image issues: {path.name}",
+                        metadata={'file_path': str(path.as_posix()), 'file_name': path.name, 'source_type': 'document_error'}
+                    )]
+                else:
+                    raise wmf_error
+        
+        # Combine text from multiple documents if needed
+        if docs_from_file:
+            combined_text = "\n\n".join([doc.text for doc in docs_from_file if doc.text])
+            metadata = docs_from_file[0].metadata if docs_from_file else {}
+            metadata.update({'file_path': str(path.as_posix()), 'file_name': path.name})
+            
+            return {
+                'content': combined_text,
+                'metadata': metadata,
+                'source_type': metadata.get('source_type', 'document')
+            }
+        else:
+            return {
+                'content': f"No content extracted from {path.name}",
+                'metadata': {'file_path': str(path.as_posix()), 'file_name': path.name},
+                'source_type': 'document_error'
+            }
+            
+    except Exception as e:
+        logger.error(f"Failed to process {file_path}: {e}")
+        return {
+            'content': f"Error processing {path.name}: {str(e)}",
+            'metadata': {'file_path': str(path.as_posix()), 'file_name': path.name},
+            'source_type': 'document_error'
+        }
+
+
+def create_document_with_entities(content_result: Dict, rich_metadata: Optional[RichMetadata] = None) -> Document:
+    """Create a Document object with entity extraction"""
+    content = content_result.get('content', '')
+    metadata = content_result.get('metadata', {})
+    source_type = content_result.get('source_type', 'document')
+    
+    # Create the document
+    doc = Document(text=content)
+    doc.metadata.update(metadata)
+    doc.metadata['source_type'] = source_type
+    
+    # Add rich metadata if provided
+    if rich_metadata:
+        doc.metadata['rich_metadata'] = rich_metadata
+    
+    return doc
+
 
 def manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
     documents = []

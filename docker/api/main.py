@@ -21,7 +21,7 @@ import uuid
 from cortex_engine.async_ingest import AsyncIngestionEngine, AsyncIngestionConfig, AsyncIngestionResult
 from cortex_engine.async_query import AsyncSearchEngine, AsyncQueryConfig, AsyncQueryResult
 from cortex_engine.config_manager import ConfigManager
-from cortex_engine.collection_manager import CollectionManager
+from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.utils.logging_utils import get_logger
 from cortex_engine.utils.path_utils import convert_windows_to_wsl_path
 from cortex_engine.exceptions import *
@@ -438,7 +438,7 @@ async def get_collections(
 ):
     """Get all collections"""
     try:
-        collection_manager = CollectionManager(config)
+        collection_manager = WorkingCollectionManager()
         collections = collection_manager.get_all_collections()
         
         collection_infos = []
@@ -467,7 +467,7 @@ async def create_collection(
 ):
     """Create a new collection"""
     try:
-        collection_manager = CollectionManager(config)
+        collection_manager = WorkingCollectionManager()
         
         collection_data = {
             'description': description,
