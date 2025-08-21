@@ -81,7 +81,7 @@ docker run -d \
     --name cortex-suite \
     -p 8501:8501 \
     -p 8000:8000 \
-    -v cortex_data:/home/cortex/data \
+    -v cortex_data:/data \
     -v cortex_logs:/home/cortex/app/logs \
     -v cortex_ollama:/home/cortex/.ollama \
     --env-file .env \

@@ -136,7 +136,7 @@ else
         --name cortex-suite \
         -p 8501:8501 \
         -p 8000:8000 \
-        -v cortex_data:/home/cortex/data \
+        -v cortex_data:/data \
         -v cortex_logs:/home/cortex/app/logs \
         --env-file .env \
         --restart unless-stopped \
