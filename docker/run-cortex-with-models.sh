@@ -130,6 +130,68 @@ else
         exit 1
     fi
 
+    # Detect user directories to mount
+    USER_VOLUME_MOUNTS=""
+    echo "🔍 Detecting user directories to mount..."
+
+    # Detect common user directories based on OS
+    if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+        # Windows (Git Bash/MSYS2)
+        if [ -d "/c/Users" ]; then
+            USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /c/Users:/mnt/c/Users:ro"
+            echo "  📁 Mounting C:/Users as read-only"
+        fi
+        if [ -d "/d" ]; then
+            USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /d:/mnt/d:ro"
+            echo "  📁 Mounting D: drive as read-only"
+        fi
+        if [ -d "/e" ]; then
+            USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /e:/mnt/e:ro"
+            echo "  📁 Mounting E: drive as read-only"
+        fi
+        if [ -d "/f" ]; then
+            USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /f:/mnt/f:ro"
+            echo "  📁 Mounting F: drive as read-only"
+        fi
+    elif [[ "$OSTYPE" == "linux-gnu" ]]; then
+        # Linux/WSL
+        if [ -d "/mnt/c" ]; then
+            # WSL environment
+            USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /mnt/c:/mnt/c:ro"
+            echo "  📁 Mounting WSL /mnt/c as read-only"
+            if [ -d "/mnt/d" ]; then
+                USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /mnt/d:/mnt/d:ro"
+                echo "  📁 Mounting WSL /mnt/d as read-only"
+            fi
+            if [ -d "/mnt/e" ]; then
+                USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /mnt/e:/mnt/e:ro"
+                echo "  📁 Mounting WSL /mnt/e as read-only"
+            fi
+            if [ -d "/mnt/f" ]; then
+                USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /mnt/f:/mnt/f:ro"
+                echo "  📁 Mounting WSL /mnt/f as read-only"
+            fi
+        else
+            # Standard Linux
+            if [ -d "$HOME" ]; then
+                USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v $HOME:/home/host_user:ro"
+                echo "  📁 Mounting $HOME as /home/host_user (read-only)"
+            fi
+        fi
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        if [ -d "$HOME" ]; then
+            USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v $HOME:/home/host_user:ro"
+            echo "  📁 Mounting $HOME as /home/host_user (read-only)"
+        fi
+    fi
+
+    if [ -z "$USER_VOLUME_MOUNTS" ]; then
+        echo "  ⚠️ No user directories detected for mounting"
+    else
+        echo "  ✅ User directories will be available inside the container"
+    fi
+
     # Run the container
     echo "🚀 Starting Cortex Suite..."
     docker run -d \
@@ -138,6 +200,7 @@ else
         -p 8000:8000 \
         -v cortex_data:/data \
         -v cortex_logs:/home/cortex/app/logs \
+        $USER_VOLUME_MOUNTS \
         --env-file .env \
         --restart unless-stopped \
         cortex-suite

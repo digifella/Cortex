@@ -1,15 +1,21 @@
 """
-System Status Checker for Cortex Suite
-Provides real-time status of AI models, services, and system health
+System Status Checker for Cortex Suite - Hybrid Model Architecture
+Provides real-time status of AI models, services, and system health across multiple backends
 """
 
 import subprocess
 import json
 import requests
-from typing import Dict, List, Optional, Tuple
+import asyncio
+from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
 import time
+
+from .model_services import HybridModelManager, ModelInfo as ServiceModelInfo, ModelStatus as ServiceModelStatus
+from .utils.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 class ServiceStatus(Enum):
     RUNNING = "running"
@@ -28,29 +34,51 @@ class ModelInfo:
     name: str
     status: ModelStatus
     size_gb: float
+    backend: str
     download_progress: Optional[float] = None  # 0.0 to 1.0
+    error_message: Optional[str] = None
+    performance_tier: str = "standard"
+
+@dataclass
+class BackendStatus:
+    name: str
+    status: ServiceStatus
+    available_models: List[str]
+    model_count: int
+    performance_metrics: Dict[str, Any]
     error_message: Optional[str] = None
 
 @dataclass
 class SystemHealth:
+    # Legacy fields for backward compatibility
     ollama_status: ServiceStatus
     api_status: ServiceStatus
     models: List[ModelInfo]
     setup_complete: bool
     error_messages: List[str]
     last_updated: float
+    
+    # New hybrid architecture fields
+    backends: List[BackendStatus]
+    model_distribution_strategy: str
+    total_models_available: int
+    hybrid_manager_status: ServiceStatus
 
 class SystemStatusChecker:
-    """Checks the status of all Cortex Suite components"""
+    """Checks the status of all Cortex Suite components with hybrid model support"""
     
     REQUIRED_MODELS = [
-        ("mistral:7b-instruct-v0.3-q4_K_M", 4.4),
-        ("mistral-small3.2", 15.0)
+        ("mistral:7b-instruct-v0.3-q4_K_M", 4.4, "standard"),
+        ("mistral-small3.2", 15.0, "premium")
     ]
     
-    def __init__(self):
+    def __init__(self, model_distribution_strategy: str = "hybrid_docker_preferred"):
         self.ollama_url = "http://localhost:11434"
         self.api_url = "http://localhost:8000"
+        self.model_distribution_strategy = model_distribution_strategy
+        self._hybrid_manager = None
+        self._last_hybrid_check = 0
+        self._hybrid_check_interval = 30  # seconds
     
     def check_ollama_status(self) -> ServiceStatus:
         """Check if Ollama service is running"""

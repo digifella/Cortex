@@ -1,0 +1,374 @@
+# Docker Compose for Cortex Suite - Hybrid Model Architecture
+# Supports both Docker Model Runner and Ollama backends
+version: '3.8'
+
+services:
+  # Ollama Service for Local LLM (Compatibility Layer)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: cortex-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_ORIGINS=*
+      - OLLAMA_MAX_VRAM=4GB
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles:
+      - ollama
+      - hybrid
+      - gpu
+
+  # Docker Model Runner Service (Enterprise Backend)
+  docker-model-runner:
+    image: docker:dind
+    container_name: cortex-docker-models
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - docker_models:/var/lib/docker
+      - /var/run/docker.sock:/var/run/docker.sock
+      - docker_model_cache:/models
+    environment:
+      - DOCKER_TLS_CERTDIR=
+      - MODEL_CACHE_PATH=/models
+      - MODEL_REGISTRY=docker.io/ai
+    healthcheck:
+      test: ["CMD", "docker", "version"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    profiles:
+      - docker-models
+      - hybrid
+      - enterprise
+
+  # AI Model Services (Using Docker Model Runner)
+  mistral-7b:
+    provider:
+      type: model
+    image: "ai/mistral:7b-instruct-v0.3-q4_K_M"
+    container_name: cortex-model-mistral-7b
+    restart: unless-stopped
+    depends_on:
+      docker-model-runner:
+        condition: service_healthy
+    environment:
+      MODEL_TYPE: "text-generation"
+      GPU_ENABLED: "${ENABLE_GPU:-false}"
+      PERFORMANCE_TIER: "standard"
+    profiles:
+      - docker-models
+      - hybrid
+      - enterprise
+
+  mistral-small:
+    provider:
+      type: model
+    image: "ai/mistral:small-3.2"
+    container_name: cortex-model-mistral-small
+    restart: unless-stopped
+    depends_on:
+      docker-model-runner:
+        condition: service_healthy
+    environment:
+      MODEL_TYPE: "text-generation"
+      GPU_ENABLED: "${ENABLE_GPU:-false}"
+      PERFORMANCE_TIER: "premium"
+    profiles:
+      - docker-models
+      - hybrid
+      - enterprise
+
+  llava-vision:
+    provider:
+      type: model
+    image: "ai/llava:latest"
+    container_name: cortex-model-llava
+    restart: unless-stopped
+    depends_on:
+      docker-model-runner:
+        condition: service_healthy
+    environment:
+      MODEL_TYPE: "vision-language"
+      GPU_ENABLED: "${ENABLE_GPU:-false}"
+      PERFORMANCE_TIER: "standard"
+    profiles:
+      - docker-models
+      - hybrid
+      - vision
+
+  # ChromaDB Vector Database
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: cortex-chromadb
+    restart: unless-stopped
+    volumes:
+      - chroma_data:/chroma/chroma
+    ports:
+      - "8001:8000"
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Cortex API Service with Hybrid Model Support
+  cortex-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+      args:
+        ENABLE_DOCKER_MODELS: "true"
+    container_name: cortex-api
+    restart: unless-stopped
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    volumes:
+      - cortex_data:/data
+      - cortex_logs:/app/logs
+      - /var/run/docker.sock:/var/run/docker.sock  # For Docker Model Runner access
+    ports:
+      - "8000:8000"
+    environment:
+      - AI_DATABASE_PATH=/data/ai_databases
+      - KNOWLEDGE_SOURCE_PATH=/data/knowledge_base
+      - MODEL_DISTRIBUTION_STRATEGY=${MODEL_DISTRIBUTION_STRATEGY:-hybrid_docker_preferred}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - DOCKER_MODEL_REGISTRY=${DOCKER_MODEL_REGISTRY:-docker.io/ai}
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - ENVIRONMENT=${DEPLOYMENT_ENV:-production}
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Cortex Streamlit UI
+  cortex-ui:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ui
+    container_name: cortex-ui
+    restart: unless-stopped
+    depends_on:
+      cortex-api:
+        condition: service_healthy
+    volumes:
+      - cortex_data:/data
+      - cortex_logs:/app/logs
+    ports:
+      - "8501:8501"
+    environment:
+      - AI_DATABASE_PATH=/data/ai_databases
+      - KNOWLEDGE_SOURCE_PATH=/data/knowledge_base
+      - API_BASE_URL=http://cortex-api:8000
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - MODEL_DISTRIBUTION_STRATEGY=${MODEL_DISTRIBUTION_STRATEGY:-hybrid_docker_preferred}
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Hybrid Model Initialization Service
+  model-init-hybrid:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.model-init
+    container_name: cortex-model-init-hybrid
+    restart: "no"
+    depends_on:
+      - cortex-api
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - MODEL_DISTRIBUTION_STRATEGY=${MODEL_DISTRIBUTION_STRATEGY:-hybrid_docker_preferred}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - DOCKER_MODEL_REGISTRY=${DOCKER_MODEL_REGISTRY:-docker.io/ai}
+      - ENABLE_DOCKER_MODELS=${ENABLE_DOCKER_MODELS:-true}
+      - ENABLE_OLLAMA_MODELS=${ENABLE_OLLAMA_MODELS:-true}
+    command: |
+      sh -c "
+        echo '🚀 Starting Hybrid Model Initialization...'
+        
+        # Check which backends are available
+        python -c '
+        import asyncio
+        from cortex_engine.model_services import HybridModelManager
+        
+        async def init_models():
+            manager = HybridModelManager()
+            
+            # Check backend availability
+            backends = await manager.get_available_backends()
+            print(f\"Available backends: {backends}\")
+            
+            # Install essential models
+            essential_models = [
+                \"mistral:7b-instruct-v0.3-q4_K_M\",
+                \"mistral-small3.2\"
+            ]
+            
+            for model in essential_models:
+                print(f\"Ensuring model {model} is available...\")
+                if not await manager.is_model_available(model):
+                    print(f\"Pulling model {model}...\")
+                    async for progress in manager.pull_model(model):
+                        print(f\"Progress: {progress.status}\")
+                else:
+                    print(f\"Model {model} already available\")
+            
+            # Show final status
+            status = await manager.get_system_status()
+            print(f\"Initialization complete. Status: {status}\")
+            
+            await manager.close()
+        
+        asyncio.run(init_models())
+        '
+        
+        echo '✅ Hybrid Model Initialization Complete'
+      "
+    profiles:
+      - init
+      - hybrid
+
+  # Model Migration Service (Optional)
+  model-migration:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.migration
+    container_name: cortex-model-migration
+    restart: "no"
+    depends_on:
+      - cortex-api
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ollama_data:/ollama_data:ro
+    environment:
+      - MIGRATION_SOURCE=ollama
+      - MIGRATION_TARGET=docker_model_runner
+      - KEEP_SOURCE_MODELS=${KEEP_SOURCE_MODELS:-true}
+    profiles:
+      - migration
+
+  # Performance Monitoring Service
+  model-monitor:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.monitor
+    container_name: cortex-model-monitor
+    restart: unless-stopped
+    depends_on:
+      - cortex-api
+    volumes:
+      - cortex_logs:/app/logs
+      - monitor_data:/monitor/data
+    ports:
+      - "9090:9090"  # Prometheus metrics
+    environment:
+      - MONITOR_INTERVAL=60
+      - METRICS_PORT=9090
+      - LOG_LEVEL=INFO
+    profiles:
+      - monitoring
+      - enterprise
+
+  # Backup Service (Enhanced for Hybrid Models)
+  backup-service:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backup
+    container_name: cortex-backup
+    restart: unless-stopped
+    depends_on:
+      - cortex-api
+    volumes:
+      - cortex_data:/data
+      - backup_data:/backups
+      - docker_models:/docker_models:ro
+      - ollama_data:/ollama_data:ro
+    environment:
+      - BACKUP_SCHEDULE=0 2 * * *  # Daily at 2 AM
+      - BACKUP_RETENTION_DAYS=30
+      - AI_DATABASE_PATH=/data/ai_databases
+      - BACKUP_MODELS=${BACKUP_MODELS:-false}  # Model backups are large
+      - BACKUP_COMPRESSION=gzip
+    profiles:
+      - backup
+
+volumes:
+  # Traditional volumes
+  ollama_data:
+    driver: local
+  chroma_data:
+    driver: local
+  cortex_data:
+    driver: local
+  cortex_logs:
+    driver: local
+  backup_data:
+    driver: local
+  
+  # New hybrid architecture volumes
+  docker_models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DOCKER_MODELS_PATH:-./docker_models}
+  
+  docker_model_cache:
+    driver: local
+  
+  monitor_data:
+    driver: local
+
+networks:
+  default:
+    name: cortex-hybrid-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# Service Profiles for Different Deployment Scenarios:
+#
+# Development (Ollama only):
+#   docker-compose --profile ollama up
+#
+# Enterprise (Docker Models only):
+#   docker-compose --profile docker-models --profile enterprise up
+#
+# Hybrid (Both backends):
+#   docker-compose --profile hybrid up
+#
+# Full monitoring:
+#   docker-compose --profile hybrid --profile monitoring up
+#
+# With backup:
+#   docker-compose --profile hybrid --profile backup up

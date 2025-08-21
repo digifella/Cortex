@@ -104,7 +104,32 @@ docker build -t cortex-suite -f Dockerfile .
 if errorlevel 1 goto build_failed
 
 echo ** Starting Cortex Suite...
-docker run -d --name cortex-suite -p 8501:8501 -p 8000:8000 -v cortex_data:/data -v cortex_logs:/home/cortex/app/logs -v cortex_ollama:/home/cortex/.ollama --env-file .env --restart unless-stopped cortex-suite
+REM Detect user directories to mount
+set USER_VOLUME_MOUNTS=
+echo DETECT: Checking for user directories to mount...
+if exist "C:\Users" (
+    set USER_VOLUME_MOUNTS=%USER_VOLUME_MOUNTS% -v "C:\Users":/mnt/c/Users:ro
+    echo   MOUNT: C:\Users as read-only
+)
+if exist "E:\" (
+    set USER_VOLUME_MOUNTS=%USER_VOLUME_MOUNTS% -v "E:\":/mnt/e:ro
+    echo   MOUNT: E:\ drive as read-only
+)
+if exist "D:\" (
+    set USER_VOLUME_MOUNTS=%USER_VOLUME_MOUNTS% -v "D:\":/mnt/d:ro
+    echo   MOUNT: D:\ drive as read-only
+)
+if exist "F:\" (
+    set USER_VOLUME_MOUNTS=%USER_VOLUME_MOUNTS% -v "F:\":/mnt/f:ro
+    echo   MOUNT: F:\ drive as read-only
+)
+if "%USER_VOLUME_MOUNTS%"=="" (
+    echo   WARNING: No user directories detected
+) else (
+    echo   OK: User directories will be available
+)
+
+docker run -d --name cortex-suite -p 8501:8501 -p 8000:8000 -v cortex_data:/data -v cortex_logs:/home/cortex/app/logs -v cortex_ollama:/home/cortex/.ollama %USER_VOLUME_MOUNTS% --env-file .env --restart unless-stopped cortex-suite
 
 if errorlevel 1 goto start_failed
 

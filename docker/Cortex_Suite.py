@@ -202,8 +202,8 @@ st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
-        <strong>🕒 Latest Code Changes:</strong> 2025-08-16<br>
-        <em>Service-First Architecture, Real-time Setup Progress, Cross-platform Docker Distribution</em>
+        <strong>🕒 Latest Code Changes:</strong> 2025-08-21<br>
+        <em>Enhanced Setup Wizard with Real-time Logging, Model Download Progress, Debug Windows</em>
     </div>
     """, 
     unsafe_allow_html=True

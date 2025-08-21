@@ -27,7 +27,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 # Import centralized utilities
-from cortex_engine.utils import convert_windows_to_wsl_path, get_logger
+from cortex_engine.utils import convert_windows_to_wsl_path, get_logger, validate_path_exists, convert_to_docker_mount_path
 from cortex_engine.utils.model_checker import model_checker
 from cortex_engine.config import STAGING_INGESTION_FILE, INGESTED_FILES_LOG, DEFAULT_EXCLUSION_PATTERNS_STR
 from cortex_engine.config_manager import ConfigManager
@@ -1099,7 +1099,8 @@ def render_config_and_scan_ui():
 
     root_display_path = st.session_state.knowledge_source_path
     root_wsl_path = convert_windows_to_wsl_path(root_display_path)
-    is_knowledge_path_valid = os.path.isdir(root_wsl_path)
+    # Use Docker-aware path validation that checks both normal and Docker mount paths
+    is_knowledge_path_valid = validate_path_exists(root_display_path, must_be_dir=True)
 
     if is_knowledge_path_valid:
         current_display_path = st.session_state.directory_scan_path

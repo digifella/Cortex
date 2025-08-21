@@ -33,8 +33,18 @@
       "Bash(touch:*)",
       "Bash(curl:*)",
       "Bash(source:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "Bash(git fetch:*)",
+      "Bash(git pull:*)",
+      "WebSearch",
+      "WebSearch",
+      "Bash(cortex-suite)"
     ],
-    "deny": []
+    "deny": [],
+    "defaultMode": "acceptEdits",
+    "additionalDirectories": [
+      "/home/longboardfella"
+    ]
   }
 }

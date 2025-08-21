@@ -75,6 +75,81 @@ if ! docker build -t cortex-suite -f Dockerfile .; then
     exit 1
 fi
 
+# Detect user directories to mount
+USER_VOLUME_MOUNTS=""
+echo "🔍 Detecting user directories to mount..."
+
+# Detect common user directories based on OS
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    # Windows (Git Bash/MSYS2)
+    if [ -d "/c/Users" ]; then
+        USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /c/Users:/mnt/c/Users:ro"
+        echo "  📁 Mounting C:/Users as read-only"
+    fi
+    if [ -d "/d" ]; then
+        USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /d:/mnt/d:ro"
+        echo "  📁 Mounting D: drive as read-only"
+    fi
+    if [ -d "/e" ]; then
+        USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /e:/mnt/e:ro"
+        echo "  📁 Mounting E: drive as read-only"
+    fi
+    if [ -d "/f" ]; then
+        USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /f:/mnt/f:ro"
+        echo "  📁 Mounting F: drive as read-only"
+    fi
+elif [[ "$OSTYPE" == "linux-gnu" ]]; then
+    # Linux/WSL
+    if [ -d "/mnt/c" ]; then
+        # WSL environment
+        USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /mnt/c:/mnt/c:ro"
+        echo "  📁 Mounting WSL /mnt/c as read-only"
+        if [ -d "/mnt/d" ]; then
+            USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /mnt/d:/mnt/d:ro"
+            echo "  📁 Mounting WSL /mnt/d as read-only"
+        fi
+        if [ -d "/mnt/e" ]; then
+            USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /mnt/e:/mnt/e:ro"
+            echo "  📁 Mounting WSL /mnt/e as read-only"
+        fi
+        if [ -d "/mnt/f" ]; then
+            USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v /mnt/f:/mnt/f:ro"
+            echo "  📁 Mounting WSL /mnt/f as read-only"
+        fi
+    else
+        # Standard Linux
+        if [ -d "$HOME" ]; then
+            USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v $HOME:/home/host_user:ro"
+            echo "  📁 Mounting $HOME as /home/host_user (read-only)"
+        fi
+    fi
+elif [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    if [ -d "$HOME" ]; then
+        USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v $HOME:/home/host_user:ro"
+        echo "  📁 Mounting $HOME as /home/host_user (read-only)"
+    fi
+fi
+
+# Add any user-defined paths from .env
+if [ -f .env ]; then
+    # Check for custom mount paths in .env file
+    if grep -q "HOST_DOCUMENTS_PATH=" .env; then
+        DOC_PATH=$(grep "HOST_DOCUMENTS_PATH=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        if [ -n "$DOC_PATH" ] && [ -d "$DOC_PATH" ]; then
+            USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v \"$DOC_PATH\":/host_documents:ro"
+            echo "  📁 Mounting custom documents path: $DOC_PATH"
+        fi
+    fi
+fi
+
+if [ -z "$USER_VOLUME_MOUNTS" ]; then
+    echo "  ⚠️ No user directories detected for mounting"
+    echo "  💡 You can manually add paths by editing the .env file"
+else
+    echo "  ✅ User directories will be available inside the container"
+fi
+
 # Run the container
 echo "🚀 Starting Cortex Suite..."
 docker run -d \
@@ -84,6 +159,7 @@ docker run -d \
     -v cortex_data:/data \
     -v cortex_logs:/home/cortex/app/logs \
     -v cortex_ollama:/home/cortex/.ollama \
+    $USER_VOLUME_MOUNTS \
     --env-file .env \
     --restart unless-stopped \
     cortex-suite
