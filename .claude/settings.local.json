@@ -39,7 +39,8 @@
       "Bash(git pull:*)",
       "WebSearch",
       "WebSearch",
-      "Bash(cortex-suite)"
+      "Bash(cortex-suite)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",

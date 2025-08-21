@@ -7,28 +7,7 @@
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
-from .path_utils import normalize_path, validate_path_exists
-
-
-def validate_path_exists(path: Union[str, Path], must_be_dir: bool = False) -> bool:
-    """
-    Validate that a path exists and optionally is a directory.
-    
-    Args:
-        path: Path to validate
-        must_be_dir: If True, path must be a directory
-        
-    Returns:
-        True if path exists and meets requirements
-    """
-    path_obj = normalize_path(path)
-    if not path_obj or not path_obj.exists():
-        return False
-    
-    if must_be_dir:
-        return path_obj.is_dir()
-    
-    return True
+from .path_utils import normalize_path
 
 
 def get_env_var(
@@ -99,6 +78,7 @@ def validate_database_config(config: Dict[str, Any]) -> Dict[str, str]:
     
     # Check base data path
     if 'base_data_path' in config:
+        from .path_utils import validate_path_exists
         if not validate_path_exists(config['base_data_path'], must_be_dir=True):
             errors['base_data_path'] = "Database path does not exist or is not a directory"
     
