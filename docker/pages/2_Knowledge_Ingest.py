@@ -1221,9 +1221,33 @@ def render_config_and_scan_ui():
                         if "llava" in model_check["missing_models"]:
                             st.markdown("**Option 2: Skip image processing**")
                             if st.button("🚀 Continue without image analysis", type="secondary"):
+                                # Enable skip image processing and force proceed with ingestion
                                 st.session_state.skip_image_processing = True
-                                st.rerun()
-                return
+                                # Re-check models after enabling skip image processing
+                                model_check = model_checker.check_model_availability(
+                                    skip_vision=True,
+                                    skip_image_processing=True
+                                )
+                                # If we can now proceed, continue with ingestion
+                                if model_check["can_proceed"]:
+                                    st.success("✅ Image processing disabled - proceeding with ingestion")
+                                    # Continue to the ingestion logic (don't return here)
+                                else:
+                                    st.rerun()
+                                    return
+                
+                # Only return if we still can't proceed after attempting the image processing fix
+                if not model_check["can_proceed"] and not st.session_state.get("skip_image_processing", False):
+                    return
+                
+                # Re-check model availability if skip image processing was enabled
+                if st.session_state.get("skip_image_processing", False):
+                    model_check = model_checker.check_model_availability(
+                        skip_vision=True,
+                        skip_image_processing=True
+                    )
+                    if not model_check["can_proceed"]:
+                        return
             
             # Show successful model check
             if model_check["warnings"]:
