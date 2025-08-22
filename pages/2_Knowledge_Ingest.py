@@ -1166,7 +1166,9 @@ def render_config_and_scan_ui():
                        help="📄 When both PDF and DOCX versions of the same document exist, only ingest the DOCX version (usually has better text extraction).")
             st.checkbox("Deduplicate by latest version", key="filter_deduplicate", 
                        help="🔄 Automatically detects files with version numbers or dates (e.g., 'report_v2.pdf', 'proposal_final.docx') and only ingests the latest version.")
-            st.checkbox("⚡ Skip image processing (faster ingestion)", key="skip_image_processing", 
+            st.checkbox("⚡ Skip image processing (faster ingestion)", 
+                       key="skip_image_processing",
+                       value=st.session_state.get("skip_image_processing", False),
                        help="🖼️ Skip AI vision analysis of JPG/PNG files. Use this if you don't need image descriptions or if vision processing is slow/unavailable.")
         with col2:
             st.write("**Pattern-Based Exclusion**")
@@ -1221,33 +1223,11 @@ def render_config_and_scan_ui():
                         if "llava" in model_check["missing_models"]:
                             st.markdown("**Option 2: Skip image processing**")
                             if st.button("🚀 Continue without image analysis", type="secondary"):
-                                # Enable skip image processing and force proceed with ingestion
+                                # Enable skip image processing checkbox in session state
                                 st.session_state.skip_image_processing = True
-                                # Re-check models after enabling skip image processing
-                                model_check = model_checker.check_model_availability(
-                                    skip_vision=True,
-                                    skip_image_processing=True
-                                )
-                                # If we can now proceed, continue with ingestion
-                                if model_check["can_proceed"]:
-                                    st.success("✅ Image processing disabled - proceeding with ingestion")
-                                    # Continue to the ingestion logic (don't return here)
-                                else:
-                                    st.rerun()
-                                    return
-                
-                # Only return if we still can't proceed after attempting the image processing fix
-                if not model_check["can_proceed"] and not st.session_state.get("skip_image_processing", False):
-                    return
-                
-                # Re-check model availability if skip image processing was enabled
-                if st.session_state.get("skip_image_processing", False):
-                    model_check = model_checker.check_model_availability(
-                        skip_vision=True,
-                        skip_image_processing=True
-                    )
-                    if not model_check["can_proceed"]:
-                        return
+                                # Force rerun to update the UI and proceed with ingestion
+                                st.rerun()
+                return
             
             # Show successful model check
             if model_check["warnings"]:
