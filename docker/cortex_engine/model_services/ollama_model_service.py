@@ -199,7 +199,7 @@ class OllamaModelService(ModelServiceInterface):
     async def get_model_endpoint(self, model_name: str) -> Optional[str]:
         """Get the API endpoint URL for a model."""
         if await self.is_model_available(model_name):
-            return f"{self.base_url}/api/generate"
+            return f"{self.base_url}/api/chat"
         return None
     
     async def test_model_inference(self, model_name: str, test_prompt: str = "Hello") -> bool:
@@ -211,12 +211,12 @@ class OllamaModelService(ModelServiceInterface):
             session = await self._get_session()
             payload = {
                 "model": model_name,
-                "prompt": test_prompt,
+                "messages": [{"role": "user", "content": test_prompt}],
                 "stream": False
             }
             
             async with session.post(
-                f"{self.base_url}/api/generate",
+                f"{self.base_url}/api/chat",
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as response:
@@ -225,7 +225,7 @@ class OllamaModelService(ModelServiceInterface):
                     return False
                 
                 data = await response.json()
-                return "response" in data and data["response"]
+                return "message" in data and "content" in data.get("message", {})
                 
         except Exception as e:
             logger.error(f"Model inference test failed: {e}")

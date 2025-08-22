@@ -2,8 +2,8 @@
 Unified LLM Service Manager
 Provides consistent LLM provider selection and availability checking across all modules.
 
-Version: 1.0.0
-Date: 2025-08-13
+Version: 1.2.0
+Date: 2025-08-22
 """
 
 import os
@@ -173,8 +173,8 @@ class LLMServiceManager:
         model = self.TASK_MODELS.get(self.task_type, "mistral")
         
         if provider == LLMProvider.LOCAL_OLLAMA:
-            from llama_index.llms.ollama import Ollama
-            return Ollama(model=model, request_timeout=120.0)
+            from .utils.smart_ollama_llm import create_smart_ollama_llm
+            return create_smart_ollama_llm(model=model, request_timeout=120.0)
             
         elif provider == LLMProvider.CLOUD_GEMINI:
             api_key = os.getenv("GEMINI_API_KEY")

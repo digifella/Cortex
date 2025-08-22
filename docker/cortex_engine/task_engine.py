@@ -1,6 +1,6 @@
 # ## File: cortex_engine/task_engine.py
-# Version: 13.0.0 (Mistral Small 3.2 Integration)
-# Date: 2025-07-24
+# Version: 13.2.0 (Smart Ollama LLM Selector)
+# Date: 2025-08-22
 # Purpose: Core AI task execution engine.
 #          - FEATURE (v13.0.0): Updated to use Mistral Small 3.2 for improved proposal
 #            generation with better instruction following and reduced repetition.
@@ -12,7 +12,6 @@ from typing import Dict, List, Any, Optional
 
 from docx.shared import RGBColor
 from llama_index.core import VectorStoreIndex, Settings
-from llama_index.llms.ollama import Ollama
 from .instruction_parser import CortexInstruction, INSTRUCTION_REGEX
 from .collection_manager import WorkingCollectionManager
 from .config import PROPOSAL_LLM_MODEL
@@ -119,14 +118,12 @@ class TaskExecutionEngine:
                 raise Exception(f"Ollama service unavailable: {error_msg}")
             
             # ENFORCE LOCAL-ONLY: Proposals MUST run locally for privacy/control
-            proposal_llm = Ollama(
+            from .utils.smart_ollama_llm import create_smart_ollama_llm
+            proposal_llm = create_smart_ollama_llm(
                 model=PROPOSAL_LLM_MODEL,
-                request_timeout=300.0,
-                # Optimize for proposal generation with Mistral Small 3.2
-                temperature=0.3,  # Lower temperature for more consistent outputs
-                top_p=0.8,       # Reduce randomness for better instruction following
-                num_predict=2048, # Reasonable output length for proposal sections
+                request_timeout=300.0
             )
+            # Note: Model parameters (temperature, top_p, etc.) are now handled at request level in modern API
             Settings.llm = proposal_llm
             logger.info(f"✅ Proposal LLM configured (LOCAL): {PROPOSAL_LLM_MODEL}")
         except Exception as e:

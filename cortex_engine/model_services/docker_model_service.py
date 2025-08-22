@@ -275,7 +275,7 @@ class DockerModelService(ModelServiceInterface):
         # Docker Model Runner integrates with the host's Docker daemon
         # Models are typically served through the Docker Model Runner service
         if await self.is_model_available(model_name):
-            return f"http://localhost:11434/api/generate"  # Compatible with Ollama API
+            return f"http://localhost:11434/api/chat"  # Compatible with modern Ollama API
         return None
     
     async def test_model_inference(self, model_name: str, test_prompt: str = "Hello") -> bool:

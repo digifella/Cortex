@@ -1,6 +1,6 @@
 # ## File: ingest_cortex.py
-# Version: 13.0.0 (GraphRAG Integration by Claude Opus)
-# Date: 2025-07-23
+# Version: 13.2.0 (Smart Ollama LLM Selector for Docker Compatibility)
+# Date: 2025-08-22
 # Purpose: Core ingestion script for Project Cortex with integrated knowledge graph extraction.
 #          - FEATURE (v13.0.0): Integrated entity extraction and knowledge graph building
 #            during the ingestion process. The system now extracts people, organizations,
@@ -31,7 +31,6 @@ import re
 from pydantic import BaseModel, Field, ValidationError
 from llama_index.core import Document
 from llama_index.core.settings import Settings
-from llama_index.llms.ollama import Ollama
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.core import VectorStoreIndex, StorageContext
@@ -53,6 +52,7 @@ sys.path.insert(0, str(project_root))
 from cortex_engine.config import INGESTION_LOG_PATH, STAGING_INGESTION_FILE, INGESTED_FILES_LOG, COLLECTION_NAME, EMBED_MODEL
 from cortex_engine.utils import get_file_hash
 from cortex_engine.utils.logging_utils import get_logger
+from cortex_engine.utils.smart_ollama_llm import create_smart_ollama_llm
 
 logger = get_logger(__name__)
 from cortex_engine.query_cortex import describe_image_with_vlm_for_ingestion
@@ -98,8 +98,8 @@ def initialize_script():
         logging.warning("AI-enhanced metadata extraction will be disabled. Documents will be processed with basic metadata only.")
         Settings.llm = None  # Will be handled in analysis function
     else:
-        Settings.llm = Ollama(model="mistral", request_timeout=120.0)
-        logging.info("Ollama connected successfully")
+        Settings.llm = create_smart_ollama_llm(model="mistral:7b-instruct-v0.3-q4_K_M", request_timeout=120.0)
+        logging.info("Ollama connected successfully with modern API")
     
     Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
     logging.info(f"Models configured (Embed: {EMBED_MODEL}).")
