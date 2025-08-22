@@ -1166,9 +1166,7 @@ def render_config_and_scan_ui():
                        help="📄 When both PDF and DOCX versions of the same document exist, only ingest the DOCX version (usually has better text extraction).")
             st.checkbox("Deduplicate by latest version", key="filter_deduplicate", 
                        help="🔄 Automatically detects files with version numbers or dates (e.g., 'report_v2.pdf', 'proposal_final.docx') and only ingests the latest version.")
-            st.checkbox("⚡ Skip image processing (faster ingestion)", 
-                       key="skip_image_processing",
-                       value=st.session_state.get("skip_image_processing", False),
+            st.checkbox("⚡ Skip image processing (faster ingestion)", key="skip_image_processing", 
                        help="🖼️ Skip AI vision analysis of JPG/PNG files. Use this if you don't need image descriptions or if vision processing is slow/unavailable.")
         with col2:
             st.write("**Pattern-Based Exclusion**")
@@ -1222,11 +1220,12 @@ def render_config_and_scan_ui():
                     with col2:
                         if "llava" in model_check["missing_models"]:
                             st.markdown("**Option 2: Skip image processing**")
-                            if st.button("🚀 Continue without image analysis", type="secondary"):
-                                # Enable skip image processing checkbox in session state
-                                st.session_state.skip_image_processing = True
-                                # Force rerun to update the UI and proceed with ingestion
-                                st.rerun()
+                            st.info("📋 **To proceed without image analysis:**\n\n"
+                                   "1. Expand **'Advanced Options'** section below\n"
+                                   "2. Under **'Smart Filtering'**, check the box:\n"
+                                   "   ⚡ **Skip image processing (faster ingestion)**\n"
+                                   "3. Click **'Scan 1 Selected Directory(ies)'** again")
+                            st.markdown("↓ *Scroll down to Advanced Options* ↓")
                 return
             
             # Show successful model check
