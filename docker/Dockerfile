@@ -43,7 +43,8 @@ COPY --chown=cortex:cortex . .
 # Create data directories
 RUN mkdir -p /home/cortex/data/ai_databases \
     /home/cortex/data/knowledge_base \
-    /home/cortex/logs
+    /home/cortex/logs \
+    /home/cortex/app/logs
 
 # Set default environment variables
 ENV AI_DATABASE_PATH=/home/cortex/data/ai_databases
