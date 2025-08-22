@@ -37,6 +37,9 @@ ENV PATH="/home/cortex/.local/bin:$PATH"
 # Download spaCy model
 RUN python -m spacy download en_core_web_sm
 
+# Download required NLTK data for document processing
+RUN python -c "import nltk; nltk.download('averaged_perceptron_tagger'); nltk.download('punkt'); nltk.download('punkt_tab'); nltk.download('stopwords'); nltk.download('wordnet'); nltk.download('omw-1.4')"
+
 # Copy application code
 COPY --chown=cortex:cortex . .
 
