@@ -203,7 +203,7 @@ st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
         <strong>🕒 Latest Code Changes:</strong> 2025-08-23<br>
-        <em>Fixed multiple dependency conflicts (PyArrow, Typer), Docling integration, batch processing fixes</em>
+        <em>Resolved all dependency conflicts with pinned versions - Docker build optimized for fast resolution</em>
     </div>
     """, 
     unsafe_allow_html=True
