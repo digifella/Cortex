@@ -115,8 +115,8 @@ if exist "F:\" echo   MOUNT: F:\ drive will be available as /mnt/f
 
 echo   OK: Starting Cortex Suite with all detected drives...
 
-REM Build docker run command with only existing drives
-set DOCKER_CMD=docker run -d --name cortex-suite -p 8501:8501 -p 8000:8000 -v cortex_data:/data -v cortex_logs:/home/cortex/app/logs -v cortex_ollama:/home/cortex/.ollama
+REM Build docker run command with only existing drives and GPU support
+set DOCKER_CMD=docker run -d --name cortex-suite --gpus all -p 8501:8501 -p 8000:8000 -v cortex_data:/data -v cortex_logs:/home/cortex/app/logs -v cortex_ollama:/home/cortex/.ollama
 
 REM Always mount entire C:\ drive if it exists (should always exist on Windows)
 if exist "C:\" (

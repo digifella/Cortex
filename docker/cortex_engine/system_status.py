@@ -115,18 +115,28 @@ class SystemStatusChecker:
     def _detect_gpu_and_optimization(self, platform_name: str, architecture: str) -> Tuple[str, str]:
         """Detect GPU type and determine optimization strategy"""
         
-        # Check for NVIDIA GPU
+        # Check for NVIDIA GPU with enhanced detection
         nvidia_detected = False
+        nvidia_gpu_name = None
         try:
-            result = subprocess.run(["nvidia-smi"], capture_output=True, timeout=3)
-            if result.returncode == 0:
+            result = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader,nounits"], 
+                                  capture_output=True, timeout=3, text=True)
+            if result.returncode == 0 and result.stdout.strip():
                 nvidia_detected = True
+                nvidia_gpu_name = result.stdout.strip().split('\n')[0]  # Get first GPU
         except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
+            # Try alternative detection method
+            try:
+                result = subprocess.run(["nvidia-smi"], capture_output=True, timeout=3)
+                if result.returncode == 0:
+                    nvidia_detected = True
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
         
         # Determine GPU type and optimization based on platform and detection
         if nvidia_detected:
-            return "NVIDIA GPU", "CUDA Acceleration"
+            gpu_name = nvidia_gpu_name if nvidia_gpu_name else "NVIDIA GPU"
+            return gpu_name, "CUDA Acceleration"
         
         elif platform_name == "macOS":
             if architecture == "ARM64":

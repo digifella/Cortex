@@ -150,10 +150,11 @@ else
     echo "  ✅ User directories will be available inside the container"
 fi
 
-# Run the container
+# Run the container with GPU support
 echo "🚀 Starting Cortex Suite..."
 docker run -d \
     --name cortex-suite \
+    --gpus all \
     -p 8501:8501 \
     -p 8000:8000 \
     -v cortex_data:/data \
