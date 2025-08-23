@@ -251,32 +251,31 @@ class TestModelMigration:
     @pytest.fixture
     def migration_manager(self):
         """Create migration manager with mocked hybrid manager."""
-        mock_hybrid = Mock()
+        mock_hybrid = AsyncMock()
         return ModelMigrationManager(mock_hybrid)
     
     @pytest.mark.asyncio
     async def test_migration_plan_creation(self, migration_manager):
         """Test creation of migration plans."""
         # Mock source service with available models
-        mock_source_service = Mock()
+        mock_source_service = AsyncMock()
         mock_source_service.list_available_models.return_value = [
             ModelInfo("mistral", "7b", 4.4, ModelStatus.AVAILABLE, "ollama")
         ]
         
         # Mock target service
-        mock_target_service = Mock()
+        mock_target_service = AsyncMock()
         mock_target_service.is_model_available.return_value = False
         
-        migration_manager.hybrid_manager._get_backend_service.side_effect = [
-            mock_source_service, mock_target_service
-        ]
-        
-        plan = await migration_manager.create_migration_plan("ollama", "docker_model_runner")
-        
-        assert plan.source_backend == "ollama"
-        assert plan.target_backend == "docker_model_runner"
-        assert len(plan.models_to_migrate) == 1
-        assert plan.estimated_size_gb == 4.4
+        with patch.object(migration_manager.hybrid_manager, '_get_backend_service') as mock_get_service:
+            mock_get_service.side_effect = [mock_source_service, mock_target_service]
+            
+            plan = await migration_manager.create_migration_plan("ollama", "docker_model_runner")
+            
+            assert plan.source_backend == "ollama"
+            assert plan.target_backend == "docker_model_runner"
+            assert len(plan.models_to_migrate) == 1
+            assert plan.estimated_size_gb == 4.4
     
     def test_model_name_mapping(self, migration_manager):
         """Test model name mapping between backends."""
@@ -295,17 +294,19 @@ class TestModelMigration:
     @pytest.mark.asyncio
     async def test_migration_validation(self, migration_manager):
         """Test migration compatibility validation."""
-        migration_manager.hybrid_manager._check_backend_availability.return_value = {
-            "ollama": True,
-            "docker_model_runner": False
-        }
-        
-        validation = await migration_manager.validate_migration_compatibility("ollama", "docker_model_runner")
-        
-        assert validation["source_available"] == True
-        assert validation["target_available"] == False
-        assert validation["compatible"] == False
-        assert "Target backend docker_model_runner is not available" in validation["issues"]
+        with patch.object(migration_manager.hybrid_manager, '_check_backend_availability', 
+                         new_callable=AsyncMock) as mock_availability:
+            mock_availability.return_value = {
+                "ollama": True,
+                "docker_model_runner": False
+            }
+            
+            validation = await migration_manager.validate_migration_compatibility("ollama", "docker_model_runner")
+            
+            assert validation["source_available"] == True
+            assert validation["target_available"] == False
+            assert validation["compatible"] == False
+            assert "Target backend docker_model_runner is not available" in validation["issues"]
 
 
 class TestIntegration:

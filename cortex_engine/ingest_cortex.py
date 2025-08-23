@@ -1,5 +1,5 @@
 # ## File: ingest_cortex.py
-# Version: 13.2.0 (Smart Ollama LLM Selector for Docker Compatibility)
+# Version: 14.0.0 (Docling Integration with Migration Strategy)
 # Date: 2025-08-22
 # Purpose: Core ingestion script for Project Cortex with integrated knowledge graph extraction.
 #          - FEATURE (v13.0.0): Integrated entity extraction and knowledge graph building
@@ -53,6 +53,7 @@ from cortex_engine.config import INGESTION_LOG_PATH, STAGING_INGESTION_FILE, ING
 from cortex_engine.utils import get_file_hash
 from cortex_engine.utils.logging_utils import get_logger
 from cortex_engine.utils.smart_ollama_llm import create_smart_ollama_llm
+from cortex_engine.migration_to_docling import create_migration_manager
 
 logger = get_logger(__name__)
 from cortex_engine.query_cortex import describe_image_with_vlm_for_ingestion
@@ -277,6 +278,39 @@ def create_document_with_entities(content_result: Dict, rich_metadata: Optional[
 
 
 def manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
+    """
+    Enhanced document loading with Docling integration and intelligent migration.
+    
+    This function now uses a migration strategy to gradually transition from legacy
+    LlamaIndex readers to Docling-enhanced processing while maintaining stability.
+    """
+    
+    # Check for migration mode preference in args
+    migration_mode = getattr(args, 'migration_mode', 'gradual') if args else 'gradual'
+    skip_image_processing = getattr(args, 'skip_image_processing', False) if args else False
+    
+    # Use migration manager for intelligent processing
+    try:
+        migration_manager = create_migration_manager(mode=migration_mode)
+        documents = migration_manager.process_documents(file_paths, skip_image_processing)
+        
+        # Log migration insights
+        if hasattr(migration_manager, 'comparison_results') and migration_manager.comparison_results:
+            logger.info("📊 Migration manager provided processing insights")
+        
+        return documents
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Migration processing failed, falling back to legacy: {e}")
+        # Fallback to legacy processing
+        return _legacy_manual_load_documents(file_paths, args)
+
+
+def _legacy_manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
+    """
+    Legacy document loading function (original implementation).
+    Kept as fallback for compatibility and robustness.
+    """
     documents = []
     reader_map = {".pdf": PyMuPDFReader(), ".docx": DocxReader(), ".pptx": PptxReader(), 
                   ".doc": UnstructuredReader(), ".ppt": UnstructuredReader()}

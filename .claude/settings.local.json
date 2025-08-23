@@ -40,7 +40,10 @@
       "WebSearch",
       "WebSearch",
       "Bash(cortex-suite)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(pip install:*)",
+      "Bash(pip show:*)",
+      "Bash(git stash:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",

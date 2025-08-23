@@ -9,7 +9,7 @@ This package supports multiple model backends:
 """
 
 from .interfaces import ModelServiceInterface, ModelInfo, ModelStatus
-from .hybrid_manager import HybridModelManager
+from .hybrid_manager import HybridModelManager, DistributionStrategy
 from .docker_model_service import DockerModelService
 from .ollama_model_service import OllamaModelService
 from .model_registry import ModelRegistry
@@ -19,6 +19,7 @@ __all__ = [
     'ModelInfo', 
     'ModelStatus',
     'HybridModelManager',
+    'DistributionStrategy',
     'DockerModelService',
     'OllamaModelService',
     'ModelRegistry'

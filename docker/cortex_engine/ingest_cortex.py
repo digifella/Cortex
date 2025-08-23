@@ -1,5 +1,5 @@
 # ## File: ingest_cortex.py
-# Version: 13.2.0 (Smart Ollama LLM Selector for Docker Compatibility)
+# Version: 14.0.0 (Docling Integration with Migration Strategy)
 # Date: 2025-08-22
 # Purpose: Core ingestion script for Project Cortex with integrated knowledge graph extraction.
 #          - FEATURE (v13.0.0): Integrated entity extraction and knowledge graph building
@@ -14,7 +14,6 @@ import argparse
 import json
 import logging
 import warnings
-import requests
 
 # Suppress common warnings that don't affect functionality
 warnings.filterwarnings("ignore", message=".*attention_mask.*")
@@ -54,6 +53,7 @@ from cortex_engine.config import INGESTION_LOG_PATH, STAGING_INGESTION_FILE, ING
 from cortex_engine.utils import get_file_hash
 from cortex_engine.utils.logging_utils import get_logger
 from cortex_engine.utils.smart_ollama_llm import create_smart_ollama_llm
+from cortex_engine.migration_to_docling import create_migration_manager
 
 logger = get_logger(__name__)
 from cortex_engine.query_cortex import describe_image_with_vlm_for_ingestion
@@ -99,7 +99,7 @@ def initialize_script():
         logging.warning("AI-enhanced metadata extraction will be disabled. Documents will be processed with basic metadata only.")
         Settings.llm = None  # Will be handled in analysis function
     else:
-        Settings.llm = create_smart_ollama_llm(model="mistral:7b-instruct-v0.3-q4_K_M", request_timeout=300.0)
+        Settings.llm = create_smart_ollama_llm(model="mistral:7b-instruct-v0.3-q4_K_M", request_timeout=120.0)
         logging.info("Ollama connected successfully with modern API")
     
     Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
@@ -278,6 +278,39 @@ def create_document_with_entities(content_result: Dict, rich_metadata: Optional[
 
 
 def manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
+    """
+    Enhanced document loading with Docling integration and intelligent migration.
+    
+    This function now uses a migration strategy to gradually transition from legacy
+    LlamaIndex readers to Docling-enhanced processing while maintaining stability.
+    """
+    
+    # Check for migration mode preference in args
+    migration_mode = getattr(args, 'migration_mode', 'gradual') if args else 'gradual'
+    skip_image_processing = getattr(args, 'skip_image_processing', False) if args else False
+    
+    # Use migration manager for intelligent processing
+    try:
+        migration_manager = create_migration_manager(mode=migration_mode)
+        documents = migration_manager.process_documents(file_paths, skip_image_processing)
+        
+        # Log migration insights
+        if hasattr(migration_manager, 'comparison_results') and migration_manager.comparison_results:
+            logger.info("📊 Migration manager provided processing insights")
+        
+        return documents
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Migration processing failed, falling back to legacy: {e}")
+        # Fallback to legacy processing
+        return _legacy_manual_load_documents(file_paths, args)
+
+
+def _legacy_manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
+    """
+    Legacy document loading function (original implementation).
+    Kept as fallback for compatibility and robustness.
+    """
     documents = []
     reader_map = {".pdf": PyMuPDFReader(), ".docx": DocxReader(), ".pptx": PptxReader(), 
                   ".doc": UnstructuredReader(), ".ppt": UnstructuredReader()}
@@ -520,32 +553,18 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None):
                     thematic_tags=["basic-processing", "no-ai-analysis"]
                 )
             else:
-                try:
-                    prompt = metadata_prompt_template.format(schema=schema_json_str, text=doc.get_content()[:8000], file_path=file_path_str, source_type=source_type)
-                    logging.info(f"Sending prompt to LLM for metadata extraction (document: {file_name})...")
-                    response_str = str(Settings.llm.complete(prompt))
-                    logging.info("Received raw response from LLM. Cleaning and parsing JSON...")
-                    json_match = re.search(r'\{.*\}', response_str, re.DOTALL)
-                    if not json_match:
-                        error_snippet = response_str.strip().replace('\n', ' ')[:200]
-                        logging.error(f"LLM did not return valid JSON for {file_name}. Response: {error_snippet}...")
-                        raise ValueError("LLM did not return a valid JSON object.")
-                    
-                    clean_json_str = json_match.group(0)
-                    metadata_json = json.loads(clean_json_str)
-                except (TimeoutError, requests.exceptions.Timeout, Exception) as e:
-                    if "timeout" in str(e).lower() or "timed out" in str(e).lower():
-                        logging.warning(f"LLM timeout for {file_name} - falling back to basic metadata. Error: {e}")
-                        # Create fallback metadata when LLM times out
-                        rich_metadata = RichMetadata(
-                            document_type="Other",
-                            proposal_outcome="N/A", 
-                            summary=f"Document processed with timeout fallback. Large document may need manual review. File: {file_name}",
-                            thematic_tags=["timeout-fallback", "needs-review", "large-document"]
-                        )
-                    else:
-                        # Re-raise non-timeout errors
-                        raise e
+                prompt = metadata_prompt_template.format(schema=schema_json_str, text=doc.get_content()[:8000], file_path=file_path_str, source_type=source_type)
+                logging.info("Sending prompt to LLM for metadata extraction...")
+                response_str = str(Settings.llm.complete(prompt))
+                logging.info("Received raw response from LLM. Cleaning and parsing JSON...")
+                json_match = re.search(r'\{.*\}', response_str, re.DOTALL)
+                if not json_match:
+                    error_snippet = response_str.strip().replace('\n', ' ')[:200]
+                    logging.error(f"LLM did not return valid JSON for {file_name}. Response: {error_snippet}...")
+                    raise ValueError("LLM did not return a valid JSON object.")
+                
+                clean_json_str = json_match.group(0)
+                metadata_json = json.loads(clean_json_str)
 
                 # Normalize common validation fields before Pydantic
                 if 'proposal_outcome' in metadata_json and isinstance(metadata_json['proposal_outcome'], str):

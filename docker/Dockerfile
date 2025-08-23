@@ -52,6 +52,11 @@ RUN python -m spacy download en_core_web_sm
 # Download required NLTK data for document processing
 RUN python -c "import nltk; nltk.download('averaged_perceptron_tagger'); nltk.download('punkt'); nltk.download('punkt_tab'); nltk.download('stopwords'); nltk.download('wordnet'); nltk.download('omw-1.4')"
 
+# Install Docling for enhanced document processing (optional)
+# Note: This may have dependency conflicts, system will fallback to legacy readers if unavailable
+RUN pip install --no-deps docling-core>=2.35.0 || echo "Docling core installation failed, will use legacy readers"
+RUN pip install docling>=1.0.0 || echo "Docling installation failed, will use legacy readers"
+
 # Copy application code
 COPY --chown=cortex:cortex . .
 
