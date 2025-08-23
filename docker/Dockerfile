@@ -17,19 +17,31 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Ollama
-RUN curl -fsSL https://ollama.ai/install.sh | sh
-
-# Create app user
+# Create app user first
 RUN useradd --create-home --shell /bin/bash cortex
+
+# Install Ollama and give cortex user access
+RUN curl -fsSL https://ollama.ai/install.sh | sh && \
+    chown -R cortex:cortex /usr/local/bin/ollama /usr/bin/ollama 2>/dev/null || true && \
+    mkdir -p /home/cortex/.ollama && \
+    chown -R cortex:cortex /home/cortex/.ollama
+
 USER cortex
 WORKDIR /home/cortex/app
 
 # Copy requirements first for better caching
 COPY --chown=cortex:cortex requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies with platform detection
+RUN pip install --no-cache-dir -r requirements.txt && \
+    # Install PyTorch with CUDA support if NVIDIA runtime detected, otherwise CPU-only \
+    if nvidia-smi > /dev/null 2>&1; then \
+        echo "NVIDIA GPU detected, installing CUDA PyTorch"; \
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121; \
+    else \
+        echo "No NVIDIA GPU detected, installing CPU-only PyTorch"; \
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu; \
+    fi
 
 # Add user's local bin to PATH for installed packages
 ENV PATH="/home/cortex/.local/bin:$PATH"
@@ -55,6 +67,8 @@ ENV KNOWLEDGE_SOURCE_PATH=/home/cortex/data/knowledge_base
 ENV GRAPHVIZ_DOT_EXECUTABLE=/usr/bin/dot
 ENV LLM_PROVIDER=ollama
 ENV OLLAMA_MODEL=mistral:7b-instruct-v0.3-q4_K_M
+ENV OLLAMA_HOST=0.0.0.0:11434
+ENV OLLAMA_ORIGINS=*
 
 # Expose ports
 EXPOSE 8501 8000
@@ -68,21 +82,25 @@ echo "📅 $(date)"\n\
 \n\
 # Start Ollama service in background\n\
 echo "🤖 Starting Ollama service..."\n\
+export OLLAMA_HOST=0.0.0.0:11434\n\
+export OLLAMA_ORIGINS=*\n\
 ollama serve &\n\
 OLLAMA_PID=$!\n\
 \n\
-# Wait for Ollama to be ready (quick check)\n\
+# Wait for Ollama to be ready (longer timeout)\n\
 echo "⏳ Waiting for Ollama to initialize..."\n\
-for i in {1..30}; do\n\
+for i in {1..60}; do\n\
     if curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then\n\
         echo "✅ Ollama is ready!"\n\
         break\n\
     fi\n\
-    if [ $i -eq 30 ]; then\n\
+    if [ $i -eq 60 ]; then\n\
         echo "⚠️ Ollama taking longer than expected, continuing..."\n\
+        echo "🔍 Ollama process status: $(ps aux | grep ollama || echo 'Not found')"\n\
         break\n\
     fi\n\
-    sleep 2\n\
+    echo "   ... attempt $i/60"\n\
+    sleep 3\n\
 done\n\
 \n\
 # Start API server immediately (will handle missing models gracefully)\n\

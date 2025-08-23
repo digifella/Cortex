@@ -1,0 +1,20 @@
+[
+  {
+    "doc_id": "b249c19d7743c402a17380adcebd2fb91f5a87fa7f2386b1608ea54cc6663eae",
+    "doc_posix_path": "/mnt/c/Users/paul/OneDrive - VentraIP Australia/Knowledge_Base/Pegagogies and Courses in Healthcare/A02 Robotics in Healthcare (FINAL) 2022-09-14 (1).pdf",
+    "file_name": "A02 Robotics in Healthcare (FINAL) 2022-09-14 (1).pdf",
+    "last_modified_date": "2025-05-28 09:25:09",
+    "rich_metadata": {
+      "document_type": "Other",
+      "proposal_outcome": "N/A",
+      "summary": "ERROR: Could not analyze document. Reason: cannot access local variable 'e' where it is not associated with a value",
+      "thematic_tags": [
+        "error",
+        "analysis-failed"
+      ]
+    },
+    "exclude_from_final": false,
+    "extracted_entities": [],
+    "extracted_relationships": []
+  }
+]

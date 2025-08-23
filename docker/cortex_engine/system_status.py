@@ -6,6 +6,8 @@ Provides real-time status of AI models, services, and system health
 import subprocess
 import json
 import requests
+import platform
+import os
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
@@ -32,10 +34,19 @@ class ModelInfo:
     error_message: Optional[str] = None
 
 @dataclass
+class PlatformInfo:
+    platform_name: str  # "Windows", "macOS", "Linux" 
+    architecture: str    # "x86_64", "arm64", "aarch64"
+    gpu_type: str       # "NVIDIA GPU", "Apple Silicon", "Intel GPU", "CPU Only"
+    optimization: str   # "CUDA Acceleration", "Metal Acceleration", "CPU Optimized"
+    docker_env: bool    # True if running in Docker
+
+@dataclass
 class SystemHealth:
     ollama_status: ServiceStatus
     api_status: ServiceStatus
     models: List[ModelInfo]
+    platform_info: PlatformInfo
     setup_complete: bool
     error_messages: List[str]
     last_updated: float
@@ -51,6 +62,88 @@ class SystemStatusChecker:
     def __init__(self):
         self.ollama_url = "http://localhost:11434"
         self.api_url = "http://localhost:8000"
+    
+    def detect_platform_info(self) -> PlatformInfo:
+        """Detect platform, architecture, and hardware acceleration capabilities"""
+        # Detect if running in Docker first
+        docker_env = os.path.exists("/.dockerenv") or os.path.exists("/proc/1/cgroup")
+        
+        # Detect basic platform info
+        system = platform.system()
+        machine = platform.machine().lower()
+        
+        # When running in Docker, detect the host OS from environment or kernel info
+        if docker_env:
+            # Try to detect host OS from kernel version or other indicators
+            if "microsoft" in platform.release().lower():
+                # Running in WSL2 on Windows (common Docker Desktop scenario)
+                platform_name = "Windows"
+            else:
+                # Could be Linux host or Mac with Docker Desktop
+                # For simplicity, we'll indicate it's containerized
+                platform_name = "Container Host"
+        else:
+            # Running directly on host OS
+            if system == "Darwin":
+                platform_name = "macOS"
+            elif system == "Windows":
+                platform_name = "Windows"
+            elif system == "Linux":
+                platform_name = "Linux"
+            else:
+                platform_name = system
+        
+        # Normalize architecture
+        if machine in ["x86_64", "amd64"]:
+            architecture = "x86_64"
+        elif machine in ["arm64", "aarch64"]:
+            architecture = "ARM64"
+        else:
+            architecture = machine.upper()
+        
+        # Detect GPU and determine optimization
+        gpu_type, optimization = self._detect_gpu_and_optimization(platform_name, architecture)
+        
+        return PlatformInfo(
+            platform_name=platform_name,
+            architecture=architecture,
+            gpu_type=gpu_type,
+            optimization=optimization,
+            docker_env=docker_env
+        )
+    
+    def _detect_gpu_and_optimization(self, platform_name: str, architecture: str) -> Tuple[str, str]:
+        """Detect GPU type and determine optimization strategy"""
+        
+        # Check for NVIDIA GPU
+        nvidia_detected = False
+        try:
+            result = subprocess.run(["nvidia-smi"], capture_output=True, timeout=3)
+            if result.returncode == 0:
+                nvidia_detected = True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        
+        # Determine GPU type and optimization based on platform and detection
+        if nvidia_detected:
+            return "NVIDIA GPU", "CUDA Acceleration"
+        
+        elif platform_name == "macOS":
+            if architecture == "ARM64":
+                return "Apple Silicon GPU", "Metal Acceleration"
+            else:
+                return "Intel GPU", "CPU Optimized"
+        
+        elif platform_name == "Windows":
+            # Could add AMD/Intel GPU detection here if needed
+            return "Integrated GPU", "CPU Optimized"
+        
+        elif platform_name == "Linux":
+            # Could add AMD GPU detection here if needed
+            return "Integrated GPU", "CPU Optimized"
+        
+        else:
+            return "CPU Only", "CPU Optimized"
     
     def check_ollama_status(self) -> ServiceStatus:
         """Check if Ollama service is running"""
@@ -114,6 +207,9 @@ class SystemStatusChecker:
         """Get comprehensive system health status"""
         error_messages = []
         
+        # Detect platform info
+        platform_info = self.detect_platform_info()
+        
         # Check service statuses
         ollama_status = self.check_ollama_status()
         api_status = self.check_api_status()
@@ -145,6 +241,7 @@ class SystemStatusChecker:
             ollama_status=ollama_status,
             api_status=api_status,
             models=models,
+            platform_info=platform_info,
             setup_complete=setup_complete,
             error_messages=error_messages,
             last_updated=time.time()
@@ -180,12 +277,30 @@ class SystemStatusChecker:
         else:
             status_message = "🔄 Finalizing setup..."
         
+        # Generate platform configuration message
+        platform_info = health.platform_info
+        if platform_info.docker_env:
+            if platform_info.platform_name == "Windows":
+                platform_config = f"🐳 Docker on Windows {platform_info.architecture} - {platform_info.optimization}"
+            else:
+                platform_config = f"🐳 Docker Container {platform_info.architecture} - {platform_info.optimization}"
+        else:
+            platform_config = f"💻 {platform_info.platform_name} {platform_info.architecture} - {platform_info.optimization}"
+        
         return {
             "progress_percent": progress_percent,
             "status_message": status_message,
+            "platform_config": platform_config,
             "setup_complete": health.setup_complete,
             "ollama_running": health.ollama_status == ServiceStatus.RUNNING,
             "api_running": health.api_status == ServiceStatus.RUNNING,
+            "platform_info": {
+                "platform": platform_info.platform_name,
+                "architecture": platform_info.architecture,
+                "gpu_type": platform_info.gpu_type,
+                "optimization": platform_info.optimization,
+                "docker_env": platform_info.docker_env
+            },
             "models": [
                 {
                     "name": model.name,

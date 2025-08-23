@@ -202,8 +202,8 @@ st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
-        <strong>🕒 Latest Code Changes:</strong> 2025-08-22<br>
-        <em>Fixed Ollama API 404 errors during document ingestion with modern API wrapper</em>
+        <strong>🕒 Latest Code Changes:</strong> 2025-08-23<br>
+        <em>Comprehensive Docker distribution fixes: drive mounting, platform detection, LLM timeouts, and cross-platform compatibility</em>
     </div>
     """, 
     unsafe_allow_html=True

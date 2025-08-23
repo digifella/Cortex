@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import warnings
+import requests
 
 # Suppress common warnings that don't affect functionality
 warnings.filterwarnings("ignore", message=".*attention_mask.*")
@@ -98,7 +99,7 @@ def initialize_script():
         logging.warning("AI-enhanced metadata extraction will be disabled. Documents will be processed with basic metadata only.")
         Settings.llm = None  # Will be handled in analysis function
     else:
-        Settings.llm = create_smart_ollama_llm(model="mistral:7b-instruct-v0.3-q4_K_M", request_timeout=120.0)
+        Settings.llm = create_smart_ollama_llm(model="mistral:7b-instruct-v0.3-q4_K_M", request_timeout=300.0)
         logging.info("Ollama connected successfully with modern API")
     
     Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
@@ -519,18 +520,32 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None):
                     thematic_tags=["basic-processing", "no-ai-analysis"]
                 )
             else:
-                prompt = metadata_prompt_template.format(schema=schema_json_str, text=doc.get_content()[:8000], file_path=file_path_str, source_type=source_type)
-                logging.info("Sending prompt to LLM for metadata extraction...")
-                response_str = str(Settings.llm.complete(prompt))
-                logging.info("Received raw response from LLM. Cleaning and parsing JSON...")
-                json_match = re.search(r'\{.*\}', response_str, re.DOTALL)
-                if not json_match:
-                    error_snippet = response_str.strip().replace('\n', ' ')[:200]
-                    logging.error(f"LLM did not return valid JSON for {file_name}. Response: {error_snippet}...")
-                    raise ValueError("LLM did not return a valid JSON object.")
-                
-                clean_json_str = json_match.group(0)
-                metadata_json = json.loads(clean_json_str)
+                try:
+                    prompt = metadata_prompt_template.format(schema=schema_json_str, text=doc.get_content()[:8000], file_path=file_path_str, source_type=source_type)
+                    logging.info(f"Sending prompt to LLM for metadata extraction (document: {file_name})...")
+                    response_str = str(Settings.llm.complete(prompt))
+                    logging.info("Received raw response from LLM. Cleaning and parsing JSON...")
+                    json_match = re.search(r'\{.*\}', response_str, re.DOTALL)
+                    if not json_match:
+                        error_snippet = response_str.strip().replace('\n', ' ')[:200]
+                        logging.error(f"LLM did not return valid JSON for {file_name}. Response: {error_snippet}...")
+                        raise ValueError("LLM did not return a valid JSON object.")
+                    
+                    clean_json_str = json_match.group(0)
+                    metadata_json = json.loads(clean_json_str)
+                except (TimeoutError, requests.exceptions.Timeout, Exception) as e:
+                    if "timeout" in str(e).lower() or "timed out" in str(e).lower():
+                        logging.warning(f"LLM timeout for {file_name} - falling back to basic metadata. Error: {e}")
+                        # Create fallback metadata when LLM times out
+                        rich_metadata = RichMetadata(
+                            document_type="Other",
+                            proposal_outcome="N/A", 
+                            summary=f"Document processed with timeout fallback. Large document may need manual review. File: {file_name}",
+                            thematic_tags=["timeout-fallback", "needs-review", "large-document"]
+                        )
+                    else:
+                        # Re-raise non-timeout errors
+                        raise e
 
                 # Normalize common validation fields before Pydantic
                 if 'proposal_outcome' in metadata_json and isinstance(metadata_json['proposal_outcome'], str):
