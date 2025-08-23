@@ -553,35 +553,54 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None):
                     thematic_tags=["basic-processing", "no-ai-analysis"]
                 )
             else:
-                prompt = metadata_prompt_template.format(schema=schema_json_str, text=doc.get_content()[:8000], file_path=file_path_str, source_type=source_type)
-                logging.info("Sending prompt to LLM for metadata extraction...")
-                response_str = str(Settings.llm.complete(prompt))
-                logging.info("Received raw response from LLM. Cleaning and parsing JSON...")
-                json_match = re.search(r'\{.*\}', response_str, re.DOTALL)
-                if not json_match:
-                    error_snippet = response_str.strip().replace('\n', ' ')[:200]
-                    logging.error(f"LLM did not return valid JSON for {file_name}. Response: {error_snippet}...")
-                    raise ValueError("LLM did not return a valid JSON object.")
-                
-                clean_json_str = json_match.group(0)
-                metadata_json = json.loads(clean_json_str)
+                try:
+                    prompt = metadata_prompt_template.format(schema=schema_json_str, text=doc.get_content()[:8000], file_path=file_path_str, source_type=source_type)
+                    logging.info("Sending prompt to LLM for metadata extraction...")
+                    response_str = str(Settings.llm.complete(prompt))
+                    logging.info("Received raw response from LLM. Cleaning and parsing JSON...")
+                    
+                    # Check if response is empty (indicates LLM error)
+                    if not response_str or response_str.strip() == "":
+                        raise ValueError("LLM returned empty response")
+                    
+                    json_match = re.search(r'\{.*\}', response_str, re.DOTALL)
+                    if not json_match:
+                        error_snippet = response_str.strip().replace('\n', ' ')[:200]
+                        logging.error(f"LLM did not return valid JSON for {file_name}. Response: {error_snippet}...")
+                        raise ValueError("LLM did not return a valid JSON object.")
+                    
+                    clean_json_str = json_match.group(0)
+                    metadata_json = json.loads(clean_json_str)
+                    
+                    # Only process if we got valid JSON data
+                    if 'metadata_json' in locals():
+                        # Normalize common validation fields before Pydantic
+                        if 'proposal_outcome' in metadata_json and isinstance(metadata_json['proposal_outcome'], str):
+                            metadata_json['proposal_outcome'] = metadata_json['proposal_outcome'].title()
 
-                # Normalize common validation fields before Pydantic
-                if 'proposal_outcome' in metadata_json and isinstance(metadata_json['proposal_outcome'], str):
-                    metadata_json['proposal_outcome'] = metadata_json['proposal_outcome'].title()
-
-                try: 
-                    rich_metadata = RichMetadata.model_validate(metadata_json)
-                except ValidationError as e:
-                    logging.warning(f"Initial validation failed for {file_name}. Retrying with nested key check...")
-                    if isinstance(metadata_json, dict) and len(metadata_json) == 1:
-                        nested_key = list(metadata_json.keys())[0]
-                        if isinstance(metadata_json[nested_key], dict): 
-                            rich_metadata = RichMetadata.model_validate(metadata_json[nested_key])
-                        else: 
-                            raise e
-                    else:
-                        raise e
+                        try: 
+                            rich_metadata = RichMetadata.model_validate(metadata_json)
+                        except ValidationError as e:
+                            logging.warning(f"Initial validation failed for {file_name}. Retrying with nested key check...")
+                            if isinstance(metadata_json, dict) and len(metadata_json) == 1:
+                                nested_key = list(metadata_json.keys())[0]
+                                if isinstance(metadata_json[nested_key], dict): 
+                                    rich_metadata = RichMetadata.model_validate(metadata_json[nested_key])
+                                else: 
+                                    raise e
+                            else:
+                                raise e
+                                
+                except (ValueError, json.JSONDecodeError, RuntimeError, Exception) as llm_error:
+                    logging.warning(f"LLM processing failed for {file_name}: {llm_error}")
+                    logging.info(f"Falling back to basic metadata for {file_name}")
+                    # Create fallback metadata when LLM fails
+                    rich_metadata = RichMetadata(
+                        document_type="Other",
+                        proposal_outcome="N/A", 
+                        summary=f"Document processed with fallback metadata (LLM error). File: {file_name}",
+                        thematic_tags=["llm-error", "fallback-metadata"]
+                    )
             logging.info(f"Successfully parsed and validated metadata for {file_name}.")
             
             # Extract entities and relationships

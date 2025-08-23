@@ -61,13 +61,15 @@ class ModernOllama(LLM):
     @llm_completion_callback()
     def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
         """Complete a prompt using Ollama chat API."""
-        from llama_index.core.base.llms.types import ChatMessage
-        messages = [ChatMessage(role="user", content=prompt)]
-        chat_response = self.chat(messages, **kwargs)
-        return CompletionResponse(
-            text=chat_response.message.content,
-            raw=chat_response.raw
-        )
+        try:
+            from llama_index.core.base.llms.types import ChatMessage
+            messages = [ChatMessage(role="user", content=prompt)]
+            chat_response = self.chat(messages, **kwargs)
+            return CompletionResponse(text=chat_response.message.content)
+        except Exception as e:
+            logger.error(f"Ollama completion error: {e}")
+            # Return empty response to prevent callback validation errors
+            return CompletionResponse(text="")
     
     @llm_completion_callback()
     def chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
