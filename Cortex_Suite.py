@@ -203,7 +203,7 @@ st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
         <strong>🕒 Latest Code Changes:</strong> 2025-08-23<br>
-        <em>Fixed batch processing NoneType error, cleaned up warning messages, restored Docling integration</em>
+        <em>Fixed PyArrow dependency conflicts, Docling integration, batch processing NoneType error</em>
     </div>
     """, 
     unsafe_allow_html=True
