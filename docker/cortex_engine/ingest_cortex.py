@@ -28,11 +28,16 @@ warnings.filterwarnings("ignore", message=".*docling_reader.*", category=UserWar
 # Suppress Pydantic field name warnings (non-functional)
 warnings.filterwarnings("ignore", message=".*field names.*", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*pydantic.*field.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*has conflict with protected namespace.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*model_.*", category=UserWarning)
 
 # Suppress torchvision and model loading warnings (informational only)
 warnings.filterwarnings("ignore", message=".*torchvision.*", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*CUDA.*", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*GPU.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*torch.load.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*vulnerability.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*CVE-.*", category=UserWarning)
 
 # Suppress sentence-transformers verbosity
 warnings.filterwarnings("ignore", category=FutureWarning, module="sentence_transformers")
