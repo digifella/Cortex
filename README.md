@@ -99,9 +99,26 @@ source venv/bin/activate
 
 **3. Install Python Dependencies:**
 ```bash
-pip install -r requirements.txt```
+pip install -r requirements.txt
 # Download spaCy language model for entity extraction
 python -m spacy download en_core_web_sm
+```
+
+**3a. Optional: Enhanced Document Processing (Docling)**
+
+For superior document layout recognition and structure extraction:
+```bash
+# Install Docling for enhanced document processing
+pip install "docling>=1.0.0,<1.9.0"
+```
+
+**Benefits of Docling (when installed):**
+- Better table structure recognition
+- Improved layout preservation  
+- Enhanced OCR for scanned documents
+- Superior handling of complex document formats
+
+**Note:** System works perfectly without Docling using proven legacy document readers (PyMuPDF, DocxReader, etc.). Docling is automatically detected and used when available.
 
 **4. Set Up Environment Variables:**
 Create a `.env` file in the project root with your API keys.```# .env file
