@@ -228,5 +228,5 @@ xlsxwriter==3.2.5
 yarl==1.20.1
 youtube-transcript-api==0.6.2
 zipp==3.23.0
-# Docling for enhanced document processing (optional - fallback to legacy readers if unavailable)
-# Note: Requires compatible numpy version, install separately in Docker if needed
+# Docling for enhanced document processing (compatible with numpy <2.0)
+docling>=1.0.0

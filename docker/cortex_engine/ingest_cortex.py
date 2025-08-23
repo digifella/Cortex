@@ -20,9 +20,34 @@ warnings.filterwarnings("ignore", message=".*attention_mask.*")
 warnings.filterwarnings("ignore", message=".*pad_token_id.*")
 warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
 
+# Suppress Docling warnings about API compatibility (non-blocking)
+warnings.filterwarnings("ignore", message=".*Docling.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*docling.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*docling_reader.*", category=UserWarning)
+
+# Suppress Pydantic field name warnings (non-functional)
+warnings.filterwarnings("ignore", message=".*field names.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*pydantic.*field.*", category=UserWarning)
+
+# Suppress torchvision and model loading warnings (informational only)
+warnings.filterwarnings("ignore", message=".*torchvision.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*CUDA.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*GPU.*", category=UserWarning)
+
+# Suppress sentence-transformers verbosity
+warnings.filterwarnings("ignore", category=FutureWarning, module="sentence_transformers")
+warnings.filterwarnings("ignore", category=UserWarning, module="sentence_transformers")
+
+# Suppress huggingface model warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="huggingface_hub")
+
 # Reduce verbosity of specific loggers that tend to be noisy
 logging.getLogger("unstructured").setLevel(logging.ERROR)
 logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+logging.getLogger("torch").setLevel(logging.WARNING)
+logging.getLogger("torchvision").setLevel(logging.ERROR)
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Literal, Tuple

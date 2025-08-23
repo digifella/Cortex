@@ -211,7 +211,7 @@ st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
         <strong>🕒 Latest Code Changes:</strong> 2025-08-23<br>
-        <em>Comprehensive Docker distribution fixes: drive mounting, platform detection, LLM timeouts, and cross-platform compatibility</em>
+        <em>Fixed batch processing NoneType error, cleaned up warning messages, restored Docling integration</em>
     </div>
     """, 
     unsafe_allow_html=True

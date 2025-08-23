@@ -1415,10 +1415,15 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
                         st.session_state.log_messages.append(line)
                     log_placeholder.code("\n".join(st.session_state.log_messages), language="log")
 
-        st.session_state.ingestion_process.wait()
-        st.session_state.ingestion_process = None
-        progress_bar.progress(1.0, text="Analysis Complete!")
-        st.success("Process finished.")
+            # Wait for process completion and clean up
+            st.session_state.ingestion_process.wait()
+            st.session_state.ingestion_process = None
+            progress_bar.progress(1.0, text="Analysis Complete!")
+            st.success("Process finished.")
+        else:
+            # Process was stopped or already completed
+            progress_bar.progress(1.0, text="Process stopped")
+            st.warning("Process was stopped or already completed.")
 
         if on_complete_stage == "metadata_review":
             load_staged_files()

@@ -94,8 +94,14 @@ class DoclingDocumentReader:
             
             logger.info("✅ Docling converter initialized successfully")
             
+        except ImportError as e:
+            logger.warning(f"Docling dependency missing: {e}")
+            logger.info("💡 To install Docling: pip install docling")
+            logger.info("📋 Falling back to legacy document readers")
+            self._converter = None
         except Exception as e:
-            logger.warning(f"Docling converter failed to initialize (dependency conflict): {e}")
+            logger.warning(f"Docling converter failed to initialize: {e}")
+            logger.info("🔧 This may be due to incompatible dependencies (torch/numpy versions)")
             logger.info("📋 Falling back to legacy document readers")
             self._converter = None
     
