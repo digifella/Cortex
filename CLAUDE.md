@@ -491,6 +491,48 @@ If upgrading from versions prior to 70.0.0, delete the entire `knowledge_hub_db`
 - **Windows batch file errorlevel checking**: Check `errorlevel` immediately after the command you care about - other commands like `del` will overwrite the errorlevel value
 - **Windows Docker build context issues**: When building from Windows directories (e.g., `E:\Docker_Cortex`), Docker may try to include Windows system folders like `$RECYCLE.BIN`, causing "Access is denied" errors. Solution: Copy `.dockerignore` to the parent build context directory before building
 
+### Dependency Management & Resolution Guidelines
+
+#### ⚠️ Critical Lessons Learned (August 2025)
+**See `DEPENDENCY_RESOLUTION_GUIDE.md` for complete details.**
+
+During Docling integration, dependency hell was encountered and resolved. Key lessons:
+
+**❌ What NOT to Do:**
+- **Over-pin flexible version ranges** to exact versions
+- **Force incompatible dependencies** into requirements.txt
+- **Remove pip's flexibility** to resolve compatible versions
+
+**✅ Best Practices:**
+- **Make enhancements optional** with graceful fallbacks
+- **Keep version ranges flexible** unless specific versions required  
+- **Test dependency changes** in isolated environments first
+- **Document integration rationale** clearly
+
+#### Current Stable Dependency Strategy
+```txt
+# Core Dependencies (Flexible Ranges)
+chromadb>=0.5.15,<0.6.0    # Allows pip to resolve compatible versions
+pydantic>=2.7.0            # Flexible for ecosystem compatibility
+pydantic_core>=2.18.0      # Matches pydantic requirements
+
+# Optional Enhancements (Manual Installation)
+# pip install "docling>=1.0.0,<1.9.0"  # Enhanced document processing
+# System automatically detects and uses when available
+```
+
+#### Dependency Conflict Resolution Process
+1. **Identify root cause** - which dependency introduced conflicts
+2. **Consider optional approach** - can it be manually installed?
+3. **Implement graceful fallbacks** - system works without enhancement  
+4. **Only pin as last resort** - document why exact versions needed
+5. **Test thoroughly** - verify builds and functionality
+
+#### Red Flags
+- **Pip backtracking warnings**: "This is taking longer than usual"
+- **ResolutionImpossible errors**: Fundamental incompatibility detected
+- **Cascading conflicts**: One dependency change affecting many others
+
 ### Logging Locations
 - **Ingestion**: `logs/ingestion.log`
 - **Query**: `logs/query.log`  

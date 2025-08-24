@@ -211,7 +211,7 @@ st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
         <strong>🕒 Latest Code Changes:</strong> 2025-08-23<br>
-        <em>Made Docling truly optional - fast Docker builds with enhanced processing available when manually installed</em>
+        <em>Comprehensive dependency resolution - documented lessons learned, restored stable versions, fast builds</em>
     </div>
     """, 
     unsafe_allow_html=True
