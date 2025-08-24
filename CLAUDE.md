@@ -376,6 +376,13 @@ When preparing a Docker distribution for Windows:
 - **Smart Migration**: Gradual transition from legacy readers with A/B testing capability
 - **Fallback Resilience**: Automatic fallback to LlamaIndex readers for maximum compatibility
 
+#### Docker Environment Fixes (Aug 24, 2025)
+- **Automatic Legacy Mode**: Docker environments automatically default to legacy mode (detects `/.dockerenv`)
+- **Infinite Recursion Fix**: Fixed migration manager calling itself recursively in legacy mode
+- **Torch Compatibility**: Graceful PowerPoint reader initialization with fallback for torch < 2.6
+- **Stable Docker Ingestion**: Zero dependency conflicts, reliable document processing in containers
+- **Error Recovery**: Comprehensive error handling prevents crashes from library incompatibilities
+
 #### Planned Enhancements (Sprints 4-7):
 - **Smart Filtering**: Metadata-based collection filtering (document types, clients, outcomes)
 - **Theme Visualization**: Interactive network graphs showing theme relationships and connections

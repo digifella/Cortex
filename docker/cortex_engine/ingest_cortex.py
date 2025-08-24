@@ -316,7 +316,10 @@ def manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
     """
     
     # Check for migration mode preference in args
-    migration_mode = getattr(args, 'migration_mode', 'gradual') if args else 'gradual'
+    # In Docker environments, default to legacy mode to avoid Docling dependency conflicts
+    import os
+    default_mode = 'legacy' if os.path.exists('/.dockerenv') else 'gradual'
+    migration_mode = getattr(args, 'migration_mode', default_mode) if args else default_mode
     skip_image_processing = getattr(args, 'skip_image_processing', False) if args else False
     
     # Use migration manager for intelligent processing
@@ -342,8 +345,23 @@ def _legacy_manual_load_documents(file_paths: List[str], args=None) -> List[Docu
     Kept as fallback for compatibility and robustness.
     """
     documents = []
-    reader_map = {".pdf": PyMuPDFReader(), ".docx": DocxReader(), ".pptx": PptxReader(), 
-                  ".doc": UnstructuredReader(), ".ppt": UnstructuredReader()}
+    
+    # Initialize readers with graceful fallback for torch version issues
+    reader_map = {".pdf": PyMuPDFReader(), ".docx": DocxReader()}
+    
+    # Try to initialize PptxReader, fallback to UnstructuredReader if torch issues
+    try:
+        reader_map[".pptx"] = PptxReader()
+        reader_map[".ppt"] = PptxReader()
+        logging.info("✅ PowerPoint reader initialized successfully")
+    except Exception as e:
+        logging.warning(f"⚠️ PowerPoint reader failed to initialize (torch version issue): {e}")
+        logging.info("📋 Using UnstructuredReader fallback for PowerPoint files")
+        reader_map[".pptx"] = UnstructuredReader()
+        reader_map[".ppt"] = UnstructuredReader()
+    
+    # Add other readers
+    reader_map[".doc"] = UnstructuredReader()
     default_reader = FlatReader()
     
     # Suppress PyMuPDF warnings

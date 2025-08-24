@@ -79,10 +79,15 @@ class IngestionMigrationManager:
     
     def _process_legacy_only(self, file_paths: List[str], skip_image_processing: bool) -> List[Any]:
         """Process using legacy pipeline only."""
-        from .ingest_cortex import manual_load_documents
+        from .ingest_cortex import _legacy_manual_load_documents
         
         logger.info("📋 Using legacy ingestion pipeline")
-        return manual_load_documents(file_paths, skip_image_processing)
+        # Create args object for legacy function
+        class Args:
+            def __init__(self, skip_img):
+                self.skip_image_processing = skip_img
+        args = Args(skip_image_processing)
+        return _legacy_manual_load_documents(file_paths, args)
     
     def _process_docling_only(self, file_paths: List[str], skip_image_processing: bool) -> List[Any]:
         """Process using Docling pipeline only."""
