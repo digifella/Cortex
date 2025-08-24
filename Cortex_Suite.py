@@ -131,6 +131,14 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🔧 System Status")
     
+    # Display platform configuration
+    try:
+        setup_info = system_status.get_setup_progress()
+        if "platform_config" in setup_info:
+            st.info(setup_info["platform_config"])
+    except Exception:
+        st.info("💻 Platform: Detecting...")
+    
     # Quick model availability check
     ingestion_check = model_checker.check_ingestion_requirements(include_images=True)
     research_check = model_checker.check_research_requirements()
