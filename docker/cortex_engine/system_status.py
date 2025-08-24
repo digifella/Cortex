@@ -65,8 +65,8 @@ class SystemStatusChecker:
     
     def detect_platform_info(self) -> PlatformInfo:
         """Detect platform, architecture, and hardware acceleration capabilities"""
-        # Detect if running in Docker first
-        docker_env = os.path.exists("/.dockerenv") or os.path.exists("/proc/1/cgroup")
+        # Detect if running in Docker first - more accurate detection
+        docker_env = self._is_running_in_docker()
         
         # Detect basic platform info
         system = platform.system()
@@ -111,6 +111,42 @@ class SystemStatusChecker:
             optimization=optimization,
             docker_env=docker_env
         )
+    
+    def _is_running_in_docker(self) -> bool:
+        """More accurate Docker detection that distinguishes WSL2 from Docker"""
+        # Check for Docker-specific files first
+        if os.path.exists("/.dockerenv"):
+            return True
+        
+        # Check container-specific environment variables
+        if os.environ.get("container") or os.environ.get("DOCKER_CONTAINER"):
+            return True
+            
+        # For Linux systems, check cgroup more carefully
+        if os.path.exists("/proc/1/cgroup"):
+            try:
+                with open("/proc/1/cgroup", "r") as f:
+                    cgroup_content = f.read()
+                    # Look for Docker-specific cgroup patterns
+                    if "docker" in cgroup_content.lower() or "containerd" in cgroup_content.lower():
+                        return True
+                    # WSL2 has different cgroup patterns - don't treat as Docker
+                    if "wsl" in cgroup_content.lower() or "init.scope" in cgroup_content:
+                        return False
+            except (IOError, PermissionError):
+                pass
+        
+        # Check for WSL environment (definitely not Docker)
+        if os.path.exists("/proc/version"):
+            try:
+                with open("/proc/version", "r") as f:
+                    version_content = f.read().lower()
+                    if "microsoft" in version_content or "wsl" in version_content:
+                        return False  # WSL2, not Docker
+            except (IOError, PermissionError):
+                pass
+        
+        return False
     
     def _detect_gpu_and_optimization(self, platform_name: str, architecture: str) -> Tuple[str, str]:
         """Detect GPU type and determine optimization strategy"""
