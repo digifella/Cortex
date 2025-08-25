@@ -6,9 +6,9 @@ setlocal enabledelayedexpansion
 
 echo.
 echo ===============================================
-echo    CORTEX SUITE v2.1.0 (Universal + Hybrid Models)
+echo    CORTEX SUITE v2.2.0 (Hybrid Model Architecture)
 echo    Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64
-echo    Docker Ingestion Fixes Applied (2025-08-24)
+echo    Docker Model Runner + Ollama Integration (2025-08-25)
 echo    Date: %date% %time%
 echo ===============================================
 echo.

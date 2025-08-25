@@ -4,8 +4,10 @@
 
 set -e
 
-echo "🚀 Cortex Suite - Hybrid Model Architecture Launcher"
-echo "=================================================="
+echo "🚀 Cortex Suite v2.2.0 - Hybrid Model Architecture Launcher"
+echo "Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64"
+echo "Docker Model Runner + Ollama Integration (2025-08-25)"
+echo "=========================================================="
 
 # Configuration
 DOCKER_COMPOSE_FILE="${DOCKER_COMPOSE_FILE:-docker-compose-hybrid.yml}"

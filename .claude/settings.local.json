@@ -43,7 +43,8 @@
       "Bash(git commit:*)",
       "Bash(pip install:*)",
       "Bash(pip show:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(rsync:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",

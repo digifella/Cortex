@@ -4,8 +4,10 @@
 
 set -e
 
-echo "🚀 Cortex Suite - Enhanced Launcher with Model Management"
-echo "========================================================"
+echo "🚀 Cortex Suite v2.2.0 - Enhanced Launcher with Model Management"
+echo "Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64"
+echo "Docker Model Runner + Ollama Integration (2025-08-25)"
+echo "==============================================================="
 
 # Check if Docker is running
 if ! docker info >/dev/null 2>&1; then

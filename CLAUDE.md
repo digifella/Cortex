@@ -30,16 +30,22 @@ The Cortex Suite is a Streamlit-based AI-powered knowledge management and propos
 
 ## Development Commands
 
-### ⚠️ IMPORTANT REMINDERS FOR DEVELOPERS
+### ⚠️ CRITICAL REMINDERS FOR DEVELOPERS
 
-**Before making ANY code changes, remember:**
-1. 🗓️ **Update footer date** in `Cortex_Suite.py` with current date  
-2. 📝 **Increment version numbers** appropriately in changed files
-3. 💾 **Commit to git** with descriptive message after changes
-4. 🐳 **Sync Docker directory** with updated files  
-5. 📤 **Push Docker sync** to git as separate commit
+**🚨 MANDATORY: Before making ANY code changes, follow DISTRIBUTION_SYNC_CHECKLIST.md**
 
-**See "Development Workflow & Synchronization" section below for detailed steps.**
+**Essential steps:**
+1. 📋 **Follow Distribution Sync Checklist** - See `DISTRIBUTION_SYNC_CHECKLIST.md`
+2. 🗓️ **Update footer date** in `Cortex_Suite.py` with current date  
+3. 📝 **Increment version numbers** in ALL installation files (.bat, .sh)
+4. 🐳 **Sync Docker directory** with updated files using rsync
+5. ✅ **Test platform installers** on Windows/Mac/Linux
+6. 💾 **Commit with proper version tags** 
+7. 📤 **Push all changes** together
+
+**FAILURE TO FOLLOW CHECKLIST = BROKEN INSTALLATIONS FOR USERS**
+
+**See "Development Workflow & Synchronization" and `DISTRIBUTION_SYNC_CHECKLIST.md`**
 
 ### Environment Setup
 ```bash
