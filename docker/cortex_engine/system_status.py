@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 import time
+import asyncio
 
 class ServiceStatus(Enum):
     RUNNING = "running"
@@ -42,14 +43,23 @@ class PlatformInfo:
     docker_env: bool    # True if running in Docker
 
 @dataclass
+class BackendInfo:
+    name: str
+    status: ServiceStatus
+    model_count: int
+    performance_tier: str = "standard"  # standard, premium, enterprise
+    
+@dataclass
 class SystemHealth:
     ollama_status: ServiceStatus
     api_status: ServiceStatus
     models: List[ModelInfo]
+    backends: List[BackendInfo]
     platform_info: PlatformInfo
     setup_complete: bool
     error_messages: List[str]
     last_updated: float
+    hybrid_strategy: Optional[str] = None
 
 class SystemStatusChecker:
     """Checks the status of all Cortex Suite components"""
@@ -59,9 +69,11 @@ class SystemStatusChecker:
         ("mistral-small3.2", 15.0)
     ]
     
-    def __init__(self):
+    def __init__(self, model_distribution_strategy: str = "hybrid_ollama_preferred"):
         self.ollama_url = "http://localhost:11434"
         self.api_url = "http://localhost:8000"
+        self.hybrid_strategy = model_distribution_strategy
+        self.hybrid_manager = None  # Will be initialized async
     
     def detect_platform_info(self) -> PlatformInfo:
         """Detect platform, architecture, and hardware acceleration capabilities"""
@@ -191,6 +203,77 @@ class SystemStatusChecker:
         else:
             return "CPU Only", "CPU Optimized"
     
+    async def _initialize_hybrid_manager(self):
+        """Initialize hybrid model manager if not already done."""
+        if self.hybrid_manager is None:
+            try:
+                from .model_services import HybridModelManager, DistributionStrategy
+                self.hybrid_manager = HybridModelManager(strategy=self.hybrid_strategy)
+            except ImportError:
+                # Hybrid model services not available, fallback to traditional approach
+                pass
+        return self.hybrid_manager
+    
+    async def _check_backend_availability(self) -> List[BackendInfo]:
+        """Check availability of all model backends."""
+        backends = []
+        
+        # Try to get hybrid manager
+        hybrid_manager = await self._initialize_hybrid_manager()
+        
+        if hybrid_manager:
+            try:
+                # Get backend availability from hybrid manager
+                backend_availability = await hybrid_manager._check_backend_availability()
+                
+                for backend_name, is_available in backend_availability.items():
+                    status = ServiceStatus.RUNNING if is_available else ServiceStatus.STOPPED
+                    model_count = 0
+                    
+                    # Get model count for available backends
+                    if is_available:
+                        try:
+                            if backend_name == "ollama":
+                                models = await hybrid_manager.ollama_service.list_available_models()
+                                model_count = len(models)
+                            elif backend_name == "docker_model_runner":
+                                models = await hybrid_manager.docker_service.list_available_models()
+                                model_count = len(models)
+                        except Exception:
+                            pass
+                    
+                    # Determine performance tier based on backend
+                    performance_tier = "premium" if backend_name == "docker_model_runner" else "standard"
+                    
+                    backends.append(BackendInfo(
+                        name=backend_name,
+                        status=status,
+                        model_count=model_count,
+                        performance_tier=performance_tier
+                    ))
+                    
+            except Exception as e:
+                # If hybrid manager fails, add fallback info
+                backends.append(BackendInfo(
+                    name="ollama",
+                    status=ServiceStatus.STOPPED,
+                    model_count=0,
+                    performance_tier="standard"
+                ))
+        else:
+            # Fallback: just check Ollama directly
+            ollama_status = self.check_ollama_status()
+            model_count = len(self.get_installed_models()) if ollama_status == ServiceStatus.RUNNING else 0
+            
+            backends.append(BackendInfo(
+                name="ollama", 
+                status=ollama_status,
+                model_count=model_count,
+                performance_tier="standard"
+            ))
+        
+        return backends
+    
     def check_ollama_status(self) -> ServiceStatus:
         """Check if Ollama service is running"""
         try:
@@ -277,6 +360,23 @@ class SystemStatusChecker:
             if status == ModelStatus.ERROR and error:
                 error_messages.append(f"Model {model_name}: {error}")
         
+        # Check backend availability (sync wrapper for async method)
+        backends = []
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            backends = loop.run_until_complete(self._check_backend_availability())
+            loop.close()
+        except Exception as e:
+            # Fallback to basic ollama info
+            backends = [BackendInfo(
+                name="ollama",
+                status=ollama_status,
+                model_count=len(self.get_installed_models()) if ollama_status == ServiceStatus.RUNNING else 0,
+                performance_tier="standard"
+            )]
+        
         # Determine if setup is complete
         setup_complete = (
             ollama_status == ServiceStatus.RUNNING and
@@ -287,10 +387,12 @@ class SystemStatusChecker:
             ollama_status=ollama_status,
             api_status=api_status,
             models=models,
+            backends=backends,
             platform_info=platform_info,
             setup_complete=setup_complete,
             error_messages=error_messages,
-            last_updated=time.time()
+            last_updated=time.time(),
+            hybrid_strategy=self.hybrid_strategy
         )
     
     def get_setup_progress(self) -> Dict:
@@ -340,6 +442,17 @@ class SystemStatusChecker:
             "setup_complete": health.setup_complete,
             "ollama_running": health.ollama_status == ServiceStatus.RUNNING,
             "api_running": health.api_status == ServiceStatus.RUNNING,
+            "hybrid_strategy": health.hybrid_strategy,
+            "backends": [
+                {
+                    "name": backend.name,
+                    "status": backend.status.value,
+                    "model_count": backend.model_count,
+                    "performance_tier": backend.performance_tier,
+                    "available": backend.status == ServiceStatus.RUNNING
+                }
+                for backend in health.backends
+            ],
             "platform_info": {
                 "platform": platform_info.platform_name,
                 "architecture": platform_info.architecture,
@@ -361,3 +474,7 @@ class SystemStatusChecker:
 
 # Global instance for easy access
 system_status = SystemStatusChecker()
+
+def get_system_status_with_strategy(strategy: str = "hybrid_ollama_preferred") -> SystemStatusChecker:
+    """Get system status checker with specific hybrid strategy."""
+    return SystemStatusChecker(model_distribution_strategy=strategy)

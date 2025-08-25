@@ -131,11 +131,28 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🔧 System Status")
     
-    # Display platform configuration
+    # Display platform configuration and hybrid backend info
     try:
         setup_info = system_status.get_setup_progress()
         if "platform_config" in setup_info:
             st.info(setup_info["platform_config"])
+            
+        # Display backend information if available
+        if "backends" in setup_info and setup_info["backends"]:
+            st.markdown("**🚀 AI Backends:**")
+            for backend in setup_info["backends"]:
+                name = backend["name"].replace("_", " ").title()
+                status_icon = "🟢" if backend["available"] else "🔴"
+                tier_icon = "⭐" if backend["performance_tier"] == "premium" else "📦"
+                model_info = f"({backend['model_count']} models)" if backend['model_count'] > 0 else "(no models)"
+                
+                st.caption(f"{status_icon} {tier_icon} {name} {model_info}")
+                
+            # Show active strategy
+            if "hybrid_strategy" in setup_info and setup_info["hybrid_strategy"]:
+                strategy_display = setup_info["hybrid_strategy"].replace("_", " ").title()
+                st.caption(f"🎯 **Strategy:** {strategy_display}")
+                
     except Exception:
         st.info("💻 Platform: Detecting...")
     
@@ -210,8 +227,8 @@ st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
-        <strong>🕒 Latest Code Changes:</strong> 2025-08-24<br>
-        <em>Universal Architecture: Intel x86_64, Apple Silicon M-series, ARM64 PCs + Docker ingestion fixes</em>
+        <strong>🕒 Latest Code Changes:</strong> 2025-08-25<br>
+        <em>Hybrid Model Architecture: Docker Model Runner + Ollama integration with real-time backend monitoring</em>
     </div>
     """, 
     unsafe_allow_html=True
