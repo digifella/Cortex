@@ -6,9 +6,9 @@ setlocal enabledelayedexpansion
 
 echo.
 echo ===============================================
-echo    CORTEX SUITE v2.2.0 (Hybrid Model Architecture)
+echo    CORTEX SUITE v3.0.0 (Enhanced Visual Processing)
 echo    Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64
-echo    Docker Model Runner + Ollama Integration (2025-08-25)
+echo    Advanced LLaVA Integration + Visual Analysis Dashboard (2025-08-25)
 echo    Date: %date% %time%
 echo ===============================================
 echo.

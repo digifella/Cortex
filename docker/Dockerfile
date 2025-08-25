@@ -91,12 +91,12 @@ EXPOSE 8501 8000
 RUN echo '#!/bin/bash\n\
 set -e\n\
 \n\
-echo "🚀 Starting Cortex Suite v2.1.0 (Universal Architecture)"\n\
+echo "🚀 Starting Cortex Suite v3.0.0 (Enhanced Visual Processing)"\n\
 echo "📅 $(date)"\n\
 echo "💻 Platform: $(uname -m) ($(uname -s))"\n\
 echo "🐳 Docker Environment: $([ -f /.dockerenv ] && echo "Yes" || echo "No")"\n\
 echo "🔧 Multi-Platform Support: Intel x86_64, Apple Silicon M-series, ARM64 PCs"\n\
-echo "📋 Docker Ingestion Fixes: Applied (2025-08-24)"\n\
+echo "👁️ Visual Analysis: Advanced LLaVA Integration + Dashboard (2025-08-25)"\n\
 echo ""\n\
 \n\
 # Start Ollama service in background\n\

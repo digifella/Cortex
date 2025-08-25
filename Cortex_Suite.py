@@ -1,5 +1,5 @@
 # ## File: Cortex_Suite.py
-# Version: v2.1.0 (Universal Architecture + Docker Ingestion Fixes)
+# Version: v3.0.0 (Enhanced Visual Processing Integration)
 # Date: 2025-08-24
 # Purpose: A central Streamlit launchpad for the integrated Cortex Suite.
 
@@ -34,7 +34,7 @@ except Exception:
 if not setup_complete:
     # Show setup progress page
     st.title("🔧 Cortex Suite Setup in Progress")
-    st.caption("Version v2.1.0 - Universal Architecture Setup")
+    st.caption("Version v3.0.0 - Enhanced Visual Processing Integration")
     
     # Progress bar
     progress_percent = setup_info.get("progress_percent", 0)
@@ -96,7 +96,7 @@ if not setup_complete:
 else:
     # Normal main page
     st.title("🚀 Welcome to the Project Cortex Suite")
-    st.caption("Version v2.1.0 (Universal Architecture + Docker Ingestion Fixes)")
+    st.caption("Version v3.0.0 (Enhanced Visual Processing Integration)")
 
 st.markdown("""
 This is the central hub for the Cortex Suite, an integrated workbench for building a knowledge base and using it for AI-assisted proposal development.

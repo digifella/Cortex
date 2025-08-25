@@ -4,9 +4,9 @@
 
 set -e
 
-echo "🚀 Cortex Suite v2.2.0 - Enhanced Launcher with Model Management"
+echo "🚀 Cortex Suite v3.0.0 - Enhanced Visual Processing with Model Management"
 echo "Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64"
-echo "Docker Model Runner + Ollama Integration (2025-08-25)"
+echo "Advanced LLaVA Integration + Visual Analysis Dashboard (2025-08-25)"
 echo "==============================================================="
 
 # Check if Docker is running
