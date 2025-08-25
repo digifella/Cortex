@@ -38,12 +38,12 @@ class DockerModelService(ModelServiceInterface):
         return "docker_model_runner"
     
     async def _check_docker_available(self) -> bool:
-        """Check if Docker and Docker Model Runner are available."""
+        """Check if Docker is available (not Docker Model Runner specifically)."""
         if self._docker_available is not None:
             return self._docker_available
         
         try:
-            # Check Docker
+            # Check if Docker daemon is available and running
             proc = await asyncio.create_subprocess_exec(
                 "docker", "version",
                 stdout=asyncio.subprocess.PIPE,
@@ -55,9 +55,9 @@ class DockerModelService(ModelServiceInterface):
                 self._docker_available = False
                 return False
             
-            # Check Docker Model Runner support
+            # Additional check: try to list containers to verify Docker is fully functional
             proc = await asyncio.create_subprocess_exec(
-                "docker", "model", "--help",
+                "docker", "ps", "-q",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -67,12 +67,29 @@ class DockerModelService(ModelServiceInterface):
             return self._docker_available
             
         except Exception as e:
-            logger.warning(f"Docker Model Runner check failed: {e}")
+            logger.warning(f"Docker availability check failed: {e}")
             self._docker_available = False
             return False
     
+    async def _check_docker_model_runner_available(self) -> bool:
+        """Check if Docker Model Runner extension is available."""
+        try:
+            # Check Docker Model Runner support
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "model", "--help",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await proc.communicate()
+            
+            return proc.returncode == 0
+            
+        except Exception as e:
+            logger.debug(f"Docker Model Runner extension not available: {e}")
+            return False
+    
     async def is_available(self) -> bool:
-        """Check if Docker Model Runner is available."""
+        """Check if Docker is available (for basic container operations)."""
         return await self._check_docker_available()
     
     async def _run_docker_command(self, *args) -> tuple[int, str, str]:
@@ -150,16 +167,24 @@ class DockerModelService(ModelServiceInterface):
         if not await self.is_available():
             return []
         
+        # Check if Docker Model Runner extension is available
+        if not await self._check_docker_model_runner_available():
+            logger.debug("Docker Model Runner extension not available - no models to list")
+            return []
+        
         returncode, stdout, stderr = await self._run_docker_command("model", "list")
         
         if returncode != 0:
-            logger.error(f"Failed to list Docker models: {stderr}")
+            logger.debug(f"Failed to list Docker models: {stderr}")
             return []
         
         return self._parse_model_list(stdout)
     
     async def get_model_info(self, model_name: str) -> Optional[ModelInfo]:
         """Get information about a specific model."""
+        if not await self._check_docker_model_runner_available():
+            return None
+            
         docker_name = self._map_model_name(model_name)
         
         returncode, stdout, stderr = await self._run_docker_command("model", "inspect", docker_name)
@@ -187,6 +212,9 @@ class DockerModelService(ModelServiceInterface):
     
     async def is_model_available(self, model_name: str) -> bool:
         """Check if a specific model is locally available."""
+        if not await self._check_docker_model_runner_available():
+            return False
+            
         docker_name = self._map_model_name(model_name)
         
         returncode, stdout, stderr = await self._run_docker_command("model", "list", "--format", "json")

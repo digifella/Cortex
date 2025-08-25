@@ -237,16 +237,41 @@ class SystemStatusChecker:
                                 models = await hybrid_manager.ollama_service.list_available_models()
                                 model_count = len(models)
                             elif backend_name == "docker_model_runner":
-                                models = await hybrid_manager.docker_service.list_available_models()
-                                model_count = len(models)
+                                # For Docker, check if Model Runner extension is available
+                                docker_service = hybrid_manager.docker_service
+                                if await docker_service._check_docker_model_runner_available():
+                                    models = await docker_service.list_available_models()
+                                    model_count = len(models)
+                                else:
+                                    # Docker is available but Model Runner extension is not
+                                    model_count = 0
+                                    # Update status to indicate Docker is available but without Model Runner
+                                    status = ServiceStatus.RUNNING  # Docker daemon is running
                         except Exception:
                             pass
                     
-                    # Determine performance tier based on backend
-                    performance_tier = "premium" if backend_name == "docker_model_runner" else "standard"
+                    # Determine performance tier and display name based on backend
+                    if backend_name == "docker_model_runner":
+                        performance_tier = "premium"
+                        # Check if this is just Docker available or Docker + Model Runner
+                        if status == ServiceStatus.RUNNING and model_count == 0:
+                            try:
+                                docker_service = hybrid_manager.docker_service
+                                if not await docker_service._check_docker_model_runner_available():
+                                    display_name = "Docker (Model Runner extension not available)"
+                                    performance_tier = "standard"
+                                else:
+                                    display_name = "Docker Model Runner"
+                            except:
+                                display_name = "Docker Model Runner"
+                        else:
+                            display_name = "Docker Model Runner"
+                    else:
+                        performance_tier = "standard"
+                        display_name = backend_name.replace("_", " ").title()
                     
                     backends.append(BackendInfo(
-                        name=backend_name,
+                        name=display_name,
                         status=status,
                         model_count=model_count,
                         performance_tier=performance_tier
