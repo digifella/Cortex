@@ -28,7 +28,12 @@ class DockerModelService(ModelServiceInterface):
             "mistral": "ai/mistral:7b-instruct",
             "mistral:7b-instruct-v0.3-q4_K_M": "ai/mistral:7b-instruct-v0.3-q4_K_M",
             "mistral-small3.2": "ai/mistral:small-3.2",
-            "llava": "ai/llava:latest",
+            # Vision Language Models - Enhanced Model Family
+            "llava": "ai/llava:7b",
+            "llava:7b": "ai/llava:7b", 
+            "llava:13b": "ai/llava:13b",
+            "moondream": "ai/moondream:latest",
+            # Code Generation Models
             "codellama": "ai/codellama:latest",
             "phi": "ai/phi:latest"
         }

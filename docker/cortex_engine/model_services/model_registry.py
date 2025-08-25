@@ -90,21 +90,54 @@ class ModelRegistry:
                 size_estimate_gb=7.2,
                 use_cases=["proposal_generation", "complex_analysis", "professional_writing"]
             ),
+            # LLaVA Model Family - Advanced Vision Language Models
             ModelRegistryEntry(
-                name="llava",
-                aliases=["llava:latest"],
+                name="llava:7b",
+                aliases=["llava", "llava:latest"],
                 capabilities={
                     ModelCapability.TEXT_GENERATION,
                     ModelCapability.IMAGE_ANALYSIS,
                     ModelCapability.CHAT
                 },
-                preferred_backend="ollama",  # Ollama has better LLaVA support currently
-                docker_name="ai/llava:latest",
-                ollama_name="llava",
-                description="Large Language and Vision Assistant",
+                preferred_backend="ollama",  # Ollama has excellent LLaVA support
+                docker_name="ai/llava:7b",
+                ollama_name="llava:7b",
+                description="Large Language and Vision Assistant (7B parameters)",
                 performance_tier="standard",
-                size_estimate_gb=4.5,
-                use_cases=["image_description", "document_analysis", "visual_qa"]
+                size_estimate_gb=4.7,
+                use_cases=["image_description", "document_analysis", "visual_qa", "chart_analysis"]
+            ),
+            ModelRegistryEntry(
+                name="llava:13b",
+                aliases=["llava:13b-chat"],
+                capabilities={
+                    ModelCapability.TEXT_GENERATION,
+                    ModelCapability.IMAGE_ANALYSIS,
+                    ModelCapability.CHAT
+                },
+                preferred_backend="ollama",
+                docker_name="ai/llava:13b",
+                ollama_name="llava:13b",
+                description="Large Language and Vision Assistant (13B parameters - higher accuracy)",
+                performance_tier="premium",
+                size_estimate_gb=7.8,
+                use_cases=["detailed_image_analysis", "technical_diagram_analysis", "complex_visual_qa"]
+            ),
+            ModelRegistryEntry(
+                name="moondream",
+                aliases=["moondream:latest"],
+                capabilities={
+                    ModelCapability.TEXT_GENERATION,
+                    ModelCapability.IMAGE_ANALYSIS,
+                    ModelCapability.CHAT
+                },
+                preferred_backend="ollama",
+                docker_name="ai/moondream:latest", 
+                ollama_name="moondream",
+                description="Moondream - Compact Vision Language Model (fast inference)",
+                performance_tier="standard",
+                size_estimate_gb=1.6,
+                use_cases=["fast_image_description", "basic_visual_qa", "mobile_deployment"]
             ),
             ModelRegistryEntry(
                 name="codellama",

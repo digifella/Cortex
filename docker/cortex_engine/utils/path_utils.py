@@ -8,9 +8,6 @@ import re
 import os
 from pathlib import Path
 from typing import Union, Optional, List
-from .logging_utils import get_logger
-
-logger = get_logger(__name__)
 
 
 def convert_windows_to_wsl_path(path_str: Union[str, Path, None]) -> str:
@@ -174,21 +171,13 @@ def validate_path_exists(path: Union[str, Path], must_be_dir: bool = False) -> b
     # Check Docker mount paths
     for docker_path in docker_mount_paths:
         try:
-            logger.debug(f"Checking Docker mount path: {docker_path}")
             if docker_path.exists():
-                logger.debug(f"Docker path exists: {docker_path}")
                 if must_be_dir:
-                    is_dir = docker_path.is_dir()
-                    logger.debug(f"Docker path is_dir={is_dir}: {docker_path}")
-                    return is_dir
+                    return docker_path.is_dir()
                 return True
-            else:
-                logger.debug(f"Docker path does not exist: {docker_path}")
-        except (OSError, PermissionError) as e:
-            logger.debug(f"Error checking Docker path {docker_path}: {e}")
+        except (OSError, PermissionError):
             continue
     
-    logger.debug(f"Path validation failed for: {path} (original), tried Docker paths: {docker_mount_paths}")
     return False
 
 

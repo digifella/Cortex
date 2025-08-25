@@ -95,8 +95,16 @@ LOG_FILE = INGESTION_LOG_PATH
 STAGING_FILE = STAGING_INGESTION_FILE
 COLLECTIONS_FILE = str(project_root / "working_collections.json")
 
-# Define supported image extensions
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+# Define supported image extensions - Enhanced Visual Processing Support
+IMAGE_EXTENSIONS = {
+    # Standard formats
+    ".png", ".jpg", ".jpeg",
+    # Additional formats for comprehensive visual processing
+    ".gif", ".bmp", ".webp", ".tiff", ".tif",
+    # Vector and specialized formats
+    ".svg",  # Will be converted to raster for VLM processing
+    ".ico"   # Icon files
+}
 
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 

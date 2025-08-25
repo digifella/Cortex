@@ -12,8 +12,7 @@ from typing import Dict, Any, Optional
 
 # --- Core Paths ---
 # This is now a FALLBACK. The scripts will accept a path argument to override this.
-# Docker-friendly default path
-BASE_DATA_PATH = os.getenv("AI_DATABASE_PATH", "/data/ai_databases")
+BASE_DATA_PATH = "/mnt/f/ai_databases"
 
 # The following paths are placeholders; they will be dynamically set by scripts.
 # They are derived from the BASE_DATA_PATH by default.
@@ -50,7 +49,10 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 # --- Core Local Models (Required) ---
 EMBED_MODEL = "BAAI/bge-base-en-v1.5"  # Embedding model for vector storage
-VLM_MODEL = "llava"  # Vision language model for image processing
+# Vision Language Model Configuration
+# Options: "llava:7b", "llava:13b", "llava:34b" (newer, more capable models)
+# or "moondream" (smaller, faster alternative)
+VLM_MODEL = "llava:7b"  # Vision language model for image processing - upgraded to 7B parameter model
 
 # --- Task-Specific Model Configuration ---
 # Proposal Generation: MUST be local, optimized for instruction following

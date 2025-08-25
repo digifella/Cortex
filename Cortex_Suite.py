@@ -228,7 +228,7 @@ st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
         <strong>🕒 Latest Code Changes:</strong> 2025-08-25<br>
-        <em>Hybrid Model Architecture: Docker Model Runner + Ollama integration with real-time backend monitoring</em>
+        <em>Enhanced Visual Processing: Advanced LLaVA integration with multi-format support, OCR, chart analysis, and comprehensive visual search dashboard</em>
     </div>
     """, 
     unsafe_allow_html=True

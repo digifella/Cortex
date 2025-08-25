@@ -325,9 +325,14 @@ You can use Cortex Suite entirely locally or enhance it with cloud APIs for adva
         
         # Check Docker
         try:
-            import subprocess
-            subprocess.run(["docker", "--version"], capture_output=True, check=True)
-            results["docker"] = {"status": "✅", "message": "Docker available"}
+            # If we're running in Docker, Docker is obviously working
+            if os.path.exists("/.dockerenv") or os.environ.get("container") or os.environ.get("DOCKER_CONTAINER"):
+                results["docker"] = {"status": "✅", "message": "Running in Docker container"}
+            else:
+                # If not in Docker, check if Docker CLI is available
+                import subprocess
+                subprocess.run(["docker", "--version"], capture_output=True, check=True)
+                results["docker"] = {"status": "✅", "message": "Docker available"}
         except Exception:
             results["docker"] = {"status": "❌", "message": "Docker not found or not running"}
             all_passed = False
@@ -706,9 +711,9 @@ Choose installation option (1-4):
         if choice == "1":  # Essential only
             models_to_install = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2"]
         elif choice == "2":  # Recommended
-            models_to_install = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava"]
+            models_to_install = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b"]
         elif choice == "3":  # Complete
-            models_to_install = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava", "codellama"]
+            models_to_install = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b", "codellama"]
         elif choice == "4":  # Custom
             if "custom_models" not in user_input:
                 message = """
@@ -717,8 +722,10 @@ Choose installation option (1-4):
 Available models:
 1. ✅ Mistral 7B (4.4GB) - Required
 2. ✅ Mistral Small 3.2 (7.2GB) - Required  
-3. ⭐ LLaVA (4.5GB) - Image analysis
-4. ⭐ Code Llama (3.8GB) - Code generation
+3. 👁️ LLaVA 7B (4.7GB) - Advanced image analysis
+4. 🚀 LLaVA 13B (7.8GB) - Premium image analysis 
+5. ⚡ Moondream (1.6GB) - Fast image processing
+6. 💻 Code Llama (3.8GB) - Code generation
 
 Enter model numbers to install (e.g., "1,2,3"): 
                 """.strip()
@@ -735,8 +742,10 @@ Enter model numbers to install (e.g., "1,2,3"):
             model_map = {
                 "1": "mistral:7b-instruct-v0.3-q4_K_M",
                 "2": "mistral-small3.2", 
-                "3": "llava",
-                "4": "codellama"
+                "3": "llava:7b",
+                "4": "llava:13b",
+                "5": "moondream", 
+                "6": "codellama"
             }
             models_to_install = [model_map[s.strip()] for s in selections if s.strip() in model_map]
         

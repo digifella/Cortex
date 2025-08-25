@@ -49,7 +49,10 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 # --- Core Local Models (Required) ---
 EMBED_MODEL = "BAAI/bge-base-en-v1.5"  # Embedding model for vector storage
-VLM_MODEL = "llava"  # Vision language model for image processing
+# Vision Language Model Configuration
+# Options: "llava:7b", "llava:13b", "llava:34b" (newer, more capable models)
+# or "moondream" (smaller, faster alternative)
+VLM_MODEL = "llava:7b"  # Vision language model for image processing - upgraded to 7B parameter model
 
 # --- Task-Specific Model Configuration ---
 # Proposal Generation: MUST be local, optimized for instruction following

@@ -129,11 +129,23 @@ def describe_image_with_vlm_for_ingestion(image_path: str) -> str:
             messages=[
                 {
                     'role': 'user',
-                    'content': 'Describe this image in detail for a searchable knowledge base. Be specific about any text, diagrams, or data presented. What is the key information conveyed by this image?',
+                    'content': '''Analyze this image comprehensively for a professional knowledge management system. Please provide:
+
+1. **Visual Content**: Describe what you see (objects, people, scenes, layout)
+2. **Text Content**: Extract and transcribe any visible text, labels, titles, or captions
+3. **Technical Elements**: Identify charts, graphs, diagrams, tables, or technical drawings
+4. **Context & Purpose**: What is the likely purpose or message of this image?
+5. **Key Information**: What are the most important details for knowledge retrieval?
+
+Be specific and detailed. Include any data, numbers, or technical specifications visible. This description will be used for document search and analysis.''',
                     'images': [encoded_image]
                 }
             ],
-            options={"temperature": 0.2}  # Lower temperature for more factual descriptions
+            options={
+                "temperature": 0.1,  # Very low temperature for factual accuracy
+                "top_p": 0.9,       # Slightly reduce randomness
+                "num_predict": 500   # Allow longer, more detailed responses
+            }
         )
         description = response['message']['content']
         print(f"  -> VLM Ingestion: Success. Description length: {len(description)} chars.")

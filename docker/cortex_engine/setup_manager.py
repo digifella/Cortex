@@ -325,9 +325,14 @@ You can use Cortex Suite entirely locally or enhance it with cloud APIs for adva
         
         # Check Docker
         try:
-            import subprocess
-            subprocess.run(["docker", "--version"], capture_output=True, check=True)
-            results["docker"] = {"status": "✅", "message": "Docker available"}
+            # If we're running in Docker, Docker is obviously working
+            if os.path.exists("/.dockerenv") or os.environ.get("container") or os.environ.get("DOCKER_CONTAINER"):
+                results["docker"] = {"status": "✅", "message": "Running in Docker container"}
+            else:
+                # If not in Docker, check if Docker CLI is available
+                import subprocess
+                subprocess.run(["docker", "--version"], capture_output=True, check=True)
+                results["docker"] = {"status": "✅", "message": "Docker available"}
         except Exception:
             results["docker"] = {"status": "❌", "message": "Docker not found or not running"}
             all_passed = False
