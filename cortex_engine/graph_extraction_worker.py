@@ -13,6 +13,10 @@ from outlines.models.ollama import Ollama
 from outlines import Generator
 from outlines.types import JsonSchema
 
+from .utils.logging_utils import get_logger
+
+logger = get_logger(__name__)
+
 def main():
     """
     Accepts model name and schema via arguments, reads the prompt from stdin,
@@ -28,7 +32,13 @@ def main():
         client = ollama.Client()
 
         # --- START: v2.1.1 DEBUGGING ADDITION ---
-        # Print all the inputs this worker script received to the error stream for debugging
+        # Log all the inputs this worker script received
+        logger.debug("--- GRAPH EXTRACTION WORKER (v2.1.1) INPUTS ---")
+        logger.debug(f"Model Name: {args.model_name}")
+        logger.debug(f"Schema: {args.schema_str}")
+        logger.debug(f"Prompt Text (first 500 chars): {prompt[:500]}...")
+        logger.debug("-------------------------------------------------")
+        # Keep stderr output for debugging compatibility
         print("--- GRAPH EXTRACTION WORKER (v2.1.1) INPUTS ---", file=sys.stderr)
         print(f"Model Name: {args.model_name}", file=sys.stderr)
         print(f"Schema: {args.schema_str}", file=sys.stderr)
@@ -42,7 +52,11 @@ def main():
         generated_json_str = generator(prompt)
 
         # --- START: v2.1.1 DEBUGGING ADDITION ---
-        # Print the raw generated output before sending it to stdout
+        # Log the raw generated output
+        logger.debug("--- RAW LLM EXTRACTION OUTPUT ---")
+        logger.debug(generated_json_str)
+        logger.debug("---------------------------------")
+        # Keep stderr output for debugging compatibility
         print("--- RAW LLM EXTRACTION OUTPUT ---", file=sys.stderr)
         print(generated_json_str, file=sys.stderr)
         print("---------------------------------", file=sys.stderr)
@@ -52,6 +66,7 @@ def main():
         sys.exit(0)
 
     except Exception as e:
+        logger.error(f"Worker script failed: {e}")
         print(f"Worker script failed: {e}", file=sys.stderr)
         sys.exit(1)
 

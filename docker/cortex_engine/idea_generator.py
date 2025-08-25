@@ -19,12 +19,10 @@ This file serves as a compatibility wrapper to maintain existing imports.
 """
 
 # Import the refactored classes
-from .idea_generator import (
-    IdeaGenerator,
-    DoubleDiamondProcessor,
-    IdeationAgents,
-    IdeaExporter
-)
+from .idea_generator.core import IdeaGenerator
+from .idea_generator.double_diamond import DoubleDiamondProcessor
+from .idea_generator.agents import IdeationAgents
+from .idea_generator.export import IdeaExporter
 
 # Maintain backward compatibility
 __all__ = [

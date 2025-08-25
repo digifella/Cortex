@@ -69,13 +69,6 @@ class SystemStatusChecker:
         ("mistral-small3.2", 15.0)
     ]
     
-    # Optional Visual Processing Models (for enhanced image analysis)
-    VISUAL_MODELS = [
-        ("llava:7b", 4.7),          # Standard visual model
-        ("llava:13b", 7.8),         # Premium visual model
-        ("moondream", 1.6)          # Lightweight visual model
-    ]
-    
     def __init__(self, model_distribution_strategy: str = "hybrid_ollama_preferred"):
         self.ollama_url = "http://localhost:11434"
         self.api_url = "http://localhost:8000"

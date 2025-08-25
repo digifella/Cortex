@@ -13,7 +13,7 @@ from pathlib import Path
 
 # Import centralized utilities
 from .utils import convert_windows_to_wsl_path, get_project_root, get_logger
-from .utils import get_file_hash
+from .utils.file_utils import get_file_hash
 from .exceptions import CollectionError, PathError
 
 # Set up logging

@@ -80,7 +80,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from cortex_engine.config import INGESTION_LOG_PATH, STAGING_INGESTION_FILE, INGESTED_FILES_LOG, COLLECTION_NAME, EMBED_MODEL
-from cortex_engine.utils import get_file_hash
+from cortex_engine.utils.file_utils import get_file_hash
 from cortex_engine.utils.logging_utils import get_logger
 from cortex_engine.utils.smart_ollama_llm import create_smart_ollama_llm
 from cortex_engine.migration_to_docling import create_migration_manager

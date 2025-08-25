@@ -36,7 +36,16 @@ from .graph_manager import EnhancedGraphManager
 logger = get_logger(__name__)
 
 # File type categories
-IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp'}
+# Enhanced Visual Processing - Comprehensive Image Format Support  
+IMAGE_EXTENSIONS = {
+    # Standard formats
+    '.png', '.jpg', '.jpeg',
+    # Additional raster formats
+    '.gif', '.bmp', '.webp', '.tiff', '.tif',
+    # Vector and specialized formats
+    '.svg',  # Will be converted to raster for VLM processing
+    '.ico'   # Icon files
+}
 DOCLING_PREFERRED_FORMATS = {'.pdf', '.docx', '.pptx', '.xlsx', '.doc', '.ppt', '.xls'}
 LEGACY_FORMATS = {'.txt', '.md', '.markdown', '.csv', '.json', '.xml', '.html', '.htm'}
 

@@ -227,8 +227,8 @@ st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
-        <strong>🕒 Latest Code Changes:</strong> 2025-08-25<br>
-        <em>Enhanced Setup Wizard: User-friendly command executor, improved model installation flow, and cross-platform terminal interface for non-technical users</em>
+        <strong>🕒 Latest Code Changes:</strong> 2025-08-26<br>
+        <em>Code Quality Cleanup: Removed duplicate utilities, optimized imports, cleaned up legacy files, and improved logging consistency across modules</em>
     </div>
     """, 
     unsafe_allow_html=True
