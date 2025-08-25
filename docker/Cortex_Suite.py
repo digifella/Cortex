@@ -228,7 +228,7 @@ st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
         <strong>🕒 Latest Code Changes:</strong> 2025-08-25<br>
-        <em>Enhanced Visual Processing: Advanced LLaVA integration with multi-format support, OCR, chart analysis, and comprehensive visual search dashboard</em>
+        <em>Enhanced Setup Wizard: User-friendly command executor, improved model installation flow, and cross-platform terminal interface for non-technical users</em>
     </div>
     """, 
     unsafe_allow_html=True

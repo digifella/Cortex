@@ -320,21 +320,218 @@ def display_step_model_installation(step_result):
     
     st.warning("⏱️ Models download in background - you can use the app while they install!")
     
-    col1, col2, col3 = st.columns([1, 1, 1])
+    # Initialize installation state
+    if 'model_installation_active' not in st.session_state:
+        st.session_state.model_installation_active = False
+    if 'setup_logs' not in st.session_state:
+        st.session_state.setup_logs = []
+    if 'model_installation_started' not in st.session_state:
+        st.session_state.model_installation_started = False
     
-    with col2:
-        if st.button("🚀 Start Installation", type="primary", use_container_width=True):
-            user_input = {"install_models": install_choice}
-            if custom_models:
-                user_input["custom_models"] = custom_models
+    # Check if we already have models installed (bypass installation if already done)
+    try:
+        from cortex_engine.utils.model_checker import model_checker
+        available_models = model_checker.get_available_models()
+        
+        expected_models = []
+        if install_choice == "Recommended":
+            expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b"]
+        elif install_choice == "Complete":
+            expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b", "codellama"]
+        elif install_choice == "Essential Only":
+            expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2"]
+        
+        # If we have some models, show current status and option to continue
+        if available_models and not st.session_state.model_installation_active:
+            st.success(f"✅ Found {len(available_models)} existing models!")
             
-            # Add a log entry for the installation start
-            if 'setup_logs' not in st.session_state:
+            for model in available_models:
+                st.success(f"✅ {model}")
+            
+            if len(available_models) >= 2:  # At least basic models
+                st.info("🎯 You have enough models to proceed with setup. You can continue and download additional models later.")
+                col1, col2, col3 = st.columns([1, 1, 1])
+                with col2:
+                    if st.button("✅ Continue with Existing Models", type="primary", use_container_width=True):
+                        return run_setup_step_with_logging(SetupStep.SYSTEM_VALIDATION)
+            
+            st.markdown("---")
+            st.markdown("**Or install additional models:**")
+    except Exception:
+        pass  # Continue with normal flow
+    
+    # Show installation progress if active
+    if st.session_state.model_installation_active:
+        st.info("🔄 Model installation in progress...")
+        
+        col1, col2, col3 = st.columns([2, 1, 2])
+        with col2:
+            if st.button("🔄 Reset Installation", help="Reset installation state if stuck"):
+                st.session_state.model_installation_active = False
                 st.session_state.setup_logs = []
+                st.success("✅ Installation state reset")
+                st.rerun()
+        
+        # Show expandable installation log
+        with st.expander("📋 Installation Progress Log", expanded=True):
+            log_container = st.container()
+            with log_container:
+                if st.session_state.setup_logs:
+                    for log_entry in st.session_state.setup_logs[-20:]:  # Show last 20 entries
+                        st.code(log_entry, language=None)
+                else:
+                    st.text("Initializing installation...")
+                
+                # Add helpful instructions
+                st.markdown("---")
+                st.markdown("""
+                **💡 Installation Tips:**
+                - Models download in the background via Ollama
+                - You can use other Cortex Suite features while models install
+                - Check the main dashboard for real-time model availability
+                - Large models (LLaVA 7B ~4.7GB) may take several minutes
+                """)
+        
+        # Check if we should show completion
+        st.markdown("### 🔍 Current Model Status")
+        try:
+            from cortex_engine.utils.model_checker import model_checker
+            from cortex_engine.utils.ollama_progress import ollama_progress_monitor
             
-            st.session_state.setup_logs.append(f"[{time.strftime('%H:%M:%S')}] Starting model installation: {install_choice}")
+            available_models = model_checker.get_available_models()
             
-            return run_setup_step_with_progress_tracking(SetupStep.MODEL_INSTALLATION, user_input)
+            # Create detailed model status display
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**📦 Available Models:**")
+                if available_models:
+                    for model in available_models:
+                        st.success(f"✅ {model}")
+                else:
+                    st.info("⏳ No models available yet...")
+            
+            with col2:
+                st.markdown("**🔍 Expected Models:**")
+                expected_models = []
+                if install_choice == "Recommended":
+                    expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b"]
+                elif install_choice == "Complete":
+                    expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b", "codellama"]
+                elif install_choice == "Essential Only":
+                    expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2"]
+                
+                for model in expected_models:
+                    if any(model in available for available in available_models):
+                        st.success(f"✅ {model}")
+                    else:
+                        st.warning(f"⏳ {model} (downloading...)")
+            
+            # Show progress summary
+            if available_models:
+                st.success(f"📊 **Status**: {len(available_models)}/{len(expected_models) if expected_models else '?'} models ready")
+                
+                # Check for visual models specifically
+                visual_models = [m for m in available_models if 'llava' in m.lower() or 'moondream' in m.lower()]
+                if visual_models:
+                    st.success(f"👁️ **Visual Processing Ready**: {', '.join(visual_models)}")
+                    # Add log entry only once
+                    visual_log_entry = f"[{time.strftime('%H:%M:%S')}] ✅ Visual processing models detected: {', '.join(visual_models)}"
+                    if visual_log_entry not in st.session_state.setup_logs:
+                        st.session_state.setup_logs.append(visual_log_entry)
+                
+                # Check if installation is complete
+                if len(available_models) >= len(expected_models):
+                    st.success("🎉 **Installation Complete!** All expected models are ready.")
+                    completion_log = f"[{time.strftime('%H:%M:%S')}] 🎉 Model installation completed successfully!"
+                    if completion_log not in st.session_state.setup_logs:
+                        st.session_state.setup_logs.append(completion_log)
+                    
+                    # Show continue button
+                    col1, col2, col3 = st.columns([1, 1, 1])
+                    with col2:
+                        if st.button("✅ Continue to Next Step", type="primary", use_container_width=True):
+                            st.session_state.model_installation_active = False
+                            return run_setup_step_with_logging(SetupStep.SYSTEM_VALIDATION)
+            else:
+                st.info("⏳ **Status**: Models are still downloading in the background...")
+                
+                # Add periodic progress updates
+                current_time = time.strftime('%H:%M:%S')
+                progress_update = f"[{current_time}] 📥 Download in progress - Ollama is fetching model files..."
+                if len(st.session_state.setup_logs) < 10 or progress_update not in st.session_state.setup_logs[-5:]:
+                    st.session_state.setup_logs.append(progress_update)
+                
+                # Add option to continue anyway after reasonable wait time
+                st.markdown("---")
+                st.warning("💡 **Having issues with downloads?** You can continue setup and models will download in the background.")
+                
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    if st.button("⏭️ Continue Setup (Models will download in background)", help="Continue to next step - you can use basic features while models finish downloading"):
+                        st.session_state.model_installation_active = False
+                        st.session_state.setup_logs.append(f"[{time.strftime('%H:%M:%S')}] ⏭️ User chose to continue setup - models downloading in background")
+                        return run_setup_step_with_logging(SetupStep.SYSTEM_VALIDATION)
+                
+                # Add manual model installer widget
+                st.markdown("---")
+                st.markdown("### 🛠️ Manual Model Installation")
+                try:
+                    from cortex_engine.utils.command_executor import display_model_installer_widget
+                    display_model_installer_widget()
+                except ImportError as e:
+                    st.error(f"Command executor not available: {e}")
+                    st.markdown("""
+                    **Manual Installation (Advanced Users):**
+                    
+                    If you're comfortable with command line:
+                    ```bash
+                    # For Docker users:
+                    docker exec -it cortex-suite ollama pull llava:7b
+                    
+                    # For direct installation:
+                    ollama pull llava:7b
+                    ```
+                    """)
+        
+        except Exception as e:
+            st.warning(f"⚠️ Cannot check model status: {e}")
+            error_log = f"[{time.strftime('%H:%M:%S')}] ⚠️ Status check failed: {str(e)}"
+            if error_log not in st.session_state.setup_logs:
+                st.session_state.setup_logs.append(error_log)
+        
+        # Auto-refresh every 10 seconds instead of 2
+        time.sleep(10)
+        st.rerun()
+    
+    else:
+        # Show installation button
+        col1, col2, col3 = st.columns([1, 1, 1])
+        
+        with col2:
+            if st.button("🚀 Start Installation", type="primary", use_container_width=True):
+                user_input = {"install_models": install_choice}
+                if custom_models:
+                    user_input["custom_models"] = custom_models
+                
+                # Set installation active state
+                st.session_state.model_installation_active = True
+                st.session_state.setup_logs = []  # Clear previous logs
+                st.session_state.setup_logs.append(f"[{time.strftime('%H:%M:%S')}] 🚀 Starting model installation: {install_choice}")
+                
+                if install_choice == "Recommended":
+                    st.session_state.setup_logs.append(f"[{time.strftime('%H:%M:%S')}] 📦 Installing: Mistral 7B, Mistral Small 3.2, LLaVA 7B")
+                elif install_choice == "Complete":
+                    st.session_state.setup_logs.append(f"[{time.strftime('%H:%M:%S')}] 📦 Installing: All models including LLaVA 7B and Code Llama")
+                elif install_choice == "Essential Only":
+                    st.session_state.setup_logs.append(f"[{time.strftime('%H:%M:%S')}] 📦 Installing: Essential models only (Mistral 7B, Mistral Small 3.2)")
+                else:
+                    st.session_state.setup_logs.append(f"[{time.strftime('%H:%M:%S')}] 📦 Installing: Custom model selection")
+                
+                st.session_state.setup_logs.append(f"[{time.strftime('%H:%M:%S')}] ⏳ This may take several minutes depending on your internet speed...")
+                
+                # Trigger rerun to show progress
+                st.rerun()
     
     return None
 
