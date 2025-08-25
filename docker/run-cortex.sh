@@ -4,8 +4,15 @@
 
 set -e
 
-echo "🚀 Cortex Suite - Easy Launcher"
-echo "================================"
+echo ""
+echo "==============================================="
+echo "   CORTEX SUITE v2.1.0 (Universal Architecture)"
+echo "   Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64"
+echo "   Docker Ingestion Fixes Applied (2025-08-24)"
+echo "   Date: $(date)"
+echo "==============================================="
+echo ""
+echo "🚀 Starting Cortex Suite Launcher"
 
 # Check if Docker is running
 if ! docker info >/dev/null 2>&1; then
@@ -150,11 +157,28 @@ else
     echo "  ✅ User directories will be available inside the container"
 fi
 
-# Run the container with GPU support
+# Check for NVIDIA GPU support before adding --gpus flag
+echo "🔍 Checking for NVIDIA GPU support..."
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+    echo "🔍 Testing Docker GPU access..."
+    if docker run --rm --gpus all hello-world >/dev/null 2>&1; then
+        echo "✅ NVIDIA GPU detected and Docker GPU support available"
+        GPU_FLAG="--gpus all"
+    else
+        echo "ℹ️ NVIDIA GPU detected but Docker GPU support unavailable, using CPU-only mode"
+        GPU_FLAG=""
+    fi
+else
+    echo "ℹ️ No NVIDIA GPU detected, using CPU-only mode"  
+    echo "ℹ️ This is optimal for Apple Silicon M-series, ARM64 systems, and Intel CPUs without NVIDIA"
+    GPU_FLAG=""
+fi
+
+# Run the container with intelligent GPU detection
 echo "🚀 Starting Cortex Suite..."
 docker run -d \
     --name cortex-suite \
-    --gpus all \
+    $GPU_FLAG \
     -p 8501:8501 \
     -p 8000:8000 \
     -v cortex_data:/data \

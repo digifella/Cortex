@@ -4,8 +4,15 @@ REM Supports both Docker Model Runner and Ollama backends
 
 setlocal enabledelayedexpansion
 
-echo 🚀 Cortex Suite - Hybrid Model Architecture Launcher
-echo ==================================================
+echo.
+echo ===============================================
+echo    CORTEX SUITE v2.1.0 (Universal + Hybrid Models)
+echo    Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64
+echo    Docker Ingestion Fixes Applied (2025-08-24)
+echo    Date: %date% %time%
+echo ===============================================
+echo.
+echo 🚀 Starting Cortex Suite - Hybrid Model Architecture Launcher
 
 REM Configuration
 set "DOCKER_COMPOSE_FILE=docker-compose-hybrid.yml"

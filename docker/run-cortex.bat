@@ -1,7 +1,15 @@
 @echo off
 setlocal enabledelayedexpansion
 
-echo ** Cortex Suite - FIXED Launcher
+echo.
+echo ===============================================
+echo    CORTEX SUITE v2.1.0 (Universal Architecture)
+echo    Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64
+echo    Docker Ingestion Fixes Applied (2025-08-24)
+echo    Date: %date% %time%
+echo ===============================================
+echo.
+echo ** Starting Cortex Suite Launcher
 echo =================================
 
 docker info >nul 2>&1
@@ -115,8 +123,24 @@ if exist "F:\" echo   MOUNT: F:\ drive will be available as /mnt/f
 
 echo   OK: Starting Cortex Suite with all detected drives...
 
-REM Build docker run command with only existing drives and GPU support
-set DOCKER_CMD=docker run -d --name cortex-suite --gpus all -p 8501:8501 -p 8000:8000 -v cortex_data:/data -v cortex_logs:/home/cortex/app/logs -v cortex_ollama:/home/cortex/.ollama
+REM Check for NVIDIA GPU support before adding --gpus flag
+echo DEBUG: Checking for NVIDIA GPU support...
+nvidia-smi >nul 2>&1
+if not errorlevel 1 (
+    echo DEBUG: Testing Docker GPU access...
+    docker run --rm --gpus all hello-world >nul 2>&1
+    if not errorlevel 1 (
+        echo OK: NVIDIA GPU detected and Docker GPU support available
+        set DOCKER_CMD=docker run -d --name cortex-suite --gpus all -p 8501:8501 -p 8000:8000 -v cortex_data:/data -v cortex_logs:/home/cortex/app/logs -v cortex_ollama:/home/cortex/.ollama
+    ) else (
+        echo INFO: NVIDIA GPU detected but Docker GPU support unavailable, using CPU-only mode
+        set DOCKER_CMD=docker run -d --name cortex-suite -p 8501:8501 -p 8000:8000 -v cortex_data:/data -v cortex_logs:/home/cortex/app/logs -v cortex_ollama:/home/cortex/.ollama
+    )
+) else (
+    echo INFO: No NVIDIA GPU detected, using CPU-only mode
+    echo INFO: This is optimal for ARM64 PCs, Apple Silicon, and Intel systems without NVIDIA GPUs
+    set DOCKER_CMD=docker run -d --name cortex-suite -p 8501:8501 -p 8000:8000 -v cortex_data:/data -v cortex_logs:/home/cortex/app/logs -v cortex_ollama:/home/cortex/.ollama
+)
 
 REM Always mount entire C:\ drive if it exists (should always exist on Windows)
 if exist "C:\" (

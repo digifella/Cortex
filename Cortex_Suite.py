@@ -1,6 +1,6 @@
 # ## File: Cortex_Suite.py
-# Version: v2.0.0 (Service-First Architecture)
-# Date: 2025-08-16
+# Version: v2.1.0 (Universal Architecture + Docker Ingestion Fixes)
+# Date: 2025-08-24
 # Purpose: A central Streamlit launchpad for the integrated Cortex Suite.
 
 import streamlit as st
@@ -34,7 +34,7 @@ except Exception:
 if not setup_complete:
     # Show setup progress page
     st.title("🔧 Cortex Suite Setup in Progress")
-    st.caption("Version v2.0.0 - Initial Setup")
+    st.caption("Version v2.1.0 - Universal Architecture Setup")
     
     # Progress bar
     progress_percent = setup_info.get("progress_percent", 0)
@@ -96,7 +96,7 @@ if not setup_complete:
 else:
     # Normal main page
     st.title("🚀 Welcome to the Project Cortex Suite")
-    st.caption("Version v2.0.0 (Service-First Architecture)")
+    st.caption("Version v2.1.0 (Universal Architecture + Docker Ingestion Fixes)")
 
 st.markdown("""
 This is the central hub for the Cortex Suite, an integrated workbench for building a knowledge base and using it for AI-assisted proposal development.
@@ -210,8 +210,8 @@ st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
-        <strong>🕒 Latest Code Changes:</strong> 2025-08-23<br>
-        <em>Comprehensive dependency resolution - documented lessons learned, restored stable versions, fast builds</em>
+        <strong>🕒 Latest Code Changes:</strong> 2025-08-24<br>
+        <em>Universal Architecture: Intel x86_64, Apple Silicon M-series, ARM64 PCs + Docker ingestion fixes</em>
     </div>
     """, 
     unsafe_allow_html=True

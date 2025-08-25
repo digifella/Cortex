@@ -32,15 +32,25 @@ WORKDIR /home/cortex/app
 # Copy requirements first for better caching
 COPY --chown=cortex:cortex requirements.txt .
 
-# Install Python dependencies with platform detection
-RUN pip install --no-cache-dir -r requirements.txt && \
-    # Install PyTorch with CUDA support if NVIDIA runtime detected, otherwise CPU-only \
-    if nvidia-smi > /dev/null 2>&1; then \
-        echo "NVIDIA GPU detected, installing CUDA PyTorch"; \
-        pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121; \
+# Install Python dependencies (architecture-neutral)
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install PyTorch with intelligent platform detection for universal compatibility
+# Supports Intel x86_64, Apple Silicon M-series, ARM64 PCs
+RUN ARCH=$(uname -m) && \
+    echo "🔍 Detected architecture: $ARCH" && \
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
+        echo "🍎 ARM64 architecture detected (Apple Silicon M-series/ARM64 PC)"; \
+        echo "📦 Installing PyTorch CPU-optimized for ARM64"; \
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu; \
+    elif [ "$ARCH" = "x86_64" ] && nvidia-smi > /dev/null 2>&1; then \
+        echo "🚀 Intel x86_64 with NVIDIA GPU detected"; \
+        echo "⚡ Installing PyTorch with CUDA acceleration"; \
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121; \
     else \
-        echo "No NVIDIA GPU detected, installing CPU-only PyTorch"; \
-        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu; \
+        echo "💻 Intel x86_64 CPU-only detected"; \
+        echo "📦 Installing PyTorch CPU-optimized"; \
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu; \
     fi
 
 # Add user's local bin to PATH for installed packages
@@ -81,8 +91,13 @@ EXPOSE 8501 8000
 RUN echo '#!/bin/bash\n\
 set -e\n\
 \n\
-echo "🚀 Starting Cortex Suite..."\n\
+echo "🚀 Starting Cortex Suite v2.1.0 (Universal Architecture)"\n\
 echo "📅 $(date)"\n\
+echo "💻 Platform: $(uname -m) ($(uname -s))"\n\
+echo "🐳 Docker Environment: $([ -f /.dockerenv ] && echo "Yes" || echo "No")"\n\
+echo "🔧 Multi-Platform Support: Intel x86_64, Apple Silicon M-series, ARM64 PCs"\n\
+echo "📋 Docker Ingestion Fixes: Applied (2025-08-24)"\n\
+echo ""\n\
 \n\
 # Start Ollama service in background\n\
 echo "🤖 Starting Ollama service..."\n\
