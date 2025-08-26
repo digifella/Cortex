@@ -38,7 +38,7 @@ from cortex_engine.config import COLLECTION_NAME, INGESTED_FILES_LOG, EMBED_MODE
 from cortex_engine.help_system import help_system
 
 # --- App Config ---
-PAGE_VERSION = "v1.0.0"
+PAGE_VERSION = "v1.0.6"
 logger = get_logger(__name__)
 
 # --- Constants ---
@@ -109,10 +109,61 @@ def load_base_index(db_path, model_provider, api_key=None):
         else:
             Settings.llm = Ollama(model="mistral", request_timeout=120.0)
         
-        Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+        # Fix PyTorch meta tensor issue with explicit model loading
+        try:
+            import torch
+            # Force disable lazy loading to avoid meta tensor issues
+            torch.serialization.add_safe_globals({'_codecs'}) # Common fix
+            embed_model = HuggingFaceEmbedding(
+                model_name=EMBED_MODEL,
+                device="cpu",
+                trust_remote_code=True,
+                cache_folder=None,
+                model_kwargs={'torch_dtype': torch.float32}  # Explicit dtype
+            )
+        except Exception as e:
+            logger.warning(f"Advanced embedding model setup failed, trying basic: {e}")
+            # Fallback to simpler initialization
+            embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+        Settings.embed_model = embed_model
+        logger.info(f"Loaded embedding model: {EMBED_MODEL}")
+        
+        # Debug: Check embedding dimensions
+        embedding_info = {"model": EMBED_MODEL, "dimension": "unknown", "status": "unknown"}
+        try:
+            test_embedding = embed_model.get_text_embedding("test")
+            embedding_dim = len(test_embedding)
+            embedding_info.update({"dimension": embedding_dim, "status": "loaded"})
+            logger.info(f"Embedding model dimension: {embedding_dim}")
+        except Exception as e:
+            embedding_info.update({"status": f"failed: {e}"})
+            logger.warning(f"Could not test embedding dimension: {e}")
+        
+        # Don't store in session_state here due to caching - will be done separately
         db_settings = ChromaSettings(anonymized_telemetry=False)
         db = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
         chroma_collection = db.get_or_create_collection(COLLECTION_NAME)
+        
+        # Debug: Check collection info
+        try:
+            collection_count = chroma_collection.count()
+            logger.info(f"Collection '{COLLECTION_NAME}' has {collection_count} documents")
+            
+            # Try to peek at existing embeddings to understand expected dimension
+            collection_info = {"count": collection_count, "expected_dimension": "unknown"}
+            if collection_count > 0:
+                sample = chroma_collection.peek(limit=1)
+                if sample.get('embeddings') and len(sample['embeddings']) > 0:
+                    expected_dim = len(sample['embeddings'][0])
+                    collection_info["expected_dimension"] = expected_dim
+                    logger.info(f"Collection expects embeddings with dimension: {expected_dim}")
+                else:
+                    logger.warning("No embeddings found in sample data")
+            
+            # Don't store in session_state here due to caching - will be done separately
+        except Exception as e:
+            logger.warning(f"Could not inspect collection: {e}")
+            
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
         storage_context = StorageContext.from_defaults(vector_store=vector_store, persist_dir=chroma_db_path)
         index = load_index_from_storage(storage_context)
@@ -126,6 +177,88 @@ def load_base_index(db_path, model_provider, api_key=None):
         st.error(f"Backend initialization failed: {e}")
         logger.error(f"Error loading query engine from {chroma_db_path}: {e}", exc_info=True)
         return None, None
+
+def run_embedding_diagnostics(db_path):
+    """Run embedding diagnostics that aren't cached - updates session state"""
+    try:
+        wsl_db_path = convert_windows_to_wsl_path(db_path)
+        chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+        
+        # Test embedding model with meta tensor fix
+        try:
+            import torch
+            embed_model = HuggingFaceEmbedding(
+                model_name=EMBED_MODEL,
+                device="cpu",
+                trust_remote_code=True,
+                cache_folder=None,
+                model_kwargs={'torch_dtype': torch.float32}
+            )
+        except Exception as e:
+            logger.warning(f"Advanced embedding model setup failed in diagnostics, trying basic: {e}")
+            try:
+                embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+            except Exception as fallback_e:
+                logger.error(f"All embedding model initialization failed: {fallback_e}")
+                embedding_info = {"model": EMBED_MODEL, "dimension": "error", "status": f"init failed: {fallback_e}"}
+                # Store in session state early
+                st.session_state.embedding_info = embedding_info
+                st.session_state.collection_info = {"count": "error", "expected_dimension": "error", "error": str(fallback_e)}
+                return
+                
+        embedding_info = {"model": EMBED_MODEL, "dimension": "unknown", "status": "unknown"}
+        
+        try:
+            test_embedding = embed_model.get_text_embedding("test")
+            embedding_dim = len(test_embedding)
+            embedding_info.update({"dimension": embedding_dim, "status": "loaded"})
+            logger.info(f"Diagnostic: Embedding model dimension: {embedding_dim}")
+        except Exception as e:
+            embedding_info.update({"status": f"failed: {e}"})
+            logger.warning(f"Diagnostic: Could not test embedding dimension: {e}")
+        
+        # Test collection
+        db_settings = ChromaSettings(anonymized_telemetry=False)
+        db = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+        chroma_collection = db.get_or_create_collection(COLLECTION_NAME)
+        
+        collection_info = {"count": "unknown", "expected_dimension": "unknown"}
+        try:
+            # First check if collection exists and is accessible
+            collection_count = chroma_collection.count()
+            collection_info["count"] = collection_count
+            logger.info(f"Diagnostic: Collection has {collection_count} documents")
+            
+            if collection_count > 0:
+                try:
+                    # Try to peek at a sample to get dimension info
+                    sample = chroma_collection.peek(limit=1)
+                    if sample.get('embeddings') and len(sample['embeddings']) > 0:
+                        expected_dim = len(sample['embeddings'][0])
+                        collection_info["expected_dimension"] = expected_dim
+                        logger.info(f"Diagnostic: Collection expects embeddings with dimension: {expected_dim}")
+                    else:
+                        logger.warning("Diagnostic: No embeddings found in sample data - collection may be empty or corrupted")
+                        collection_info["expected_dimension"] = "no_embeddings_found"
+                except Exception as peek_e:
+                    logger.warning(f"Diagnostic: Could not peek at collection sample: {peek_e}")
+                    collection_info["expected_dimension"] = f"peek_failed: {peek_e}"
+            else:
+                logger.info("Diagnostic: Collection is empty")
+                collection_info["expected_dimension"] = "empty_collection"
+                
+        except Exception as e:
+            logger.error(f"Diagnostic: Collection access failed: {e}", exc_info=True)
+            collection_info.update({"count": "error", "expected_dimension": "error", "error": str(e)})
+        
+        # Store in session state
+        st.session_state.embedding_info = embedding_info
+        st.session_state.collection_info = collection_info
+        
+    except Exception as e:
+        logger.error(f"Diagnostic function failed: {e}")
+        st.session_state.embedding_info = {"model": EMBED_MODEL, "dimension": "error", "status": f"diagnostic failed: {e}"}
+        st.session_state.collection_info = {"count": "error", "expected_dimension": "error", "error": str(e)}
 
 def initialize_search_state():
     if 'search_sort_key' not in st.session_state: st.session_state.search_sort_key = 'score'
@@ -176,6 +309,39 @@ def render_sidebar():
 
 def render_main_content(base_index, vector_collection):
     st.header("🔎 3. Knowledge Search")
+    
+    # Show embedding diagnostic info if available
+    if hasattr(st.session_state, 'embedding_info') and hasattr(st.session_state, 'collection_info'):
+        embed_info = st.session_state.embedding_info
+        coll_info = st.session_state.collection_info
+        
+        with st.expander("🔧 Embedding Diagnostics (Click to expand)", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Current Embedding Model:**")
+                st.code(f"Model: {embed_info.get('model', 'Unknown')}\nDimension: {embed_info.get('dimension', 'Unknown')}\nStatus: {embed_info.get('status', 'Unknown')}")
+            with col2:
+                st.markdown("**Collection Information:**")
+                if coll_info.get('error'):
+                    st.code(f"Documents: {coll_info.get('count', 'Unknown')}\nExpected Dim: {coll_info.get('expected_dimension', 'Unknown')}\nError: {coll_info.get('error', 'Unknown')}")
+                else:
+                    st.code(f"Documents: {coll_info.get('count', 'Unknown')}\nExpected Dim: {coll_info.get('expected_dimension', 'Unknown')}")
+            
+            # Check for collection errors first
+            if coll_info.get('error'):
+                st.error(f"❌ **Collection Access Error!** Cannot inspect ChromaDB collection: {coll_info.get('error')}")
+                st.info("💡 **Solutions**:\n1. Check database permissions and path access\n2. Try restarting the application\n3. Check if the collection database is corrupted\n4. Consider re-ingesting your documents")
+            # Then check for dimension mismatch
+            elif (embed_info.get('dimension') != 'unknown' and 
+                coll_info.get('expected_dimension') != 'unknown' and
+                str(embed_info.get('dimension')) != str(coll_info.get('expected_dimension'))):
+                st.error(f"❌ **Dimension Mismatch Detected!** Current model produces {embed_info.get('dimension')} dimensions, but collection expects {coll_info.get('expected_dimension')} dimensions.")
+                st.info("💡 **Solution**: The collection was created with a different embedding model. You need to either:\n1. Re-ingest your documents with the current model, or\n2. Use the same embedding model that was used during ingestion")
+            elif (embed_info.get('dimension') != 'unknown' and coll_info.get('count') != 'error' and
+                  str(embed_info.get('dimension')) == str(coll_info.get('expected_dimension', 'unknown'))):
+                st.success("✅ **Embedding Configuration OK!** Model and collection dimensions match perfectly.")
+                st.info("🔍 The search issue may be related to query processing or other factors, not embedding dimensions.")
+    
     if not base_index:
         st.markdown("---"); st.info("Backend not loaded. Please check configuration and ensure ingestion has been run."); return
 
@@ -236,13 +402,93 @@ def render_main_content(base_index, vector_collection):
             where_clause = all_conditions[0]
         # else: where_clause remains {}
 
-        retriever_kwargs = {"vector_store_kwargs": {"where": where_clause}} if where_clause else {}
+        # Only include where clause if it has actual conditions (not empty dict)
+        if where_clause and len(where_clause) > 0:
+            retriever_kwargs = {"vector_store_kwargs": {"where": where_clause}}
+        else:
+            # Explicitly avoid passing any where clause to prevent ChromaDB validation errors
+            retriever_kwargs = {}
+        
+        # Debug logging for troubleshooting
+        logger.debug(f"Search conditions: {len(all_conditions)} conditions, where_clause keys: {list(where_clause.keys()) if where_clause else 'None'}")
+        logger.debug(f"Retriever kwargs: {retriever_kwargs}")
         # --- END: v20.0.0 NATIVE CHROMA FILTER LOGIC ---
 
         with st.spinner("Searching..."):
-            retriever = base_index.as_retriever(similarity_top_k=50, **retriever_kwargs)
-            search_text = query if query else " "
-            response_nodes = retriever.retrieve(search_text)
+            try:
+                # Try with filters first if we have them
+                retriever = base_index.as_retriever(similarity_top_k=50, **retriever_kwargs)
+                search_text = query if query else " "
+                response_nodes = retriever.retrieve(search_text)
+            except ValueError as e:
+                if "Expected where to have exactly one operator" in str(e):
+                    # The issue is likely in LlamaIndex ChromaVectorStore itself
+                    # Let's try to bypass the problematic retriever approach
+                    logger.warning(f"ChromaDB where clause validation failed: {e}")
+                    st.warning("⚠️ Filter validation failed, using direct vector search...")
+                    
+                    try:
+                        # Debug: Check vector collection state
+                        logger.debug(f"Vector collection type: {type(vector_collection)}")
+                        logger.debug(f"Search text: '{search_text}'")
+                        
+                        # Direct ChromaDB query bypass for basic search functionality
+                        search_results = vector_collection.query(
+                            query_texts=[search_text or "document"],
+                            n_results=50,
+                            include=['documents', 'metadatas', 'distances']
+                        )
+                        
+                        logger.debug(f"Direct search returned: {len(search_results.get('documents', [[]])[0])} results")
+                        
+                        # Convert ChromaDB results to LlamaIndex-like format
+                        response_nodes = []
+                        if search_results.get('documents') and search_results['documents'][0]:
+                            # Import TextNode locally to avoid circular imports
+                            try:
+                                from llama_index.core.schema import TextNode
+                                NodeClass = TextNode
+                                logger.debug("Successfully imported TextNode")
+                            except ImportError as ie:
+                                logger.warning(f"TextNode import failed: {ie}, using SimpleNode fallback")
+                                # Fallback to a simple object if import fails
+                                class SimpleNode:
+                                    def __init__(self, text, metadata=None, score=None):
+                                        self.text = text
+                                        self.metadata = metadata or {}
+                                        self.score = score
+                                NodeClass = SimpleNode
+                                
+                            for i, (doc, metadata, distance) in enumerate(zip(
+                                search_results['documents'][0],
+                                search_results['metadatas'][0],
+                                search_results['distances'][0]
+                            )):
+                                node = NodeClass(
+                                    text=doc,
+                                    metadata=metadata or {},
+                                    score=1.0 - distance  # Convert distance to similarity score
+                                )
+                                response_nodes.append(node)
+                            
+                            logger.info(f"Direct search created {len(response_nodes)} result nodes")
+                        else:
+                            logger.warning("Direct search returned no documents")
+                            response_nodes = []
+                        
+                        st.info("✅ Using direct vector search (some advanced features may be limited)")
+                        
+                    except Exception as fallback_e:
+                        logger.error(f"Direct search fallback failed: {fallback_e}", exc_info=True)
+                        st.error(f"❌ Both filtered and direct search failed: {str(fallback_e)}")
+                        st.error("Please check your knowledge base configuration and ensure documents were properly ingested.")
+                        return
+                else:
+                    raise
+            except Exception as e:
+                logger.error(f"Search failed: {e}")
+                st.error(f"Search failed: {e}")
+                return
             unique_results = list(OrderedDict((node.metadata.get('doc_id'), node) for node in response_nodes).values())
             st.session_state.search_results = unique_results
             st.session_state.search_page = 0
@@ -432,6 +678,9 @@ def check_unsaved_search_results():
 check_unsaved_search_results()
 
 base_index, vector_collection = load_base_index(st.session_state.db_path_input, "Local")
+
+# Run diagnostics on every page load (not cached)
+run_embedding_diagnostics(st.session_state.db_path_input)
 
 render_sidebar()
 render_main_content(base_index, vector_collection)

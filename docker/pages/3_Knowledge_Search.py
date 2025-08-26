@@ -38,7 +38,7 @@ from cortex_engine.config import COLLECTION_NAME, INGESTED_FILES_LOG, EMBED_MODE
 from cortex_engine.help_system import help_system
 
 # --- App Config ---
-PAGE_VERSION = "v1.0.4"
+PAGE_VERSION = "v1.0.6"
 logger = get_logger(__name__)
 
 # --- Constants ---
@@ -109,7 +109,22 @@ def load_base_index(db_path, model_provider, api_key=None):
         else:
             Settings.llm = Ollama(model="mistral", request_timeout=120.0)
         
-        embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+        # Fix PyTorch meta tensor issue with explicit model loading
+        try:
+            import torch
+            # Force disable lazy loading to avoid meta tensor issues
+            torch.serialization.add_safe_globals({'_codecs'}) # Common fix
+            embed_model = HuggingFaceEmbedding(
+                model_name=EMBED_MODEL,
+                device="cpu",
+                trust_remote_code=True,
+                cache_folder=None,
+                model_kwargs={'torch_dtype': torch.float32}  # Explicit dtype
+            )
+        except Exception as e:
+            logger.warning(f"Advanced embedding model setup failed, trying basic: {e}")
+            # Fallback to simpler initialization
+            embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
         Settings.embed_model = embed_model
         logger.info(f"Loaded embedding model: {EMBED_MODEL}")
         
@@ -124,8 +139,7 @@ def load_base_index(db_path, model_provider, api_key=None):
             embedding_info.update({"status": f"failed: {e}"})
             logger.warning(f"Could not test embedding dimension: {e}")
         
-        # Store for UI display
-        st.session_state.embedding_info = embedding_info
+        # Don't store in session_state here due to caching - will be done separately
         db_settings = ChromaSettings(anonymized_telemetry=False)
         db = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
         chroma_collection = db.get_or_create_collection(COLLECTION_NAME)
@@ -146,11 +160,9 @@ def load_base_index(db_path, model_provider, api_key=None):
                 else:
                     logger.warning("No embeddings found in sample data")
             
-            # Store for UI display
-            st.session_state.collection_info = collection_info
+            # Don't store in session_state here due to caching - will be done separately
         except Exception as e:
             logger.warning(f"Could not inspect collection: {e}")
-            st.session_state.collection_info = {"count": "error", "expected_dimension": "error", "error": str(e)}
             
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
         storage_context = StorageContext.from_defaults(vector_store=vector_store, persist_dir=chroma_db_path)
@@ -165,6 +177,88 @@ def load_base_index(db_path, model_provider, api_key=None):
         st.error(f"Backend initialization failed: {e}")
         logger.error(f"Error loading query engine from {chroma_db_path}: {e}", exc_info=True)
         return None, None
+
+def run_embedding_diagnostics(db_path):
+    """Run embedding diagnostics that aren't cached - updates session state"""
+    try:
+        wsl_db_path = convert_windows_to_wsl_path(db_path)
+        chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+        
+        # Test embedding model with meta tensor fix
+        try:
+            import torch
+            embed_model = HuggingFaceEmbedding(
+                model_name=EMBED_MODEL,
+                device="cpu",
+                trust_remote_code=True,
+                cache_folder=None,
+                model_kwargs={'torch_dtype': torch.float32}
+            )
+        except Exception as e:
+            logger.warning(f"Advanced embedding model setup failed in diagnostics, trying basic: {e}")
+            try:
+                embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+            except Exception as fallback_e:
+                logger.error(f"All embedding model initialization failed: {fallback_e}")
+                embedding_info = {"model": EMBED_MODEL, "dimension": "error", "status": f"init failed: {fallback_e}"}
+                # Store in session state early
+                st.session_state.embedding_info = embedding_info
+                st.session_state.collection_info = {"count": "error", "expected_dimension": "error", "error": str(fallback_e)}
+                return
+                
+        embedding_info = {"model": EMBED_MODEL, "dimension": "unknown", "status": "unknown"}
+        
+        try:
+            test_embedding = embed_model.get_text_embedding("test")
+            embedding_dim = len(test_embedding)
+            embedding_info.update({"dimension": embedding_dim, "status": "loaded"})
+            logger.info(f"Diagnostic: Embedding model dimension: {embedding_dim}")
+        except Exception as e:
+            embedding_info.update({"status": f"failed: {e}"})
+            logger.warning(f"Diagnostic: Could not test embedding dimension: {e}")
+        
+        # Test collection
+        db_settings = ChromaSettings(anonymized_telemetry=False)
+        db = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+        chroma_collection = db.get_or_create_collection(COLLECTION_NAME)
+        
+        collection_info = {"count": "unknown", "expected_dimension": "unknown"}
+        try:
+            # First check if collection exists and is accessible
+            collection_count = chroma_collection.count()
+            collection_info["count"] = collection_count
+            logger.info(f"Diagnostic: Collection has {collection_count} documents")
+            
+            if collection_count > 0:
+                try:
+                    # Try to peek at a sample to get dimension info
+                    sample = chroma_collection.peek(limit=1)
+                    if sample.get('embeddings') and len(sample['embeddings']) > 0:
+                        expected_dim = len(sample['embeddings'][0])
+                        collection_info["expected_dimension"] = expected_dim
+                        logger.info(f"Diagnostic: Collection expects embeddings with dimension: {expected_dim}")
+                    else:
+                        logger.warning("Diagnostic: No embeddings found in sample data - collection may be empty or corrupted")
+                        collection_info["expected_dimension"] = "no_embeddings_found"
+                except Exception as peek_e:
+                    logger.warning(f"Diagnostic: Could not peek at collection sample: {peek_e}")
+                    collection_info["expected_dimension"] = f"peek_failed: {peek_e}"
+            else:
+                logger.info("Diagnostic: Collection is empty")
+                collection_info["expected_dimension"] = "empty_collection"
+                
+        except Exception as e:
+            logger.error(f"Diagnostic: Collection access failed: {e}", exc_info=True)
+            collection_info.update({"count": "error", "expected_dimension": "error", "error": str(e)})
+        
+        # Store in session state
+        st.session_state.embedding_info = embedding_info
+        st.session_state.collection_info = collection_info
+        
+    except Exception as e:
+        logger.error(f"Diagnostic function failed: {e}")
+        st.session_state.embedding_info = {"model": EMBED_MODEL, "dimension": "error", "status": f"diagnostic failed: {e}"}
+        st.session_state.collection_info = {"count": "error", "expected_dimension": "error", "error": str(e)}
 
 def initialize_search_state():
     if 'search_sort_key' not in st.session_state: st.session_state.search_sort_key = 'score'
@@ -228,14 +322,25 @@ def render_main_content(base_index, vector_collection):
                 st.code(f"Model: {embed_info.get('model', 'Unknown')}\nDimension: {embed_info.get('dimension', 'Unknown')}\nStatus: {embed_info.get('status', 'Unknown')}")
             with col2:
                 st.markdown("**Collection Information:**")
-                st.code(f"Documents: {coll_info.get('count', 'Unknown')}\nExpected Dim: {coll_info.get('expected_dimension', 'Unknown')}")
+                if coll_info.get('error'):
+                    st.code(f"Documents: {coll_info.get('count', 'Unknown')}\nExpected Dim: {coll_info.get('expected_dimension', 'Unknown')}\nError: {coll_info.get('error', 'Unknown')}")
+                else:
+                    st.code(f"Documents: {coll_info.get('count', 'Unknown')}\nExpected Dim: {coll_info.get('expected_dimension', 'Unknown')}")
             
-            # Highlight dimension mismatch
-            if (embed_info.get('dimension') != 'unknown' and 
+            # Check for collection errors first
+            if coll_info.get('error'):
+                st.error(f"❌ **Collection Access Error!** Cannot inspect ChromaDB collection: {coll_info.get('error')}")
+                st.info("💡 **Solutions**:\n1. Check database permissions and path access\n2. Try restarting the application\n3. Check if the collection database is corrupted\n4. Consider re-ingesting your documents")
+            # Then check for dimension mismatch
+            elif (embed_info.get('dimension') != 'unknown' and 
                 coll_info.get('expected_dimension') != 'unknown' and
-                embed_info.get('dimension') != coll_info.get('expected_dimension')):
+                str(embed_info.get('dimension')) != str(coll_info.get('expected_dimension'))):
                 st.error(f"❌ **Dimension Mismatch Detected!** Current model produces {embed_info.get('dimension')} dimensions, but collection expects {coll_info.get('expected_dimension')} dimensions.")
                 st.info("💡 **Solution**: The collection was created with a different embedding model. You need to either:\n1. Re-ingest your documents with the current model, or\n2. Use the same embedding model that was used during ingestion")
+            elif (embed_info.get('dimension') != 'unknown' and coll_info.get('count') != 'error' and
+                  str(embed_info.get('dimension')) == str(coll_info.get('expected_dimension', 'unknown'))):
+                st.success("✅ **Embedding Configuration OK!** Model and collection dimensions match perfectly.")
+                st.info("🔍 The search issue may be related to query processing or other factors, not embedding dimensions.")
     
     if not base_index:
         st.markdown("---"); st.info("Backend not loaded. Please check configuration and ensure ingestion has been run."); return
@@ -573,6 +678,9 @@ def check_unsaved_search_results():
 check_unsaved_search_results()
 
 base_index, vector_collection = load_base_index(st.session_state.db_path_input, "Local")
+
+# Run diagnostics on every page load (not cached)
+run_embedding_diagnostics(st.session_state.db_path_input)
 
 render_sidebar()
 render_main_content(base_index, vector_collection)
