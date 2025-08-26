@@ -1,21 +1,27 @@
 # **`README.md`**
 
-**Version:** 94.0.0 (GraphRAG Integration Release)
-**Date:** 2025-07-23
+**Version:** 94.1.0 (Knowledge Search UX Enhancement)
+**Date:** 2025-08-26
 
 **Prelim:**
 Please be aware that the system operates in a WSL2 environment, so all paths should support linux and windows.
 
-### 1. System Status: GraphRAG Integration Complete
+### 1. System Status: Knowledge Search Complete & Cross-Platform Ready
 
-This document marks a major milestone with the **Project Cortex Suite** now featuring integrated knowledge graph capabilities. The system can extract entities (people, organizations, projects) and their relationships during ingestion, enabling powerful relationship-based queries.
+This document reflects recent major fixes and enhancements to the **Project Cortex Suite**, now featuring complete Knowledge Search functionality with cross-platform path compatibility and enhanced user experience.
 
-*   **[NEW] GraphRAG Integration: Entity and Relationship Extraction**
+*   **[ENHANCED] Knowledge Search: Direct ChromaDB + Progress Indicators (v22.2.2)**
+    *   **Status:** Completely rebuilt. Knowledge Search now bypasses LlamaIndex entirely, using direct ChromaDB queries with comprehensive timeout protection and real-time progress indicators.
+    *   **Capabilities:** Fast, reliable search with visual feedback during operations. Users see search progress and results count in real-time.
+    *   **Technical:** Eliminated numpy.iterable compatibility issues, added 30-second timeout protection, and implemented fallback text search.
+
+*   **[RESOLVED] Cross-Platform Path Compatibility**
+    *   **Status:** Complete. Eliminated all hardcoded WSL paths with intelligent default path detection for Windows/Mac/Linux environments.
+    *   **Implementation:** New `cortex_engine/utils/default_paths.py` provides platform-aware path resolution with graceful fallbacks.
+
+*   **[RESOLVED] GraphRAG Integration: Entity and Relationship Extraction**
     *   **Status:** The ingestion pipeline now automatically extracts consultants, clients, projects, and their relationships using spaCy NER and pattern matching. This data is stored in a NetworkX graph alongside the vector embeddings.
     *   **Capabilities:** The system can now answer queries like "What projects did consultant X work on?", "Who collaborated with person Y?", and "What types of work has client Z requested?"
-
-*   **[RESOLVED] Knowledge Search: Combined Metadata and Collection Scope Search**
-    *   **Status:** Fixed. The search logic constructs native ChromaDB `where` clauses directly.
 
 *   **[RESOLVED] AI Research: Sources Found During Foundational Search**
     *   **Status:** Fixed. The foundational query functions work correctly.
