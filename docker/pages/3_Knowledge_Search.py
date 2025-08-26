@@ -109,10 +109,36 @@ def load_base_index(db_path, model_provider, api_key=None):
         else:
             Settings.llm = Ollama(model="mistral", request_timeout=120.0)
         
-        Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+        embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+        Settings.embed_model = embed_model
+        logger.info(f"Loaded embedding model: {EMBED_MODEL}")
+        
+        # Debug: Check embedding dimensions
+        try:
+            test_embedding = embed_model.get_text_embedding("test")
+            logger.info(f"Embedding model dimension: {len(test_embedding)}")
+        except Exception as e:
+            logger.warning(f"Could not test embedding dimension: {e}")
         db_settings = ChromaSettings(anonymized_telemetry=False)
         db = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
         chroma_collection = db.get_or_create_collection(COLLECTION_NAME)
+        
+        # Debug: Check collection info
+        try:
+            collection_count = chroma_collection.count()
+            logger.info(f"Collection '{COLLECTION_NAME}' has {collection_count} documents")
+            
+            # Try to peek at existing embeddings to understand expected dimension
+            if collection_count > 0:
+                sample = chroma_collection.peek(limit=1)
+                if sample.get('embeddings') and len(sample['embeddings']) > 0:
+                    expected_dim = len(sample['embeddings'][0])
+                    logger.info(f"Collection expects embeddings with dimension: {expected_dim}")
+                else:
+                    logger.warning("No embeddings found in sample data")
+        except Exception as e:
+            logger.warning(f"Could not inspect collection: {e}")
+            
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
         storage_context = StorageContext.from_defaults(vector_store=vector_store, persist_dir=chroma_db_path)
         index = load_index_from_storage(storage_context)
