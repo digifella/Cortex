@@ -38,7 +38,7 @@ from cortex_engine.config import COLLECTION_NAME, INGESTED_FILES_LOG, EMBED_MODE
 from cortex_engine.help_system import help_system
 
 # --- App Config ---
-PAGE_VERSION = "v1.0.3"
+PAGE_VERSION = "v1.0.4"
 logger = get_logger(__name__)
 
 # --- Constants ---
@@ -114,11 +114,18 @@ def load_base_index(db_path, model_provider, api_key=None):
         logger.info(f"Loaded embedding model: {EMBED_MODEL}")
         
         # Debug: Check embedding dimensions
+        embedding_info = {"model": EMBED_MODEL, "dimension": "unknown", "status": "unknown"}
         try:
             test_embedding = embed_model.get_text_embedding("test")
-            logger.info(f"Embedding model dimension: {len(test_embedding)}")
+            embedding_dim = len(test_embedding)
+            embedding_info.update({"dimension": embedding_dim, "status": "loaded"})
+            logger.info(f"Embedding model dimension: {embedding_dim}")
         except Exception as e:
+            embedding_info.update({"status": f"failed: {e}"})
             logger.warning(f"Could not test embedding dimension: {e}")
+        
+        # Store for UI display
+        st.session_state.embedding_info = embedding_info
         db_settings = ChromaSettings(anonymized_telemetry=False)
         db = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
         chroma_collection = db.get_or_create_collection(COLLECTION_NAME)
@@ -129,15 +136,21 @@ def load_base_index(db_path, model_provider, api_key=None):
             logger.info(f"Collection '{COLLECTION_NAME}' has {collection_count} documents")
             
             # Try to peek at existing embeddings to understand expected dimension
+            collection_info = {"count": collection_count, "expected_dimension": "unknown"}
             if collection_count > 0:
                 sample = chroma_collection.peek(limit=1)
                 if sample.get('embeddings') and len(sample['embeddings']) > 0:
                     expected_dim = len(sample['embeddings'][0])
+                    collection_info["expected_dimension"] = expected_dim
                     logger.info(f"Collection expects embeddings with dimension: {expected_dim}")
                 else:
                     logger.warning("No embeddings found in sample data")
+            
+            # Store for UI display
+            st.session_state.collection_info = collection_info
         except Exception as e:
             logger.warning(f"Could not inspect collection: {e}")
+            st.session_state.collection_info = {"count": "error", "expected_dimension": "error", "error": str(e)}
             
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
         storage_context = StorageContext.from_defaults(vector_store=vector_store, persist_dir=chroma_db_path)
@@ -202,6 +215,28 @@ def render_sidebar():
 
 def render_main_content(base_index, vector_collection):
     st.header("🔎 3. Knowledge Search")
+    
+    # Show embedding diagnostic info if available
+    if hasattr(st.session_state, 'embedding_info') and hasattr(st.session_state, 'collection_info'):
+        embed_info = st.session_state.embedding_info
+        coll_info = st.session_state.collection_info
+        
+        with st.expander("🔧 Embedding Diagnostics (Click to expand)", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Current Embedding Model:**")
+                st.code(f"Model: {embed_info.get('model', 'Unknown')}\nDimension: {embed_info.get('dimension', 'Unknown')}\nStatus: {embed_info.get('status', 'Unknown')}")
+            with col2:
+                st.markdown("**Collection Information:**")
+                st.code(f"Documents: {coll_info.get('count', 'Unknown')}\nExpected Dim: {coll_info.get('expected_dimension', 'Unknown')}")
+            
+            # Highlight dimension mismatch
+            if (embed_info.get('dimension') != 'unknown' and 
+                coll_info.get('expected_dimension') != 'unknown' and
+                embed_info.get('dimension') != coll_info.get('expected_dimension')):
+                st.error(f"❌ **Dimension Mismatch Detected!** Current model produces {embed_info.get('dimension')} dimensions, but collection expects {coll_info.get('expected_dimension')} dimensions.")
+                st.info("💡 **Solution**: The collection was created with a different embedding model. You need to either:\n1. Re-ingest your documents with the current model, or\n2. Use the same embedding model that was used during ingestion")
+    
     if not base_index:
         st.markdown("---"); st.info("Backend not loaded. Please check configuration and ensure ingestion has been run."); return
 
