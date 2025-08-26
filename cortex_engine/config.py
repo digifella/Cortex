@@ -1,5 +1,5 @@
 # ## File: config.py
-# Version: 3.0.0 (Hybrid Model Architecture)
+# Version: 3.1.0 (Cross-Platform Path Fix)
 # Date: 2025-08-20
 # Purpose: Central configuration file for Project Cortex with hybrid model support.
 #          - CHANGE (v3.0.0): Added hybrid model distribution configuration
@@ -9,10 +9,12 @@
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional
+from .utils.default_paths import get_default_ai_database_path
 
 # --- Core Paths ---
 # This is now a FALLBACK. The scripts will accept a path argument to override this.
-BASE_DATA_PATH = "/mnt/f/ai_databases"
+# Uses cross-platform path detection instead of hardcoded paths
+BASE_DATA_PATH = get_default_ai_database_path()
 
 # The following paths are placeholders; they will be dynamically set by scripts.
 # They are derived from the BASE_DATA_PATH by default.

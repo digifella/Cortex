@@ -1,5 +1,5 @@
 # ## File: cortex_engine/config_manager.py
-# Version: 3.0.0 (Utilities Refactor)
+# Version: 3.1.0 (Cross-Platform Path Fix)
 # Date: 2025-07-23
 # Purpose: Manages persistent user configuration settings using a class structure.
 #          - REFACTOR (v3.0.0): Updated to use centralized utilities for logging
@@ -10,6 +10,7 @@ from pathlib import Path
 
 # Import centralized utilities
 from .utils import get_logger, get_project_root
+from .utils.default_paths import get_default_ai_database_path, get_default_knowledge_source_path
 from .exceptions import ConfigurationError
 
 # Set up logging
@@ -33,10 +34,10 @@ class ConfigManager:
         """Loads the configuration from the JSON file, with environment variable fallbacks."""
         import os
         
-        # Start with environment variable defaults
+        # Start with cross-platform defaults  
         default_config = {
-            "ai_database_path": os.getenv("AI_DATABASE_PATH", "/mnt/f/ai_databases"),
-            "knowledge_source_path": os.getenv("KNOWLEDGE_SOURCE_PATH", "")
+            "ai_database_path": get_default_ai_database_path(),
+            "knowledge_source_path": get_default_knowledge_source_path()
         }
         
         if not self.config_path.exists():

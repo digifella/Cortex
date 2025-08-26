@@ -92,6 +92,13 @@ services:
     volumes:
       - cortex_data:/data
       - cortex_logs:/app/logs
+      # External volume mappings for Windows paths
+      - type: bind
+        source: ${WINDOWS_AI_DATABASE_PATH:-./cortex_data}
+        target: /data/ai_databases
+      - type: bind  
+        source: ${WINDOWS_KNOWLEDGE_SOURCE_PATH:-./knowledge_base}
+        target: /data/knowledge_base
     ports:
       - "8501:8501"
     environment:

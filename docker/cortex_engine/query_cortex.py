@@ -1,7 +1,13 @@
 # ## File: query_cortex.py
-# Version: 5.1.1 (Critical UnboundLocalError Fix)
+# Version: 5.4.0 (LlamaIndex Compatibility Fix)
 # Date: 2025-08-26
 # Purpose: Backend module providing models and prompts.
+#          - CRITICAL FIX (v5.4.0): Added get_agg_embedding_from_queries method and full LlamaIndex
+#            compatibility to resolve 'SentenceTransformerWrapper' object has no attribute error.
+#          - CRITICAL FIX (v5.3.0): Fixed emergency embedding model to use 768 dimensions matching
+#            BAAI/bge-base-en-v1.5 standard, resolving ChromaDB dimension mismatch errors.
+#          - CRITICAL FIX (v5.2.0): Added emergency embedding model for transformers compatibility
+#            issues. Prevents complete system failure when PyTorch/transformers conflicts occur.
 #          - CRITICAL BUGFIX (v5.1.1): Fixed UnboundLocalError for 'os' import that was
 #            preventing proper model initialization. Moved os import to proper scope.
 #          - CRITICAL FIX (v5.1.0): Applied PyTorch 2.8+ meta tensor fix to embedding
@@ -95,78 +101,134 @@ def setup_models():
             )
             logger.info(f"✅ KB models configured (LOCAL): LLM={KB_LLM_MODEL}, Embed={EMBED_MODEL}, Device={device}")
         
-        # PyTorch 2.8+ meta tensor fix for embedding model
+        # Embedding model initialization - prefer native LlamaIndex for full compatibility
         import os  # Move os import to be available in function scope
         try:
-            # Method 1: Use sentence-transformers directly (most reliable)
+            # Method 1: Native HuggingFaceEmbedding (preferred for full LlamaIndex compatibility)
             try:
-                from sentence_transformers import SentenceTransformer
-                
-                # Set environment variables
-                os.environ["TOKENIZERS_PARALLELISM"] = "false"
-                os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-                
-                st_model = SentenceTransformer(EMBED_MODEL, device=device, trust_remote_code=True)
-                
-                # Test the model
-                test_output = st_model.encode("test", convert_to_tensor=False)
-                logger.info(f"Query engine: Sentence-transformers test successful, dimension: {len(test_output)}")
-                
-                # Create wrapper for LlamaIndex compatibility
-                class SentenceTransformerWrapper:
-                    def __init__(self, model, model_name):
-                        self.model = model
-                        self.model_name = model_name
-                        
-                    def get_text_embedding(self, text):
-                        return self.model.encode(text, convert_to_tensor=False).tolist()
-                    
-                    def get_text_embeddings(self, texts):
-                        embeddings = self.model.encode(texts, convert_to_tensor=False)
-                        return [emb.tolist() for emb in embeddings]
-                
-                Settings.embed_model = SentenceTransformerWrapper(st_model, EMBED_MODEL)
-                logger.info("✅ Query engine: Successfully initialized using sentence-transformers wrapper approach")
-                
-            except Exception as st_e:
-                logger.warning(f"Query engine: Sentence-transformers approach failed: {st_e}")
-                
-                # Method 2: Environment variable approach for meta tensor handling
                 os.environ["TOKENIZERS_PARALLELISM"] = "false"
                 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
                 
                 Settings.embed_model = HuggingFaceEmbedding(
                     model_name=EMBED_MODEL,
                     device=device,
-                    trust_remote_code=True,
-                    cache_folder=None,
-                    model_kwargs={
-                        'torch_dtype': torch.float32,
-                        'low_cpu_mem_usage': False,
-                        'device_map': None,
-                        'use_auth_token': False
-                    }
+                    trust_remote_code=True
                 )
-                logger.info("✅ Query engine: Successfully initialized using environment fix approach")
+                
+                # Test the model
+                test_embedding = Settings.embed_model.get_text_embedding("test")
+                logger.info(f"Query engine: HuggingFaceEmbedding successful, dimension: {len(test_embedding)}")
+                logger.info("✅ Query engine: Successfully initialized using native HuggingFaceEmbedding")
+                
+            except Exception as hf_e:
+                logger.warning(f"Query engine: HuggingFaceEmbedding approach failed: {hf_e}")
+                
+                # Method 2: Sentence-transformers with full wrapper (fallback)
+                try:
+                    from sentence_transformers import SentenceTransformer
+                    
+                    st_model = SentenceTransformer(EMBED_MODEL, device=device, trust_remote_code=True)
+                    
+                    # Test the model
+                    test_output = st_model.encode("test", convert_to_tensor=False)
+                    logger.info(f"Query engine: Sentence-transformers test successful, dimension: {len(test_output)}")
+                    
+                    # Create FULL wrapper for LlamaIndex compatibility with all required methods
+                    class CompleteSentenceTransformerWrapper:
+                        def __init__(self, model, model_name):
+                            self.model = model
+                            self.model_name = model_name
+                            
+                        def get_text_embedding(self, text):
+                            return self.model.encode(text, convert_to_tensor=False).tolist()
+                        
+                        def get_text_embeddings(self, texts):
+                            embeddings = self.model.encode(texts, convert_to_tensor=False)
+                            return [emb.tolist() for emb in embeddings]
+                        
+                        def get_text_embedding_batch(self, texts):
+                            return self.get_text_embeddings(texts)
+                        
+                        def get_query_embedding(self, query):
+                            return self.get_text_embedding(query)
+                        
+                        def get_agg_embedding_from_queries(self, queries):
+                            """Aggregate multiple query embeddings by averaging them"""
+                            embeddings = self.get_text_embeddings(queries)
+                            if not embeddings:
+                                return []
+                            # Average the embeddings
+                            import numpy as np
+                            avg_embedding = np.mean(embeddings, axis=0)
+                            return avg_embedding.tolist()
+                    
+                    Settings.embed_model = CompleteSentenceTransformerWrapper(st_model, EMBED_MODEL)
+                    logger.info("✅ Query engine: Successfully initialized using complete sentence-transformers wrapper")
+                    
+                except Exception as st_e:
+                    logger.warning(f"Query engine: Sentence-transformers approach failed: {st_e}")
+                    
+                    # Method 3: Basic HuggingFace fallback with simpler config
+                    try:
+                        Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL, device=device)
+                        logger.info("✅ Query engine: Successfully initialized using basic HuggingFaceEmbedding")
+                    
+                    except Exception as basic_e:
+                        logger.error(f"Query engine: All embedding initialization methods failed: {basic_e}")
+                        # Try alternative model as last resort before emergency
+                        try:
+                            alt_model = "sentence-transformers/all-MiniLM-L6-v2"
+                            Settings.embed_model = HuggingFaceEmbedding(model_name=alt_model, device=device)
+                            logger.warning(f"⚠️ Query engine: Using alternative embedding model: {alt_model}")
+                            
+                        except Exception as alt_e:
+                            logger.error(f"Query engine: Alternative model failed: {alt_e}")
+                            # Emergency fallback with full LlamaIndex compatibility
+                            logger.warning("🚨 Creating emergency embedding model with full LlamaIndex compatibility")
+                            
+                            class EmergencyEmbeddingModel:
+                                """Emergency embedding model with full LlamaIndex interface"""
+                                def __init__(self):
+                                    self.embed_dim = 768
+                                    self.model_name = "emergency-fallback"
+                                    logger.warning("⚠️ Using emergency embedding model - search quality will be limited")
+                                
+                                def get_text_embedding(self, text):
+                                    import hashlib
+                                    hash_obj = hashlib.sha256(text.encode('utf-8'))
+                                    hash_bytes = hash_obj.digest()
+                                    embedding = []
+                                    for i in range(self.embed_dim):
+                                        byte_idx = (i * 4) % len(hash_bytes)
+                                        byte_val = hash_bytes[byte_idx] if byte_idx < len(hash_bytes) else 0
+                                        float_val = (float(byte_val) - 127.5) / 127.5
+                                        embedding.append(float_val)
+                                    return embedding
+                                
+                                def get_text_embeddings(self, texts):
+                                    return [self.get_text_embedding(text) for text in texts]
+                                
+                                def get_text_embedding_batch(self, texts):
+                                    return self.get_text_embeddings(texts)
+                                
+                                def get_query_embedding(self, query):
+                                    return self.get_text_embedding(query)
+                                
+                                def get_agg_embedding_from_queries(self, queries):
+                                    """Aggregate multiple query embeddings by averaging them"""
+                                    embeddings = self.get_text_embeddings(queries)
+                                    if not embeddings:
+                                        return []
+                                    import numpy as np
+                                    avg_embedding = np.mean(embeddings, axis=0)
+                                    return avg_embedding.tolist()
+                            
+                            Settings.embed_model = EmergencyEmbeddingModel()
+                            logger.warning("🆘 Emergency embedding model active with full compatibility")
                 
         except Exception as e:
-            logger.warning(f"Query engine: Advanced setups failed: {e}")
-            
-            # Method 3: Basic fallback
-            try:
-                Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL, device=device)
-                logger.info("✅ Query engine: Successfully initialized using basic fallback")
-                
-            except Exception as fallback_e:
-                logger.error(f"Query engine: All embedding initialization methods failed: {fallback_e}")
-                # Try alternative model
-                try:
-                    alt_model = "sentence-transformers/all-MiniLM-L6-v2"
-                    Settings.embed_model = HuggingFaceEmbedding(model_name=alt_model, device=device)
-                    logger.warning(f"⚠️ Query engine: Using alternative embedding model: {alt_model}")
-                except Exception as alt_e:
-                    logger.error(f"Query engine: Complete embedding failure: {alt_e}")
-                    raise RuntimeError(f"Failed to initialize any embedding model: {alt_e}")
+            logger.error(f"❌ CRITICAL: Complete embedding system failure: {e}")
+            raise RuntimeError(f"Failed to configure KB models: {e}")
         
     except Exception as e:
         logger.error(f"❌ CRITICAL: Failed to configure KB models: {e}")

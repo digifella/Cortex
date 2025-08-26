@@ -1,5 +1,5 @@
 # ## File: Proposal_Copilot.py
-# Version: 28.0.0 (Utilities Refactor)
+# Version: 28.1.0 (Cross-Platform Path Fix)
 # Date: 2025-07-23
 # Purpose: Core UI for drafting proposals.
 #          - REFACTOR (v28.0.0): Updated to use centralized utilities for path handling,
@@ -36,7 +36,9 @@ from cortex_engine.config_manager import ConfigManager
 logger = get_logger(__name__)
 
 # --- CONFIGURATION ---
-DEFAULT_DB_PATH = "/mnt/f/ai_databases"
+# Use cross-platform default path detection
+from cortex_engine.utils.default_paths import get_default_ai_database_path
+DEFAULT_DB_PATH = get_default_ai_database_path()
 RESPONDING_ORGS = ["Deakin", "Escient", "Longboardfella", "Consortium"]
 GENERATIVE_TASKS = ["GENERATE_FROM_KB", "GENERATE_RESOURCES", "GENERATE_FROM_KB_AND_PROPOSAL", "GENERATE_FROM_PROPOSAL_ONLY"]
 RETRIEVAL_TASKS = ["RETRIEVE_FROM_KB"]

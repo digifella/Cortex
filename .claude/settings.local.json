@@ -44,7 +44,9 @@
       "Bash(pip install:*)",
       "Bash(pip show:*)",
       "Bash(git stash:*)",
-      "Bash(rsync:*)"
+      "Bash(rsync:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(./sync_docker_distribution.sh:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",

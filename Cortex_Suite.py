@@ -18,6 +18,9 @@ from cortex_engine.help_system import help_system
 from cortex_engine.utils.model_checker import model_checker
 from cortex_engine.system_status import system_status
 
+# Application version constant for distribution sync
+APP_VERSION = "v3.1.1"
+
 # --- Page Setup ---
 st.set_page_config(
     page_title="Cortex Suite",
@@ -300,7 +303,7 @@ st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
         <strong>🕒 Latest Code Changes:</strong> 2025-08-26<br>
-        <em>Knowledge Search Complete Fix: Resolved all embedding model issues by integrating backend system. Fixed PyTorch 2.8→2.3.1 compatibility, eliminated SentenceTransformerWrapper errors, restored 100% functionality.</em>
+        <em>Knowledge Search UX Enhancement: Added progress indicator with real-time status updates to prevent user confusion during search operations. Cross-Platform Path Compatibility: Eliminated all hardcoded WSL paths. Full PyTorch 2.8→2.3.1 compatibility.</em>
     </div>
     """, 
     unsafe_allow_html=True

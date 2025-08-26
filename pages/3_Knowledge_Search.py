@@ -1,13 +1,15 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: 22.0.0 (Backend Integration Fix)
+# Version: 22.2.2 (Progress Indicator Enhancement)
 # Date: 2025-08-26
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
+#          - UX ENHANCEMENT (v22.2.2): Added progress indicator with st.status to show search
+#            activity and prevent user confusion during search operations.
+#          - COMPATIBILITY FIX (v22.2.1): Removed LlamaIndex imports to resolve numpy.iterable
+#            compatibility issues in Docker environment. Now uses pure ChromaDB approach.
+#          - MAJOR FIX (v22.2.0): Bypassed LlamaIndex query engine with direct ChromaDB search
+#            to resolve persistent "Expected where to have exactly one operator, got {}" errors.
 #          - CRITICAL FIX (v22.0.0): Replaced custom embedding initialization with backend system
 #            integration to resolve 'SentenceTransformerWrapper' missing methods error.
-#          - CRITICAL FIX (v21.3.0): Fixed emergency embedding model to use correct 768 dimensions
-#            matching BAAI/bge-base-en-v1.5 standard, resolving ChromaDB dimension mismatch.
-#          - CRITICAL BUGFIX (v21.2.3): Fixed path not being retained by saving database path
-#            changes to persistent config file. Session state was being overridden on page loads.
 
 import streamlit as st
 import os
@@ -15,12 +17,11 @@ import pandas as pd
 from pathlib import Path
 import re
 
-# Import backend components
-from llama_index.core import Settings, StorageContext, load_index_from_storage
-from llama_index.llms.ollama import Ollama
-from llama_index.vector_stores.chroma import ChromaVectorStore
+# Import only ChromaDB components needed for direct search
 import chromadb
 from chromadb.config import Settings as ChromaSettings
+
+# LlamaIndex imports moved to functions where actually needed to avoid numpy.iterable issues
 
 # Import project modules
 from cortex_engine.config import EMBED_MODEL, COLLECTION_NAME, KB_LLM_MODEL
@@ -31,7 +32,7 @@ from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 logger = get_logger(__name__)
 
 # Page configuration
-PAGE_VERSION = "22.0.0"
+PAGE_VERSION = "22.2.2"
 
 st.set_page_config(page_title="Knowledge Search", layout="wide")
 
@@ -52,89 +53,41 @@ def get_document_type_options():
         return []
 
 
-@st.cache_resource(ttl=3600)
-def load_base_index(db_path, model_provider, api_key=None):
-    """Load the base index with backend embedding system integration"""
+def validate_database(db_path):
+    """Validate database exists and return ChromaDB collection info"""
     import os
     if not db_path or not db_path.strip():
         st.warning("Database path is not configured.")
-        return None, None
+        return None
         
     wsl_db_path = convert_windows_to_wsl_path(db_path)
     chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
     
     if not os.path.isdir(chroma_db_path):
         st.warning(f"🧠 Knowledge base directory not found at '{chroma_db_path}'.")
-        return None, None
+        return None
         
     try:
-        # Check if Ollama is available
-        from cortex_engine.utils.ollama_utils import check_ollama_service, get_ollama_status_message
-        
-        is_running, error_msg = check_ollama_service()
-        if not is_running:
-            st.warning(f"⚠️ {get_ollama_status_message(is_running, error_msg)}")
-            st.info("📋 **Limited functionality:** Vector search available, but AI-powered query enhancement is disabled.")
-            Settings.llm = None
-        else:
-            Settings.llm = Ollama(model="mistral", request_timeout=120.0)
-        
-        # Use backend embedding system for full compatibility
-        import torch
-        logger.info(f"Initializing embedding model {EMBED_MODEL} with PyTorch {torch.__version__}")
-        
-        # Initialize backend system which properly configures Settings.embed_model
-        from cortex_engine.query_cortex import setup_models
-        setup_models()
-        
-        # Verify backend system worked
-        if Settings.embed_model:
-            test_embedding = Settings.embed_model.get_text_embedding("test")
-            logger.info(f"✅ Backend embedding model successful: {type(Settings.embed_model).__name__}, dimension: {len(test_embedding)}")
-            
-            # Verify critical method exists
-            if hasattr(Settings.embed_model, 'get_agg_embedding_from_queries'):
-                logger.info("✅ get_agg_embedding_from_queries method available")
-            else:
-                logger.error("❌ Missing get_agg_embedding_from_queries method")
-        else:
-            st.error("❌ Backend embedding model not available")
-            return None, None
-        
-        # Set up ChromaDB
+        # Simple ChromaDB validation without LlamaIndex
         db_settings = ChromaSettings(anonymized_telemetry=False)
-        db = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
-        chroma_collection = db.get_or_create_collection(COLLECTION_NAME)
+        client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+        collection = client.get_collection(COLLECTION_NAME)
         
         # Log collection info
-        try:
-            collection_count = chroma_collection.count()
-            logger.info(f"Collection '{COLLECTION_NAME}' has {collection_count} documents")
-            
-            if collection_count > 0:
-                sample = chroma_collection.peek(limit=1)
-                if sample.get('embeddings') and len(sample['embeddings']) > 0:
-                    expected_dim = len(sample['embeddings'][0])
-                    logger.info(f"Collection expects embeddings with dimension: {expected_dim}")
-        except Exception as e:
-            logger.warning(f"Could not inspect collection: {e}")
-            
-        # Create vector store and index
-        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-        storage_context = StorageContext.from_defaults(vector_store=vector_store, persist_dir=chroma_db_path)
-        index = load_index_from_storage(storage_context)
+        collection_count = collection.count()
+        logger.info(f"Collection '{COLLECTION_NAME}' has {collection_count} documents")
         
-        if Settings.llm:
-            st.success(f"✅ Knowledge base loaded successfully from '{chroma_db_path}' with full AI capabilities.")
+        if collection_count > 0:
+            st.success(f"✅ Knowledge base validated: {collection_count} documents available for direct search.")
+            return {"path": chroma_db_path, "count": collection_count, "collection": collection}
         else:
-            st.success(f"✅ Knowledge base loaded from '{chroma_db_path}' (basic search mode).")
-        
-        return index, chroma_collection
-        
+            st.warning("⚠️ Database directory exists but no documents found.")
+            return None
+            
     except Exception as e:
-        st.error(f"❌ Backend initialization failed: {e}")
-        logger.error(f"Error loading query engine from {chroma_db_path}: {e}", exc_info=True)
-        return None, None
+        st.error(f"❌ Database validation failed: {e}")
+        logger.error(f"Error validating database at {chroma_db_path}: {e}")
+        return None
 
 
 def initialize_search_state():
@@ -201,7 +154,9 @@ def render_sidebar():
     
     with col2:
         if st.button("🔄 Reset", help="Reset to default path"):
-            default_path = "/mnt/f/ai_databases"
+            # Use cross-platform default path detection
+            from cortex_engine.utils.default_paths import get_default_ai_database_path
+            default_path = get_default_ai_database_path()
             st.session_state.db_path_input = default_path
             try:
                 config_manager.update_config({"ai_database_path": default_path})
@@ -264,56 +219,168 @@ def render_sidebar():
 
 
 def perform_search(base_index, query, filters):
-    """Perform search with the configured index"""
+    """Perform search - using direct ChromaDB approach to bypass LlamaIndex issues"""
     try:
-        if not base_index:
-            st.error("❌ Knowledge base not loaded")
-            return []
-        
         if not query.strip():
             st.warning("⚠️ Please enter a search query")
             return []
         
-        # Create query engine
-        query_engine = base_index.as_query_engine(
-            similarity_top_k=20,
-            response_mode="no_text"  # We only want the source nodes
-        )
+        # Get database path from config
+        from cortex_engine.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        current_config = config_manager.get_config()
+        db_path = current_config.get("ai_database_path", "")
         
-        # Perform query
-        with st.spinner("🔍 Searching knowledge base..."):
-            response = query_engine.query(query)
-            
-            # Extract results
-            results = []
-            if hasattr(response, 'source_nodes') and response.source_nodes:
-                for i, node in enumerate(response.source_nodes):
-                    try:
-                        # Extract metadata
-                        metadata = node.metadata if hasattr(node, 'metadata') else {}
-                        
-                        result = {
-                            'rank': i + 1,
-                            'score': getattr(node, 'score', 0.0),
-                            'text': node.text if hasattr(node, 'text') else str(node),
-                            'file_path': metadata.get('file_path', 'Unknown'),
-                            'file_name': metadata.get('file_name', 'Unknown'),
-                            'document_type': metadata.get('document_type', 'Unknown'),
-                            'chunk_id': metadata.get('chunk_id', f'chunk_{i}'),
-                            'doc_id': getattr(node, 'node_id', f'node_{i}')
-                        }
-                        results.append(result)
-                        
-                    except Exception as e:
-                        logger.warning(f"Error processing search result {i}: {e}")
-                        continue
-            
-            logger.info(f"Search completed: {len(results)} results for query: {query[:50]}...")
-            return results
+        if not db_path:
+            st.error("❌ Database path not configured")
+            return []
+        
+        # Use direct ChromaDB search to bypass LlamaIndex where clause issues
+        logger.info(f"Using direct ChromaDB search for query: {query[:50]}...")
+        return direct_chromadb_search(db_path, query, filters)
             
     except Exception as e:
         st.error(f"❌ Search failed: {e}")
         logger.error(f"Search error: {e}", exc_info=True)
+        return []
+
+
+def direct_chromadb_search(db_path, query, filters, top_k=20):
+    """
+    Perform direct ChromaDB search bypassing LlamaIndex entirely
+    This resolves the ChromaDB where clause issues
+    """
+    import time
+    import concurrent.futures
+    
+    def search_with_timeout():
+        try:
+            logger.info(f"Starting ChromaDB search for query: '{query}'")
+            wsl_db_path = convert_windows_to_wsl_path(db_path)
+            chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+            
+            if not os.path.isdir(chroma_db_path):
+                st.error(f"Database not found: {chroma_db_path}")
+                return []
+            
+            # Direct ChromaDB client
+            logger.info("Connecting to ChromaDB client...")
+            db_settings = ChromaSettings(anonymized_telemetry=False)
+            client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+            collection = client.get_collection(COLLECTION_NAME)
+            logger.info(f"Connected to collection '{COLLECTION_NAME}'")
+            
+            # Try simple get first to test collection access
+            logger.info("Testing collection access...")
+            try:
+                peek = collection.peek(limit=1)
+                logger.info(f"Collection peek successful, has embeddings: {bool(peek.get('embeddings'))}")
+            except Exception as peek_e:
+                logger.warning(f"Collection peek failed: {peek_e}")
+            
+            # Direct query - try both vector search and text search approaches
+            logger.info("Executing ChromaDB query...")
+            
+            # First try vector search
+            try:
+                results = collection.query(
+                    query_texts=[query],
+                    n_results=top_k
+                )
+                logger.info("ChromaDB vector query completed successfully")
+            except Exception as vector_e:
+                logger.warning(f"Vector search failed: {vector_e}")
+                # Fallback to get all and filter (last resort)
+                logger.info("Attempting fallback text-based search...")
+                try:
+                    # Get a subset of documents and filter by text content
+                    all_results = collection.get(limit=min(1000, top_k * 10))  # Get larger sample
+                    
+                    # Simple text matching as fallback
+                    matching_docs = []
+                    query_lower = query.lower()
+                    
+                    documents = all_results.get('documents', [])
+                    metadatas = all_results.get('metadatas', [])
+                    
+                    for i, (doc, metadata) in enumerate(zip(documents, metadatas)):
+                        if query_lower in doc.lower():
+                            matching_docs.append({
+                                'documents': [doc],
+                                'metadatas': [metadata], 
+                                'distances': [0.5]  # Arbitrary similarity score
+                            })
+                    
+                    # Format as ChromaDB query result
+                    if matching_docs:
+                        results = {
+                            'documents': [[item['documents'][0] for item in matching_docs[:top_k]]],
+                            'metadatas': [[item['metadatas'][0] for item in matching_docs[:top_k]]],
+                            'distances': [[item['distances'][0] for item in matching_docs[:top_k]]]
+                        }
+                        logger.info(f"Fallback text search found {len(matching_docs)} matches")
+                    else:
+                        results = {'documents': [[]], 'metadatas': [[]], 'distances': [[]]}
+                        logger.info("No text matches found in fallback search")
+                        
+                except Exception as fallback_e:
+                    logger.error(f"Fallback search also failed: {fallback_e}")
+                    return []
+            
+            # Format results
+            formatted_results = []
+            if results and results.get('documents'):
+                documents = results['documents'][0] if results['documents'] else []
+                metadatas = results['metadatas'][0] if results['metadatas'] else []
+                distances = results['distances'][0] if results['distances'] else []
+                
+                logger.info(f"Processing {len(documents)} raw results...")
+                
+                for i, (doc, metadata, distance) in enumerate(zip(documents, metadatas, distances)):
+                    result = {
+                        'rank': i + 1,
+                        'score': max(0, 1.0 - distance),  # Convert distance to similarity score
+                        'text': doc,
+                        'file_path': metadata.get('file_path', 'Unknown'),
+                        'file_name': metadata.get('file_name', 'Unknown'),
+                        'document_type': metadata.get('document_type', 'Unknown'),
+                        'chunk_id': metadata.get('chunk_id', f'chunk_{i}'),
+                        'doc_id': metadata.get('doc_id', f'doc_{i}')
+                    }
+                    
+                    # Apply post-search filtering if needed
+                    if filters and isinstance(filters, dict):
+                        doc_type_filter = filters.get('doc_type_filter')
+                        if (doc_type_filter and doc_type_filter != "Any" and 
+                            result['document_type'] != doc_type_filter):
+                            continue  # Skip this result
+                    
+                    formatted_results.append(result)
+            else:
+                logger.warning("No documents returned from ChromaDB query")
+            
+            logger.info(f"Direct ChromaDB search returned {len(formatted_results)} formatted results")
+            return formatted_results
+            
+        except Exception as e:
+            logger.error(f"Direct ChromaDB search failed: {e}", exc_info=True)
+            return []
+    
+    try:
+        # Run search with timeout to prevent hanging
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(search_with_timeout)
+            try:
+                results = future.result(timeout=30)  # 30 second timeout
+                return results
+            except concurrent.futures.TimeoutError:
+                logger.error("Search timed out after 30 seconds")
+                st.error("Search timed out. The database may be large or there may be connectivity issues.")
+                return []
+                
+    except Exception as e:
+        logger.error(f"Search executor failed: {e}")
+        st.error(f"Search failed: {e}")
         return []
 
 
@@ -352,16 +419,16 @@ def main():
     # Render sidebar and get config
     config = render_sidebar()
     
-    # Load base index
+    # Validate database
     db_path = config['db_path']
     if not db_path:
         st.error("❌ Database path not configured. Please set it in the sidebar.")
         return
     
-    base_index, vector_collection = load_base_index(db_path, "Local")
+    db_info = validate_database(db_path)
     
-    if not base_index:
-        st.error("❌ Failed to load knowledge base. Please check your database path and try again.")
+    if not db_info:
+        st.error("❌ Failed to validate knowledge base. Please check your database path and try again.")
         return
     
     # Search interface
@@ -381,9 +448,20 @@ def main():
             # Update last query
             st.session_state.last_search_query = query
             
-            # Perform search
-            results = perform_search(base_index, query, config)
-            st.session_state.last_search_results = results
+            # Show progress indicator
+            with st.status("🔍 Searching knowledge base...", expanded=True) as status:
+                st.write(f"🎯 Query: '{query}'")
+                st.write("📊 Analyzing documents...")
+                
+                # Perform search (base_index not needed for direct ChromaDB search)
+                results = perform_search(None, query, config)
+                st.session_state.last_search_results = results
+                
+                # Update status when complete
+                if results and len(results) > 0:
+                    status.update(label=f"✅ Found {len(results)} results", state="complete")
+                else:
+                    status.update(label="⚠️ No results found", state="complete")
             
             # Display results
             render_search_results(results, config)
