@@ -38,7 +38,7 @@ from cortex_engine.config import COLLECTION_NAME, INGESTED_FILES_LOG, EMBED_MODE
 from cortex_engine.help_system import help_system
 
 # --- App Config ---
-PAGE_VERSION = "v1.0.0"
+PAGE_VERSION = "v1.0.3"
 logger = get_logger(__name__)
 
 # --- Constants ---
@@ -262,6 +262,10 @@ def render_main_content(base_index, vector_collection):
                     st.warning("⚠️ Filter validation failed, using direct vector search...")
                     
                     try:
+                        # Debug: Check vector collection state
+                        logger.debug(f"Vector collection type: {type(vector_collection)}")
+                        logger.debug(f"Search text: '{search_text}'")
+                        
                         # Direct ChromaDB query bypass for basic search functionality
                         search_results = vector_collection.query(
                             query_texts=[search_text or "document"],
@@ -269,14 +273,18 @@ def render_main_content(base_index, vector_collection):
                             include=['documents', 'metadatas', 'distances']
                         )
                         
+                        logger.debug(f"Direct search returned: {len(search_results.get('documents', [[]])[0])} results")
+                        
                         # Convert ChromaDB results to LlamaIndex-like format
                         response_nodes = []
-                        if search_results['documents'][0]:
+                        if search_results.get('documents') and search_results['documents'][0]:
                             # Import TextNode locally to avoid circular imports
                             try:
                                 from llama_index.core.schema import TextNode
                                 NodeClass = TextNode
-                            except ImportError:
+                                logger.debug("Successfully imported TextNode")
+                            except ImportError as ie:
+                                logger.warning(f"TextNode import failed: {ie}, using SimpleNode fallback")
                                 # Fallback to a simple object if import fails
                                 class SimpleNode:
                                     def __init__(self, text, metadata=None, score=None):
@@ -296,12 +304,18 @@ def render_main_content(base_index, vector_collection):
                                     score=1.0 - distance  # Convert distance to similarity score
                                 )
                                 response_nodes.append(node)
+                            
+                            logger.info(f"Direct search created {len(response_nodes)} result nodes")
+                        else:
+                            logger.warning("Direct search returned no documents")
+                            response_nodes = []
                         
-                        st.info("Using direct vector search (some advanced features may be limited)")
+                        st.info("✅ Using direct vector search (some advanced features may be limited)")
                         
                     except Exception as fallback_e:
-                        logger.error(f"Direct search fallback also failed: {fallback_e}")
-                        st.error(f"Both filtered and direct search failed. Please check your knowledge base configuration.")
+                        logger.error(f"Direct search fallback failed: {fallback_e}", exc_info=True)
+                        st.error(f"❌ Both filtered and direct search failed: {str(fallback_e)}")
+                        st.error("Please check your knowledge base configuration and ensure documents were properly ingested.")
                         return
                 else:
                     raise
