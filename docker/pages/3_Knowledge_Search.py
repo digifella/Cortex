@@ -272,13 +272,25 @@ def render_main_content(base_index, vector_collection):
                         # Convert ChromaDB results to LlamaIndex-like format
                         response_nodes = []
                         if search_results['documents'][0]:
-                            from llama_index.core.schema import TextNode
+                            # Import TextNode locally to avoid circular imports
+                            try:
+                                from llama_index.core.schema import TextNode
+                                NodeClass = TextNode
+                            except ImportError:
+                                # Fallback to a simple object if import fails
+                                class SimpleNode:
+                                    def __init__(self, text, metadata=None, score=None):
+                                        self.text = text
+                                        self.metadata = metadata or {}
+                                        self.score = score
+                                NodeClass = SimpleNode
+                                
                             for i, (doc, metadata, distance) in enumerate(zip(
                                 search_results['documents'][0],
                                 search_results['metadatas'][0],
                                 search_results['distances'][0]
                             )):
-                                node = TextNode(
+                                node = NodeClass(
                                     text=doc,
                                     metadata=metadata or {},
                                     score=1.0 - distance  # Convert distance to similarity score
