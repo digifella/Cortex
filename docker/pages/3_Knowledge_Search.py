@@ -237,13 +237,37 @@ def render_main_content(base_index, vector_collection):
         # else: where_clause remains {}
 
         # Only include where clause if it has actual conditions (not empty dict)
-        retriever_kwargs = {"vector_store_kwargs": {"where": where_clause}} if where_clause and len(where_clause) > 0 else {}
+        if where_clause and len(where_clause) > 0:
+            retriever_kwargs = {"vector_store_kwargs": {"where": where_clause}}
+        else:
+            # Explicitly avoid passing any where clause to prevent ChromaDB validation errors
+            retriever_kwargs = {}
+        
+        # Debug logging for troubleshooting
+        logger.debug(f"Search conditions: {len(all_conditions)} conditions, where_clause keys: {list(where_clause.keys()) if where_clause else 'None'}")
+        logger.debug(f"Retriever kwargs: {retriever_kwargs}")
         # --- END: v20.0.0 NATIVE CHROMA FILTER LOGIC ---
 
         with st.spinner("Searching..."):
-            retriever = base_index.as_retriever(similarity_top_k=50, **retriever_kwargs)
-            search_text = query if query else " "
-            response_nodes = retriever.retrieve(search_text)
+            try:
+                # Try with filters first if we have them
+                retriever = base_index.as_retriever(similarity_top_k=50, **retriever_kwargs)
+                search_text = query if query else " "
+                response_nodes = retriever.retrieve(search_text)
+            except ValueError as e:
+                if "Expected where to have exactly one operator" in str(e):
+                    # Fallback: try search without any filters if ChromaDB validation fails
+                    logger.warning(f"ChromaDB where clause validation failed, retrying without filters: {e}")
+                    st.warning("⚠️ Filter validation failed, searching without metadata filters...")
+                    # Clear all retriever_kwargs and try a clean search
+                    retriever = base_index.as_retriever(similarity_top_k=50)
+                    response_nodes = retriever.retrieve(search_text)
+                else:
+                    raise
+            except Exception as e:
+                logger.error(f"Search failed: {e}")
+                st.error(f"Search failed: {e}")
+                return
             unique_results = list(OrderedDict((node.metadata.get('doc_id'), node) for node in response_nodes).values())
             st.session_state.search_results = unique_results
             st.session_state.search_page = 0
