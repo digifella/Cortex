@@ -256,12 +256,41 @@ def render_main_content(base_index, vector_collection):
                 response_nodes = retriever.retrieve(search_text)
             except ValueError as e:
                 if "Expected where to have exactly one operator" in str(e):
-                    # Fallback: try search without any filters if ChromaDB validation fails
-                    logger.warning(f"ChromaDB where clause validation failed, retrying without filters: {e}")
-                    st.warning("⚠️ Filter validation failed, searching without metadata filters...")
-                    # Clear all retriever_kwargs and try a clean search
-                    retriever = base_index.as_retriever(similarity_top_k=50)
-                    response_nodes = retriever.retrieve(search_text)
+                    # The issue is likely in LlamaIndex ChromaVectorStore itself
+                    # Let's try to bypass the problematic retriever approach
+                    logger.warning(f"ChromaDB where clause validation failed: {e}")
+                    st.warning("⚠️ Filter validation failed, using direct vector search...")
+                    
+                    try:
+                        # Direct ChromaDB query bypass for basic search functionality
+                        search_results = vector_collection.query(
+                            query_texts=[search_text or "document"],
+                            n_results=50,
+                            include=['documents', 'metadatas', 'distances']
+                        )
+                        
+                        # Convert ChromaDB results to LlamaIndex-like format
+                        response_nodes = []
+                        if search_results['documents'][0]:
+                            from llama_index.core.schema import TextNode
+                            for i, (doc, metadata, distance) in enumerate(zip(
+                                search_results['documents'][0],
+                                search_results['metadatas'][0],
+                                search_results['distances'][0]
+                            )):
+                                node = TextNode(
+                                    text=doc,
+                                    metadata=metadata or {},
+                                    score=1.0 - distance  # Convert distance to similarity score
+                                )
+                                response_nodes.append(node)
+                        
+                        st.info("Using direct vector search (some advanced features may be limited)")
+                        
+                    except Exception as fallback_e:
+                        logger.error(f"Direct search fallback also failed: {fallback_e}")
+                        st.error(f"Both filtered and direct search failed. Please check your knowledge base configuration.")
+                        return
                 else:
                     raise
             except Exception as e:
