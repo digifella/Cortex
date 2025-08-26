@@ -236,7 +236,8 @@ def render_main_content(base_index, vector_collection):
             where_clause = all_conditions[0]
         # else: where_clause remains {}
 
-        retriever_kwargs = {"vector_store_kwargs": {"where": where_clause}} if where_clause else {}
+        # Only include where clause if it has actual conditions (not empty dict)
+        retriever_kwargs = {"vector_store_kwargs": {"where": where_clause}} if where_clause and len(where_clause) > 0 else {}
         # --- END: v20.0.0 NATIVE CHROMA FILTER LOGIC ---
 
         with st.spinner("Searching..."):
