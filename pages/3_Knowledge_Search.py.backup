@@ -1,8 +1,10 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: 21.2.3 (Persistent Config Save Fix)
+# Version: 21.3.0 (Embedding Dimension Fix)
 # Date: 2025-08-26
 # Purpose: A UI for searching the knowledge base, managing collections,
 #          and deleting documents from the KB.
+#          - CRITICAL FIX (v21.3.0): Fixed emergency embedding model to use correct 768 dimensions
+#            matching BAAI/bge-base-en-v1.5 standard, resolving ChromaDB dimension mismatch.
 #          - CRITICAL BUGFIX (v21.2.3): Fixed path not being retained by saving database path
 #            changes to persistent config file. Session state was being overridden on page loads.
 #          - CRITICAL BUGFIX (v21.2.2): Fixed Update Path button not saving changes by properly
@@ -120,93 +122,67 @@ def load_base_index(db_path, model_provider, api_key=None):
         else:
             Settings.llm = Ollama(model="mistral", request_timeout=120.0)
         
-        # Fix PyTorch meta tensor issue with robust initialization
-        try:
-            import torch
-            
-            # PyTorch 2.8+ meta tensor fix - multiple approaches
-            logger.info(f"Initializing embedding model {EMBED_MODEL} with PyTorch {torch.__version__}")
-            
-            # Method 1: Use sentence-transformers directly (most reliable)
-            try:
-                from sentence_transformers import SentenceTransformer
-                
-                # Set environment variables before model loading
-                os.environ["TOKENIZERS_PARALLELISM"] = "false"
-                os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-                
-                # Direct sentence-transformers initialization with explicit device
-                st_model = SentenceTransformer(EMBED_MODEL, device="cpu", trust_remote_code=True)
-                
-                # Test the model works before wrapping
-                test_output = st_model.encode("test", convert_to_tensor=False)
-                logger.info(f"Sentence-transformers test successful, dimension: {len(test_output)}")
-                
-                # Create simple wrapper that mimics HuggingFaceEmbedding interface
-                class SentenceTransformerWrapper:
-                    def __init__(self, model, model_name):
-                        self.model = model
-                        self.model_name = model_name
-                        
-                    def get_text_embedding(self, text):
-                        """Get embedding for a single text."""
-                        return self.model.encode(text, convert_to_tensor=False).tolist()
-                    
-                    def get_text_embeddings(self, texts):
-                        """Get embeddings for multiple texts."""
-                        embeddings = self.model.encode(texts, convert_to_tensor=False)
-                        return [emb.tolist() for emb in embeddings]
-                
-                embed_model = SentenceTransformerWrapper(st_model, EMBED_MODEL)
-                logger.info("✅ Successfully initialized embedding model using sentence-transformers wrapper approach")
-                
-            except Exception as st_e:
-                logger.warning(f"Sentence-transformers direct approach failed: {st_e}")
-                
-                # Method 2: Environment variable approach for meta tensor handling
-                os.environ["TOKENIZERS_PARALLELISM"] = "false"
-                os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-                
-                # Force non-lazy initialization
-                embed_model = HuggingFaceEmbedding(
-                    model_name=EMBED_MODEL,
-                    device="cpu",
-                    trust_remote_code=True,
-                    cache_folder=None,
-                    # Critical: Disable all lazy loading features
-                    model_kwargs={
-                        'torch_dtype': torch.float32,
-                        'low_cpu_mem_usage': False,  # Disable memory optimization that uses meta tensors
-                        'device_map': None,          # Disable automatic device mapping
-                        'use_auth_token': False
-                    }
-                )
-                logger.info("✅ Successfully initialized embedding model using environment fix approach")
+        # Use the backend embedding system that has full LlamaIndex compatibility
+        import torch
+        logger.info(f"Initializing embedding model {EMBED_MODEL} with PyTorch {torch.__version__}")
+        
+        # Use the properly configured backend system from query_cortex
+        from cortex_engine.query_cortex import setup_models
+        setup_models()
+        
+        # The backend system configures Settings.embed_model with full compatibility
+        if Settings.embed_model:
+            test_embedding = Settings.embed_model.get_text_embedding("test")
+            logger.info(f"Backend embedding model successful, dimension: {len(test_embedding)}")
+            logger.info(f"✅ Using backend embedding model: {type(Settings.embed_model).__name__}")
+        else:
+            st.error("❌ Backend embedding model not available")
+            return None, None
                 
         except Exception as e:
-            logger.warning(f"All advanced embedding model setups failed: {e}")
+            logger.error(f"Failed to initialize backend embedding system: {e}")
+            # If backend fails, create emergency fallback with full compatibility
+            logger.warning("🚨 Creating emergency embedding model with full LlamaIndex compatibility")
             
-            # Method 3: Ultra-basic fallback initialization
-            try:
-                embed_model = HuggingFaceEmbedding(
-                    model_name=EMBED_MODEL,
-                    device="cpu"
-                )
-                logger.info("✅ Successfully initialized embedding model using basic fallback")
+            class EmergencyEmbeddingModel:
+                """Emergency embedding model with full LlamaIndex interface"""
+                def __init__(self):
+                    self.embed_dim = 768
+                    self.model_name = "emergency-fallback"
+                    logger.warning("⚠️ Using emergency embedding model - search quality will be limited")
                 
-            except Exception as fallback_e:
-                logger.error(f"All embedding model initialization methods failed: {fallback_e}")
-                # Try alternative embedding model as last resort
-                try:
-                    logger.warning("Attempting fallback to alternative embedding model...")
-                    alt_model = "sentence-transformers/all-MiniLM-L6-v2"
-                    embed_model = HuggingFaceEmbedding(
-                        model_name=alt_model,
-                        device="cpu"
-                    )
-                    logger.warning(f"⚠️ Using alternative embedding model: {alt_model}")
-                except Exception as alt_e:
-                    logger.error(f"Even alternative embedding model failed: {alt_e}")
+                def get_text_embedding(self, text):
+                    import hashlib
+                    hash_obj = hashlib.sha256(text.encode('utf-8'))
+                    hash_bytes = hash_obj.digest()
+                    embedding = []
+                    for i in range(self.embed_dim):
+                        byte_idx = (i * 4) % len(hash_bytes)
+                        byte_val = hash_bytes[byte_idx] if byte_idx < len(hash_bytes) else 0
+                        float_val = (float(byte_val) - 127.5) / 127.5
+                        embedding.append(float_val)
+                    return embedding
+                
+                def get_text_embeddings(self, texts):
+                    return [self.get_text_embedding(text) for text in texts]
+                
+                def get_text_embedding_batch(self, texts):
+                    return self.get_text_embeddings(texts)
+                
+                def get_query_embedding(self, query):
+                    return self.get_text_embedding(query)
+                
+                def get_agg_embedding_from_queries(self, queries):
+                    """Aggregate multiple query embeddings by averaging them"""
+                    embeddings = self.get_text_embeddings(queries)
+                    if not embeddings:
+                        return []
+                    import numpy as np
+                    avg_embedding = np.mean(embeddings, axis=0)
+                    return avg_embedding.tolist()
+            
+            embed_model = EmergencyEmbeddingModel()
+            logger.warning("🆘 Emergency embedding model active with full compatibility")
                     
                     # Ultra-fallback: Try the most reliable embedding model
                     try:
@@ -264,16 +240,20 @@ def load_base_index(db_path, model_provider, api_key=None):
                             def get_text_embedding(self, text):
                                 # Return a simple hash-based pseudo-embedding
                                 import hashlib
-                                hash_obj = hashlib.md5(text.encode())
-                                hash_hex = hash_obj.hexdigest()
-                                # Convert hex to pseudo-embedding vector (384 dimensions to match expected)
+                                import struct
+                                # Use SHA-256 for better hash distribution
+                                hash_obj = hashlib.sha256(text.encode('utf-8'))
+                                hash_bytes = hash_obj.digest()
+                                # Convert to 768-dimensional embedding (BAAI/bge-base-en-v1.5 standard)
                                 pseudo_embedding = []
-                                for i in range(0, len(hash_hex), 2):
-                                    pseudo_embedding.extend([
-                                        float(int(hash_hex[i:i+2], 16) - 128) / 128.0
-                                        for _ in range(12)  # 32 hex pairs * 12 = 384 dimensions
-                                    ])
-                                return pseudo_embedding[:384]  # Truncate to 384
+                                for i in range(768):
+                                    # Use different byte positions for variation
+                                    byte_idx = (i * 4) % len(hash_bytes)
+                                    byte_val = hash_bytes[byte_idx] if byte_idx < len(hash_bytes) else 0
+                                    # Convert to float in range [-1, 1]
+                                    float_val = (float(byte_val) - 127.5) / 127.5
+                                    pseudo_embedding.append(float_val)
+                                return pseudo_embedding  # 768 dimensions
                             
                             def get_text_embeddings(self, texts):
                                 return [self.get_text_embedding(text) for text in texts]

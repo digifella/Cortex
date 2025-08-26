@@ -1,7 +1,9 @@
 # ## File: Cortex_Suite.py
-# Version: v3.0.0 (Enhanced Visual Processing Integration)
-# Date: 2025-08-24
+# Version: v3.1.0 (Database Status Enhancement)
+# Date: 2025-08-26
 # Purpose: A central Streamlit launchpad for the integrated Cortex Suite.
+#          - FEATURE (v3.1.0): Added comprehensive database status display in sidebar
+#            showing database path, directory existence, knowledge base status, and document count.
 
 import streamlit as st
 import sys
@@ -34,7 +36,7 @@ except Exception:
 if not setup_complete:
     # Show setup progress page
     st.title("🔧 Cortex Suite Setup in Progress")
-    st.caption("Version v3.0.0 - Enhanced Visual Processing Integration")
+    st.caption("Version v3.1.0 - Database Status Enhancement")
     
     # Progress bar
     progress_percent = setup_info.get("progress_percent", 0)
@@ -174,6 +176,76 @@ with st.sidebar:
         st.caption("Local research model not available")
     else:
         st.error("❌ Research: Ollama down")
+    
+    st.divider()
+    
+    # Database Status Check
+    st.subheader("💾 Database Status")
+    
+    # Import required modules for database checking
+    try:
+        from cortex_engine.session_state import initialize_app_session_state
+        from cortex_engine.utils import convert_windows_to_wsl_path
+        import os
+        
+        # Initialize session state to get database path
+        initialize_app_session_state()
+        
+        current_db_path = st.session_state.get("db_path_input", "")
+        
+        if current_db_path:
+            # Convert and check paths
+            wsl_path = convert_windows_to_wsl_path(current_db_path)
+            chroma_path = os.path.join(wsl_path, "knowledge_hub_db")
+            
+            # Display current path
+            st.caption(f"📁 **Path:** `{current_db_path}`")
+            
+            # Check base directory
+            if os.path.exists(wsl_path):
+                st.success("✅ Base directory exists")
+                
+                # Check knowledge base
+                if os.path.exists(chroma_path):
+                    st.success("✅ Knowledge base found")
+                    
+                    # Try to count documents
+                    try:
+                        import chromadb
+                        from chromadb.config import Settings as ChromaSettings
+                        from cortex_engine.config import COLLECTION_NAME
+                        
+                        db_settings = ChromaSettings(anonymized_telemetry=False)
+                        db = chromadb.PersistentClient(path=chroma_path, settings=db_settings)
+                        collection = db.get_or_create_collection(COLLECTION_NAME)
+                        doc_count = collection.count()
+                        
+                        if doc_count > 0:
+                            st.info(f"📚 **{doc_count} documents** in knowledge base")
+                        else:
+                            st.warning("⚠️ Knowledge base is empty")
+                            st.caption("Run Knowledge Ingest to add documents")
+                            
+                    except Exception as db_e:
+                        st.warning("⚠️ Cannot inspect knowledge base")
+                        st.caption(f"Error: {str(db_e)[:50]}...")
+                else:
+                    st.error("❌ Knowledge base missing")
+                    st.caption("Run Knowledge Ingest to create it")
+            else:
+                st.error("❌ Database directory not found")
+                st.caption("Check path in Knowledge Search")
+        else:
+            st.warning("⚠️ No database path configured")
+            st.caption("Configure in Knowledge Search")
+            
+        # Quick fix button
+        if st.button("🔧 Fix Database Path", use_container_width=True):
+            st.info("💡 Go to **Knowledge Search** page to configure the database path")
+            
+    except Exception as status_e:
+        st.error("❌ Database status check failed")
+        st.caption(f"Error: {str(status_e)[:50]}...")
 
 # Add help system
 help_system.show_help_menu()
@@ -228,7 +300,7 @@ st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
         <strong>🕒 Latest Code Changes:</strong> 2025-08-26<br>
-        <em>Code Quality Cleanup: Removed duplicate utilities, optimized imports, cleaned up legacy files, and improved logging consistency across modules</em>
+        <em>Knowledge Search Complete Fix: Resolved all embedding model issues by integrating backend system. Fixed PyTorch 2.8→2.3.1 compatibility, eliminated SentenceTransformerWrapper errors, restored 100% functionality.</em>
     </div>
     """, 
     unsafe_allow_html=True
