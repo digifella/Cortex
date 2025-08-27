@@ -1,7 +1,9 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: 22.4.0 (Multi-Strategy Search Enhancement)
+# Version: 22.4.1 (Docker Environment Compatibility)
 # Date: 2025-08-26
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
+#          - DOCKER FIX (v22.4.1): Added Docker environment compatibility for collection manager
+#            errors. Gracefully handles missing database schema and provides fallback options.
 #          - SEARCH ENHANCEMENT (v22.4.0): Implemented multi-strategy search approach to handle
 #            complex queries like 'strategy and transformation'. Tries vector search, multi-term
 #            search, and text fallback for comprehensive results.
@@ -38,13 +40,15 @@ from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 logger = get_logger(__name__)
 
 # Page configuration
-PAGE_VERSION = "22.4.0"
+PAGE_VERSION = "22.4.1"
 
 st.set_page_config(page_title="Knowledge Search", layout="wide")
 
 
 def get_document_type_options():
+    """Get document type options - Docker-safe version"""
     try:
+        # In Docker environment, use fallback to static options since collections may not be initialized
         collection_mgr = WorkingCollectionManager()
         collections = collection_mgr.collections
         doc_types = set()
@@ -55,8 +59,11 @@ def get_document_type_options():
                     doc_types.add(doc_type)
         return sorted(list(doc_types))
     except Exception as e:
-        logger.error(f"Error getting document types: {e}")
-        return []
+        logger.warning(f"Collections not available (Docker environment?): {e}")
+        # Return static fallback options for Docker environment
+        return ["Project Plan", "Technical Documentation", "Proposal/Quote", "Case Study / Trophy",
+                "Final Report", "Draft Report", "Presentation", "Contract/SOW",
+                "Meeting Minutes", "Financial Report", "Research Paper", "Email Correspondence", "Other"]
 
 
 def validate_database(db_path):
@@ -123,14 +130,21 @@ def render_sidebar():
     """Render the sidebar with database configuration and filters"""
     st.sidebar.header("⚙️ Configuration")
     
-    # Database path configuration
+    # Database path configuration - Docker-safe
     from cortex_engine.session_state import initialize_app_session_state
     initialize_app_session_state()
     
-    from cortex_engine.config_manager import ConfigManager
-    config_manager = ConfigManager()
-    current_config = config_manager.get_config()
-    current_path = current_config.get("ai_database_path", "")
+    # Handle Docker environment gracefully
+    current_path = ""
+    try:
+        from cortex_engine.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        current_config = config_manager.get_config()
+        current_path = current_config.get("ai_database_path", "")
+    except Exception as e:
+        logger.warning(f"Config manager not available (Docker environment?): {e}")
+        # In Docker, default to standard path
+        current_path = "/app/data/ai_databases"
     
     st.sidebar.subheader("📁 Database Storage Path")
     
@@ -154,12 +168,13 @@ def render_sidebar():
                     # Update session state
                     st.session_state.db_path_input = new_path.strip()
                     
-                    # Save to persistent config file
+                    # Save to persistent config file - Docker-safe
                     try:
                         config_manager.update_config({"ai_database_path": new_path.strip()})
                         st.sidebar.success("✅ Database path updated and saved!")
                     except Exception as config_e:
-                        st.sidebar.warning(f"⚠️ Could not save to config file: {config_e}")
+                        logger.warning(f"Could not save config (Docker environment?): {config_e}")
+                        st.sidebar.info("🐳 Running in Docker mode - path updated for this session")
                         
                     # Clear cache to force reload
                     st.cache_resource.clear()
@@ -171,15 +186,21 @@ def render_sidebar():
     
     with col2:
         if st.button("🔄 Reset", help="Reset to default path"):
-            # Use cross-platform default path detection
-            from cortex_engine.utils.default_paths import get_default_ai_database_path
-            default_path = get_default_ai_database_path()
+            # Use cross-platform default path detection - Docker-safe
+            try:
+                from cortex_engine.utils.default_paths import get_default_ai_database_path
+                default_path = get_default_ai_database_path()
+            except Exception:
+                # Docker fallback
+                default_path = "/app/data/ai_databases"
+            
             st.session_state.db_path_input = default_path
             try:
                 config_manager.update_config({"ai_database_path": default_path})
                 st.sidebar.success("✅ Path reset to default!")
             except Exception as e:
-                st.sidebar.warning(f"⚠️ Could not save reset: {e}")
+                logger.warning(f"Could not save config (Docker environment?): {e}")
+                st.sidebar.info("🐳 Running in Docker mode - using default Docker path")
             st.cache_resource.clear()
             st.rerun()
     
@@ -272,19 +293,25 @@ def render_sidebar():
     if st.session_state.search_scope == "Active Collection":
         st.sidebar.subheader("📚 Working Collections")
         
-        # Get available collections
-        collection_mgr = WorkingCollectionManager()
-        collection_names = collection_mgr.get_collection_names()
-        
-        if collection_names:
-            st.sidebar.selectbox(
-                "Active Collection:",
-                options=collection_names,
-                key="selected_collection",
-                help="Select which collection to search within."
-            )
-        else:
-            st.sidebar.info("No collections found. Create one in Collection Management.")
+        # Get available collections - Docker-safe
+        try:
+            collection_mgr = WorkingCollectionManager()
+            collection_names = collection_mgr.get_collection_names()
+            
+            if collection_names:
+                st.sidebar.selectbox(
+                    "Active Collection:",
+                    options=collection_names,
+                    key="selected_collection",
+                    help="Select which collection to search within."
+                )
+            else:
+                st.sidebar.info("No collections found. Create one in Collection Management.")
+                st.session_state.selected_collection = "default"
+        except Exception as e:
+            logger.warning(f"Collections not available: {e}")
+            st.sidebar.info("Collections not available in this environment. Searching entire knowledge base.")
+            st.session_state.search_scope = "Entire Knowledge Base"
             st.session_state.selected_collection = "default"
     
     return {
@@ -304,11 +331,17 @@ def perform_search(base_index, query, filters):
             st.warning("⚠️ Please enter a search query")
             return []
         
-        # Get database path from config
-        from cortex_engine.config_manager import ConfigManager
-        config_manager = ConfigManager()
-        current_config = config_manager.get_config()
-        db_path = current_config.get("ai_database_path", "")
+        # Get database path from config - Docker-safe
+        db_path = ""
+        try:
+            from cortex_engine.config_manager import ConfigManager
+            config_manager = ConfigManager()
+            current_config = config_manager.get_config()
+            db_path = current_config.get("ai_database_path", "")
+        except Exception as e:
+            logger.warning(f"Config not available (Docker environment?): {e}")
+            # Try session state as fallback
+            db_path = st.session_state.get('db_path_input', '/app/data/ai_databases')
         
         if not db_path:
             st.error("❌ Database path not configured")
@@ -515,8 +548,10 @@ def direct_chromadb_search(db_path, query, filters, top_k=20):
                     collection_doc_ids = set(collection_obj.get("doc_ids", []))
                     logger.info(f"Collection '{selected_collection}' has {len(collection_doc_ids)} documents")
                 except Exception as e:
-                    logger.warning(f"Could not load collection scope: {e}")
+                    logger.warning(f"Could not load collection scope (Docker environment?): {e}")
+                    # In Docker/fresh environment, collections may not exist - skip collection filtering
                     collection_doc_ids = None
+                    filters['search_scope'] = "Entire Knowledge Base"  # Force full search
             
             # Format results
             formatted_results = []
@@ -542,7 +577,7 @@ def direct_chromadb_search(db_path, query, filters, top_k=20):
                     
                     # Apply post-search filtering - SAFE approach without ChromaDB where clauses
                     if filters and isinstance(filters, dict):
-                        # Collection scope filter
+                        # Collection scope filter - skip if collections not available
                         if (collection_doc_ids is not None and 
                             result['doc_id'] not in collection_doc_ids):
                             continue  # Skip - not in selected collection
@@ -641,56 +676,76 @@ def render_search_results(results, filters):
                 st.session_state.last_search_query = ""
                 st.rerun()
         
-        # Bulk action modals
+        # Bulk action modals - Docker-safe
         if st.session_state.get('show_bulk_add', False):
             with st.expander("➕ Add All Results to Collection", expanded=True):
-                collection_mgr = WorkingCollectionManager()
-                collection_names = collection_mgr.get_collection_names()
-                
-                target_collection = st.selectbox("Select target collection:", collection_names)
-                
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    if st.button("Add to Collection", type="primary"):
-                        doc_ids = [result['doc_id'] for result in results]
-                        try:
-                            collection_mgr.add_docs_by_id_to_collection(target_collection, doc_ids)
-                            st.success(f"✅ Added {len(doc_ids)} documents to '{target_collection}'!")
+                try:
+                    collection_mgr = WorkingCollectionManager()
+                    collection_names = collection_mgr.get_collection_names()
+                    
+                    if collection_names:
+                        target_collection = st.selectbox("Select target collection:", collection_names)
+                        
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if st.button("Add to Collection", type="primary"):
+                                doc_ids = [result['doc_id'] for result in results]
+                                try:
+                                    collection_mgr.add_docs_by_id_to_collection(target_collection, doc_ids)
+                                    st.success(f"✅ Added {len(doc_ids)} documents to '{target_collection}'!")
+                                    st.session_state.show_bulk_add = False
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ Failed to add documents: {e}")
+                        
+                        with col_b:
+                            if st.button("Cancel"):
+                                st.session_state.show_bulk_add = False
+                                st.rerun()
+                    else:
+                        st.info("No collections available. Please set up collections first.")
+                        if st.button("Close"):
                             st.session_state.show_bulk_add = False
                             st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Failed to add documents: {e}")
-                
-                with col_b:
-                    if st.button("Cancel"):
+                except Exception as e:
+                    st.error(f"Collections not available in this environment: {e}")
+                    st.info("Collection features require a fully initialized system.")
+                    if st.button("Close", key="close_bulk_error"):
                         st.session_state.show_bulk_add = False
                         st.rerun()
         
         if st.session_state.get('show_save_collection', False):
             with st.expander("💾 Save as New Collection", expanded=True):
-                new_collection_name = st.text_input("Collection name:", placeholder="e.g., AI Research Papers")
-                
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    if st.button("Create Collection", type="primary"):
-                        if new_collection_name.strip():
-                            try:
-                                collection_mgr = WorkingCollectionManager()
-                                if collection_mgr.create_collection(new_collection_name.strip()):
-                                    doc_ids = [result['doc_id'] for result in results]
-                                    collection_mgr.add_docs_by_id_to_collection(new_collection_name.strip(), doc_ids)
-                                    st.success(f"✅ Created '{new_collection_name}' with {len(doc_ids)} documents!")
-                                    st.session_state.show_save_collection = False
-                                    st.rerun()
-                                else:
-                                    st.error(f"Collection '{new_collection_name}' already exists!")
-                            except Exception as e:
-                                st.error(f"❌ Failed to create collection: {e}")
-                        else:
-                            st.warning("Please enter a collection name")
-                
-                with col_b:
-                    if st.button("Cancel", key="cancel_save"):
+                try:
+                    new_collection_name = st.text_input("Collection name:", placeholder="e.g., AI Research Papers")
+                    
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        if st.button("Create Collection", type="primary"):
+                            if new_collection_name.strip():
+                                try:
+                                    collection_mgr = WorkingCollectionManager()
+                                    if collection_mgr.create_collection(new_collection_name.strip()):
+                                        doc_ids = [result['doc_id'] for result in results]
+                                        collection_mgr.add_docs_by_id_to_collection(new_collection_name.strip(), doc_ids)
+                                        st.success(f"✅ Created '{new_collection_name}' with {len(doc_ids)} documents!")
+                                        st.session_state.show_save_collection = False
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Collection '{new_collection_name}' already exists!")
+                                except Exception as e:
+                                    st.error(f"❌ Failed to create collection: {e}")
+                            else:
+                                st.warning("Please enter a collection name")
+                    
+                    with col_b:
+                        if st.button("Cancel", key="cancel_save"):
+                            st.session_state.show_save_collection = False
+                            st.rerun()
+                except Exception as e:
+                    st.error(f"Collections not available in this environment: {e}")
+                    st.info("Collection features require a fully initialized system.")
+                    if st.button("Close", key="close_save_error"):
                         st.session_state.show_save_collection = False
                         st.rerun()
         
@@ -709,26 +764,38 @@ def render_search_results(results, filters):
                     st.session_state[f'show_add_{i}'] = True
                     st.rerun()
             
-            # Individual add actions
+            # Individual add actions - Docker-safe
             if st.session_state.get(f'show_add_{i}', False):
-                collection_mgr = WorkingCollectionManager()
-                collection_names = collection_mgr.get_collection_names()
-                
-                target_collection = st.selectbox(f"Add to collection:", collection_names, key=f"target_add_{i}")
-                
-                col_x, col_y = st.columns(2)
-                with col_x:
-                    if st.button("Add", key=f"confirm_add_{i}", type="primary"):
-                        try:
-                            collection_mgr.add_docs_by_id_to_collection(target_collection, [result['doc_id']])
-                            st.success(f"✅ Added to '{target_collection}'!")
+                try:
+                    collection_mgr = WorkingCollectionManager()
+                    collection_names = collection_mgr.get_collection_names()
+                    
+                    if collection_names:
+                        target_collection = st.selectbox(f"Add to collection:", collection_names, key=f"target_add_{i}")
+                        
+                        col_x, col_y = st.columns(2)
+                        with col_x:
+                            if st.button("Add", key=f"confirm_add_{i}", type="primary"):
+                                try:
+                                    collection_mgr.add_docs_by_id_to_collection(target_collection, [result['doc_id']])
+                                    st.success(f"✅ Added to '{target_collection}'!")
+                                    st.session_state[f'show_add_{i}'] = False
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ Failed to add: {e}")
+                        
+                        with col_y:
+                            if st.button("Cancel", key=f"cancel_add_{i}"):
+                                st.session_state[f'show_add_{i}'] = False
+                                st.rerun()
+                    else:
+                        st.info("No collections available")
+                        if st.button("Close", key=f"close_add_{i}"):
                             st.session_state[f'show_add_{i}'] = False
                             st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Failed to add: {e}")
-                
-                with col_y:
-                    if st.button("Cancel", key=f"cancel_add_{i}"):
+                except Exception as e:
+                    st.warning(f"Collections not available: {e}")
+                    if st.button("Close", key=f"close_add_error_{i}"):
                         st.session_state[f'show_add_{i}'] = False
                         st.rerun()
             
@@ -752,6 +819,11 @@ def main():
     st.title("🔍 3. Knowledge Search")
     st.caption(f"Version: {PAGE_VERSION}")
     
+    # Docker environment detection
+    is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_ENV') == 'true'
+    if is_docker:
+        st.info("🐳 **Running in Docker mode** - Some collection features may be limited until first setup is complete.")
+    
     # Initialize session state
     initialize_search_state()
     
@@ -767,11 +839,24 @@ def main():
     db_info = validate_database(db_path)
     
     if not db_info:
-        st.error("❌ Failed to validate knowledge base. Please check your database path and try again.")
+        is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_ENV') == 'true'
+        if is_docker:
+            st.error("❌ **Docker Setup Required**")
+            st.info("📝 **To get started:**\n1. Use the sidebar to set your database path (try `/app/data/ai_databases`)\n2. Go to **Knowledge Ingest** to add documents\n3. Return here to search")
+        else:
+            st.error("❌ Failed to validate knowledge base. Please check your database path and try again.")
         return
     
     # Search interface
     st.subheader("🔍 Search Knowledge Base")
+    
+    # Docker-specific guidance
+    is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_ENV') == 'true'
+    if is_docker and not db_info:
+        st.warning("🐳 **Docker First-Time Setup Required**")
+        st.info("📝 **Next Steps:**\n1. Go to **Knowledge Ingest** page to add documents\n2. Set up your database path in the sidebar\n3. Return here to search your documents")
+        st.info("💡 **Default Docker path:** `/app/data/ai_databases`")
+        return
     
     # Add helpful examples
     with st.expander("💡 Search Examples & Tips", expanded=False):
