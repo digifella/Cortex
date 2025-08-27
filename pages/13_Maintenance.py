@@ -1,9 +1,10 @@
 # ## File: pages/13_Maintenance.py
-# Version: v1.0.0
+# Version: v1.0.1 (Import Fix)
 # Date: 2025-08-27
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
 #          from various pages into a single, organized maintenance interface.
+#          - BUGFIX (v1.0.1): Fixed import error by using ConfigManager instead of load_config
 
 import streamlit as st
 import os
@@ -23,11 +24,12 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v1.0.0"
+PAGE_VERSION = "v1.0.1"
 
 # Import Cortex modules
 try:
-    from cortex_engine.config import load_config, INGESTED_FILES_LOG
+    from cortex_engine.config import INGESTED_FILES_LOG
+    from cortex_engine.config_manager import ConfigManager
     from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
     from cortex_engine.utils.command_executor import display_command_executor_widget, SafeCommandExecutor
     from cortex_engine.ingestion_recovery import IngestionRecoveryManager
@@ -53,9 +55,17 @@ def load_maintenance_config():
     """Load configuration for maintenance operations"""
     if st.session_state.maintenance_config is None:
         try:
-            config = load_config()
-            st.session_state.maintenance_config = config
-            return config
+            config_manager = ConfigManager()
+            config = config_manager.get_config()
+            
+            # Map ConfigManager keys to expected keys
+            maintenance_config = {
+                'db_path': config.get('ai_database_path', '/tmp/cortex_db'),
+                'knowledge_source_path': config.get('knowledge_source_path', ''),
+            }
+            
+            st.session_state.maintenance_config = maintenance_config
+            return maintenance_config
         except Exception as e:
             st.error(f"Failed to load configuration: {e}")
             return None
