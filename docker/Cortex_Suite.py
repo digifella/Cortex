@@ -102,6 +102,29 @@ else:
     # Normal main page
     st.title("🚀 Welcome to the Project Cortex Suite")
     st.caption("Version v3.0.0 (Enhanced Visual Processing Integration)")
+    
+    # What's New section
+    with st.expander("✨ What's New in Recent Updates", expanded=False):
+        st.markdown("""
+        ### 🔧 v3.1.2 - Maintenance Page Consolidation (August 27, 2025)
+        - **NEW**: Consolidated Maintenance page (page 13) combining all administrative functions
+        - **IMPROVED**: Database maintenance, system terminal, setup management, and backups now in one organized location
+        - **ENHANCED**: Better UI organization with tabbed interface for admin functions
+        - **PREPARED**: Foundation laid for future password protection of sensitive operations
+        
+        ### 🔍 v22.4.3 - Knowledge Search Stability (August 26, 2025)  
+        - **FIXED**: Resolved Docker environment compatibility issues with database operations
+        - **ENHANCED**: Multi-strategy search approach (vector → multi-term → text fallback) for better results
+        - **IMPROVED**: Progress indicators with real-time status updates during search operations
+        - **RESOLVED**: UnboundLocalError and schema mismatch issues in Docker deployments
+        
+        ### 🎯 Previous Major Features
+        - **Enhanced Visual Processing**: Advanced LLaVA integration for image analysis and visual content understanding
+        - **GraphRAG Integration**: Automatic entity extraction and relationship mapping from ingested documents  
+        - **Hybrid Model Architecture**: Intelligent backend selection between Docker Model Runner and Ollama
+        - **Cross-Platform Support**: Seamless operation across Windows, Mac, Linux, and WSL2 environments
+        - **Docling Integration**: State-of-the-art document processing with layout preservation and OCR support
+        """)
 
 st.markdown("""
 This is the central hub for the Cortex Suite, an integrated workbench for building a knowledge base and using it for AI-assisted proposal development.
