@@ -1,7 +1,9 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: 22.4.1 (Docker Environment Compatibility)
+# Version: 22.4.2 (Docker-Development Database Conflict Resolution)
 # Date: 2025-08-26
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
+#          - DOCKER FIX (v22.4.2): Resolved Docker-development database conflicts. Detects when
+#            Docker is accessing development databases with schema mismatches and provides solutions.
 #          - DOCKER FIX (v22.4.1): Added Docker environment compatibility for collection manager
 #            errors. Gracefully handles missing database schema and provides fallback options.
 #          - SEARCH ENHANCEMENT (v22.4.0): Implemented multi-strategy search approach to handle
@@ -40,7 +42,7 @@ from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 logger = get_logger(__name__)
 
 # Page configuration
-PAGE_VERSION = "22.4.1"
+PAGE_VERSION = "22.4.2"
 
 st.set_page_config(page_title="Knowledge Search", layout="wide")
 
@@ -66,18 +68,20 @@ def get_document_type_options():
                 "Meeting Minutes", "Financial Report", "Research Paper", "Email Correspondence", "Other"]
 
 
-def validate_database(db_path):
+def validate_database(db_path, silent=False):
     """Validate database exists and return ChromaDB collection info"""
     import os
     if not db_path or not db_path.strip():
-        st.warning("Database path is not configured.")
+        if not silent:
+            st.warning("Database path is not configured.")
         return None
         
     wsl_db_path = convert_windows_to_wsl_path(db_path)
     chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
     
     if not os.path.isdir(chroma_db_path):
-        st.warning(f"🧠 Knowledge base directory not found at '{chroma_db_path}'.")
+        if not silent:
+            st.warning(f"🧠 Knowledge base directory not found at '{chroma_db_path}'.")
         return None
         
     try:
@@ -91,16 +95,44 @@ def validate_database(db_path):
         logger.info(f"Collection '{COLLECTION_NAME}' has {collection_count} documents")
         
         if collection_count > 0:
-            st.success(f"✅ Knowledge base validated: {collection_count} documents available for direct search.")
+            if not silent:
+                st.success(f"✅ Knowledge base validated: {collection_count} documents available for direct search.")
             return {"path": chroma_db_path, "count": collection_count, "collection": collection}
         else:
-            st.warning("⚠️ Database directory exists but no documents found.")
+            if not silent:
+                st.warning("⚠️ Database directory exists but no documents found.")
             return None
             
     except Exception as e:
-        st.error(f"❌ Database validation failed: {e}")
-        logger.error(f"Error validating database at {chroma_db_path}: {e}")
-        return None
+        # Check if this is a collections schema error (development database accessed from Docker)
+        if "collections.config_json_str" in str(e):
+            if not silent:
+                st.warning("🐳 **Development database detected in Docker environment**")
+                st.info("📝 **This database was created outside Docker and has schema differences.**\n\n💡 **Options:**\n- Use a separate Docker database path (recommended)\n- Or continue with limited collection features")
+            logger.warning(f"Development database schema conflict in Docker: {e}")
+            
+            # Try to continue with ChromaDB-only access (skip collections)
+            try:
+                db_settings = ChromaSettings(anonymized_telemetry=False)
+                client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+                collection = client.get_collection(COLLECTION_NAME)
+                collection_count = collection.count()
+                
+                if collection_count > 0:
+                    if not silent:
+                        st.success(f"✅ ChromaDB access successful: {collection_count} documents available (collections disabled)")
+                    return {"path": chroma_db_path, "count": collection_count, "collection": collection, "collections_disabled": True}
+                    
+            except Exception as chroma_e:
+                if not silent:
+                    st.error(f"❌ ChromaDB access also failed: {chroma_e}")
+                logger.error(f"ChromaDB access failed: {chroma_e}")
+                return None
+        else:
+            if not silent:
+                st.error(f"❌ Database validation failed: {e}")
+            logger.error(f"Error validating database at {chroma_db_path}: {e}")
+            return None
 
 
 def initialize_search_state():
@@ -819,10 +851,28 @@ def main():
     st.title("🔍 3. Knowledge Search")
     st.caption(f"Version: {PAGE_VERSION}")
     
-    # Docker environment detection
+    # Docker environment detection with better logic
     is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_ENV') == 'true'
-    if is_docker:
+    
+    # Check if we're in a development environment (has access to existing database)
+    is_dev_with_existing_db = False
+    if config and config.get('db_path'):
+        db_path_check = config['db_path']
+        if db_path_check and os.path.exists(convert_windows_to_wsl_path(db_path_check)):
+            try:
+                # Try to validate the existing database (silently to avoid duplicate messages)
+                db_info_check = validate_database(db_path_check, silent=True)
+                if db_info_check and db_info_check.get('count', 0) > 0:
+                    is_dev_with_existing_db = True
+                    logger.info(f"Development database detected with {db_info_check['count']} documents")
+            except Exception:
+                pass
+    
+    # Only show Docker mode message if we're actually in a fresh Docker environment
+    if is_docker and not is_dev_with_existing_db:
         st.info("🐳 **Running in Docker mode** - Some collection features may be limited until first setup is complete.")
+    elif is_docker and is_dev_with_existing_db:
+        st.success("🐳 **Docker mode with existing database detected** - Full functionality available!")
     
     # Initialize session state
     initialize_search_state()
@@ -840,9 +890,28 @@ def main():
     
     if not db_info:
         is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_ENV') == 'true'
+        current_db_path = config.get('db_path', '') if config else ''
+        
         if is_docker:
-            st.error("❌ **Docker Setup Required**")
-            st.info("📝 **To get started:**\n1. Use the sidebar to set your database path (try `/app/data/ai_databases`)\n2. Go to **Knowledge Ingest** to add documents\n3. Return here to search")
+            # More specific Docker error handling
+            if current_db_path and ('F:\\' in current_db_path or 'C:\\' in current_db_path):
+                st.error("❌ **Docker + Windows Database Path Conflict**")
+                st.warning("🚫 **Root Cause:** Docker cannot properly access Windows file paths like `F:\\ai_databases`")
+                st.info("📝 **Solution:** Use Docker-native paths:\n1. Set path to `/app/data/ai_databases` in sidebar\n2. Go to **Knowledge Ingest** to populate it\n3. Return here to search")
+                
+                with st.expander("🚑 Emergency Fix"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("🚀 Fix Database Path Now"):
+                            st.session_state.db_path_input = "/app/data/ai_databases"
+                            st.success("Path updated to Docker-compatible location!")
+                            st.info("Please refresh the page to apply changes.")
+                    with col2:
+                        if st.button("🔄 Refresh Page"):
+                            st.rerun()
+            else:
+                st.error("❌ **Docker Setup Required**")
+                st.info("📝 **To get started:**\n1. Use the sidebar to set your database path (try `/app/data/ai_databases`)\n2. Go to **Knowledge Ingest** to add documents\n3. Return here to search")
         else:
             st.error("❌ Failed to validate knowledge base. Please check your database path and try again.")
         return
@@ -850,13 +919,27 @@ def main():
     # Search interface
     st.subheader("🔍 Search Knowledge Base")
     
-    # Docker-specific guidance
+    # Docker-specific guidance with better detection
     is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_ENV') == 'true'
+    
     if is_docker and not db_info:
-        st.warning("🐳 **Docker First-Time Setup Required**")
-        st.info("📝 **Next Steps:**\n1. Go to **Knowledge Ingest** page to add documents\n2. Set up your database path in the sidebar\n3. Return here to search your documents")
-        st.info("💡 **Default Docker path:** `/app/data/ai_databases`")
-        return
+        # Check if we're trying to use a development database from Docker
+        current_db_path = config.get('db_path', '') if config else ''
+        if current_db_path and ('F:\\' in current_db_path or 'C:\\' in current_db_path):
+            st.warning("🐳 **Windows Database Path Detected in Docker**")
+            st.error("🚫 **Issue:** You're trying to access a Windows database path from inside Docker.")
+            st.info("📝 **Solutions:**\n\n**Option 1 (Recommended):** Use separate Docker database\n- Set path to `/app/data/ai_databases`\n- Go to Knowledge Ingest to add documents\n\n**Option 2:** Mount Windows database correctly\n- Ensure Windows path is properly mounted as Docker volume\n- Use mounted path like `/mnt/database` instead of `F:\\ai_databases`")
+            
+            with st.expander("🔧 Quick Fix: Use Docker Database Path"):
+                if st.button("🚀 Set Docker Database Path", type="primary"):
+                    st.session_state.db_path_input = "/app/data/ai_databases"
+                    st.success("Database path updated! Please refresh the page.")
+                    st.rerun()
+            return
+        else:
+            st.warning("🐳 **Docker First-Time Setup Required**")
+            st.info("📝 **Next Steps:**\n1. Set database path in sidebar (try `/app/data/ai_databases`)\n2. Go to **Knowledge Ingest** page to add documents\n3. Return here to search your documents")
+            return
     
     # Add helpful examples
     with st.expander("💡 Search Examples & Tips", expanded=False):
