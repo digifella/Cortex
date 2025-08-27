@@ -302,8 +302,8 @@ st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
-        <strong>🕒 Latest Code Changes:</strong> 2025-08-26<br>
-        <em>Knowledge Search UX Enhancement: Added progress indicator with real-time status updates to prevent user confusion during search operations. Cross-Platform Path Compatibility: Eliminated all hardcoded WSL paths. Full PyTorch 2.8→2.3.1 compatibility.</em>
+        <strong>🕒 Latest Code Changes:</strong> 2025-08-27<br>
+        <em>UI Organization Enhancement: Created consolidated Maintenance page (13_Maintenance.py) combining database maintenance, system terminal, setup management, and backup functions. Moved maintenance functions from Knowledge Ingest and System Terminal pages for better organization and future password protection capability.</em>
     </div>
     """, 
     unsafe_allow_html=True

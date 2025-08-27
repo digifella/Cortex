@@ -1,7 +1,10 @@
 # ## File: pages/2_Knowledge_Ingest.py
-# Version: 39.0.0 (Utilities Refactor)
-# Date: 2025-07-23
+# Version: 39.3.0 (Maintenance Function Consolidation)
+# Date: 2025-08-27
 # Purpose: GUI for knowledge base ingestion.
+#          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
+#            for better organization and UI cleanup. Functions moved: clear_ingestion_log_file,
+#            delete_knowledge_base, and all database recovery tools.
 #          - REFACTOR (v39.0.0): Updated to use centralized utilities for path handling,
 #            logging, and error handling. Removed code duplication.
 
@@ -143,24 +146,7 @@ def initialize_state(force_reset: bool = False):
 
 # Path handling now handled by centralized utilities
 
-def delete_knowledge_base(db_path: str):
-    """Delete the knowledge base with proper error handling and logging."""
-    wsl_db_path = convert_windows_to_wsl_path(db_path)
-    chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
-    
-    try:
-        if chroma_db_dir.exists() and chroma_db_dir.is_dir():
-            shutil.rmtree(chroma_db_dir)
-            logger.info(f"Successfully deleted knowledge base at: {chroma_db_dir}")
-            st.success(f"✅ Successfully deleted the Knowledge Base at: {chroma_db_dir}")
-        else:
-            logger.warning(f"Knowledge base directory not found: {chroma_db_dir}")
-            st.warning("Knowledge Base directory not found.")
-    except Exception as e:
-        logger.error(f"Failed to delete knowledge base directory {chroma_db_dir}: {e}")
-        st.error(f"Failed to delete the Knowledge Base directory: {e}")
-    
-    st.session_state.show_confirm_delete_kb = False
+# Note: delete_knowledge_base function moved to pages/13_Maintenance.py
 
 @st.cache_data
 def get_full_file_content(file_path_str: str) -> str:
@@ -1067,20 +1053,7 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
         logger.error(f"Auto-resume failed: {e}")
         return False
 
-def clear_ingestion_log_file():
-    wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
-    chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
-    ingested_log_path = chroma_db_dir / INGESTED_FILES_LOG
-    try:
-        chroma_db_dir.mkdir(parents=True, exist_ok=True)
-        if ingested_log_path.exists():
-            ingested_log_path.unlink()
-            st.success(f"Successfully cleared the ingestion log: {ingested_log_path}")
-        else:
-            st.info("Ingestion log not found (it may have already been cleared).")
-    except Exception as e:
-        st.error(f"Failed to clear the ingestion log: {e}")
-    st.session_state.show_confirm_clear_log = False
+# Note: clear_ingestion_log_file function moved to pages/13_Maintenance.py
 
 def render_config_and_scan_ui():
     st.header("Ingest New Documents")
@@ -1241,35 +1214,16 @@ def render_config_and_scan_ui():
             if not is_knowledge_path_valid: st.error(f"Root Source Path is not valid.")
             if not is_db_path_valid: st.error(f"DB Path's parent is not valid.")
 
-    with st.expander("⚙️ Maintenance & Danger Zone"):
-        st.warning("These are powerful actions that can result in data loss. Please proceed with caution.")
-        st.subheader("Clear Ingestion Log")
-        st.info("This action allows all files to be scanned and re-ingested. This is useful if you want to rebuild the knowledge base from scratch with new settings.")
-        if st.button("Clear Ingestion Log..."):
-            st.session_state.show_confirm_clear_log = True
-        if st.session_state.get("show_confirm_clear_log"):
-            st.warning(f"This will delete the **{INGESTED_FILES_LOG}** file. The system will then see all source files as new on the next scan. Are you sure?")
-            c1, c2 = st.columns(2)
-            if c1.button("YES, Clear the Log", use_container_width=True, type="primary"):
-                clear_ingestion_log_file()
-                st.rerun()
-            if c2.button("Cancel", use_container_width=True):
-                st.session_state.show_confirm_clear_log = False
-                st.rerun()
-        st.divider()
-        st.subheader("Delete Entire Knowledge Base")
-        st.error("⚠️ **DANGER:** This is the most destructive action.")
-        if st.button("Permanently Delete Knowledge Base...", type="primary"):
-            st.session_state.show_confirm_delete_kb = True
-        if st.session_state.get("show_confirm_delete_kb"):
-            st.warning(f"This will permanently delete the entire **knowledge_hub_db** directory. This action cannot be undone.")
-            c1, c2 = st.columns(2)
-            if c1.button("YES, DELETE EVERYTHING", use_container_width=True):
-                delete_knowledge_base(st.session_state.db_path)
-                st.rerun()
-            if c2.button("Cancel Deletion", use_container_width=True):
-                st.session_state.show_confirm_delete_kb = False
-                st.rerun()
+    with st.expander("⚙️ Database Maintenance"):
+        st.info("Database maintenance functions have been moved to the dedicated **Maintenance** page for better organization and security.")
+        st.markdown("**Available maintenance functions:**")
+        st.markdown("- 🗑️ Clear Ingestion Log (re-scan all files)")
+        st.markdown("- 🛠️ Database Recovery & Repair Tools")
+        st.markdown("- 🔄 Advanced Recovery Operations")
+        st.markdown("- ⚠️ Delete Entire Knowledge Base")
+        
+        if st.button("🔧 Open Maintenance Page", use_container_width=True, type="primary"):
+            st.switch_page("pages/13_Maintenance.py")
 
 def render_pre_analysis_ui():
     st.header("Pre-Analysis Review")
@@ -1997,130 +1951,24 @@ def render_recovery_section():
                         st.session_state.recovery_dismissed = True
                         st.rerun()
         
-        # Show maintenance tools access when no issues but tools requested
+        # Show maintenance tools access when no issues but tools requested  
         elif not recovery_needed and not show_maintenance and not st.session_state.get("recovery_dismissed", False):
-            # Provide discrete access to recovery tools
-            if st.button("🛠️ Database Maintenance & Recovery Tools", use_container_width=True, help="Access advanced database repair and recovery features"):
-                st.session_state.show_recovery_maintenance = True
-                st.rerun()
+            # Redirect to maintenance page for advanced tools
+            st.info("💡 **Database maintenance and recovery tools** have been moved to the dedicated **Maintenance** page for better organization.")
+            if st.button("🔧 Open Maintenance Page", use_container_width=True, help="Access advanced database repair and recovery features"):
+                st.switch_page("pages/13_Maintenance.py")
         
-        # Show maintenance tools if requested or recovery is needed
+        # Show urgent recovery message if issues detected
         if show_maintenance or (recovery_needed and not st.session_state.get("recovery_dismissed", False)):
-            with st.expander("🔧 Database Recovery & Maintenance", expanded=True):
-                st.markdown("""
-                **Recover from failed ingestions** or **repair inconsistencies** in your knowledge base.
-                Use this when ingestion processes are interrupted or documents seem to be missing.
-                """)
-                
-                recovery_manager = IngestionRecoveryManager(db_path)
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("#### 🔍 Analyze Current State")
-                    if st.button("🔍 Analyze Ingestion State", use_container_width=True, key="analyze_recovery_state"):
-                        with st.spinner("🔄 Analyzing knowledge base state..."):
-                            analysis = recovery_manager.analyze_ingestion_state()
-                            st.session_state.recovery_analysis = analysis
-                            st.rerun()
-                    
-                    if "recovery_analysis" in st.session_state:
-                        analysis = st.session_state.recovery_analysis
-                        
-                        # Show key statistics
-                        if "statistics" in analysis:
-                            stats = analysis["statistics"]
-                            stat_col1, stat_col2, stat_col3 = st.columns(3)
-                            with stat_col1:
-                                st.metric("📁 Ingested Files", stats.get("ingested_files_count", 0))
-                            with stat_col2:
-                                st.metric("📄 KB Documents", stats.get("chromadb_docs_count", 0))
-                            with stat_col3:
-                                st.metric("🚨 Orphaned", stats.get("orphaned_count", 0))
-                        
-                        # Show issues found
-                        if analysis.get("issues_found"):
-                            st.warning("**Issues Found:**")
-                            for issue in analysis["issues_found"]:
-                                st.write(f"• {issue}")
-                        else:
-                            st.success("✅ No issues detected")
-                
-                with col2:
-                    st.markdown("#### 🛠️ Recovery Actions")
-                    
-                    # Quick recovery collection creation
-                    if st.button("🚀 Quick Recovery: Create Collection from Recent Files", use_container_width=True, key="quick_recovery_recent"):
-                        collection_name = st.text_input("Collection name:", value="recovered_files", key="quick_recovery_name")
-                        
-                        if collection_name:
-                            with st.spinner(f"🔄 Creating recovery collection '{collection_name}'..."):
-                                result = recovery_manager.create_recovery_collection_from_recent(collection_name, hours_back=24)
-                                
-                                if result["status"] == "success":
-                                    st.success(f"✅ Created '{collection_name}' with {result['documents_added']} documents!")
-                                else:
-                                    st.error(f"❌ Recovery failed: {result.get('error', 'Unknown error')}")
-                    
-                    # Orphaned document recovery
-                    if st.session_state.get("recovery_analysis", {}).get("statistics", {}).get("orphaned_count", 0) > 0:
-                        st.markdown("**Orphaned Documents Detected**")
-                        orphaned_count = st.session_state.recovery_analysis["statistics"]["orphaned_count"]
-                        collection_name = st.text_input(f"Recover {orphaned_count} orphaned documents to collection:", 
-                                                       value="recovered_orphaned", key="orphaned_recovery_name")
-                        
-                        if st.button(f"🔄 Recover {orphaned_count} Documents", use_container_width=True, key="recover_orphaned_docs"):
-                            if collection_name:
-                                with st.spinner("🔄 Recovering orphaned documents..."):
-                                    result = recovery_manager.recover_orphaned_documents(collection_name)
-                                    
-                                    if result["status"] == "success":
-                                        st.success(f"✅ Recovered {result['recovered_count']} documents to '{collection_name}'!")
-                                    else:
-                                        st.error(f"❌ Recovery failed: {result.get('error', 'Unknown error')}")
-                    
-                    # Collection repair
-                    if st.button("🔧 Auto-Repair Collections", use_container_width=True, key="auto_repair_collections"):
-                        with st.spinner("🔄 Repairing collection inconsistencies..."):
-                            result = recovery_manager.auto_repair_collections()
-                            
-                            if result["status"] == "success":
-                                if result["collections_cleaned"] > 0:
-                                    st.success(f"✅ Repaired {result['collections_cleaned']} collections, removed {result['invalid_refs_removed']} invalid references")
-                                else:
-                                    st.info("✅ No repairs needed - all collections are consistent")
-                            else:
-                                st.error(f"❌ Repair failed: {result.get('error', 'Unknown error')}")
-                
-                # Show recommendations if available
-                if st.session_state.get("recovery_analysis", {}).get("recommendations"):
-                    st.markdown("---")
-                    st.markdown("#### 💡 Recommended Actions")
-                    recommendations = st.session_state.recovery_analysis["recommendations"]
-                    
-                    for rec in recommendations:
-                        priority_color = {"high": "🔴", "medium": "🟡", "low": "🟢"}
-                        priority_icon = priority_color.get(rec["priority"], "🔵")
-                        
-                        st.markdown(f"{priority_icon} **{rec['description']}**")
-                        st.caption(rec["details"])
-                
-                # Controls at the bottom
-                st.markdown("---")
-                control_col1, control_col2, control_col3 = st.columns(3)
-                
-                with control_col1:
-                    if "recovery_analysis" in st.session_state:
-                        if st.button("🗑️ Clear Analysis", type="secondary", use_container_width=True):
-                            del st.session_state.recovery_analysis
-                            st.rerun()
-                
-                with control_col3:
-                    if st.button("✅ Close Recovery Tools", type="primary", use_container_width=True):
-                        st.session_state.show_recovery_maintenance = False
-                        if "recovery_analysis" in st.session_state:
-                            del st.session_state.recovery_analysis
-                        st.rerun()
+            st.warning("⚠️ **Database issues detected!** Advanced recovery tools are available on the **Maintenance** page.")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔧 Go to Maintenance", use_container_width=True, type="primary"):
+                    st.switch_page("pages/13_Maintenance.py")
+            with col2:
+                if st.button("Dismiss Warning", use_container_width=True):
+                    st.session_state.recovery_dismissed = True
+                    st.rerun()
     
     except Exception as e:
         logger.error(f"Recovery section render failed: {e}")

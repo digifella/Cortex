@@ -3,9 +3,9 @@ setlocal enabledelayedexpansion
 
 echo.
 echo ===============================================
-echo    CORTEX SUITE v3.1.1 (Docker Windows Path Fix + Database Reset)
+echo    CORTEX SUITE v3.1.2 (Maintenance Page Consolidation)
 echo    Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64
-echo    Advanced LLaVA Integration + Visual Analysis Dashboard (2025-08-25)
+echo    Enhanced UI Organization + Centralized Admin Functions (2025-08-27)
 echo    Date: %date% %time%
 echo ===============================================
 echo.
