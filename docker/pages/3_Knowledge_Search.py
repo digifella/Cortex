@@ -1,7 +1,9 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: 22.4.2 (Docker-Development Database Conflict Resolution)
+# Version: 22.4.3 (UnboundLocalError Fix)
 # Date: 2025-08-26
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
+#          - BUGFIX (v22.4.3): Fixed UnboundLocalError where 'config' variable was referenced before
+#            initialization. Moved config loading to top of main() function.
 #          - DOCKER FIX (v22.4.2): Resolved Docker-development database conflicts. Detects when
 #            Docker is accessing development databases with schema mismatches and provides solutions.
 #          - DOCKER FIX (v22.4.1): Added Docker environment compatibility for collection manager
@@ -42,7 +44,7 @@ from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 logger = get_logger(__name__)
 
 # Page configuration
-PAGE_VERSION = "22.4.2"
+PAGE_VERSION = "22.4.3"
 
 st.set_page_config(page_title="Knowledge Search", layout="wide")
 
@@ -851,6 +853,12 @@ def main():
     st.title("🔍 3. Knowledge Search")
     st.caption(f"Version: {PAGE_VERSION}")
     
+    # Initialize session state first
+    initialize_search_state()
+    
+    # Render sidebar and get config early
+    config = render_sidebar()
+    
     # Docker environment detection with better logic
     is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_ENV') == 'true'
     
@@ -873,12 +881,6 @@ def main():
         st.info("🐳 **Running in Docker mode** - Some collection features may be limited until first setup is complete.")
     elif is_docker and is_dev_with_existing_db:
         st.success("🐳 **Docker mode with existing database detected** - Full functionality available!")
-    
-    # Initialize session state
-    initialize_search_state()
-    
-    # Render sidebar and get config
-    config = render_sidebar()
     
     # Validate database
     db_path = config['db_path']
