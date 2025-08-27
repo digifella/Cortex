@@ -86,7 +86,18 @@ python -c "import nltk; nltk.download('averaged_perceptron_tagger'); nltk.downlo
 # For other systems, see README.md section 6
 ```
 
-### Database Management
+### Administrative Functions
+
+**IMPORTANT**: As of v3.1.2, all database management and administrative functions have been consolidated into the **Maintenance page (page 13)** for better organization and security.
+
+#### Available in Maintenance Page:
+- **Database Maintenance**: Clear ingestion logs, delete knowledge base, analyze database state
+- **Recovery Tools**: Recover orphaned documents, repair collections, create recovery collections
+- **System Terminal**: Safe command execution with quick actions
+- **Setup Management**: Reset installation state, reconfigure system components  
+- **Backup Management**: Create, restore, and manage knowledge base backups
+
+#### Command Line Tools (Alternative):
 ```bash
 # Inspect knowledge graph and database contents
 python scripts/cortex_inspector.py --db-path /mnt/f/ai_databases --stats
@@ -164,13 +175,48 @@ GRAPHVIZ_DOT_EXECUTABLE="/usr/bin/dot"
 
 ### UI Pages (`pages/`)
 - `1_AI_Assisted_Research.py` - Multi-agent research system
-- `2_Knowledge_Ingest.py` - Document ingestion UI
+- `2_Knowledge_Ingest.py` - Document ingestion UI (maintenance functions moved to page 13)
 - `3_Knowledge_Search.py` - Vector + graph search
 - `4_Collection_Management.py` - Working collections CRUD
 - `5_Proposal_Step_1_Prep.py` - Template editor
 - `6_Proposal_Step_2_Make.py` - Proposal lifecycle
 - `Proposal_Copilot.py` - AI-assisted proposal drafting
-- `10_Idea_Generator.py` - **NEW**: Double Diamond innovation methodology
+- `10_Idea_Generator.py` - Double Diamond innovation methodology
+- `12_System_Terminal.py` - Redirects to Maintenance page (consolidated)
+- `13_Maintenance.py` - **NEW**: Consolidated administrative functions
+
+#### Maintenance Page Details (`13_Maintenance.py`)
+The Maintenance page provides a centralized, tabbed interface for all administrative functions:
+
+**🗄️ Database Tab:**
+- Clear ingestion logs to re-scan all files
+- Delete entire knowledge base (destructive operation)  
+- Analyze ingestion state and database health
+- Recover orphaned documents from failed ingestions
+- Auto-repair collection inconsistencies
+- Quick recovery: create collections from recent files
+
+**💻 Terminal Tab:**
+- Safe command execution with whitelisted commands
+- Quick actions: check models, system status, disk usage
+- Secure environment with audit logging
+- Real-time command output display
+
+**⚙️ Setup Tab:**
+- Reset installation state if setup gets stuck
+- Clear setup progress and allow reconfiguration
+- System component reset and troubleshooting
+
+**💾 Backups Tab:**
+- Create timestamped knowledge base backups
+- Restore from existing backup files
+- Manage backup lifecycle (view, verify, delete)
+- Backup validation and integrity checking
+
+**ℹ️ Info Tab:**
+- Documentation and help information
+- Security notes and best practices
+- Feature descriptions and usage guidance
 
 ## Development Notes
 

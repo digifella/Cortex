@@ -1,19 +1,24 @@
 # **`README.md`**
 
-**Version:** 94.1.0 (Knowledge Search UX Enhancement)
-**Date:** 2025-08-26
+**Version:** 95.0.0 (Maintenance Page Consolidation)
+**Date:** 2025-08-27
 
 **Prelim:**
 Please be aware that the system operates in a WSL2 environment, so all paths should support linux and windows.
 
-### 1. System Status: Knowledge Search Complete & Cross-Platform Ready
+### 1. System Status: UI Organization Enhanced & Administrative Functions Consolidated
 
-This document reflects recent major fixes and enhancements to the **Project Cortex Suite**, now featuring complete Knowledge Search functionality with cross-platform path compatibility and enhanced user experience.
+This document reflects recent major enhancements to the **Project Cortex Suite**, now featuring a consolidated Maintenance page for all administrative functions, improved UI organization, and enhanced user experience.
 
-*   **[ENHANCED] Knowledge Search: Direct ChromaDB + Progress Indicators (v22.2.2)**
+*   **[NEW] Maintenance Page Consolidation (v3.1.2)**
+    *   **Status:** Complete. All administrative and maintenance functions consolidated into dedicated Maintenance page (page 13).
+    *   **Capabilities:** Tabbed interface with Database Maintenance, System Terminal, Setup Management, and Backup functions.
+    *   **Benefits:** Better organization, enhanced security preparation, cleaner UI, and centralized access control.
+
+*   **[ENHANCED] Knowledge Search: Direct ChromaDB + Progress Indicators (v22.4.3)**
     *   **Status:** Completely rebuilt. Knowledge Search now bypasses LlamaIndex entirely, using direct ChromaDB queries with comprehensive timeout protection and real-time progress indicators.
-    *   **Capabilities:** Fast, reliable search with visual feedback during operations. Users see search progress and results count in real-time.
-    *   **Technical:** Eliminated numpy.iterable compatibility issues, added 30-second timeout protection, and implemented fallback text search.
+    *   **Capabilities:** Fast, reliable search with visual feedback during operations. Multi-strategy search approach for better results.
+    *   **Technical:** Docker environment compatibility, UnboundLocalError fixes, and enhanced fallback mechanisms.
 
 *   **[RESOLVED] Cross-Platform Path Compatibility**
     *   **Status:** Complete. Eliminated all hardcoded WSL paths with intelligent default path detection for Windows/Mac/Linux environments.
