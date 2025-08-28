@@ -1,5 +1,5 @@
 # ## File: pages/13_Maintenance.py
-# Version: v1.0.1 (Import Fix)
+# Version: v4.0.4
 # Date: 2025-08-27
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -24,18 +24,22 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v1.0.1"
+PAGE_VERSION = "v4.0.4"
 
 # Import Cortex modules
 try:
     from cortex_engine.config import INGESTED_FILES_LOG
     from cortex_engine.config_manager import ConfigManager
-    from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
+    from cortex_engine.utils import get_logger, convert_windows_to_wsl_path, ensure_directory
     from cortex_engine.utils.command_executor import display_command_executor_widget, SafeCommandExecutor
     from cortex_engine.ingestion_recovery import IngestionRecoveryManager
     from cortex_engine.collection_manager import WorkingCollectionManager
     from cortex_engine.setup_manager import SetupManager
     from cortex_engine.backup_manager import BackupManager
+    from cortex_engine.sync_backup_manager import SyncBackupManager
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+    from cortex_engine.config import COLLECTION_NAME
 except ImportError as e:
     st.error(f"Failed to import required Cortex modules: {e}")
     st.stop()
@@ -50,6 +54,61 @@ if 'show_confirm_delete_kb' not in st.session_state:
     st.session_state.show_confirm_delete_kb = False
 if 'maintenance_config' not in st.session_state:
     st.session_state.maintenance_config = None
+
+def delete_knowledge_base(db_path: str):
+    """Delete the knowledge base with proper error handling and logging."""
+    wsl_db_path = convert_windows_to_wsl_path(db_path)
+    chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
+    graph_file = Path(wsl_db_path) / "knowledge_cortex.gpickle"
+    
+    try:
+        deleted_items = []
+        
+        # Delete ChromaDB directory
+        if chroma_db_dir.exists() and chroma_db_dir.is_dir():
+            shutil.rmtree(chroma_db_dir)
+            deleted_items.append(f"ChromaDB directory: {chroma_db_dir}")
+            logger.info(f"Successfully deleted ChromaDB directory: {chroma_db_dir}")
+        
+        # Delete knowledge graph file
+        if graph_file.exists():
+            graph_file.unlink()
+            deleted_items.append(f"Knowledge graph: {graph_file}")
+            logger.info(f"Successfully deleted knowledge graph: {graph_file}")
+        
+        if deleted_items:
+            st.success(f"✅ Successfully deleted knowledge base components:\\n" + "\\n".join(f"- {item}" for item in deleted_items))
+            logger.info("Knowledge base deletion completed successfully")
+        else:
+            st.warning("⚠️ No knowledge base components found to delete.")
+            logger.warning(f"No knowledge base found at: {wsl_db_path}")
+            
+    except Exception as e:
+        error_msg = f"Failed to delete knowledge base: {e}"
+        logger.error(f"Knowledge base deletion failed: {e}")
+        st.error(f"❌ {error_msg}")
+    
+    # Reset the confirmation state  
+    st.session_state.show_confirm_delete_kb = False
+
+@st.cache_resource
+def init_chroma_client(db_path):
+    """Initialize ChromaDB client for maintenance operations"""
+    if not db_path:
+        return None
+        
+    wsl_db_path = convert_windows_to_wsl_path(db_path)
+    chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+    
+    if not os.path.isdir(chroma_db_path):
+        return None
+        
+    try:
+        db_settings = ChromaSettings(anonymized_telemetry=False)
+        return chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+    except Exception as e:
+        logger.error(f"Failed to connect to ChromaDB: {e}")
+        return None
 
 def load_maintenance_config():
     """Load configuration for maintenance operations"""
@@ -167,6 +226,162 @@ def display_database_maintenance():
             if c2.button("Cancel Deletion", use_container_width=True):
                 st.session_state.show_confirm_delete_kb = False
                 st.rerun()
+
+    # Add database deduplication section
+    with st.expander("🔧 Database Deduplication & Optimization", expanded=False):
+        st.subheader("🔧 Database Deduplication")
+        st.markdown("Remove duplicate documents from the knowledge base to improve performance and storage efficiency.")
+        
+        # Initialize ChromaDB client for deduplication
+        chroma_client = init_chroma_client(db_path)
+        if not chroma_client:
+            st.warning("ChromaDB not accessible. Cannot perform deduplication operations.")
+        else:
+            try:
+                vector_collection = chroma_client.get_collection(name=COLLECTION_NAME)
+                collection_mgr = WorkingCollectionManager()
+                
+                dedup_col1, dedup_col2 = st.columns([2, 1])
+                
+                with dedup_col1:
+                    st.markdown("""
+                    **What does deduplication do?**
+                    - Identifies documents with identical file hashes or content
+                    - Keeps the most complete version of each document
+                    - Removes duplicate entries from ChromaDB
+                    - Updates collections to remove references to deleted duplicates
+                    """)
+                    
+                    # Initialize deduplication session state
+                    if 'dedup_analysis_results' not in st.session_state:
+                        st.session_state.dedup_analysis_results = None
+                    if 'dedup_analysis_running' not in st.session_state:
+                        st.session_state.dedup_analysis_running = False
+                
+                with dedup_col2:
+                    # Analysis button
+                    if st.button("🔍 Analyze Duplicates", 
+                                key="analyze_duplicates_btn", 
+                                type="secondary", 
+                                use_container_width=True,
+                                disabled=st.session_state.dedup_analysis_running):
+                        
+                        st.session_state.dedup_analysis_running = True
+                        
+                        with st.spinner("Analyzing knowledge base for duplicates... This may take a few minutes."):
+                            try:
+                                # Perform duplicate analysis (dry run)
+                                results = collection_mgr.deduplicate_vector_store(vector_collection, dry_run=True)
+                                st.session_state.dedup_analysis_results = results
+                                
+                                if results.get('status') == 'analysis_complete':
+                                    st.success(f"✅ Analysis complete!")
+                                    st.info(f"""
+                                    **Duplicate Analysis Results:**
+                                    - Total documents: {results['total_documents']:,}
+                                    - Duplicates found: {results['duplicates_found']:,}
+                                    - Duplicate percentage: {results['duplicate_percentage']:.1f}%
+                                    - Unique files: {results['unique_files']:,}
+                                    - Duplicate groups: {results['duplicate_groups']:,}
+                                    """)
+                                    logger.info(f"Deduplication analysis completed via Maintenance UI: {results['duplicates_found']} duplicates found")
+                                else:
+                                    st.error(f"❌ Analysis failed: {results.get('error', 'Unknown error')}")
+                                    
+                            except Exception as e:
+                                st.error(f"❌ Analysis failed: {str(e)}")
+                                logger.error(f"Maintenance UI deduplication analysis failed: {e}")
+                            finally:
+                                st.session_state.dedup_analysis_running = False
+                                st.rerun()
+                
+                # Show analysis results if available
+                if st.session_state.dedup_analysis_results:
+                    results = st.session_state.dedup_analysis_results
+                    
+                    if results.get('status') == 'analysis_complete' and results.get('duplicates_found', 0) > 0:
+                        st.divider()
+                        
+                        # Show detailed results
+                        result_col1, result_col2, result_col3 = st.columns(3)
+                        
+                        with result_col1:
+                            st.metric("📄 Total Documents", f"{results['total_documents']:,}")
+                        with result_col2:
+                            st.metric("🔄 Duplicates Found", f"{results['duplicates_found']:,}")
+                        with result_col3:
+                            st.metric("📊 Duplicate %", f"{results['duplicate_percentage']:.1f}%")
+                        
+                        st.divider()
+                        
+                        # Cleanup options
+                        st.markdown("**🧹 Cleanup Options**")
+                        
+                        # Warning about cleanup
+                        if results['duplicate_percentage'] > 50:
+                            st.warning(f"⚠️ High duplicate percentage detected ({results['duplicate_percentage']:.1f}%). This suggests a significant duplication issue that should be resolved.")
+                        elif results['duplicate_percentage'] > 20:
+                            st.info(f"💡 Moderate duplication detected ({results['duplicate_percentage']:.1f}%). Cleanup recommended for optimal performance.")
+                        else:
+                            st.success(f"✅ Low duplication level ({results['duplicate_percentage']:.1f}%). Cleanup optional but will improve storage efficiency.")
+                        
+                        # Cleanup confirmation
+                        cleanup_col1, cleanup_col2 = st.columns([2, 1])
+                        
+                        with cleanup_col1:
+                            st.markdown(f"""
+                            **Cleanup will:**
+                            - Remove {results['duplicates_found']:,} duplicate documents
+                            - Keep the most complete version of each file
+                            - Update {len(collection_mgr.get_collection_names())} collections automatically
+                            - Free up storage space and improve query performance
+                            """)
+                        
+                        with cleanup_col2:
+                            if st.checkbox("I understand this action cannot be undone", key="dedup_confirm_checkbox"):
+                                if st.button("🧹 Remove Duplicates", 
+                                            key="remove_duplicates_btn", 
+                                            type="primary", 
+                                            use_container_width=True):
+                                    
+                                    with st.spinner(f"Removing {results['duplicates_found']:,} duplicate documents... This may take several minutes."):
+                                        try:
+                                            # Perform actual deduplication
+                                            cleanup_results = collection_mgr.deduplicate_vector_store(vector_collection, dry_run=False)
+                                            
+                                            if cleanup_results.get('status') == 'cleanup_complete':
+                                                removed_count = cleanup_results.get('removed_count', 0)
+                                                st.success(f"✅ Deduplication complete!")
+                                                st.info(f"""
+                                                **Cleanup Results:**
+                                                - Documents removed: {removed_count:,}
+                                                - Storage space freed: ~{removed_count * 0.1:.1f} MB (estimated)
+                                                - Collections updated automatically
+                                                """)
+                                                
+                                                # Clear analysis results to force re-analysis
+                                                st.session_state.dedup_analysis_results = None
+                                                
+                                                logger.info(f"Deduplication cleanup completed via Maintenance UI: {removed_count} documents removed")
+                                                
+                                                # Show recommendation to restart
+                                                st.success("🔄 **Recommendation:** Restart the application to ensure optimal performance with the cleaned database.")
+                                                
+                                            else:
+                                                st.error(f"❌ Cleanup failed: {cleanup_results.get('error', 'Unknown error')}")
+                                                
+                                        except Exception as e:
+                                            st.error(f"❌ Cleanup failed: {str(e)}")
+                                            logger.error(f"Maintenance UI deduplication cleanup failed: {e}")
+                    
+                    elif results.get('status') == 'analysis_complete' and results.get('duplicates_found', 0) == 0:
+                        st.success("✅ No duplicates found! Your knowledge base is already optimized.")
+                        
+                    elif results.get('status') == 'no_documents':
+                        st.info("ℹ️ No documents found in the knowledge base.")
+                        
+            except Exception as e:
+                st.error(f"Could not access vector collection: {e}")
 
     with st.expander("🔧 Advanced Database Recovery & Repair", expanded=False):
         st.markdown("""
@@ -351,7 +566,13 @@ def display_backup_management():
     
     try:
         db_path = config.get('db_path', '/tmp/cortex_db')
-        backup_manager = BackupManager(db_path)
+        # Convert to proper WSL path format for backup manager
+        wsl_db_path = convert_windows_to_wsl_path(db_path)
+        
+        # Ensure the backups directory exists using centralized utility
+        backups_dir = ensure_directory(Path(wsl_db_path) / "backups")
+        
+        backup_manager = BackupManager(wsl_db_path)
         
         with st.expander("📦 Create New Backup", expanded=False):
             backup_name = st.text_input("Backup name (optional):", placeholder="my_backup_2025_08_27")
@@ -432,16 +653,124 @@ def display_backup_management():
     except Exception as e:
         st.error(f"Failed to initialize backup manager: {e}")
 
+def display_changelog_viewer():
+    """Display the project changelog viewer"""
+    st.markdown("## 📋 Project Changelog")
+    st.markdown("View the complete development history and version changes for the Cortex Suite.")
+    
+    # Get project root path
+    project_root = Path(__file__).parent.parent
+    changelog_path = project_root / "CHANGELOG.md"
+    
+    if not changelog_path.exists():
+        st.error("❌ CHANGELOG.md not found in project root")
+        return
+    
+    try:
+        # Read the changelog
+        with open(changelog_path, 'r', encoding='utf-8') as f:
+            changelog_content = f.read()
+        
+        # Display changelog info
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            st.info(f"📁 **File Location:** `{changelog_path.relative_to(project_root)}`")
+        
+        with col2:
+            # Get file stats
+            stat = changelog_path.stat()
+            last_modified = datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+            st.info(f"🕒 **Last Updated:** {last_modified}")
+        
+        with col3:
+            # File size
+            size_kb = stat.st_size / 1024
+            st.info(f"📏 **Size:** {size_kb:.1f} KB")
+        
+        st.divider()
+        
+        # Display options
+        col1, col2, col3 = st.columns([1, 1, 1])
+        
+        with col1:
+            show_full = st.checkbox("📖 Show Full Changelog", 
+                                  value=st.session_state.get("changelog_show_full", False),
+                                  key="changelog_show_full_checkbox")
+        
+        with col2:
+            if st.button("🔄 Refresh", key="changelog_refresh"):
+                st.rerun()
+        
+        with col3:
+            # Download button
+            st.download_button(
+                label="💾 Download Changelog",
+                data=changelog_content,
+                file_name="CHANGELOG.md",
+                mime="text/markdown",
+                key="changelog_download"
+            )
+        
+        st.divider()
+        
+        # Parse and display changelog sections
+        if show_full:
+            # Show entire changelog
+            st.markdown("### 📚 Complete Changelog")
+            st.markdown(changelog_content)
+        else:
+            # Show recent versions (first few entries)
+            lines = changelog_content.split('\n')
+            
+            # Find recent version entries (lines starting with ##)
+            version_lines = []
+            current_section = []
+            version_count = 0
+            
+            for line in lines:
+                if line.startswith('## v') and version_count < 5:  # Show last 5 versions
+                    if current_section:
+                        version_lines.append('\n'.join(current_section))
+                        current_section = []
+                        version_count += 1
+                    current_section = [line]
+                elif line.startswith('## ') and not line.startswith('## ['):
+                    # Stop at non-version headers
+                    break
+                elif current_section:
+                    current_section.append(line)
+            
+            # Add the last section
+            if current_section and version_count < 5:
+                version_lines.append('\n'.join(current_section))
+            
+            if version_lines:
+                st.markdown("### 🆕 Recent Updates (Last 5 Versions)")
+                for section in version_lines:
+                    st.markdown(section)
+                    st.divider()
+                
+                st.info("💡 **Tip:** Check 'Show Full Changelog' above to see complete version history.")
+            else:
+                st.warning("⚠️ Could not parse changelog sections. Showing raw content:")
+                st.text(changelog_content[:2000] + "..." if len(changelog_content) > 2000 else changelog_content)
+    
+    except Exception as e:
+        st.error(f"❌ Failed to read changelog: {e}")
+        logger.error(f"Changelog viewer error: {e}")
+
 def main():
     """Main function to orchestrate the maintenance interface"""
     display_header()
     
     # Create tabs for different maintenance categories
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🗄️ Database", 
         "💻 Terminal", 
         "⚙️ Setup", 
         "💾 Backups",
+        "📋 Changelog",
         "ℹ️ Info"
     ])
     
@@ -458,6 +787,9 @@ def main():
         display_backup_management()
     
     with tab5:
+        display_changelog_viewer()
+    
+    with tab6:
         st.markdown("""
         ## 📋 Maintenance Information
         

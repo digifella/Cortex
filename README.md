@@ -1,7 +1,7 @@
 # **`README.md`**
 
-**Version:** 95.0.0 (Maintenance Page Consolidation)
-**Date:** 2025-08-27
+**Version:** 4.0.4 (Simplified Anonymizer Interface)
+**Date:** 2025-08-28
 
 **Prelim:**
 Please be aware that the system operates in a WSL2 environment, so all paths should support linux and windows.
@@ -10,12 +10,12 @@ Please be aware that the system operates in a WSL2 environment, so all paths sho
 
 This document reflects recent major enhancements to the **Project Cortex Suite**, now featuring a consolidated Maintenance page for all administrative functions, improved UI organization, and enhanced user experience.
 
-*   **[NEW] Maintenance Page Consolidation (v3.1.2)**
-    *   **Status:** Complete. All administrative and maintenance functions consolidated into dedicated Maintenance page (page 13).
-    *   **Capabilities:** Tabbed interface with Database Maintenance, System Terminal, Setup Management, and Backup functions.
-    *   **Benefits:** Better organization, enhanced security preparation, cleaner UI, and centralized access control.
+*   **[NEW] Simplified Anonymizer Interface (v4.0.4)**
+    *   **Status:** Complete. Completely simplified Document Anonymizer with auto-processing and download-only interface.
+    *   **Capabilities:** Single drag-and-drop interface with immediate processing, streamlined results with download buttons only.
+    *   **Benefits:** Eliminated complex multi-tab navigation, fixed redirect issues, auto-processing for better UX.
 
-*   **[ENHANCED] Knowledge Search: Direct ChromaDB + Progress Indicators (v22.4.3)**
+*   **[ENHANCED] Knowledge Search: Direct ChromaDB + Progress Indicators (v4.0.2)**
     *   **Status:** Completely rebuilt. Knowledge Search now bypasses LlamaIndex entirely, using direct ChromaDB queries with comprehensive timeout protection and real-time progress indicators.
     *   **Capabilities:** Fast, reliable search with visual feedback during operations. Multi-strategy search approach for better results.
     *   **Technical:** Docker environment compatibility, UnboundLocalError fixes, and enhanced fallback mechanisms.
@@ -37,7 +37,7 @@ This document reflects recent major enhancements to the **Project Cortex Suite**
 *   **[RESOLVED] AI Research: Citations in Deep Research Report**
     *   **Status:** Fixed. Enhanced prompts ensure proper citation formatting.
 
-### 2. MANDATORY: Database Migration (v70.0.0+)
+### 2. MANDATORY: Database Migration (v4.0.1+)
 
 **To resolve critical stability issues and pathing errors, the database structure was updated. If you are upgrading from a version prior to 70.0.0, you MUST perform the following one-time action before first use:**
 

@@ -1,5 +1,5 @@
 # ## File: Proposal_Copilot.py
-# Version: 28.1.0 (Cross-Platform Path Fix)
+# Version: v4.0.4
 # Date: 2025-07-23
 # Purpose: Core UI for drafting proposals.
 #          - REFACTOR (v28.0.0): Updated to use centralized utilities for path handling,

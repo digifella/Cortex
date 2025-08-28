@@ -1,5 +1,5 @@
 # ## File: pages/6_Proposal_Step_2_Make.py
-# Version: 2.2.0 (Add Delete Confirmation)
+# Version: v4.0.4
 # Date: 2025-07-15
 # Purpose: A central hub for creating, loading, and managing proposals.
 #          - FEATURE (v2.2.0): Added a confirmation step before deleting a

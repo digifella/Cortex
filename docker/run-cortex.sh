@@ -6,9 +6,9 @@ set -e
 
 echo ""
 echo "==============================================="
-echo "   CORTEX SUITE v3.1.2 (Maintenance Page Consolidation)"
+echo "   CORTEX SUITE v4.0.4 (Centralized Version Management)"
 echo "   Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64"
-echo "   Enhanced UI Organization + Centralized Admin Functions (2025-08-27)"
+echo "   Major refactor with centralized versioning, comprehensive cleanup (2025-08-28)"
 echo "   Date: $(date)"
 echo "==============================================="
 echo ""

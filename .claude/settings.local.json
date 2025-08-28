@@ -46,7 +46,8 @@
       "Bash(git stash:*)",
       "Bash(rsync:*)",
       "Bash(nvidia-smi:*)",
-      "Bash(./sync_docker_distribution.sh:*)"
+      "Bash(./sync_docker_distribution.sh:*)",
+      "Bash(git log:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",

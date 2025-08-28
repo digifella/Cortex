@@ -32,12 +32,26 @@ The Cortex Suite is a Streamlit-based AI-powered knowledge management and propos
 
 ### ⚠️ CRITICAL REMINDERS FOR DEVELOPERS
 
+**🚨 NEW: Centralized Version Management (v4.0.0+)**
+
+All version information is now centralized in `cortex_engine/version_config.py`. This is the SINGLE SOURCE OF TRUTH for version numbers.
+
+**Essential Version Management Workflow:**
+1. 📝 **Update version_config.py** - Change CORTEX_VERSION and VERSION_METADATA  
+2. 🔄 **Run sync command** - `python scripts/version_manager.py --sync-all`
+3. 📋 **Update changelog** - `python scripts/version_manager.py --update-changelog`  
+4. ✅ **Verify consistency** - `python scripts/version_manager.py --check`
+5. 💾 **Commit all changes** together with proper version tags
+6. 📤 **Push all changes** to remote repository
+
+**FAILURE TO FOLLOW VERSION WORKFLOW = INCONSISTENT VERSION NUMBERS ACROSS COMPONENTS**
+
 **🚨 MANDATORY: Before making ANY code changes, follow DISTRIBUTION_SYNC_CHECKLIST.md**
 
 **Essential steps:**
 1. 📋 **Follow Distribution Sync Checklist** - See `DISTRIBUTION_SYNC_CHECKLIST.md`
-2. 🗓️ **Update footer date** in `Cortex_Suite.py` with current date  
-3. 📝 **Increment version numbers** in ALL installation files (.bat, .sh)
+2. 📝 **Use centralized versioning** - Update only `cortex_engine/version_config.py`
+3. 🔄 **Sync all components** - Run `python scripts/version_manager.py --sync-all`
 4. 🐳 **Sync Docker directory** with updated files using rsync
 5. ✅ **Test platform installers** on Windows/Mac/Linux
 6. 💾 **Commit with proper version tags** 
@@ -440,6 +454,97 @@ When preparing a Docker distribution for Windows:
 - **Theme Visualization**: Interactive network graphs showing theme relationships and connections
 - **Visual Sparks**: Image upload and VLM integration for visual concept inspiration
 - **Advanced Analytics**: Entity relationship analysis and knowledge cluster detection
+
+## Utility Functions Registry
+
+### 🔧 Available Utility Functions
+
+**IMPORTANT**: Always use these centralized utilities instead of duplicating functionality. This prevents code duplication and ensures consistent behavior across the codebase.
+
+#### Path Handling (`cortex_engine.utils.path_utils`)
+- **`convert_windows_to_wsl_path(path)`** - Convert Windows paths to WSL format
+- **`normalize_path(path)`** - Normalize paths across platforms
+- **`ensure_directory(path)`** - Create directory if it doesn't exist
+- **`validate_path_exists(path, must_be_dir=False)`** - Check if path exists
+- **`process_drag_drop_path(raw_path)`** - Handle single drag-drop path from any platform
+- **`process_multiple_drag_drop_paths(raw_paths)`** - Handle multiple drag-drop paths
+- **`get_file_size_display(path)`** - Get human-readable file size
+- **`is_safe_path(path, base_path=None)`** - Check for directory traversal attacks
+
+#### File Operations (`cortex_engine.utils.file_utils`)
+- **`get_file_hash(filepath)`** - Generate SHA256 hash for file
+- **`get_project_root()`** - Get project root directory
+- **`get_home_directory()`** - Get user's home directory
+
+#### Logging (`cortex_engine.utils.logging_utils`)
+- **`get_logger(name, log_file=None)`** - Get standardized logger instance
+- **`setup_logging(name, level=INFO)`** - Configure logging with standard format
+- **`LoggerMixin`** - Mixin class for adding logging to classes
+
+#### Input Validation (`cortex_engine.utils.validation_utils`)
+- **`InputValidator.validate_file_path(path, must_exist=True)`** - Validate file paths
+- **`InputValidator.validate_directory_path(path, must_exist=True)`** - Validate directories
+- **`InputValidator.validate_search_query(query, max_length=1000)`** - Sanitize search queries
+- **`InputValidator.validate_filename(filename)`** - Validate filenames
+- **`InputValidator.validate_collection_name(name)`** - Validate collection names
+- **`InputValidator.validate_file_extensions(paths, allowed_exts)`** - Check file extensions
+
+#### Model Management (`cortex_engine.utils.model_checker`)
+- **`model_checker.check_ollama_service()`** - Check if Ollama is running
+- **`model_checker.get_available_models()`** - List available models
+- **`model_checker.check_ingestion_requirements(include_images=True)`** - Check models for ingestion
+- **`model_checker.check_research_requirements()`** - Check models for research
+- **`model_checker.format_status_message(results)`** - Format user-friendly status messages
+
+#### Safe Command Execution (`cortex_engine.utils.command_executor`)
+- **`SafeCommandExecutor.execute_command(cmd, timeout=60)`** - Execute commands safely
+- **`display_command_executor_widget(title, suggested_cmds)`** - Streamlit command widget
+- **`display_model_installer_widget()`** - Streamlit model installer widget
+
+#### Platform Detection (`cortex_engine.utils.default_paths`)
+- **`get_default_ai_database_path()`** - Get platform-aware database path
+- **`get_default_knowledge_source_path()`** - Get platform-aware knowledge source path  
+- **`get_platform_info()`** - Get platform information for debugging
+
+#### Configuration (`cortex_engine.utils.config_utils`)
+- **`get_env_var(key, default=None, required=False)`** - Get environment variables safely
+- **`validate_model_config(config)`** - Validate model configuration
+- **`validate_database_config(config)`** - Validate database configuration
+- **`merge_configs(*configs)`** - Merge multiple configuration dictionaries
+
+#### Ollama Integration (`cortex_engine.utils.ollama_utils`)
+- **`check_ollama_service(host, port)`** - Check Ollama service status
+- **`get_ollama_status_message(is_running, error)`** - Get user-friendly status message
+- **`format_ollama_error_for_user(operation, error_details)`** - Format user-friendly error messages
+
+### 📋 Common Import Patterns
+
+```python
+# Most common utilities
+from cortex_engine.utils import (
+    convert_windows_to_wsl_path,
+    normalize_path, 
+    ensure_directory,
+    get_logger,
+    get_file_hash,
+    InputValidator
+)
+
+# Specialized utilities
+from cortex_engine.utils.model_checker import model_checker
+from cortex_engine.utils.command_executor import SafeCommandExecutor
+from cortex_engine.utils.default_paths import get_default_ai_database_path
+```
+
+### 🚨 Development Guidelines
+
+1. **Always check this registry** before writing path handling, validation, or file operations
+2. **Use `get_logger(__name__)`** instead of `logging.getLogger(__name__)`
+3. **Use `InputValidator`** for all user input sanitization  
+4. **Use `model_checker`** before AI operations to verify model availability
+5. **Use path utilities** instead of manual path manipulation
+6. **Use `ensure_directory()`** instead of `os.makedirs()` or `Path.mkdir()`
+7. **Use centralized config utilities** instead of direct environment variable access
 
 ### System Status Monitoring
 

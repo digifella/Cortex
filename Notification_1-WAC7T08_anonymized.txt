@@ -1,0 +1,41 @@
+[ANONYMIZED DOCUMENT]
+Original file: Notification_1-WAC7T08.PDF
+Anonymized on: 2025-08-28 17:38:18,613
+Entities replaced: 40
+
+--- DOCUMENT CONTENT ---
+
+Person [ Person Q 1 of 3
+Record of Registration
+for Person J name information for:
+ 
+Person [ Person R Record of Registration contains information recorded on the Person H and Person I's (Company 9) register under section 33(8) of the 
+Company 4 2011.
+Date: 25 September 2019
+Next renewal date: 25 September 2028
+Record of registration issued by the Person K and Person F on 27 August 2025
+Person E Operations
+Company 2
+Person [ Person Q 2 of 3
+ Summary of Person V details
+Person V:
+Person [ Person G date: 25 September 2019
+Status: Person M of registration: 3 Person Z renewal date:25 September 2028
+Person V Company 8 details
+Person V Company 8: Company 6. LTD.
+Company 8 type: Person U
+Company 10: [PHONE]8
+Person D for service of documents
+Company 7
+Location 2 VIC 3001
+Location 3
+        Principal place of business
+3607 / 7 Person W
+Southbank VIC 3006
+Person S
+Location 1
+Person P every effort has been made to ensure the reliability and accuracy of the 
+information in Person X, Company 9 does not guarantee or warrant the accuracy or 
+authenticity of the information. Company 9 will not be liable for any damage or loss arising 
+from any incorrect or incomplete information provided.
+Person [ Person Q 3 of 3

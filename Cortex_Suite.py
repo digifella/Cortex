@@ -1,9 +1,9 @@
 # ## File: Cortex_Suite.py
-# Version: v3.1.0 (Database Status Enhancement)
-# Date: 2025-08-26
+# Version: v4.0.4
+# Date: 2025-08-28
 # Purpose: A central Streamlit launchpad for the integrated Cortex Suite.
-#          - FEATURE (v3.1.0): Added comprehensive database status display in sidebar
-#            showing database path, directory existence, knowledge base status, and document count.
+#          - FEATURE (v4.0.0): Centralized version management with single source of truth
+#          - FEATURE (v4.0.4): Simplified Document Anonymizer interface with auto-processing
 
 import streamlit as st
 import sys
@@ -17,11 +17,8 @@ sys.path.insert(0, str(project_root))
 from cortex_engine.help_system import help_system
 from cortex_engine.utils.model_checker import model_checker
 from cortex_engine.system_status import system_status
+from cortex_engine.version_config import get_version_string, get_version_display, VERSION_METADATA
 
-# Application version constant for distribution sync
-APP_VERSION = "v3.1.1"
-
-# --- Page Setup ---
 st.set_page_config(
     page_title="Cortex Suite",
     page_icon="🚀",
@@ -39,7 +36,7 @@ except Exception:
 if not setup_complete:
     # Show setup progress page
     st.title("🔧 Cortex Suite Setup in Progress")
-    st.caption("Version v3.1.0 - Database Status Enhancement")
+    st.caption(get_version_display())
     
     # Progress bar
     progress_percent = setup_info.get("progress_percent", 0)
@@ -101,7 +98,7 @@ if not setup_complete:
 else:
     # Normal main page
     st.title("🚀 Welcome to the Project Cortex Suite")
-    st.caption("Version v3.0.0 (Enhanced Visual Processing Integration)")
+    st.caption(get_version_display())
     
     # What's New section
     with st.expander("✨ What's New in Recent Updates", expanded=False):
@@ -323,10 +320,10 @@ st.divider()
 # Latest code changes footer
 st.markdown("---")
 st.markdown(
-    """
+    f"""
     <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
-        <strong>🕒 Latest Code Changes:</strong> 2025-08-27<br>
-        <em>UI Organization Enhancement: Created consolidated Maintenance page (13_Maintenance.py) combining database maintenance, system terminal, setup management, and backup functions. Moved maintenance functions from Knowledge Ingest and System Terminal pages for better organization and future password protection capability.</em>
+        <strong>🕒 Latest Code Changes:</strong> {VERSION_METADATA['release_date']}<br>
+        <em>{VERSION_METADATA['description']}</em>
     </div>
     """, 
     unsafe_allow_html=True
