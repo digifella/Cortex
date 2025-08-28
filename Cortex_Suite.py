@@ -1,9 +1,11 @@
 # ## File: Cortex_Suite.py
-# Version: v4.0.4
-# Date: 2025-08-28
+# Version: v4.1.1
+# Date: 2025-08-29
 # Purpose: A central Streamlit launchpad for the integrated Cortex Suite.
 #          - FEATURE (v4.0.0): Centralized version management with single source of truth
-#          - FEATURE (v4.0.4): Simplified Document Anonymizer interface with auto-processing
+#          - FEATURE (v4.0.4): Simplified Document Anonymizer interface with auto-processing  
+#          - FEATURE (v4.1.0): Advanced Document Summarizer with intelligent AI analysis
+#          - BUGFIX (v4.1.1): GPU acceleration, timeout fixes, and improved reliability
 
 import streamlit as st
 import sys
@@ -145,6 +147,8 @@ Please select a tool from the sidebar on the left to begin your workflow:
 -   **📝 Document Anonymizer:** NEW! Replace identifying information in documents with generic placeholders (Person A, Company 1, etc.) for privacy protection.
 
 -   **💡 Idea Generator:** NEW! Transform your knowledge into innovative concepts using the Double Diamond methodology (Discover, Define, Develop, Deliver) for structured ideation.
+
+-   **📄 Document Summarizer:** NEW! Generate intelligent summaries from any document with multiple detail levels (Highlights, Summary, Detailed Analysis). Perfect for extracting key insights from lengthy reports, research papers, and proposals.
 
 This unified interface provides a seamless workflow from initial research to final document generation.
 """)

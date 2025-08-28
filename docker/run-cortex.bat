@@ -9,9 +9,9 @@ setlocal enabledelayedexpansion
 
 echo.
 echo ===============================================
-echo    CORTEX SUITE v4.0.4 (Centralized Version Management)
+echo    CORTEX SUITE v4.1.1 (Document Summarizer Optimization)
 echo    Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64
-echo    Major refactor with centralized versioning, comprehensive cleanup (2025-08-28)
+echo    GPU acceleration, timeout fixes, and improved reliability (2025-08-29)
 echo    Date: %date% %time%
 echo ===============================================
 echo.

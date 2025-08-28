@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.0.1"
+CORTEX_VERSION = "4.1.1"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
-    "minor": 0,
+    "minor": 1,
     "patch": 1,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -24,20 +24,28 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-08-28",
-    "release_name": "Knowledge Maintenance Consolidation",
-    "description": "Moved knowledge maintenance functions from Collection Management to Maintenance page for better organization",
-    "breaking_changes": [
-        "Knowledge maintenance functions moved from Collection Management page to Maintenance page"
-    ],
+    "release_date": "2025-08-29",
+    "release_name": "Document Summarizer Optimization",
+    "description": "Enhanced Document Summarizer with GPU acceleration, timeout fixes, and improved reliability",
+    "breaking_changes": [],
     "new_features": [
-        "Enhanced Maintenance page with database deduplication functionality",
-        "Comprehensive knowledge base management in single location"
+        "GPU acceleration with automatic model pre-loading for faster processing",
+        "Adaptive timeout system (5-15 minutes) based on document size and complexity",
+        "Smart document chunking with size-specific optimization for each summary level",
+        "DOCX fallback reader support using python-docx for improved file compatibility"
     ],
     "improvements": [
-        "Collection Management page now focused exclusively on collections",
-        "Better separation of concerns between pages",
-        "Clearer user navigation with maintenance functions in dedicated page"
+        "Document Summarizer now uses GPU memory persistence (10-minute keep-alive)",
+        "Aggressive chunking strategy prevents timeouts: Highlights (15k), Summary (8k), Detailed (6k tokens)",
+        "Enhanced progress feedback with chunk-by-chunk processing status",
+        "Better error handling with specific recommendations for large documents",
+        "Improved file upload with proper temporary file permissions and cleanup"
+    ],
+    "bug_fixes": [
+        "Fixed DOCX file processing errors by adding python-docx fallback reader",
+        "Fixed timeout issues for large documents through intelligent chunking",
+        "Fixed 403 errors in file upload through proper temporary file handling",
+        "Fixed GPU utilization issues with automatic model loading and persistence"
     ]
 }
 

@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.0.4"
+CORTEX_VERSION = "4.1.1"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
-    "minor": 0,
-    "patch": 4,
+    "minor": 1,
+    "patch": 1,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,30 +24,28 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-08-28",
-    "release_name": "Simplified Anonymizer Interface",
-    "description": "Completely simplified Document Anonymizer with auto-processing and download-only interface",
-    "breaking_changes": [
-        "Removed complex multi-tab interface (Browse Files, Browse Directory, Manual Paths)",
-        "Removed preview functionality - files now download only",
-        "Removed manual processing button - files process automatically on upload"
-    ],
+    "release_date": "2025-08-29",
+    "release_name": "Document Summarizer Optimization",
+    "description": "Enhanced Document Summarizer with GPU acceleration, timeout fixes, and improved reliability",
+    "breaking_changes": [],
     "new_features": [
-        "Single drag-and-drop interface with immediate processing",
-        "Automatic file processing upon upload",
-        "Streamlined download-only results interface"
+        "GPU acceleration with automatic model pre-loading for faster processing",
+        "Adaptive timeout system (5-15 minutes) based on document size and complexity",
+        "Smart document chunking with size-specific optimization for each summary level",
+        "DOCX fallback reader support using python-docx for improved file compatibility"
     ],
     "improvements": [
-        "Simplified interface from complex multi-tab to single drag-drop area",
-        "Removed unnecessary preview functionality that was causing navigation issues",
-        "Auto-processing eliminates need for manual 'Start Anonymization' button",
-        "Cleaner configuration with persistent session state storage",
-        "Reduced file complexity from 499 lines to 436 lines (-13%)"
+        "Document Summarizer now uses GPU memory persistence (10-minute keep-alive)",
+        "Aggressive chunking strategy prevents timeouts: Highlights (15k), Summary (8k), Detailed (6k tokens)",
+        "Enhanced progress feedback with chunk-by-chunk processing status",
+        "Better error handling with specific recommendations for large documents",
+        "Improved file upload with proper temporary file permissions and cleanup"
     ],
     "bug_fixes": [
-        "Fixed eye icon redirect to Idea Generator by removing preview functionality",
-        "Fixed key conflicts in Streamlit components",
-        "Eliminated complex tab-based navigation issues"
+        "Fixed DOCX file processing errors by adding python-docx fallback reader",
+        "Fixed timeout issues for large documents through intelligent chunking",
+        "Fixed 403 errors in file upload through proper temporary file handling",
+        "Fixed GPU utilization issues with automatic model loading and persistence"
     ]
 }
 
