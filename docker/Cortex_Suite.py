@@ -1,28 +1,5 @@
 # ## File: Cortex_Suite.py
-# Version: v4.1.1
-# Date: 2025-08-29
-# Purpose: A central Streamlit launchpad for the integrated Cortex Suite.
-#          - FEATURE (v4.0.0): Centralized version management with single source of truth
-#          - FEATURE (v4.0.4): Simplified Document Anonymizer interface with auto-processing  
-#          - FEATURE (v4.1.0): Advanced Document Summarizer with intelligent AI analysis
-#          - BUGFIX (v4.1.1): GPU acceleration, timeout fixes, and improved reliability
-
-import streamlit as st
-import sys
-import time
-from pathlib import Path
-
-# Add project root to path for imports
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
-
-from cortex_engine.help_system import help_system
-from cortex_engine.utils.model_checker import model_checker
-from cortex_engine.system_status import system_status
-from cortex_engine.version_config import get_version_string, get_version_display, VERSION_METADATA
-
-st.set_page_config(
-    page_title="Cortex Suite",
+# Version: v4.1.2"Cortex Suite",
     page_icon="🚀",
     layout="wide"
 )
