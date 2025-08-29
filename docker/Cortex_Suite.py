@@ -13,7 +13,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from cortex_engine.system_status import system_status
-from cortex_engine.version_config import get_version_display
+from cortex_engine.version_config import get_version_display, VERSION_METADATA
 from cortex_engine.utils.model_checker import model_checker
 from cortex_engine.help_system import help_system
 
