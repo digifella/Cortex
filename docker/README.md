@@ -11,9 +11,9 @@ Please be aware that the system operates in a WSL2 environment, so all paths sho
 This document reflects recent major enhancements to the **Project Cortex Suite**, now featuring a consolidated Maintenance page for all administrative functions, improved UI organization, and enhanced user experience.
 
 *   **[NEW] ARM64 Compatibility & Multi-Architecture Support (v4.1.2)**
-    *   **Status:** Complete. Completely simplified Document Anonymizer with auto-processing and download-only interface.
-    *   **Capabilities:** Single drag-and-drop interface with immediate processing, streamlined results with download buttons only.
-    *   **Benefits:** Eliminated complex multi-tab navigation, fixed redirect issues, auto-processing for better UX.
+    *   **Status:** Complete. Universal compatibility across x86_64, ARM64, Apple Silicon, and Windows Snapdragon processors.
+    *   **Capabilities:** CPU-first installation strategy with optional GPU acceleration upgrades. Zero architecture detection required.
+    *   **Benefits:** Immediate Docker compatibility on all platforms, eliminated hardcoded CUDA dependencies, flexible PyTorch ranges.
 
 *   **[ENHANCED] Knowledge Search: Direct ChromaDB + Progress Indicators (v4.0.2)**
     *   **Status:** Completely rebuilt. Knowledge Search now bypasses LlamaIndex entirely, using direct ChromaDB queries with comprehensive timeout protection and real-time progress indicators.
@@ -150,6 +150,72 @@ GRAPHVIZ_DOT_EXECUTABLE="/usr/bin/dot"
 
 **5. Run the Streamlit Application:**```bash
 streamlit run Cortex_Suite.py```
+
+### 6.5. ARM64 & Multi-Architecture Support (v4.1.2+)
+
+The Cortex Suite now provides **universal compatibility** across all major processor architectures:
+
+#### **✅ Supported Architectures**
+- **Intel x86_64**: Windows, Linux, macOS (with optional NVIDIA GPU acceleration)
+- **ARM64 Snapdragon**: Windows on ARM (Surface Pro X, Dev Kits, etc.)
+- **Apple Silicon**: M1, M2, M3 MacBooks and iMacs (with automatic MPS acceleration) 
+- **Linux ARM64**: Various ARM64 Linux distributions and servers
+- **Docker Multi-Arch**: Universal container support across all platforms
+
+#### **🔧 Installation Strategy**
+The system uses a **CPU-first approach** that works immediately on all architectures:
+
+```bash
+# Works universally on ANY architecture:
+pip install -r requirements.txt
+```
+
+#### **⚡ GPU Acceleration (Optional Upgrade)**
+For performance enhancement on supported systems:
+
+**Intel x86_64 with NVIDIA GPU:**
+```bash
+# After base installation:
+pip uninstall torch torchvision
+pip install torch==2.3.1 torchvision==0.18.1 --extra-index-url https://download.pytorch.org/whl/cu121
+```
+
+**Apple Silicon (Automatic):**
+```bash
+# MPS acceleration is automatically enabled when available
+# No additional steps required
+```
+
+#### **🐳 Docker Support**
+Docker builds now work seamlessly across architectures:
+
+```bash
+# Works on ANY system:
+docker build -t cortex-suite .
+
+# Explicit multi-architecture build:
+docker buildx build --platform linux/amd64,linux/arm64 -t cortex-suite .
+```
+
+#### **🔍 Architecture Detection**
+Check your system architecture:
+```bash
+# Check processor type
+uname -m
+
+# Verify PyTorch installation
+python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA: {torch.cuda.is_available()}'); print(f'MPS: {torch.backends.mps.is_available()}')"
+```
+
+#### **🛠️ Troubleshooting**
+If you encounter architecture-related issues:
+
+1. **"No matching distribution" errors**: Update to v4.1.2+ requirements.txt
+2. **Docker build failures**: Ensure using latest Docker distribution files
+3. **Performance concerns**: Follow GPU acceleration upgrade path for your architecture
+4. **Import errors**: Check that all dependencies installed correctly
+
+For comprehensive troubleshooting, see `ARM64_COMPATIBILITY_GUIDE.md`.
 
 ### 7. Version History & Future Roadmap
 
