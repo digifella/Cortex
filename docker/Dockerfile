@@ -35,23 +35,9 @@ COPY --chown=cortex:cortex requirements.txt .
 # Install Python dependencies (architecture-neutral)
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install PyTorch with intelligent platform detection for universal compatibility
-# Supports Intel x86_64, Apple Silicon M-series, ARM64 PCs
-RUN ARCH=$(uname -m) && \
-    echo "🔍 Detected architecture: $ARCH" && \
-    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
-        echo "🍎 ARM64 architecture detected (Apple Silicon M-series/ARM64 PC)"; \
-        echo "📦 Installing PyTorch CPU-optimized for ARM64"; \
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu; \
-    elif [ "$ARCH" = "x86_64" ] && nvidia-smi > /dev/null 2>&1; then \
-        echo "🚀 Intel x86_64 with NVIDIA GPU detected"; \
-        echo "⚡ Installing PyTorch with CUDA acceleration"; \
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121; \
-    else \
-        echo "💻 Intel x86_64 CPU-only detected"; \
-        echo "📦 Installing PyTorch CPU-optimized"; \
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu; \
-    fi
+# PyTorch installation is now handled in requirements.txt with CPU-only wheels
+# This provides universal compatibility across x86_64, ARM64, and Snapdragon architectures
+# For GPU acceleration, users can manually install CUDA wheels post-deployment
 
 # Add user's local bin to PATH for installed packages
 ENV PATH="/home/cortex/.local/bin:$PATH"

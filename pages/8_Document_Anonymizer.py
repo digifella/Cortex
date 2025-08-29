@@ -1,5 +1,5 @@
 # ## File: pages/8_Document_Anonymizer.py
-# Version: v4.0.4
+# Version: v4.1.2
 # Date: 2025-08-28
 # Purpose: Simplified document anonymization interface with drag-and-drop processing.
 #          Processes documents to replace identifying information with generic placeholders.

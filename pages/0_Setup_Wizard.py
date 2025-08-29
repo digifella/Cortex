@@ -1,5 +1,5 @@
 # Setup Wizard Page
-# Version: v4.0.4
+# Version: v4.1.2
 # Date: 2025-08-21
 # Purpose: Guided setup and onboarding for Cortex Suite with real-time logging
 
@@ -24,7 +24,7 @@ logger = get_logger(__name__)
 st.set_page_config(page_title="Setup Wizard", layout="wide", page_icon="🧙‍♂️")
 
 # Page version
-PAGE_VERSION = "v4.0.4"
+PAGE_VERSION = "v4.1.2"
 
 st.title("🧙‍♂️ Cortex Suite Setup Wizard")
 st.caption(f"Version: {PAGE_VERSION}")

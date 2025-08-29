@@ -1,5 +1,5 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v4.0.4
+# Version: v4.1.2
 # Date: 2025-08-26
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
 #          - BUGFIX (v22.4.3): Fixed UnboundLocalError where 'config' variable was referenced before
@@ -44,7 +44,7 @@ from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 logger = get_logger(__name__)
 
 # Page configuration
-PAGE_VERSION = "v4.0.4"
+PAGE_VERSION = "v4.1.2"
 
 st.set_page_config(page_title="Knowledge Search", layout="wide")
 
