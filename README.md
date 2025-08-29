@@ -10,7 +10,7 @@ Please be aware that the system operates in a WSL2 environment, so all paths sho
 
 This document reflects recent major enhancements to the **Project Cortex Suite**, now featuring a consolidated Maintenance page for all administrative functions, improved UI organization, and enhanced user experience.
 
-*   **[NEW] Simplified Anonymizer Interface (v4.0.4)**
+*   **[NEW] ARM64 Compatibility & Multi-Architecture Support (v4.1.2)**
     *   **Status:** Complete. Completely simplified Document Anonymizer with auto-processing and download-only interface.
     *   **Capabilities:** Single drag-and-drop interface with immediate processing, streamlined results with download buttons only.
     *   **Benefits:** Eliminated complex multi-tab navigation, fixed redirect issues, auto-processing for better UX.
