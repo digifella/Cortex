@@ -36,13 +36,26 @@ class LLMServiceManager:
     availability checking, and error handling.
     """
     
-    # Task-specific model mappings
-    TASK_MODELS = {
-        TaskType.PROPOSALS: "mistral-small3.2",
-        TaskType.KNOWLEDGE_OPS: "mistral-small3.2", 
-        TaskType.RESEARCH: "mistral:7b-instruct-v0.3-q4_K_M",  # Local fallback
-        TaskType.IDEATION: "mistral"
-    }
+    # Task-specific model mappings with intelligent selection
+    @staticmethod
+    def _get_smart_model():
+        """Get recommended model based on system resources"""
+        try:
+            from cortex_engine.utils.smart_model_selector import get_recommended_text_model
+            return get_recommended_text_model()
+        except Exception:
+            return "mistral:7b-instruct-v0.3-q4_K_M"  # Safe fallback
+    
+    @classmethod
+    def get_task_models(cls):
+        """Get task-specific models with smart selection"""
+        smart_model = cls._get_smart_model()
+        return {
+            TaskType.PROPOSALS: smart_model,
+            TaskType.KNOWLEDGE_OPS: smart_model, 
+            TaskType.RESEARCH: "mistral:7b-instruct-v0.3-q4_K_M",  # Always efficient for research
+            TaskType.IDEATION: smart_model
+        }
     
     # Provider constraints by task
     TASK_PROVIDER_CONSTRAINTS = {
@@ -170,7 +183,8 @@ class LLMServiceManager:
     
     def _create_llm_instance(self, provider: LLMProvider) -> Any:
         """Create LLM instance for the specified provider."""
-        model = self.TASK_MODELS.get(self.task_type, "mistral")
+        task_models = self.get_task_models()
+        model = task_models.get(self.task_type, "mistral")
         
         if provider == LLMProvider.LOCAL_OLLAMA:
             from .utils.smart_ollama_llm import create_smart_ollama_llm
@@ -209,7 +223,7 @@ class LLMServiceManager:
             "status": "ready",
             "message": f"✅ {provider.value} ready for {self.task_type.value}",
             "provider": provider.value,
-            "model": self.TASK_MODELS.get(self.task_type, "Default")
+            "model": self.get_task_models().get(self.task_type, "Default")
         }
 
 def create_llm_service(task_type: str, user_provider: str = None) -> LLMServiceManager:

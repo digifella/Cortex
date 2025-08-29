@@ -141,6 +141,7 @@ preshed==3.0.10
 propcache==0.3.2
 proto-plus==1.26.1
 protobuf==4.25.8
+psutil>=5.9.0
 pyarrow==20.0.0
 pyasn1==0.6.1
 pyasn1_modules==0.4.2

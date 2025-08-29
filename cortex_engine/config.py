@@ -57,11 +57,19 @@ EMBED_MODEL = "BAAI/bge-base-en-v1.5"  # Embedding model for vector storage
 VLM_MODEL = "llava:7b"  # Vision language model for image processing - upgraded to 7B parameter model
 
 # --- Task-Specific Model Configuration ---
+# Dynamic Model Selection Based on System Resources
+# Import smart model selector for intelligent model selection
+try:
+    from cortex_engine.utils.smart_model_selector import get_recommended_text_model
+    SMART_MODEL_SELECTION = get_recommended_text_model()
+except Exception:
+    SMART_MODEL_SELECTION = "mistral:7b-instruct-v0.3-q4_K_M"  # Fallback to efficient model
+
 # Proposal Generation: MUST be local, optimized for instruction following
-PROPOSAL_LLM_MODEL = "mistral-small3.2"  # Mistral Small 3.2 for better proposals
+PROPOSAL_LLM_MODEL = SMART_MODEL_SELECTION  # Intelligent selection based on system resources
 
 # Knowledge Base Operations: Local, optimized for retrieval and indexing  
-KB_LLM_MODEL = "mistral-small3.2"  # Same as proposals for consistency
+KB_LLM_MODEL = SMART_MODEL_SELECTION  # Same as proposals for consistency
 
 # Research Assistant Models: Flexible (user choice in UI)
 RESEARCH_LOCAL_MODEL = "mistral:7b-instruct-v0.3-q4_K_M"  # Fast local option
@@ -71,7 +79,7 @@ RESEARCH_CLOUD_MODEL = "gemini-1.5-flash"  # Powerful cloud option
 MODEL_REGISTRY_FILE = os.path.join(BASE_DATA_PATH, "model_registry.json")
 
 # Legacy/Fallback
-LLM_MODEL = "mistral-small:3.2"  # Default fallback
+LLM_MODEL = SMART_MODEL_SELECTION  # Intelligent default based on system resources
 
 # --- UI Defaults ---
 # SPRINT 21 CHANGE: Removed image files from default exclusions.

@@ -137,7 +137,7 @@ def initialize_script():
         logging.warning("AI-enhanced metadata extraction will be disabled. Documents will be processed with basic metadata only.")
         Settings.llm = None  # Will be handled in analysis function
     else:
-        Settings.llm = create_smart_ollama_llm(model="mistral:7b-instruct-v0.3-q4_K_M", request_timeout=120.0)
+        Settings.llm = create_smart_ollama_llm(model="mistral:7b-instruct-v0.3-q4_K_M", request_timeout=600.0)
         logging.info("Ollama connected successfully with modern API")
     
     Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
