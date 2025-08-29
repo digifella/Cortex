@@ -205,8 +205,8 @@ class VersionManager:
             
             # Update version in comments and captions
             content = re.sub(
-                r'Version:\s*v\d+\.\d+\.\d+[^"\']*',
-                f'Version: {version}',
+                r'# Version:\s*v?\d+\.\d+\.\d+',
+                f'# Version: {version}',
                 content
             )
             
