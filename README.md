@@ -1,6 +1,6 @@
 # **`README.md`**
 
-**Version:** 4.0.4 (Simplified Anonymizer Interface)
+**Version:** 4.1.2 (ARM64 Compatibility & Multi-Architecture Support)
 **Date:** 2025-08-28
 
 **Prelim:**
