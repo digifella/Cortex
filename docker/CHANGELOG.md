@@ -11,6 +11,27 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v4.1.3 - 2025-08-30
+
+### Intelligent Model Selection & Resource Management
+
+Smart model selection based on system resources prevents memory crashes and optimizes performance across all hardware configurations
+
+### ✨ New Features
+- Intelligent model selection based on available system memory and Docker resource limits
+- Automatic Docker environment detection with memory limit handling
+- Real-time resource monitoring with user-friendly Streamlit alerts
+- Smart model tier selection (efficient vs powerful) based on system capabilities
+- Resource compatibility checking before model loading
+
+### 🚀 Improvements
+- Default model changed from mistral-small3.2 (26GB) to mistral:7b-instruct-v0.3-q4_K_M (4.4GB)
+- Increased document ingestion timeout from 2 minutes to 10 minutes for large documents
+- Dynamic task-specific model mapping adapts to system resources
+- Memory usage reduced by 80%+ through intelligent model selection
+- Added psutil dependency for cross-platform system resource monitoring
+
 ## v4.1.2 - 2025-08-29
 
 ### ARM64 Compatibility & Multi-Architecture Support

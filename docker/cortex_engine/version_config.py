@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.1.2"
+CORTEX_VERSION = "4.1.3"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
     "minor": 1,
-    "patch": 2,
+    "patch": 3,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,28 +24,29 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-08-29",
-    "release_name": "ARM64 Compatibility & Multi-Architecture Support",
-    "description": "Fixed numpy dependency conflicts on ARM64 processors (Windows Snapdragon, Apple Silicon) with universal CPU-first architecture",
+    "release_date": "2025-08-30",
+    "release_name": "Intelligent Model Selection & Resource Management",
+    "description": "Smart model selection based on system resources prevents memory crashes and optimizes performance across all hardware configurations",
     "breaking_changes": [],
     "new_features": [
-        "Universal ARM64 and Snapdragon processor support for Windows, Mac, and Linux",
-        "Intelligent PyTorch installation strategy (CPU-first with optional GPU upgrade)",
-        "Multi-architecture Docker builds supporting x86_64, ARM64, and aarch64",
-        "Optional CUDA dependency handling with clear upgrade paths"
+        "Intelligent model selection based on available system memory and Docker resource limits",
+        "Automatic Docker environment detection with memory limit handling", 
+        "Real-time resource monitoring with user-friendly Streamlit alerts",
+        "Smart model tier selection (efficient vs powerful) based on system capabilities",
+        "Resource compatibility checking before model loading"
     ],
     "improvements": [
-        "Removed hardcoded NVIDIA CUDA dependencies from core requirements.txt",
-        "Flexible PyTorch version ranges (>=2.3.1,<2.5.0) for better compatibility", 
-        "CPU-optimized installations work immediately on all architectures",
-        "Clear documentation for architecture-specific GPU acceleration upgrades",
-        "Follows dependency resolution best practices from DEPENDENCY_RESOLUTION_GUIDE.md"
+        "Default model changed from mistral-small3.2 (26GB) to mistral:7b-instruct-v0.3-q4_K_M (4.4GB)",
+        "Increased document ingestion timeout from 2 minutes to 10 minutes for large documents",
+        "Dynamic task-specific model mapping adapts to system resources",
+        "Memory usage reduced by 80%+ through intelligent model selection",
+        "Added psutil dependency for cross-platform system resource monitoring"
     ],
     "bug_fixes": [
-        "Fixed 'No matching distribution found for nvidia-cublas-cu12' on ARM64 processors",
-        "Fixed Windows Snapdragon Docker build failures due to x86_64-specific CUDA libs",
-        "Fixed PyTorch dependency conflicts by using flexible version ranges",
-        "Fixed triton dependency issues on non-CUDA systems"
+        "Fixed 7-minute Ollama timeout errors during Word document ingestion",
+        "Fixed Docker container memory exhaustion causing system crashes",
+        "Fixed 800%+ CPU usage display issues in Docker Desktop (misleading metrics)",
+        "Fixed WSL memory consumption issues with large language models"
     ]
 }
 
