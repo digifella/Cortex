@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.1.1"
+CORTEX_VERSION = "4.1.2"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
     "minor": 1,
-    "patch": 1,
+    "patch": 2,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,27 +25,27 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2025-08-29",
-    "release_name": "Document Summarizer Optimization",
-    "description": "Enhanced Document Summarizer with GPU acceleration, timeout fixes, and improved reliability",
+    "release_name": "ARM64 Compatibility & Multi-Architecture Support",
+    "description": "Fixed numpy dependency conflicts on ARM64 processors (Windows Snapdragon, Apple Silicon) with universal CPU-first architecture",
     "breaking_changes": [],
     "new_features": [
-        "GPU acceleration with automatic model pre-loading for faster processing",
-        "Adaptive timeout system (5-15 minutes) based on document size and complexity",
-        "Smart document chunking with size-specific optimization for each summary level",
-        "DOCX fallback reader support using python-docx for improved file compatibility"
+        "Universal ARM64 and Snapdragon processor support for Windows, Mac, and Linux",
+        "Intelligent PyTorch installation strategy (CPU-first with optional GPU upgrade)",
+        "Multi-architecture Docker builds supporting x86_64, ARM64, and aarch64",
+        "Optional CUDA dependency handling with clear upgrade paths"
     ],
     "improvements": [
-        "Document Summarizer now uses GPU memory persistence (10-minute keep-alive)",
-        "Aggressive chunking strategy prevents timeouts: Highlights (15k), Summary (8k), Detailed (6k tokens)",
-        "Enhanced progress feedback with chunk-by-chunk processing status",
-        "Better error handling with specific recommendations for large documents",
-        "Improved file upload with proper temporary file permissions and cleanup"
+        "Removed hardcoded NVIDIA CUDA dependencies from core requirements.txt",
+        "Flexible PyTorch version ranges (>=2.3.1,<2.5.0) for better compatibility", 
+        "CPU-optimized installations work immediately on all architectures",
+        "Clear documentation for architecture-specific GPU acceleration upgrades",
+        "Follows dependency resolution best practices from DEPENDENCY_RESOLUTION_GUIDE.md"
     ],
     "bug_fixes": [
-        "Fixed DOCX file processing errors by adding python-docx fallback reader",
-        "Fixed timeout issues for large documents through intelligent chunking",
-        "Fixed 403 errors in file upload through proper temporary file handling",
-        "Fixed GPU utilization issues with automatic model loading and persistence"
+        "Fixed 'No matching distribution found for nvidia-cublas-cu12' on ARM64 processors",
+        "Fixed Windows Snapdragon Docker build failures due to x86_64-specific CUDA libs",
+        "Fixed PyTorch dependency conflicts by using flexible version ranges",
+        "Fixed triton dependency issues on non-CUDA systems"
     ]
 }
 

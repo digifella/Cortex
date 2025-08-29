@@ -10,6 +10,26 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v4.1.2 - 2025-08-29
+
+### ARM64 Compatibility & Multi-Architecture Support
+
+Fixed numpy dependency conflicts on ARM64 processors (Windows Snapdragon, Apple Silicon) with universal CPU-first architecture
+
+### ✨ New Features
+- Universal ARM64 and Snapdragon processor support for Windows, Mac, and Linux
+- Intelligent PyTorch installation strategy (CPU-first with optional GPU upgrade)
+- Multi-architecture Docker builds supporting x86_64, ARM64, and aarch64
+- Optional CUDA dependency handling with clear upgrade paths
+
+### 🚀 Improvements
+- Removed hardcoded NVIDIA CUDA dependencies from core requirements.txt
+- Flexible PyTorch version ranges (>=2.3.1,<2.5.0) for better compatibility
+- CPU-optimized installations work immediately on all architectures
+- Clear documentation for architecture-specific GPU acceleration upgrades
+- Follows dependency resolution best practices from DEPENDENCY_RESOLUTION_GUIDE.md
+
 ## v4.0.4 - 2025-08-28
 
 ### Simplified Anonymizer Interface
