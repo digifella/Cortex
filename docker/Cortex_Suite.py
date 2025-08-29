@@ -1,5 +1,22 @@
 # ## File: Cortex_Suite.py
-# Version: v4.1.2"Cortex Suite",
+# Version: v4.1.2
+# Date: 2025-08-29
+# Purpose: Main entry point for the Cortex Suite application
+
+import streamlit as st
+import sys
+from pathlib import Path
+
+# Add the project root to the Python path for imports
+project_root = Path(__file__).parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from cortex_engine.system_status import system_status
+from cortex_engine.version_config import get_version_display
+
+st.set_page_config(
+    page_title="Cortex Suite",
     page_icon="🚀",
     layout="wide"
 )
