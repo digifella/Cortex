@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.3.0"
+CORTEX_VERSION = "4.4.0"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
-    "minor": 3,
+    "minor": 4,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -24,33 +24,33 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-08-30",
-    "release_name": "Critical Search Functionality Restoration",
-    "description": "Major fix for search functionality with embedding dimension mismatch resolution and robust text-based fallback search system",
+    "release_date": "2025-08-31",
+    "release_name": "Database Management & Clean Start System",
+    "description": "Comprehensive database maintenance system with Clean Start functionality for ChromaDB schema conflict resolution and complete system reset capabilities",
     "breaking_changes": [],
     "new_features": [
-        "Intelligent search fallback system with text-based search when vector embeddings fail",
-        "Enhanced search diagnostics with embedding dimension mismatch detection",
-        "Robust ChromaDB error handling with graceful degradation to text search",
-        "Multi-strategy search approach prioritizing result accuracy over search method",
-        "Search reliability improvements ensuring results are always returned when documents exist"
+        "Clean Start function for complete system reset and database schema conflict resolution",
+        "Enhanced ChromaDB schema error detection and user guidance in Collection Management",
+        "Comprehensive database cleanup system addressing Docker vs non-Docker conflicts",
+        "Smart error handling for 'collections.config_json_str' column missing errors",
+        "Complete maintenance workflow with guided user experience for database issues"
     ],
     "improvements": [
-        "Fixed critical search functionality that was returning zero results due to embedding dimension conflicts",
-        "Restored GraphRAG search capabilities with proper error handling and fallback mechanisms",
-        "Enhanced search result accuracy by implementing text-based matching when vector search fails",
-        "Improved search performance by detecting and avoiding incompatible embedding operations",
-        "Added comprehensive search debugging and error reporting for better troubleshooting",
-        "Strengthened ChromaDB telemetry error suppression for cleaner user experience",
-        "Enhanced Ollama model service with synchronous fallback for event loop issues"
+        "Enhanced Maintenance page (v4.4.0) with prominent Clean Start functionality",
+        "Improved Collection Management (v4.3.0) with specific schema error detection",
+        "Comprehensive system reset capability removing all databases, logs, and metadata",
+        "Docker compatibility improvements for database schema consistency",
+        "User-friendly error messages with actionable next steps for schema conflicts",
+        "Technical documentation and educational content about ChromaDB version conflicts",
+        "Streamlined database maintenance workflow with one-click solutions"
     ],
     "bug_fixes": [
-        "CRITICAL: Fixed search returning zero results due to embedding dimension mismatch (384 vs 768)",
-        "Fixed GraphRAG health check failing with missing get_db_path import",
-        "Fixed Ollama model service 'Event loop is closed' errors with synchronous fallback",
-        "Fixed ChromaDB telemetry spam with proper warning suppression",
-        "Restored ability to find documents containing search terms (e.g., 61+ documents with 'strategy')",
-        "Fixed search interface showing 'No results found' when documents actually existed in database"
+        "CRITICAL: Fixed ChromaDB 'collections.config_json_str' column missing schema errors",
+        "Resolved Docker vs non-Docker database compatibility conflicts",
+        "Fixed Collection Management page failing to load due to schema mismatches",
+        "Eliminated database corruption issues through comprehensive Clean Start reset",
+        "Fixed inconsistent database states between different deployment environments",
+        "Resolved ChromaDB version incompatibility issues with complete schema refresh"
     ]
 }
 

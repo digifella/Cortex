@@ -1,6 +1,6 @@
 # **`README.md`**
 
-**Version:** v4.3.0 (Critical Search Functionality Restoration)
+**Version:** v4.4.0 (Database Management & Clean Start System)
 **Date:** 2025-08-28
 
 **Prelim:**

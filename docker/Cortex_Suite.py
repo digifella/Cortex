@@ -1,6 +1,6 @@
 # ## File: Cortex_Suite.py
-# Version: v4.3.0
-# Date: 2025-08-30
+# Version: v4.4.0
+# Date: 2025-08-31
 # Purpose: Main entry point for the Cortex Suite application
 
 import streamlit as st
