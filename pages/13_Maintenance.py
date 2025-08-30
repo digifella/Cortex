@@ -1,10 +1,12 @@
 # ## File: pages/13_Maintenance.py
-# Version: v4.3.0
-# Date: 2025-08-27
+# Version: v4.4.0
+# Date: 2025-08-31
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
 #          from various pages into a single, organized maintenance interface.
 #          - BUGFIX (v1.0.1): Fixed import error by using ConfigManager instead of load_config
+#          - ENHANCEMENT (v4.4.0): Added Clean Start function for complete system reset
+#            Specifically addresses ChromaDB schema conflicts and provides fresh installation state
 
 import streamlit as st
 import os
@@ -24,7 +26,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.3.0"
+PAGE_VERSION = "v4.4.0"
 
 # Import Cortex modules
 try:
@@ -52,6 +54,8 @@ if 'show_confirm_clear_log' not in st.session_state:
     st.session_state.show_confirm_clear_log = False
 if 'show_confirm_delete_kb' not in st.session_state:
     st.session_state.show_confirm_delete_kb = False
+if 'show_confirm_clean_start' not in st.session_state:
+    st.session_state.show_confirm_clean_start = False
 if 'maintenance_config' not in st.session_state:
     st.session_state.maintenance_config = None
 
@@ -90,6 +94,113 @@ def delete_knowledge_base(db_path: str):
     
     # Reset the confirmation state  
     st.session_state.show_confirm_delete_kb = False
+
+def perform_clean_start(db_path: str):
+    """Perform complete system reset - removes all data, collections, logs, and configurations for fresh start."""
+    wsl_db_path = convert_windows_to_wsl_path(db_path)
+    
+    try:
+        deleted_items = []
+        
+        with st.spinner("🧹 Performing Clean Start - Complete System Reset..."):
+            # 1. Delete ChromaDB directory (vector database)
+            chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
+            if chroma_db_dir.exists() and chroma_db_dir.is_dir():
+                shutil.rmtree(chroma_db_dir)
+                deleted_items.append(f"ChromaDB vector database: {chroma_db_dir}")
+                logger.info(f"Clean Start: Deleted ChromaDB directory: {chroma_db_dir}")
+            
+            # 2. Delete knowledge graph file
+            graph_file = Path(wsl_db_path) / "knowledge_cortex.gpickle"
+            if graph_file.exists():
+                graph_file.unlink()
+                deleted_items.append(f"Knowledge graph: {graph_file}")
+                logger.info(f"Clean Start: Deleted knowledge graph: {graph_file}")
+            
+            # 3. Clear working collections
+            project_root = Path(__file__).parent.parent
+            collections_file = project_root / "working_collections.json"
+            if collections_file.exists():
+                collections_file.unlink()
+                deleted_items.append(f"Working collections: {collections_file}")
+                logger.info(f"Clean Start: Cleared working collections: {collections_file}")
+            
+            # 4. Clear ingestion logs and metadata
+            logs_dir = project_root / "logs"
+            if logs_dir.exists():
+                for log_file in logs_dir.glob("*.log"):
+                    log_file.unlink()
+                    deleted_items.append(f"Log file: {log_file}")
+                logger.info(f"Clean Start: Cleared logs directory: {logs_dir}")
+            
+            # 5. Clear any cached configuration files
+            config_files_to_clear = [
+                project_root / "cortex_config.json",
+                project_root / "boilerplate.json", 
+                project_root / "staging_ingestion.json"
+            ]
+            
+            for config_file in config_files_to_clear:
+                if config_file.exists():
+                    # For cortex_config.json, only reset database paths, keep other settings
+                    if config_file.name == "cortex_config.json":
+                        try:
+                            with open(config_file, 'r') as f:
+                                config_data = json.load(f)
+                            # Reset database-specific paths but keep other settings
+                            config_data.pop('ai_database_path', None)
+                            config_data.pop('knowledge_source_path', None) 
+                            with open(config_file, 'w') as f:
+                                json.dump(config_data, f, indent=2)
+                            deleted_items.append(f"Reset database paths in: {config_file}")
+                        except Exception as e:
+                            logger.warning(f"Could not reset config file {config_file}: {e}")
+                    else:
+                        config_file.unlink()
+                        deleted_items.append(f"Configuration file: {config_file}")
+            
+            # 6. Clear ingestion recovery metadata  
+            recovery_metadata_dir = Path(wsl_db_path) / "recovery_metadata"
+            if recovery_metadata_dir.exists():
+                shutil.rmtree(recovery_metadata_dir)
+                deleted_items.append(f"Recovery metadata: {recovery_metadata_dir}")
+                logger.info(f"Clean Start: Cleared recovery metadata: {recovery_metadata_dir}")
+            
+            # 7. Clear any temporary files
+            temp_patterns = ["*.tmp", "*.temp", "staging_*", "temp_*"]
+            for pattern in temp_patterns:
+                for temp_file in project_root.glob(pattern):
+                    if temp_file.is_file():
+                        temp_file.unlink()
+                        deleted_items.append(f"Temporary file: {temp_file}")
+        
+        # Success message
+        st.success("✅ **Clean Start completed successfully!**")
+        st.markdown("### 🗑️ Cleaned Items:")
+        for item in deleted_items:
+            st.write(f"- {item}")
+        
+        st.info("""
+        ### 🚀 Next Steps:
+        1. **Navigate to Knowledge Ingest page** to set database path
+        2. **Run document ingestion** to rebuild your knowledge base  
+        3. **Start fresh** - all schema conflicts should be resolved
+        
+        Your system now has a completely clean slate and should work without any ChromaDB schema errors.
+        """)
+        
+        logger.info(f"Clean Start completed successfully - {len(deleted_items)} items cleaned")
+        
+    except Exception as e:
+        error_msg = f"Clean Start failed: {e}"
+        logger.error(f"Clean Start error: {e}")
+        st.error(f"❌ {error_msg}")
+        st.error("""
+        **If Clean Start fails:**
+        1. Try manually deleting the database directory
+        2. Restart the application 
+        3. Check logs for detailed error information
+        """)
 
 @st.cache_resource
 def init_chroma_client(db_path):
@@ -190,6 +301,54 @@ def display_database_maintenance():
     
     db_path = config.get('db_path', '/tmp/cortex_db')
     
+    with st.expander("🚀 Clean Start - Complete System Reset", expanded=True):
+        st.markdown("### 🧹 Clean Start Function")
+        st.warning("""
+        **NEW:** Complete system reset function that addresses database schema issues, collection conflicts, and provides a fresh start.
+        This function is specifically designed to resolve ChromaDB schema errors like 'collections.config_json_str' column missing.
+        """)
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown("""
+            **Clean Start will:**
+            - ✅ Delete entire knowledge base directory (ChromaDB)
+            - ✅ Delete knowledge graph file (.gpickle)  
+            - ✅ Clear ingestion logs and progress files
+            - ✅ Reset working collections (working_collections.json)
+            - ✅ Clear ingestion recovery metadata
+            - ✅ Remove cached configuration files
+            - ✅ Fix ChromaDB schema conflicts and version issues
+            - ✅ Provide complete fresh installation state
+            """)
+            
+            st.info("**Use Clean Start when:**")
+            st.markdown("""
+            - Getting 'collections.config_json_str' schema errors
+            - Collection Management shows connection errors  
+            - Docker vs non-Docker database conflicts
+            - ChromaDB version compatibility issues
+            - System appears corrupted or inconsistent
+            """)
+        
+        with col2:
+            if st.button("🚀 Clean Start Reset", use_container_width=True, type="primary"):
+                st.session_state.show_confirm_clean_start = True
+                
+            if st.session_state.get("show_confirm_clean_start"):
+                st.error("⚠️ **COMPLETE SYSTEM RESET**")
+                st.warning("This will delete ALL data and provide a completely fresh start. All knowledge base content, collections, and configurations will be lost.")
+                
+                c1, c2 = st.columns(2)
+                if c1.button("✅ YES, CLEAN START", use_container_width=True):
+                    perform_clean_start(db_path)
+                    st.session_state.show_confirm_clean_start = False
+                    st.rerun()
+                if c2.button("❌ Cancel", use_container_width=True):
+                    st.session_state.show_confirm_clean_start = False
+                    st.rerun()
+
     with st.expander("⚙️ Basic Database Operations", expanded=False):
         st.subheader("Clear Ingestion Log")
         st.info("This action allows all files to be scanned and re-ingested. Useful for rebuilding the knowledge base from scratch.")

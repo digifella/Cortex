@@ -87,7 +87,48 @@ if not chroma_client: st.stop()
 try:
     vector_collection = chroma_client.get_collection(name=COLLECTION_NAME)
 except Exception as e:
-    st.error(f"Could not connect to collection '{COLLECTION_NAME}'. Please run an ingestion process first. Error: {e}")
+    error_msg = str(e)
+    
+    # Check for specific schema errors
+    if "collections.config_json_str" in error_msg or "no such column" in error_msg.lower():
+        st.error("🔧 **ChromaDB Schema Error Detected**")
+        st.markdown(f"""
+        **Error:** `{error_msg}`
+        
+        **This is a database schema conflict.** This typically happens when:
+        - Different ChromaDB versions created incompatible database structures
+        - Docker vs non-Docker environments have different schemas
+        - Database files are corrupted or partially created
+        
+        ### 🚀 **Recommended Solution:**
+        1. **Go to Maintenance page (page 13)**
+        2. **Use the new "Clean Start" function** 
+        3. **This will completely reset your database** and fix all schema conflicts
+        4. **Then re-ingest your documents** with a fresh, compatible database
+        
+        The Clean Start function is specifically designed to resolve these ChromaDB schema issues.
+        """)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔧 Go to Maintenance Page", use_container_width=True, type="primary"):
+                st.switch_page("pages/13_Maintenance.py")
+        with col2:
+            if st.button("📖 Learn More About This Error", use_container_width=True):
+                st.info("""
+                **Technical Details:**
+                ChromaDB schema errors occur when the database structure doesn't match what the application expects.
+                The 'collections.config_json_str' column was added in newer ChromaDB versions, but older databases
+                don't have this column, causing compatibility issues.
+                
+                **Why Clean Start works:**
+                - Deletes the incompatible database structure completely
+                - Forces creation of new database with current ChromaDB version schema  
+                - Eliminates all version conflicts and corruption issues
+                """)
+    else:
+        st.error(f"Could not connect to collection '{COLLECTION_NAME}'. Please run an ingestion process first. Error: {e}")
+    
     st.stop()
 
 if 'collection_sort_key' not in st.session_state: st.session_state.collection_sort_key = 'modified_at'
