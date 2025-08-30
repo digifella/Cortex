@@ -102,9 +102,42 @@ def perform_clean_start(db_path: str):
     try:
         deleted_items = []
         
+        # Debug information
+        st.info(f"🔍 **Debug Info:**\n- Original DB Path: `{db_path}`\n- Converted Path: `{wsl_db_path}`\n- Running in Docker: `{os.path.exists('/.dockerenv')}`")
+        
         with st.spinner("🧹 Performing Clean Start - Complete System Reset..."):
-            # 1. Delete ChromaDB directory (vector database)
+            # FIRST: Clear ingested files log from database directory BEFORE deleting the directory
             chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
+            st.write(f"🔍 Looking for ChromaDB directory at: `{chroma_db_dir}`")
+            st.write(f"🔍 Directory exists: `{chroma_db_dir.exists()}`")
+            
+            if chroma_db_dir.exists():
+                # List all files in the directory for debugging
+                try:
+                    files_in_dir = list(chroma_db_dir.iterdir())
+                    st.write(f"🔍 Files in ChromaDB directory: `{[f.name for f in files_in_dir if f.is_file()]}`")
+                except Exception as e:
+                    st.write(f"🔍 Could not list directory contents: {e}")
+                
+                ingested_files_log = chroma_db_dir / "ingested_files.log"
+                st.write(f"🔍 Looking for ingested files log at: `{ingested_files_log}`")
+                st.write(f"🔍 Ingested files log exists: `{ingested_files_log.exists()}`")
+                
+                if ingested_files_log.exists():
+                    try:
+                        ingested_files_log.unlink()
+                        deleted_items.append(f"Ingested files log: {ingested_files_log}")
+                        logger.info(f"Clean Start: Cleared ingested files log: {ingested_files_log}")
+                        st.write(f"✅ Deleted ingested files log")
+                    except Exception as e:
+                        st.write(f"❌ Failed to delete ingested files log: {e}")
+                        logger.error(f"Clean Start: Failed to delete ingested files log: {e}")
+                else:
+                    st.write(f"ℹ️ No ingested files log found to delete")
+            else:
+                st.write(f"ℹ️ ChromaDB directory does not exist - nothing to clean")
+            
+            # 1. Delete ChromaDB directory (vector database) - AFTER clearing the log
             if chroma_db_dir.exists() and chroma_db_dir.is_dir():
                 shutil.rmtree(chroma_db_dir)
                 deleted_items.append(f"ChromaDB vector database: {chroma_db_dir}")
@@ -132,15 +165,6 @@ def perform_clean_start(db_path: str):
                     log_file.unlink()
                     deleted_items.append(f"Log file: {log_file}")
                 logger.info(f"Clean Start: Cleared logs directory: {logs_dir}")
-            
-            # Clear ingested files log from database directory
-            chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
-            if chroma_db_dir.exists():
-                ingested_files_log = chroma_db_dir / "ingested_files.log"
-                if ingested_files_log.exists():
-                    ingested_files_log.unlink()
-                    deleted_items.append(f"Ingested files log: {ingested_files_log}")
-                    logger.info(f"Clean Start: Cleared ingested files log: {ingested_files_log}")
             
             # 5. Clear ALL staging and batch ingestion files (comprehensive)
             staging_patterns = [
