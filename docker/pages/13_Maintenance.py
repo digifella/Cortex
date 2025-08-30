@@ -97,17 +97,38 @@ def delete_knowledge_base(db_path: str):
 
 def perform_clean_start(db_path: str):
     """Perform complete system reset - removes all data, collections, logs, and configurations for fresh start."""
-    wsl_db_path = convert_windows_to_wsl_path(db_path)
+    
+    # Handle Docker environment path resolution properly
+    if os.path.exists('/.dockerenv'):
+        # In Docker container - check multiple possible mount points
+        possible_docker_paths = ["/data", "/app/data", "/home/cortex/data", db_path]
+        
+        docker_db_path = None
+        for path in possible_docker_paths:
+            if os.path.exists(path):
+                docker_db_path = path
+                break
+        
+        if not docker_db_path:
+            # Fallback to /data if nothing exists (will be created)
+            docker_db_path = "/data"
+            
+        st.info(f"🐳 **Docker Mode:** Using container path `{docker_db_path}` (checked: {possible_docker_paths})")
+        final_db_path = docker_db_path
+    else:
+        # Non-Docker environment, use WSL path conversion
+        final_db_path = convert_windows_to_wsl_path(db_path)
+        st.info(f"💻 **Host Mode:** Converted `{db_path}` to `{final_db_path}`")
     
     try:
         deleted_items = []
         
         # Debug information
-        st.info(f"🔍 **Debug Info:**\n- Original DB Path: `{db_path}`\n- Converted Path: `{wsl_db_path}`\n- Running in Docker: `{os.path.exists('/.dockerenv')}`")
+        st.info(f"🔍 **Debug Info:**\n- Original DB Path: `{db_path}`\n- Final Path: `{final_db_path}`\n- Running in Docker: `{os.path.exists('/.dockerenv')}`")
         
         with st.spinner("🧹 Performing Clean Start - Complete System Reset..."):
             # FIRST: Clear ingested files log from database directory BEFORE deleting the directory
-            chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
+            chroma_db_dir = Path(final_db_path) / "knowledge_hub_db"
             st.write(f"🔍 Looking for ChromaDB directory at: `{chroma_db_dir}`")
             st.write(f"🔍 Directory exists: `{chroma_db_dir.exists()}`")
             
@@ -144,7 +165,7 @@ def perform_clean_start(db_path: str):
                 logger.info(f"Clean Start: Deleted ChromaDB directory: {chroma_db_dir}")
             
             # 2. Delete knowledge graph file
-            graph_file = Path(wsl_db_path) / "knowledge_cortex.gpickle"
+            graph_file = Path(final_db_path) / "knowledge_cortex.gpickle"
             if graph_file.exists():
                 graph_file.unlink()
                 deleted_items.append(f"Knowledge graph: {graph_file}")
@@ -210,7 +231,7 @@ def perform_clean_start(db_path: str):
                         deleted_items.append(f"Configuration file: {config_file}")
             
             # 7. Clear ingestion recovery metadata  
-            recovery_metadata_dir = Path(wsl_db_path) / "recovery_metadata"
+            recovery_metadata_dir = Path(final_db_path) / "recovery_metadata"
             if recovery_metadata_dir.exists():
                 shutil.rmtree(recovery_metadata_dir)
                 deleted_items.append(f"Recovery metadata: {recovery_metadata_dir}")

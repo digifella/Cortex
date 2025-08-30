@@ -51,6 +51,7 @@
       "Read(/mnt/f/ai_databases/**)",
       "Read(/mnt/f/ai_databases/knowledge_hub_db/**)",
       "Bash(git tag:*)",
+      "Read(/mnt/e/OneDrive - VentraIP Australia/Ai experiments/Project Cortex Code/Test/**)",
       "Read(/mnt/e/OneDrive - VentraIP Australia/Ai experiments/Project Cortex Code/Test/**)"
     ],
     "deny": [],
