@@ -44,10 +44,20 @@ def init_chroma_client(db_path):
         return None
         
     try:
-        db_settings = ChromaSettings(anonymized_telemetry=False)
+        db_settings = ChromaSettings(
+            anonymized_telemetry=False,
+            allow_reset=True
+        )
         return chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
     except Exception as e:
-        st.error(f"Failed to connect to ChromaDB: {e}")
+        # Check if this is a Docker vs development database schema conflict
+        if "collections.config_json_str" in str(e):
+            st.warning("🐳 **Development database detected in Docker environment**")
+            st.info("📝 **This database was created outside Docker and has schema differences.**\n\n💡 **Options:**\n- Use a separate Docker database path (recommended)\n- Or continue with limited collection features")
+            logger.warning(f"Development database schema conflict in Docker: {e}")
+            return None
+        else:
+            st.error(f"Failed to connect to ChromaDB: {e}")
         return None
 
 st.set_page_config(layout="wide", page_title="Cortex Collection Management")
@@ -407,8 +417,52 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
         else:
             st.info("This collection is empty.")
 
-collection_mgr = WorkingCollectionManager()
-collections_list = list(collection_mgr.collections.values())
+# Initialize collection manager with Docker environment error handling
+try:
+    collection_mgr = WorkingCollectionManager()
+    collections_list = list(collection_mgr.collections.values())
+    collections_available = True
+except Exception as e:
+    collections_available = False
+    collections_list = []
+    
+    # Check if this is a Docker environment compatibility issue
+    if "collections.config_json_str" in str(e) or "schema" in str(e).lower():
+        st.error("🐳 **Collection Management Unavailable in Current Environment**")
+        st.warning("**Database Schema Conflict Detected**")
+        st.info("""
+        📝 **Issue:** This database was created in a different environment (Docker vs non-Docker) and has incompatible schema.
+        
+        💡 **Solutions:**
+        1. **Use separate database path for Docker** (Recommended)
+           - Go to Knowledge Search and set path to `/app/data/ai_databases`
+           - Run Knowledge Ingest to populate the Docker database
+        
+        2. **Recreate collections in current environment**
+           - Your documents are safe in the knowledge base
+           - Collections will need to be recreated from search results
+        
+        3. **Switch back to original environment** 
+           - Use Cortex outside of Docker if database was created there
+        """)
+        
+        # Show some basic info if possible
+        st.markdown("### 🔍 Troubleshooting Options")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔧 Go to Knowledge Search", use_container_width=True):
+                st.switch_page("pages/3_Knowledge_Search.py")
+        
+        with col2:
+            if st.button("📊 Check Database Status", use_container_width=True):
+                st.switch_page("pages/13_Maintenance.py")
+        
+        st.stop()  # Stop execution here
+    else:
+        st.error(f"❌ Failed to initialize Collection Management: {e}")
+        st.info("Please check the Maintenance page for database diagnostics.")
+        st.stop()
 
 is_reverse = not st.session_state.collection_sort_order_asc
 sort_key = st.session_state.collection_sort_key
