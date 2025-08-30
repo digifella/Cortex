@@ -1,8 +1,9 @@
 # ## File: pages/8_Document_Anonymizer.py
-# Version: 1.0.0
-# Date: 2025-07-30
-# Purpose: GUI for document anonymization functionality.
+# Version: v4.1.3
+# Date: 2025-08-28
+# Purpose: Simplified document anonymization interface with drag-and-drop processing.
 #          Processes documents to replace identifying information with generic placeholders.
+#          Auto-processes files on upload with download-only results interface.
 
 import streamlit as st
 import os
@@ -59,19 +60,6 @@ def is_supported_file(file_path: Path) -> bool:
     supported_extensions = {'.txt', '.pdf', '.docx'}
     return file_path.suffix.lower() in supported_extensions
 
-def process_drag_drop_paths(raw_paths: str) -> List[Path]:
-    """Process drag-and-drop paths from various platforms using enhanced path utilities."""
-    paths = process_multiple_drag_drop_paths(raw_paths)
-    
-    # Show warnings for any invalid paths
-    if raw_paths.strip():
-        input_lines = [line.strip() for line in raw_paths.strip().split('\n') if line.strip()]
-        if len(paths) < len(input_lines):
-            invalid_count = len(input_lines) - len(paths)
-            st.warning(f"{invalid_count} path(s) were invalid or not found")
-    
-    return paths
-
 def get_file_info(file_path: Path) -> Dict:
     """Get basic file information for display."""
     try:
@@ -123,13 +111,15 @@ with st.expander("⚙️ Configuration", expanded=False):
     with col1:
         shared_mapping = st.checkbox(
             "Use shared entity mapping across files",
-            value=True,
+            value=st.session_state.get("shared_mapping", True),
+            key="shared_mapping_checkbox",
             help="When enabled, the same person/company will get the same anonymous name across all files"
         )
         
         preserve_structure = st.checkbox(
             "Preserve document structure",
-            value=True,
+            value=st.session_state.get("preserve_structure", True),
+            key="preserve_structure_checkbox",
             help="Maintain original formatting and structure in output files"
         )
     
@@ -138,374 +128,51 @@ with st.expander("⚙️ Configuration", expanded=False):
             "Entity detection confidence threshold",
             min_value=0.1,
             max_value=1.0,
-            value=0.3,
+            value=st.session_state.get("confidence_threshold", 0.3),
             step=0.1,
+            key="confidence_threshold_slider",
             help="Lower values catch more entities but may include false positives"
         )
 
-# File Selection Section
-st.subheader("📁 Select Files to Anonymize")
+# Store configuration values immediately
+st.session_state.shared_mapping = shared_mapping
+st.session_state.confidence_threshold = confidence_threshold
+st.session_state.preserve_structure = preserve_structure
 
-# Tab for different input methods
-tab1, tab2, tab3 = st.tabs(["📋 Drag & Drop", "📂 Browse Files", "📁 Browse Directory"])
+# File Upload Section
+st.subheader("📁 Drop Files to Anonymize")
 
-selected_files = []
+# Simple file uploader for drag-and-drop functionality
+uploaded_files = st.file_uploader(
+    "Drag and drop files here or click to browse:",
+    type=['txt', 'pdf', 'docx'],
+    accept_multiple_files=True,
+    help="Supported formats: TXT, PDF, DOCX",
+    key="anonymizer_uploader"
+)
 
-with tab1:
-    st.markdown("**Drag and drop files or folders here:**")
+# Process files immediately when uploaded
+if uploaded_files:
+    st.success(f"📤 Processing {len(uploaded_files)} file(s)...")
     
-    # Text area for drag-drop (works on all platforms)
-    drag_drop_input = st.text_area(
-        "Paste file paths here (one per line):",
-        height=100,
-        placeholder="Drag files here or paste paths like:\n/path/to/document.pdf\n/Users/name/Documents/file.docx\nC:\\Documents\\file.txt",
-        key="drag_drop_paths"
-    )
+    # Save uploaded files to temporary directory for processing
+    import tempfile
+    temp_dir = Path(tempfile.mkdtemp())
+    files_to_process = []
     
-    if drag_drop_input:
-        dropped_files = process_drag_drop_paths(drag_drop_input)
-        if dropped_files:
-            st.success(f"Found {len(dropped_files)} file(s)")
-            selected_files.extend(dropped_files)
-
-with tab2:
-    st.markdown("**Browse and select individual files:**")
+    for uploaded_file in uploaded_files:
+        # Save uploaded file to temporary location
+        temp_file_path = temp_dir / uploaded_file.name
+        with open(temp_file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        files_to_process.append(temp_file_path)
     
-    # Initialize session state for file browser
-    if "anonymizer_directory_path" not in st.session_state:
-        config_manager = ConfigManager()
-        config = config_manager.get_config()
-        st.session_state.anonymizer_directory_path = config.get('last_directory', str(Path.home()))
+    # Store temp directory in session state for cleanup later
+    st.session_state.temp_anonymizer_dir = temp_dir
     
-    if "anonymizer_file_selections" not in st.session_state:
-        st.session_state.anonymizer_file_selections = {}
-    
-    def reset_file_browser():
-        st.session_state.anonymizer_file_selections = {}
-    
-    # Directory path input
-    new_path = st.text_input(
-        "Browse Directory:",
-        value=st.session_state.anonymizer_directory_path,
-        help="📁 Navigate to the directory containing files to anonymize"
-    )
-    
-    # Update session state if path changed manually
-    if new_path != st.session_state.anonymizer_directory_path:
-        st.session_state.anonymizer_directory_path = new_path
-        reset_file_browser()
-    
-    # Directory navigation
-    current_path = normalize_path(st.session_state.anonymizer_directory_path)
-    if current_path and current_path.exists() and current_path.is_dir():
-        try:
-            # Navigation buttons
-            c1, c2, c3 = st.columns(3)
-            
-            # Get current directory contents
-            files = []
-            subdirs = []
-            for item in current_path.iterdir():
-                if item.is_file() and is_supported_file(item):
-                    files.append(item)
-                elif item.is_dir():
-                    subdirs.append(item.name)
-            
-            files = sorted(files, key=lambda x: x.name.lower())
-            subdirs = sorted(subdirs, key=str.lower)
-            
-            if c1.button("Select All Files", use_container_width=True):
-                for file_path in files:
-                    st.session_state.anonymizer_file_selections[str(file_path)] = True
-                st.rerun()
-            
-            if c2.button("Deselect All Files", use_container_width=True):
-                for file_path in files:
-                    st.session_state.anonymizer_file_selections[str(file_path)] = False
-                st.rerun()
-            
-            # Go up one level button
-            if current_path != current_path.parent:
-                if c3.button("⬆️ Go Up One Level", use_container_width=True):
-                    st.session_state.anonymizer_directory_path = str(current_path.parent)
-                    reset_file_browser()
-                    st.rerun()
-            
-            st.markdown("---")
-            
-            # Show subdirectories for navigation
-            if subdirs:
-                st.markdown("**📁 Directories:**")
-                cols = st.columns(3)
-                for i, dirname in enumerate(subdirs):
-                    col = cols[i % 3]
-                    with col:
-                        full_path = current_path / dirname
-                        if st.button(f"📁 {dirname}", key=f"nav_dir_{dirname}", help=f"Navigate to {dirname}", use_container_width=True):
-                            st.session_state.anonymizer_directory_path = str(full_path)
-                            reset_file_browser()
-                            st.rerun()
-            
-            # Show files for selection
-            if files:
-                st.markdown("**📄 Files:**")
-                for file_path in files:
-                    info = get_file_info(file_path)
-                    is_selected = st.session_state.anonymizer_file_selections.get(str(file_path), False)
-                    
-                    col1, col2 = st.columns([0.8, 0.2])
-                    with col1:
-                        new_selection = st.checkbox(
-                            f"📄 {info['name']} ({info['size']}, {info['type']})",
-                            value=is_selected,
-                            key=f"file_cb_{file_path}"
-                        )
-                        st.session_state.anonymizer_file_selections[str(file_path)] = new_selection
-                        
-                        if new_selection and file_path not in selected_files:
-                            selected_files.append(file_path)
-                        elif not new_selection and file_path in selected_files:
-                            selected_files.remove(file_path)
-                    
-                    with col2:
-                        if info['supported']:
-                            st.success("✓")
-                        else:
-                            st.error("❌")
-            else:
-                st.info("No supported files found in this directory")
-                
-        except Exception as e:
-            st.error(f"Error reading directory: {e}")
-    else:
-        st.error("Invalid or non-existent directory")
-
-with tab3:
-    st.markdown("**Browse directory and select files for processing:**")
-    
-    # Directory browser for batch processing
-    if "anonymizer_batch_directory" not in st.session_state:
-        st.session_state.anonymizer_batch_directory = str(Path.home())
-    if "anonymizer_batch_files" not in st.session_state:
-        st.session_state.anonymizer_batch_files = []
-    if "anonymizer_file_selections" not in st.session_state:
-        st.session_state.anonymizer_file_selections = {}
-    if "anonymizer_current_page" not in st.session_state:
-        st.session_state.anonymizer_current_page = 0
-    
-    # Directory input and scan controls
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        batch_dir = st.text_input(
-            "Directory to scan:",
-            value=st.session_state.anonymizer_batch_directory,
-            key="anonymizer_batch_directory",
-            help="Directory containing files to anonymize"
-        )
-    
-    with col2:
-        include_subdirs = st.checkbox(
-            "Include subdirectories",
-            value=True,
-            help="Scan subdirectories recursively"
-        )
-    
-    if st.button("🔍 Scan Directory", type="secondary", use_container_width=True):
-        try:
-            batch_path = normalize_path(batch_dir)
-            if batch_path and batch_path.exists() and batch_path.is_dir():
-                # Find supported files
-                supported_files = []
-                if include_subdirs:
-                    for file_path in batch_path.rglob('*'):
-                        if file_path.is_file() and is_supported_file(file_path):
-                            supported_files.append(file_path)
-                else:
-                    for file_path in batch_path.iterdir():
-                        if file_path.is_file() and is_supported_file(file_path):
-                            supported_files.append(file_path)
-                
-                if supported_files:
-                    # Store files and reset state
-                    st.session_state.anonymizer_batch_files = supported_files
-                    st.session_state.anonymizer_file_selections = {str(f): False for f in supported_files}
-                    st.session_state.anonymizer_current_page = 0
-                    st.success(f"Found {len(supported_files)} supported files")
-                    st.rerun()
-                else:
-                    st.warning("No supported files found in directory" + (" and subdirectories" if include_subdirs else ""))
-            else:
-                st.error("Invalid or non-existent directory path")
-        except Exception as e:
-            st.error(f"Error scanning directory: {e}")
-    
-    # File browser with pagination (similar to Knowledge Ingest)
-    if st.session_state.anonymizer_batch_files:
-        FILES_PER_PAGE = 10  # Same as Knowledge Ingest
-        total_files = len(st.session_state.anonymizer_batch_files)
-        total_pages = (total_files + FILES_PER_PAGE - 1) // FILES_PER_PAGE
-        current_page = st.session_state.anonymizer_current_page
-        
-        # Sorting controls
-        st.markdown("---")
-        st.markdown("### 📁 File Browser")
-        
-        def sort_by_name():
-            st.session_state.anonymizer_batch_files.sort(key=lambda f: f.name.lower())
-            st.session_state.anonymizer_current_page = 0
-        
-        def sort_by_date():
-            st.session_state.anonymizer_batch_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-            st.session_state.anonymizer_current_page = 0
-        
-        sc1, sc2 = st.columns(2)
-        sc1.button("🔤 Sort by Name (A-Z)", on_click=sort_by_name, use_container_width=True)
-        sc2.button("📅 Sort by Date (Newest First)", on_click=sort_by_date, use_container_width=True)
-        
-        # Pagination info and selection summary
-        start_idx = current_page * FILES_PER_PAGE
-        end_idx = min(start_idx + FILES_PER_PAGE, total_files)
-        paginated_files = st.session_state.anonymizer_batch_files[start_idx:end_idx]
-        
-        num_selected = sum(1 for selected in st.session_state.anonymizer_file_selections.values() if selected)
-        st.info(f"Found **{total_files}** files. Currently selecting **{num_selected}** for processing. Displaying page {current_page + 1} of {total_pages}.")
-        
-        # Bulk selection controls
-        c1, c2, c3, c4 = st.columns(4)
-        
-        def select_page():
-            for f in paginated_files:
-                st.session_state.anonymizer_file_selections[str(f)] = True
-        
-        def deselect_page():
-            for f in paginated_files:
-                st.session_state.anonymizer_file_selections[str(f)] = False
-        
-        def select_all():
-            for f in st.session_state.anonymizer_batch_files:
-                st.session_state.anonymizer_file_selections[str(f)] = True
-        
-        def deselect_all():
-            for f in st.session_state.anonymizer_batch_files:
-                st.session_state.anonymizer_file_selections[str(f)] = False
-        
-        c1.button("✅ Select All on Page", on_click=select_page, use_container_width=True)
-        c2.button("❌ Deselect All on Page", on_click=deselect_page, use_container_width=True)
-        c3.button("✅ Select All (All Pages)", on_click=select_all, use_container_width=True)
-        c4.button("❌ Deselect All (All Pages)", on_click=deselect_all, use_container_width=True)
-        
-        st.markdown("---")
-        
-        # File list with checkboxes
-        def update_selection(file_path, new_value):
-            st.session_state.anonymizer_file_selections[str(file_path)] = new_value
-        
-        for fp in paginated_files:
-            from datetime import datetime
-            mod_time = datetime.fromtimestamp(fp.stat().st_mtime)
-            info = get_file_info(fp)
-            
-            # Create label similar to Knowledge Ingest
-            label = f"**{fp.name}** ({info['size']}) - `{mod_time.strftime('%Y-%m-%d %H:%M:%S')}`"
-            
-            is_selected = st.session_state.anonymizer_file_selections.get(str(fp), False)
-            new_selection = st.checkbox(label, value=is_selected, key=f"cb_{fp}")
-            
-            if new_selection != is_selected:
-                update_selection(fp, new_selection)
-                st.rerun()
-        
-        st.divider()
-        
-        # Navigation controls (same as Knowledge Ingest)
-        nav_cols = st.columns([1, 1, 5])
-        
-        if current_page > 0:
-            if nav_cols[0].button("⬅️ Previous", use_container_width=True):
-                st.session_state.anonymizer_current_page = current_page - 1
-                st.rerun()
-        
-        if end_idx < total_files:
-            if nav_cols[1].button("Next ➡️", use_container_width=True):
-                st.session_state.anonymizer_current_page = current_page + 1
-                st.rerun()
-        
-        nav_cols[2].write(f"Page {current_page + 1} of {total_pages}")
-        
-        st.divider()
-        
-        # Process selected files button
-        if num_selected > 0:
-            # Show processing section
-            st.markdown("""
-            <div style="background-color: #e8f4fd; padding: 1rem; border-radius: 0.5rem; border-left: 4px solid #1f77b4;">
-                <h3 style="margin: 0; color: #1f77b4;">🚀 Ready to Process</h3>
-                <p style="margin: 0.5rem 0 0 0;">Click the button below to start anonymizing your selected files</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col2:
-                if st.button(f"🔒 Process {num_selected} Selected Files", type="primary", use_container_width=True):
-                    # Add selected files to processing queue
-                    selected_files.clear()
-                    for file_path_str, is_selected in st.session_state.anonymizer_file_selections.items():
-                        if is_selected:
-                            file_path = Path(file_path_str)
-                            if file_path.exists():
-                                selected_files.append(file_path)
-                    
-                    if selected_files:
-                        # Store files and trigger processing
-                        st.session_state.files_to_process = selected_files.copy()
-                        st.session_state.processing_status = "starting"
-                        st.session_state.auto_start_processing = True
-                        
-                        st.success(f"🚀 Starting anonymization of {len(selected_files)} files...")
-                        st.rerun()
-                    else:
-                        st.error("No valid files to process")
-        else:
-            st.info("Select files above to begin anonymization")
-
-# Handle files from session state (when processing was initiated from batch)
-if st.session_state.get("files_to_process") and not selected_files:
-    selected_files = st.session_state.files_to_process.copy()
-    # Clear the session state files after loading
-    if st.session_state.get("processing_status") == "completed":
-        st.session_state.files_to_process = []
-
-# Display Selected Files
-if selected_files:
-    st.subheader("📋 Selected Files")
-    
-    # Remove duplicates while preserving order
-    unique_files = []
-    seen = set()
-    for f in selected_files:
-        if f not in seen:
-            unique_files.append(f)
-            seen.add(f)
-    
-    selected_files = unique_files
-    
-    for i, file_path in enumerate(selected_files):
-        info = get_file_info(file_path)
-        col1, col2, col3 = st.columns([3, 1, 1])
-        
-        with col1:
-            st.text(f"📄 {info['name']} ({info['size']}, {info['type']})")
-        
-        with col2:
-            if not info['supported']:
-                st.error("Unsupported")
-            else:
-                st.success("✓ Ready")
-        
-        with col3:
-            if st.button("Remove", key=f"remove_{i}"):
-                selected_files.pop(i)
-                st.rerun()
+    # Process immediately
+    st.session_state.files_to_process = files_to_process
+    st.session_state.auto_process = True
 
 # Output Directory Selection
 st.subheader("📁 Output Configuration")
@@ -514,13 +181,15 @@ col1, col2 = st.columns([2, 1])
 
 with col1:
     output_directory = st.text_input(
-        "Output directory (leave empty to use same directory as input files):",
+        "Output directory (leave empty to use Downloads folder):",
+        value=st.session_state.get("output_directory", ""),
         placeholder="/path/to/output or C:\\Output",
-        help="Directory where anonymized files will be saved"
+        key="output_directory_input",
+        help="Directory where anonymized files will be saved. Leave empty for Downloads folder."
     )
 
 with col2:
-    if st.button("Create Directory"):
+    if st.button("Create Directory", key="create_output_dir"):
         if output_directory:
             try:
                 output_path = normalize_path(output_directory)
@@ -532,179 +201,233 @@ with col2:
             except Exception as e:
                 st.error(f"Error creating directory: {e}")
 
-# Anonymization Execution
-st.divider()
+# Store output directory immediately  
+st.session_state.output_directory = output_directory
 
-if selected_files:
-    st.subheader("🚀 Run Anonymization")
+# Automatic Processing
+if st.session_state.get("files_to_process") and st.session_state.get("auto_process"):
+    files_to_process = st.session_state.files_to_process
+    st.session_state.auto_process = False  # Reset flag
     
-    # Summary
-    supported_count = sum(1 for f in selected_files if is_supported_file(f))
-    st.info(f"Ready to anonymize {supported_count} supported files")
+    st.divider()
+    st.subheader("🔄 Processing Files...")
     
-    # Check processing status and show feedback
-    processing_status = st.session_state.get("processing_status", None)
-    if processing_status == "starting":
-        st.info("⏳ **Processing initiated...** Preparing anonymization engine...")
+    # Filter to supported files only
+    supported_files = [f for f in files_to_process if is_supported_file(f)]
     
-    # Check if auto-processing was triggered from batch selection
-    auto_start = st.session_state.get("auto_start_processing", False)
-    if auto_start:
-        st.session_state.auto_start_processing = False  # Reset flag
-        st.session_state.processing_status = "running"  # Update status
-        process_files = True
-        st.info("🔄 **Processing started!** Anonymizing your selected files...")
-    else:
-        process_files = st.button("🔒 Start Anonymization", type="primary", use_container_width=True)
+    if len(supported_files) == 0:
+        st.error("No supported files found")
+        st.stop()
     
-    if process_files:
-        if supported_count == 0:
-            st.error("No supported files selected")
+    # Get configuration values
+    output_directory = st.session_state.get("output_directory", "")
+    shared_mapping = st.session_state.get("shared_mapping", True)
+    confidence_threshold = st.session_state.get("confidence_threshold", 0.3)
+    
+    # Prepare output directory
+    output_dir = None
+    if output_directory:
+        output_dir = normalize_path(output_directory)
+        if output_dir:
+            ensure_directory(output_dir)
         else:
-            # Create anonymizer
-            anonymizer = DocumentAnonymizer()
+            st.error("Invalid output directory")
+            st.stop()
+    
+    # Create anonymizer
+    anonymizer = DocumentAnonymizer()
+    
+    # Progress tracking
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    results_container = st.container()
+    
+    try:
+        # Run anonymization
+        status_text.text("Starting anonymization...")
+        
+        logger.info(f"Anonymizing {len(supported_files)} files")
+        logger.info(f"Output directory: {output_dir}")
+        logger.info(f"Files: {[str(f) for f in supported_files]}")
+        
+        results = anonymizer.anonymize_batch(
+            supported_files,
+            output_dir,
+            shared_mapping=shared_mapping,
+            confidence_threshold=confidence_threshold
+        )
+        
+        logger.info(f"Anonymization results: {results}")
+        
+        # Display results
+        progress_bar.progress(1.0)
+        status_text.text("Anonymization complete!")
+        
+        # Reset processing status
+        st.session_state.processing_status = "completed"
+        
+        # Handle output files from temporary directory
+        final_results = {}
+        if hasattr(st.session_state, 'temp_anonymizer_dir'):
+            import shutil
+            from pathlib import Path
             
-            # Prepare output directory
-            output_dir = None
-            if output_directory:
-                output_dir = normalize_path(output_directory)
-                if output_dir:
-                    ensure_directory(output_dir)
-                else:
-                    st.error("Invalid output directory")
-                    st.stop()
+            # If no output directory specified, move files to Downloads or current directory
+            if not output_dir:
+                # In Docker environments, avoid writing to mounted Windows volumes
+                # Use container-internal temp directory for all operations
+                import tempfile
+                final_output_dir = Path(tempfile.gettempdir()) / "cortex_anonymizer"
+                ensure_directory(final_output_dir)
+                
+                # Move output files to container-internal location
+                for input_file, output_file in results.items():
+                    if not output_file.startswith("ERROR:"):
+                        temp_output_path = Path(output_file)
+                        if temp_output_path.parent == st.session_state.temp_anonymizer_dir:
+                            # Move file to container-internal location
+                            permanent_path = final_output_dir / temp_output_path.name
+                            try:
+                                shutil.move(str(temp_output_path), str(permanent_path))
+                                final_results[input_file] = str(permanent_path)
+                            except Exception as e:
+                                logger.warning(f"Could not move file, keeping in temp location: {e}")
+                                final_results[input_file] = output_file
+                        else:
+                            final_results[input_file] = output_file
+                    else:
+                        final_results[input_file] = output_file
+            else:
+                final_results = results
             
-            # Filter to supported files only
-            files_to_process = [f for f in selected_files if is_supported_file(f)]
-            
-            # Progress tracking
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            results_container = st.container()
-            
+            # Clean up temporary input files
             try:
-                # Run anonymization
-                status_text.text("Starting anonymization...")
+                for item in st.session_state.temp_anonymizer_dir.iterdir():
+                    if item.is_file():
+                        item.unlink()
+                st.session_state.temp_anonymizer_dir.rmdir()
+                del st.session_state.temp_anonymizer_dir
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup temporary files: {cleanup_error}")
+        else:
+            final_results = results
+        
+        # Store final results for download access
+        st.session_state.anonymizer_results = final_results
+        
+        with results_container:
+            st.success(f"✅ Successfully processed {len(final_results)} files")
+            
+            # Show where files were saved
+            if not output_dir:
+                downloads_path = Path.home() / "Downloads"
+                if downloads_path.exists():
+                    st.info(f"📁 **Files saved to:** {downloads_path}")
+                else:
+                    st.info(f"📁 **Files saved to:** {Path.cwd()}")
+            else:
+                st.info(f"📁 **Files saved to:** {output_dir}")
+            
+            st.markdown("### 📥 Download Anonymized Files")
+            
+            success_count = 0
+            error_count = 0
+            
+            for input_file, output_file in final_results.items():
+                col1, col2 = st.columns([3, 1])
                 
-                results = anonymizer.anonymize_batch(
-                    files_to_process,
-                    output_dir,
-                    shared_mapping=shared_mapping,
-                    confidence_threshold=confidence_threshold
-                )
+                with col1:
+                    if output_file.startswith("ERROR:"):
+                        st.error(f"❌ {Path(input_file).name}: {output_file}")
+                        error_count += 1
+                    else:
+                        st.success(f"✅ {Path(input_file).name} → {Path(output_file).name}")
+                        success_count += 1
                 
-                # Display results
-                progress_bar.progress(1.0)
-                status_text.text("Anonymization complete!")
-                
-                # Reset processing status
-                st.session_state.processing_status = "completed"
-                
-                with results_container:
-                    st.success(f"Successfully processed {len(results)} files")
-                    
-                    # Results table
-                    st.markdown("### 📊 Anonymization Results")
-                    
-                    success_count = 0
-                    error_count = 0
-                    
-                    for input_file, output_file in results.items():
-                        col1, col2, col3 = st.columns([2, 2, 1])
-                        
-                        with col1:
-                            st.text(f"📄 {Path(input_file).name}")
-                        
-                        with col2:
-                            if output_file.startswith("ERROR:"):
-                                st.error(output_file)
-                                error_count += 1
+                with col2:
+                    if not output_file.startswith("ERROR:"):
+                        # Download button only
+                        try:
+                            output_path = Path(output_file)
+                            if output_path.exists():
+                                with open(output_file, 'r', encoding='utf-8') as f:
+                                    file_content = f.read()
+                                st.download_button(
+                                    label="💾 Download",
+                                    data=file_content,
+                                    file_name=output_path.name,
+                                    mime="text/plain",
+                                    key=f"download_{Path(input_file).stem}"
+                                )
                             else:
-                                st.success(f"✓ → {Path(output_file).name}")
-                                success_count += 1
-                        
-                        with col3:
-                            if not output_file.startswith("ERROR:"):
-                                if st.button("View", key=f"view_{input_file}"):
-                                    # Show preview of anonymized content
-                                    try:
-                                        with open(output_file, 'r', encoding='utf-8') as f:
-                                            content = f.read()
-                                        st.text_area(
-                                            f"Preview: {Path(output_file).name}",
-                                            content[:1000] + "..." if len(content) > 1000 else content,
-                                            height=200
-                                        )
-                                    except Exception as e:
-                                        st.error(f"Error reading file: {e}")
+                                st.error("File not found")
+                        except Exception as e:
+                            st.error(f"Error: {str(e)[:30]}...")
+            
+            st.markdown(f"**Summary:** {success_count} successful, {error_count} errors")
+            
+            # Show mapping file if it exists
+            if shared_mapping and not output_dir:
+                downloads_path = Path.home() / "Downloads"
+                if downloads_path.exists():
+                    mapping_file = downloads_path / "anonymization_mapping.txt"
+                else:
+                    mapping_file = Path.cwd() / "anonymization_mapping.txt"
+                
+                if mapping_file.exists():
+                    st.info(f"📋 Anonymization mapping saved to: {mapping_file}")
                     
-                    # Summary
-                    st.markdown(f"**Summary:** {success_count} successful, {error_count} errors")
-                    
-                    # Mapping report link
-                    if shared_mapping and output_dir:
-                        mapping_file = output_dir / "anonymization_mapping.txt"
-                        if mapping_file.exists():
-                            st.info(f"📋 Anonymization mapping saved to: {mapping_file}")
-                            
-                            if st.button("Show Mapping Preview"):
-                                try:
-                                    with open(mapping_file, 'r', encoding='utf-8') as f:
-                                        mapping_content = f.read()
-                                    st.text_area(
-                                        "Anonymization Mapping",
-                                        mapping_content,
-                                        height=300
-                                    )
-                                except Exception as e:
-                                    st.error(f"Error reading mapping file: {e}")
-                
-            except Exception as e:
-                progress_bar.progress(0)
-                status_text.text("Anonymization failed!")
-                
-                # Reset processing status on error
-                st.session_state.processing_status = "failed"
-                
-                st.error(f"Anonymization failed: {e}")
-                logger.error(f"Anonymization failed: {e}")
+    except Exception as e:
+        progress_bar.progress(0)
+        status_text.text("❌ Anonymization failed!")
+        
+        # Clean up temporary files on error
+        if hasattr(st.session_state, 'temp_anonymizer_dir'):
+            try:
+                import shutil
+                shutil.rmtree(st.session_state.temp_anonymizer_dir, ignore_errors=True)
+                del st.session_state.temp_anonymizer_dir
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup temporary files: {cleanup_error}")
+        
+        st.error(f"Anonymization failed: {e}")
+        logger.error(f"Anonymization failed: {e}")
 
-else:
-    st.info("👆 Select files above to begin anonymization")
+# Clear previous results when new files are uploaded
+if not st.session_state.get("files_to_process") and not uploaded_files:
+    if "anonymizer_results" in st.session_state:
+        del st.session_state.anonymizer_results
 
-# Help Section
+# Help Section  
 st.divider()
 
 with st.expander("❓ Help & Tips"):
     st.markdown("""
-    ### Supported File Formats
-    - **TXT**: Plain text files
-    - **PDF**: Adobe PDF documents
-    - **DOCX**: Microsoft Word documents
-    
     ### How It Works
-    1. **Entity Detection**: Uses AI to identify people, companies, projects, and other sensitive information
-    2. **Smart Replacement**: Replaces entities with consistent anonymous names (Person A, Company 1, etc.)
-    3. **Structure Preservation**: Maintains document formatting and readability
-    4. **Mapping Report**: Creates a reference file showing original → anonymous mappings
+    1. **Drop Files**: Drag and drop or browse for TXT, PDF, or DOCX files
+    2. **Automatic Processing**: Files are processed immediately upon upload  
+    3. **Download Results**: Use the download buttons to get your anonymized files
+    
+    ### What Gets Anonymized
+    - **People names** → Person A, Person B, etc.
+    - **Company names** → Company 1, Company 2, etc.
+    - **Project names** → Project 1, Project 2, etc.
+    - **Email addresses** → [EMAIL]
+    - **Phone numbers** → [PHONE]
+    - **URLs** → [URL]
+    
+    ### File Output
+    - **Default Location**: Downloads folder (or current directory as fallback)
+    - **Custom Location**: Specify in Output Configuration above
+    - **File Format**: Anonymized content saved as .txt files
+    - **Mapping File**: Optional reference showing original → anonymous mappings
+    - **Docker Note**: In Docker environments, files are processed in container storage for better compatibility - use download buttons to save results
     
     ### Tips for Best Results
     - **Test First**: Try with a small sample before processing large batches
-    - **Review Output**: Always review anonymized documents before use
-    - **Keep Mappings Secure**: The mapping file can reverse anonymization - store it securely
-    - **Shared Mapping**: Use shared mapping for related documents to maintain consistency
-    
-    ### Platform Compatibility
-    - **Mac**: Supports drag-drop from Finder
-    - **Windows**: Supports drag-drop from File Explorer
-    - **Linux**: Supports standard file paths
-    - **Docker**: Fully supported in containerized environments
-    
-    ### Troubleshooting
-    - **File Not Found**: Ensure file paths are accessible from the current environment
-    - **Unsupported Format**: Convert files to TXT, PDF, or DOCX
-    - **Permission Errors**: Check file and directory permissions
-    - **Memory Issues**: Process large files individually rather than in batches
+    - **Review Output**: Always verify anonymized documents before use  
+    - **Keep Mappings Secure**: The mapping file can reverse anonymization
+    - **Use Shared Mapping**: Enable for consistent names across multiple files
     """)
 
 # Show help modal if requested

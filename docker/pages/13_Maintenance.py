@@ -1,5 +1,5 @@
 # ## File: pages/13_Maintenance.py
-# Version: v4.0.0
+# Version: v4.1.3
 # Date: 2025-08-27
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -24,13 +24,13 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.0.0"
+PAGE_VERSION = "v4.1.3"
 
 # Import Cortex modules
 try:
     from cortex_engine.config import INGESTED_FILES_LOG
     from cortex_engine.config_manager import ConfigManager
-    from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
+    from cortex_engine.utils import get_logger, convert_windows_to_wsl_path, ensure_directory
     from cortex_engine.utils.command_executor import display_command_executor_widget, SafeCommandExecutor
     from cortex_engine.ingestion_recovery import IngestionRecoveryManager
     from cortex_engine.collection_manager import WorkingCollectionManager
@@ -566,7 +566,13 @@ def display_backup_management():
     
     try:
         db_path = config.get('db_path', '/tmp/cortex_db')
-        backup_manager = BackupManager(db_path)
+        # Convert to proper WSL path format for backup manager
+        wsl_db_path = convert_windows_to_wsl_path(db_path)
+        
+        # Ensure the backups directory exists using centralized utility
+        backups_dir = ensure_directory(Path(wsl_db_path) / "backups")
+        
+        backup_manager = BackupManager(wsl_db_path)
         
         with st.expander("📦 Create New Backup", expanded=False):
             backup_name = st.text_input("Backup name (optional):", placeholder="my_backup_2025_08_27")
@@ -647,16 +653,124 @@ def display_backup_management():
     except Exception as e:
         st.error(f"Failed to initialize backup manager: {e}")
 
+def display_changelog_viewer():
+    """Display the project changelog viewer"""
+    st.markdown("## 📋 Project Changelog")
+    st.markdown("View the complete development history and version changes for the Cortex Suite.")
+    
+    # Get project root path
+    project_root = Path(__file__).parent.parent
+    changelog_path = project_root / "CHANGELOG.md"
+    
+    if not changelog_path.exists():
+        st.error("❌ CHANGELOG.md not found in project root")
+        return
+    
+    try:
+        # Read the changelog
+        with open(changelog_path, 'r', encoding='utf-8') as f:
+            changelog_content = f.read()
+        
+        # Display changelog info
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            st.info(f"📁 **File Location:** `{changelog_path.relative_to(project_root)}`")
+        
+        with col2:
+            # Get file stats
+            stat = changelog_path.stat()
+            last_modified = datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+            st.info(f"🕒 **Last Updated:** {last_modified}")
+        
+        with col3:
+            # File size
+            size_kb = stat.st_size / 1024
+            st.info(f"📏 **Size:** {size_kb:.1f} KB")
+        
+        st.divider()
+        
+        # Display options
+        col1, col2, col3 = st.columns([1, 1, 1])
+        
+        with col1:
+            show_full = st.checkbox("📖 Show Full Changelog", 
+                                  value=st.session_state.get("changelog_show_full", False),
+                                  key="changelog_show_full_checkbox")
+        
+        with col2:
+            if st.button("🔄 Refresh", key="changelog_refresh"):
+                st.rerun()
+        
+        with col3:
+            # Download button
+            st.download_button(
+                label="💾 Download Changelog",
+                data=changelog_content,
+                file_name="CHANGELOG.md",
+                mime="text/markdown",
+                key="changelog_download"
+            )
+        
+        st.divider()
+        
+        # Parse and display changelog sections
+        if show_full:
+            # Show entire changelog
+            st.markdown("### 📚 Complete Changelog")
+            st.markdown(changelog_content)
+        else:
+            # Show recent versions (first few entries)
+            lines = changelog_content.split('\n')
+            
+            # Find recent version entries (lines starting with ##)
+            version_lines = []
+            current_section = []
+            version_count = 0
+            
+            for line in lines:
+                if line.startswith('## v') and version_count < 5:  # Show last 5 versions
+                    if current_section:
+                        version_lines.append('\n'.join(current_section))
+                        current_section = []
+                        version_count += 1
+                    current_section = [line]
+                elif line.startswith('## ') and not line.startswith('## ['):
+                    # Stop at non-version headers
+                    break
+                elif current_section:
+                    current_section.append(line)
+            
+            # Add the last section
+            if current_section and version_count < 5:
+                version_lines.append('\n'.join(current_section))
+            
+            if version_lines:
+                st.markdown("### 🆕 Recent Updates (Last 5 Versions)")
+                for section in version_lines:
+                    st.markdown(section)
+                    st.divider()
+                
+                st.info("💡 **Tip:** Check 'Show Full Changelog' above to see complete version history.")
+            else:
+                st.warning("⚠️ Could not parse changelog sections. Showing raw content:")
+                st.text(changelog_content[:2000] + "..." if len(changelog_content) > 2000 else changelog_content)
+    
+    except Exception as e:
+        st.error(f"❌ Failed to read changelog: {e}")
+        logger.error(f"Changelog viewer error: {e}")
+
 def main():
     """Main function to orchestrate the maintenance interface"""
     display_header()
     
     # Create tabs for different maintenance categories
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🗄️ Database", 
         "💻 Terminal", 
         "⚙️ Setup", 
         "💾 Backups",
+        "📋 Changelog",
         "ℹ️ Info"
     ])
     
@@ -673,6 +787,9 @@ def main():
         display_backup_management()
     
     with tab5:
+        display_changelog_viewer()
+    
+    with tab6:
         st.markdown("""
         ## 📋 Maintenance Information
         

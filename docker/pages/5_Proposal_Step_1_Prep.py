@@ -1,5 +1,5 @@
 # ## File: pages/5_Proposal_Step_1.py
-# Version: 27.0.0 (Corrected Placeholder Parsing)
+# Version: v4.1.3
 # Date: 2025-07-15
 # Purpose: An interactive UI to tag document placeholders.
 #          - CRITICAL FIX (v27.0.0): The parsing logic has been entirely rewritten
