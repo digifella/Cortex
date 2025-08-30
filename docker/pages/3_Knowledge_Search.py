@@ -1,7 +1,10 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v4.2.0
-# Date: 2025-08-26
+# Version: v4.3.0
+# Date: 2025-08-30
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
+#          - GRAPHRAG INTEGRATION (v4.2.1): Re-enabled GraphRAG search modes with radio button
+#            selection. Added Traditional Vector Search, GraphRAG Enhanced, and Hybrid Search
+#            options with entity relationship analysis and graph context feedback.
 #          - BUGFIX (v22.4.3): Fixed UnboundLocalError where 'config' variable was referenced before
 #            initialization. Moved config loading to top of main() function.
 #          - DOCKER FIX (v22.4.2): Resolved Docker-development database conflicts. Detects when
@@ -33,6 +36,11 @@ import re
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 
+# Suppress ChromaDB telemetry errors
+import warnings
+warnings.filterwarnings("ignore", message=".*capture.*takes.*positional argument.*")
+warnings.filterwarnings("ignore", message=".*Failed to send telemetry.*")
+
 # LlamaIndex imports moved to functions where actually needed to avoid numpy.iterable issues
 
 # Import project modules
@@ -44,7 +52,7 @@ from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 logger = get_logger(__name__)
 
 # Page configuration
-PAGE_VERSION = "v4.2.0"
+PAGE_VERSION = "v4.3.0"
 
 st.set_page_config(page_title="Knowledge Search", layout="wide")
 
@@ -88,7 +96,10 @@ def validate_database(db_path, silent=False):
         
     try:
         # Simple ChromaDB validation without LlamaIndex
-        db_settings = ChromaSettings(anonymized_telemetry=False)
+        db_settings = ChromaSettings(
+            anonymized_telemetry=False,
+            allow_reset=True
+        )
         client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
         collection = client.get_collection(COLLECTION_NAME)
         
@@ -115,7 +126,10 @@ def validate_database(db_path, silent=False):
             
             # Try to continue with ChromaDB-only access (skip collections)
             try:
-                db_settings = ChromaSettings(anonymized_telemetry=False)
+                db_settings = ChromaSettings(
+                    anonymized_telemetry=False,
+                    allow_reset=True
+                )
                 client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
                 collection = client.get_collection(COLLECTION_NAME)
                 collection_count = collection.count()
@@ -250,7 +264,10 @@ def render_sidebar():
                 if db_exists:
                     # Count documents
                     try:
-                        db_settings = ChromaSettings(anonymized_telemetry=False)
+                        db_settings = ChromaSettings(
+                            anonymized_telemetry=False,
+                            allow_reset=True
+                        )
                         client = chromadb.PersistentClient(path=db_dir, settings=db_settings)
                         collections = client.list_collections()
                         if collections:
@@ -358,8 +375,8 @@ def render_sidebar():
     }
 
 
-def perform_search(base_index, query, filters):
-    """Perform search - using direct ChromaDB approach to bypass LlamaIndex issues"""
+def perform_search(base_index, query, filters, search_mode="Traditional Vector Search"):
+    """Perform search - supports Traditional, GraphRAG Enhanced, and Hybrid modes"""
     try:
         if not query.strip():
             st.warning("⚠️ Please enter a search query")
@@ -381,14 +398,265 @@ def perform_search(base_index, query, filters):
             st.error("❌ Database path not configured")
             return []
         
-        # Use direct ChromaDB search to bypass LlamaIndex where clause issues
-        logger.info(f"Using direct ChromaDB search for query: {query[:50]}...")
-        return direct_chromadb_search(db_path, query, filters)
+        # Choose search strategy based on mode
+        if search_mode == "GraphRAG Enhanced":
+            logger.info(f"Using GraphRAG Enhanced search for query: {query[:50]}...")
+            return graphrag_enhanced_search(db_path, query, filters)
+        elif search_mode == "Hybrid Search":
+            logger.info(f"Using Hybrid (Vector + GraphRAG) search for query: {query[:50]}...")
+            return hybrid_search(db_path, query, filters)
+        else:
+            # Traditional Vector Search (default)
+            logger.info(f"Using Traditional Vector search for query: {query[:50]}...")
+            return direct_chromadb_search(db_path, query, filters)
             
     except Exception as e:
         st.error(f"❌ Search failed: {e}")
         logger.error(f"Search error: {e}", exc_info=True)
         return []
+
+
+def graphrag_enhanced_search(db_path, query, filters, top_k=20):
+    """GraphRAG enhanced search using knowledge graph context"""
+    try:
+        from cortex_engine.graphrag_integration import get_graphrag_integration
+        
+        # Initialize GraphRAG integration
+        graphrag = get_graphrag_integration(db_path)
+        
+        # Initialize vector index for GraphRAG (needed for enhanced search)
+        wsl_db_path = convert_windows_to_wsl_path(db_path)
+        chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+        
+        if not os.path.isdir(chroma_db_path):
+            st.error(f"Database not found: {chroma_db_path}")
+            return []
+        
+        # Create a simple vector index interface for GraphRAG
+        vector_index = ChromaVectorIndex(chroma_db_path)
+        
+        # Use GraphRAG enhanced search
+        raw_results = graphrag.enhanced_search(
+            query=query, 
+            vector_index=vector_index,
+            use_graph_context=True,
+            max_hops=2
+        )
+        
+        # Format results for display
+        formatted_results = []
+        for i, result in enumerate(raw_results[:top_k]):
+            # Extract content and metadata
+            if hasattr(result, 'text'):
+                content = result.text
+                metadata = getattr(result, 'metadata', {})
+            elif isinstance(result, dict):
+                content = result.get('content', result.get('text', ''))
+                metadata = result.get('metadata', {})
+            else:
+                content = str(result)
+                metadata = {}
+            
+            formatted_result = {
+                'rank': i + 1,
+                'score': metadata.get('score', 0.8),  # GraphRAG default score
+                'text': content,
+                'file_path': metadata.get('file_path', 'Unknown'),
+                'file_name': metadata.get('file_name', 'Unknown'),
+                'document_type': metadata.get('document_type', 'Unknown'),
+                'proposal_outcome': metadata.get('proposal_outcome', 'N/A'),
+                'chunk_id': metadata.get('chunk_id', f'chunk_{i}'),
+                'doc_id': metadata.get('doc_id', f'doc_{i}'),
+                'graph_context': metadata.get('graph_context', 'Enhanced with entity relationships')
+            }
+            
+            # Apply post-search filtering
+            if apply_post_search_filters(formatted_result, filters):
+                formatted_results.append(formatted_result)
+        
+        logger.info(f"GraphRAG enhanced search returned {len(formatted_results)} results")
+        return formatted_results
+        
+    except ImportError as e:
+        logger.warning(f"GraphRAG not available: {e}")
+        st.warning("⚠️ GraphRAG not available, falling back to traditional search")
+        return direct_chromadb_search(db_path, query, filters, top_k)
+    except Exception as e:
+        logger.error(f"GraphRAG search failed: {e}")
+        st.warning(f"⚠️ GraphRAG search failed: {e}. Falling back to traditional search.")
+        return direct_chromadb_search(db_path, query, filters, top_k)
+
+
+def hybrid_search(db_path, query, filters, top_k=20):
+    """Hybrid search combining vector and GraphRAG results"""
+    try:
+        from cortex_engine.graphrag_integration import get_graphrag_integration
+        
+        # Get both search results
+        vector_results = direct_chromadb_search(db_path, query, filters, top_k//2)
+        
+        try:
+            graphrag = get_graphrag_integration(db_path)
+            wsl_db_path = convert_windows_to_wsl_path(db_path)
+            chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+            
+            # Create vector index interface
+            vector_index = ChromaVectorIndex(chroma_db_path)
+            
+            # Get GraphRAG results
+            graphrag_raw = graphrag.enhanced_search(
+                query=query,
+                vector_index=vector_index,
+                use_graph_context=True,
+                max_hops=2
+            )
+            
+            # Format GraphRAG results
+            graphrag_results = []
+            for i, result in enumerate(graphrag_raw[:top_k//2]):
+                if hasattr(result, 'text'):
+                    content = result.text
+                    metadata = getattr(result, 'metadata', {})
+                else:
+                    content = str(result)
+                    metadata = {}
+                
+                formatted_result = {
+                    'rank': i + len(vector_results) + 1,
+                    'score': metadata.get('score', 0.75),
+                    'text': content,
+                    'file_path': metadata.get('file_path', 'Unknown'),
+                    'file_name': metadata.get('file_name', 'Unknown'),
+                    'document_type': metadata.get('document_type', 'Unknown'),
+                    'proposal_outcome': metadata.get('proposal_outcome', 'N/A'),
+                    'chunk_id': metadata.get('chunk_id', f'graphrag_chunk_{i}'),
+                    'doc_id': metadata.get('doc_id', f'graphrag_doc_{i}'),
+                    'search_source': 'GraphRAG Enhanced'
+                }
+                
+                if apply_post_search_filters(formatted_result, filters):
+                    graphrag_results.append(formatted_result)
+            
+        except Exception as e:
+            logger.warning(f"GraphRAG portion of hybrid search failed: {e}")
+            graphrag_results = []
+        
+        # Mark vector results
+        for result in vector_results:
+            result['search_source'] = 'Vector Search'
+        
+        # Combine and deduplicate results by doc_id
+        combined_results = {}
+        all_results = vector_results + graphrag_results
+        
+        for result in all_results:
+            doc_id = result['doc_id']
+            if doc_id not in combined_results:
+                combined_results[doc_id] = result
+            else:
+                # Keep result with higher score
+                if result['score'] > combined_results[doc_id]['score']:
+                    combined_results[doc_id] = result
+                    combined_results[doc_id]['search_source'] = 'Hybrid (Vector + GraphRAG)'
+        
+        # Sort by score and limit
+        final_results = list(combined_results.values())
+        final_results.sort(key=lambda x: x['score'], reverse=True)
+        final_results = final_results[:top_k]
+        
+        # Update ranks
+        for i, result in enumerate(final_results):
+            result['rank'] = i + 1
+        
+        logger.info(f"Hybrid search returned {len(final_results)} combined results")
+        return final_results
+        
+    except Exception as e:
+        logger.error(f"Hybrid search failed: {e}")
+        st.warning(f"⚠️ Hybrid search failed: {e}. Using traditional search.")
+        return direct_chromadb_search(db_path, query, filters, top_k)
+
+
+def apply_post_search_filters(result, filters):
+    """Apply post-search filtering logic"""
+    if not filters or not isinstance(filters, dict):
+        return True
+    
+    # Document type filter
+    doc_type_filter = filters.get('doc_type_filter')
+    outcome_filter = filters.get('outcome_filter')
+    filter_operator = filters.get('filter_operator', 'AND')
+    
+    # Check individual filter conditions
+    doc_type_match = (doc_type_filter == "Any" or 
+                     result.get('document_type') == doc_type_filter)
+    
+    outcome_match = (outcome_filter == "Any" or 
+                    result.get('proposal_outcome') == outcome_filter)
+    
+    # Apply boolean logic
+    if filter_operator == "AND":
+        return doc_type_match and outcome_match
+    else:  # OR operator
+        return (doc_type_match or outcome_match or 
+               (doc_type_filter == "Any" and outcome_filter == "Any"))
+
+
+# Simple ChromaDB Vector Index interface for GraphRAG compatibility
+class ChromaVectorIndex:
+    """Simple interface to make ChromaDB compatible with GraphRAG enhanced search"""
+    def __init__(self, chroma_db_path):
+        import chromadb
+        from chromadb.config import Settings as ChromaSettings
+        from cortex_engine.config import COLLECTION_NAME
+        
+        db_settings = ChromaSettings(
+            anonymized_telemetry=False,
+            allow_reset=True
+        )
+        self.client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+        self.collection = self.client.get_collection(COLLECTION_NAME)
+    
+    def as_retriever(self, similarity_top_k=10):
+        """Create a retriever interface for GraphRAG"""
+        return ChromaRetriever(self.collection, similarity_top_k)
+
+
+class ChromaRetriever:
+    """Simple retriever interface for GraphRAG compatibility"""
+    def __init__(self, collection, top_k=10):
+        self.collection = collection
+        self.top_k = top_k
+    
+    def retrieve(self, query):
+        """Retrieve documents for GraphRAG"""
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=self.top_k
+            )
+            
+            # Convert to GraphRAG expected format
+            retrieved_results = []
+            if results and results.get('documents'):
+                documents = results['documents'][0] if results['documents'] else []
+                metadatas = results['metadatas'][0] if results['metadatas'] else []
+                distances = results['distances'][0] if results['distances'] else []
+                
+                for doc, metadata, distance in zip(documents, metadatas, distances):
+                    # Create a simple result object
+                    result = type('RetrievalResult', (), {
+                        'text': doc,
+                        'metadata': metadata,
+                        'score': 1.0 - distance
+                    })()
+                    retrieved_results.append(result)
+            
+            return retrieved_results
+            
+        except Exception as e:
+            logger.error(f"ChromaRetriever.retrieve failed: {e}")
+            return []
 
 
 def direct_chromadb_search(db_path, query, filters, top_k=20):
@@ -411,7 +679,10 @@ def direct_chromadb_search(db_path, query, filters, top_k=20):
             
             # Direct ChromaDB client
             logger.info("Connecting to ChromaDB client...")
-            db_settings = ChromaSettings(anonymized_telemetry=False)
+            db_settings = ChromaSettings(
+                anonymized_telemetry=False,
+                allow_reset=True
+            )
             client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
             collection = client.get_collection(COLLECTION_NAME)
             logger.info(f"Connected to collection '{COLLECTION_NAME}'")
@@ -445,69 +716,14 @@ def direct_chromadb_search(db_path, query, filters, top_k=20):
                     results = None  # Try other strategies
                     
             except Exception as vector_e:
-                logger.warning(f"Vector search failed: {vector_e}")
+                logger.warning(f"Vector search failed (embedding mismatch?): {vector_e}")
+                # Skip vector search if embedding dimensions don't match
                 results = None
             
-            # Strategy 2: If vector search failed or gave no results, try individual terms
-            if not results or not results.get('documents') or not results['documents'][0]:
-                logger.info("Trying individual term searches...")
-                
-                # Split query into terms and search each
-                terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 2]
-                
-                if len(terms) > 1:
-                    combined_results = {'documents': [[]], 'metadatas': [[]], 'distances': [[]]}
-                    doc_scores = {}  # Track scores for each document
-                    
-                    for term in terms:
-                        try:
-                            term_results = collection.query(
-                                query_texts=[term],
-                                n_results=min(top_k * 2, 50)  # Get more results per term
-                            )
-                            
-                            if term_results and term_results.get('documents'):
-                                term_docs = term_results['documents'][0]
-                                term_metas = term_results['metadatas'][0]
-                                term_distances = term_results['distances'][0]
-                                
-                                for doc, meta, dist in zip(term_docs, term_metas, term_distances):
-                                    doc_id = meta.get('doc_id', 'unknown')
-                                    score = 1.0 - dist
-                                    
-                                    if doc_id in doc_scores:
-                                        # Boost score for documents that match multiple terms
-                                        doc_scores[doc_id]['score'] += score * 0.7  # Boost multi-term matches
-                                        doc_scores[doc_id]['term_count'] += 1
-                                    else:
-                                        doc_scores[doc_id] = {
-                                            'doc': doc,
-                                            'meta': meta,
-                                            'score': score,
-                                            'distance': dist,
-                                            'term_count': 1
-                                        }
-                                        
-                        except Exception as term_e:
-                            logger.warning(f"Term search for '{term}' failed: {term_e}")
-                    
-                    # Sort by score and prioritize multi-term matches
-                    if doc_scores:
-                        sorted_docs = sorted(doc_scores.values(), 
-                                           key=lambda x: (x['term_count'], x['score']), 
-                                           reverse=True)
-                        
-                        # Format as ChromaDB result
-                        results = {
-                            'documents': [[item['doc'] for item in sorted_docs[:top_k]]],
-                            'metadatas': [[item['meta'] for item in sorted_docs[:top_k]]],
-                            'distances': [[item['distance'] for item in sorted_docs[:top_k]]]
-                        }
-                        
-                        search_strategy = "multi-term"
-                        logger.info(f"Multi-term search found {len(sorted_docs)} unique documents")
+            # Strategy 2: Skip vector-based searches and go directly to text-based search
+            # (Since we have an embedding dimension mismatch)
             
-            # Strategy 3: Fallback to text-based search
+            # Strategy 3: Text-based search (our main fallback)
             if not results or not results.get('documents') or not results['documents'][0]:
                 logger.info("Attempting fallback text-based search...")
                 
@@ -668,11 +884,76 @@ def direct_chromadb_search(db_path, query, filters, top_k=20):
         return []
 
 
+def show_graphrag_entity_feedback(results, filters):
+    """Display entity-based feedback for GraphRAG searches"""
+    try:
+        # Get database path for GraphRAG integration
+        db_path = ""
+        try:
+            from cortex_engine.config_manager import ConfigManager
+            config_manager = ConfigManager()
+            current_config = config_manager.get_config()
+            db_path = current_config.get("ai_database_path", "")
+        except Exception:
+            db_path = st.session_state.get('db_path_input', '/app/data/ai_databases')
+        
+        if not db_path:
+            return
+            
+        from cortex_engine.graphrag_integration import get_graphrag_integration
+        graphrag = get_graphrag_integration(db_path)
+        
+        # Get graph statistics
+        stats = graphrag.get_graph_statistics()
+        
+        # Show entity context in an expandable section
+        with st.expander("🧠 GraphRAG Entity Analysis", expanded=False):
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("📊 Knowledge Graph", f"{stats.get('total_nodes', 0)} entities")
+                st.metric("🔗 Relationships", f"{stats.get('total_edges', 0)} connections")
+            
+            with col2:
+                entity_counts = stats.get('entity_counts', {})
+                if entity_counts:
+                    st.write("**Entity Types Found:**")
+                    for entity_type, count in entity_counts.items():
+                        if count > 0:
+                            st.write(f"• {entity_type.title()}: {count}")
+            
+            with col3:
+                # Show search source breakdown
+                search_sources = {}
+                for result in results:
+                    source = result.get('search_source', 'Traditional')
+                    search_sources[source] = search_sources.get(source, 0) + 1
+                
+                if search_sources:
+                    st.write("**Search Sources:**")
+                    for source, count in search_sources.items():
+                        st.write(f"• {source}: {count}")
+            
+            # Additional context for GraphRAG enhanced results
+            if any(result.get('graph_context') for result in results):
+                st.success("✅ Results enhanced with entity relationships and graph context")
+            else:
+                st.info("ℹ️ Results from vector search with graph validation")
+                
+    except Exception as e:
+        logger.warning(f"Could not show GraphRAG entity feedback: {e}")
+
+
 def render_search_results(results, filters):
-    """Render search results with collection management actions"""
+    """Render search results with collection management actions and entity feedback"""
     if not results:
         st.info("🔍 **No results found.**\n\n💡 **Try:**\n- Different search terms (e.g., 'strategy transformation' instead of 'strategy and transformation')\n- Checking sidebar filters - they might be too restrictive\n- Single terms first (e.g., just 'strategy')\n- Verifying your database path contains the right documents")
         return
+    
+    # Show GraphRAG entity feedback if available
+    search_mode = st.session_state.get('search_mode_selection', 'Traditional Vector Search')
+    if search_mode in ["GraphRAG Enhanced", "Hybrid Search"] and results:
+        show_graphrag_entity_feedback(results, filters)
     
     # Show active filters
     active_filters = []
@@ -841,11 +1122,18 @@ def render_search_results(results, filters):
             with col1:
                 st.write(f"📄 **Type:** {result['document_type']}")
                 st.write(f"📁 **File:** {result['file_name']}")
+                # Show search source if available
+                if result.get('search_source'):
+                    st.write(f"🔍 **Source:** {result['search_source']}")
             with col2:
                 st.write(f"🎯 **Score:** {result['score']:.4f}")
                 if result.get('proposal_outcome', 'N/A') != 'N/A':
                     st.write(f"📊 **Outcome:** {result['proposal_outcome']}")
                 st.write(f"🔗 **ID:** {result['doc_id']}")
+            
+            # Show graph context if available
+            if result.get('graph_context'):
+                st.info(f"🧠 **GraphRAG Context:** {result['graph_context']}")
 
 
 def main():
@@ -920,6 +1208,38 @@ def main():
     
     # Search interface
     st.subheader("🔍 Search Knowledge Base")
+    
+    # GraphRAG search mode selection
+    st.markdown("### 🧠 Search Strategy")
+    search_mode = st.radio(
+        "Choose your search approach:",
+        ["Traditional Vector Search", "GraphRAG Enhanced", "Hybrid Search"],
+        index=0,
+        help="""
+        **Traditional Vector Search**: Direct semantic similarity search through document embeddings
+        **GraphRAG Enhanced**: Uses knowledge graph relationships and entity context for enhanced results  
+        **Hybrid Search**: Combines vector search with graph-based relationship analysis
+        """,
+        key="search_mode_selection"
+    )
+    
+    # Show GraphRAG status info
+    if search_mode in ["GraphRAG Enhanced", "Hybrid Search"]:
+        try:
+            from cortex_engine.graphrag_integration import get_graphrag_integration
+            graphrag = get_graphrag_integration(db_path)
+            health = graphrag.health_check()
+            
+            if health['graph_nodes'] > 0:
+                st.success(f"✅ GraphRAG Ready: {health['graph_nodes']} entities, {health['graph_edges']} relationships")
+            else:
+                st.warning("⚠️ Knowledge graph is empty. GraphRAG will fall back to traditional search.")
+                
+        except Exception as e:
+            st.warning(f"⚠️ GraphRAG initialization issue: {e}")
+            logger.warning(f"GraphRAG health check failed: {e}")
+    
+    st.divider()
     
     # Docker-specific guidance with better detection
     is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_ENV') == 'true'
@@ -1026,8 +1346,9 @@ def main():
                 
                 st.write("📊 Analyzing 4201 documents...")
                 
-                # Perform search (base_index not needed for direct ChromaDB search)
-                results = perform_search(None, query, config)
+                # Perform search with selected mode
+                search_mode = st.session_state.get('search_mode_selection', 'Traditional Vector Search')
+                results = perform_search(None, query, config, search_mode)
                 st.session_state.last_search_results = results
                 
                 # Update status when complete

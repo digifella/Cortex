@@ -100,6 +100,12 @@ DEFAULT_EXCLUSION_PATTERNS_STR = (
 
 # --- Configuration Helper Functions ---
 
+def get_db_path(custom_path: Optional[str] = None) -> str:
+    """Get database path - supports custom path override or falls back to BASE_DATA_PATH."""
+    if custom_path:
+        return custom_path.strip()
+    return BASE_DATA_PATH
+
 def get_cortex_config() -> Dict[str, Any]:
     """Get complete Cortex configuration dictionary."""
     return {

@@ -13,6 +13,28 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v4.2.1 - 2025-08-30
+
+### GraphRAG Search Integration
+
+Re-enabled GraphRAG enhanced search capabilities with radio button selection and entity relationship analysis in Knowledge Search interface
+
+### ✨ New Features
+- GraphRAG search mode selection with Traditional Vector Search, GraphRAG Enhanced, and Hybrid Search options
+- Entity-based search feedback showing knowledge graph statistics and relationship counts
+- Graph context enhancement for search results with entity relationship analysis
+- Real-time GraphRAG health monitoring and status display
+- Search source identification in results (Vector Search vs GraphRAG Enhanced)
+- Hybrid search combining vector similarity with graph-based entity relationships
+
+### 🚀 Improvements
+- Re-connected existing GraphRAG infrastructure (EnhancedGraphManager, EntityExtractor, GraphRAGIntegration)
+- Enhanced search result display with graph context information
+- Graceful fallbacks from GraphRAG to traditional search when graph data unavailable
+- Improved search strategy selection with comprehensive help text
+- Real-time feedback on knowledge graph status and entity availability
+
 ## v4.2.0 - 2025-08-30
 
 ### Streamlined Document Anonymizer Interface

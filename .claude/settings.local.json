@@ -47,7 +47,9 @@
       "Bash(rsync:*)",
       "Bash(nvidia-smi:*)",
       "Bash(./sync_docker_distribution.sh:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Read(/mnt/f/ai_databases/**)",
+      "Read(/mnt/f/ai_databases/knowledge_hub_db/**)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",

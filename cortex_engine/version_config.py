@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.2.0"
+CORTEX_VERSION = "4.3.0"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
-    "minor": 2,
+    "minor": 3,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -25,31 +25,32 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2025-08-30",
-    "release_name": "Streamlined Document Anonymizer Interface",
-    "description": "Complete redesign of Document Anonymizer with modern UI patterns matching Document Summarizer for consistent user experience",
-    "breaking_changes": [
-        "Document Anonymizer interface completely redesigned (functionality unchanged)"
-    ],
+    "release_name": "Critical Search Functionality Restoration",
+    "description": "Major fix for search functionality with embedding dimension mismatch resolution and robust text-based fallback search system",
+    "breaking_changes": [],
     "new_features": [
-        "Streamlined Document Anonymizer interface matching Document Summarizer patterns",
-        "Radio button selection between Upload File and Browse Knowledge Base",
-        "Smart knowledge base directory detection using ConfigManager",
-        "Enhanced anonymization results display with entity metrics",
-        "Interactive entity mapping table with type categorization",
-        "Improved progress tracking with status messages during processing"
+        "Intelligent search fallback system with text-based search when vector embeddings fail",
+        "Enhanced search diagnostics with embedding dimension mismatch detection",
+        "Robust ChromaDB error handling with graceful degradation to text search",
+        "Multi-strategy search approach prioritizing result accuracy over search method",
+        "Search reliability improvements ensuring results are always returned when documents exist"
     ],
     "improvements": [
-        "Eliminated complex folder navigation and drag-drop complexity",
-        "Cleaner two-column layout with focused workflow",
-        "Better file selection with descriptive names and locations",
-        "Enhanced results section with preview and mapping options",
-        "More intuitive confidence threshold slider with better help text",
-        "Consistent UI patterns across Document Summarizer and Anonymizer"
+        "Fixed critical search functionality that was returning zero results due to embedding dimension conflicts",
+        "Restored GraphRAG search capabilities with proper error handling and fallback mechanisms",
+        "Enhanced search result accuracy by implementing text-based matching when vector search fails",
+        "Improved search performance by detecting and avoiding incompatible embedding operations",
+        "Added comprehensive search debugging and error reporting for better troubleshooting",
+        "Strengthened ChromaDB telemetry error suppression for cleaner user experience",
+        "Enhanced Ollama model service with synchronous fallback for event loop issues"
     ],
     "bug_fixes": [
-        "Maintained Docker volume write permission fixes for ARM64 Snapdragon",
-        "Preserved container-internal temp storage for Docker environments",
-        "Fixed file handling for various document formats"
+        "CRITICAL: Fixed search returning zero results due to embedding dimension mismatch (384 vs 768)",
+        "Fixed GraphRAG health check failing with missing get_db_path import",
+        "Fixed Ollama model service 'Event loop is closed' errors with synchronous fallback",
+        "Fixed ChromaDB telemetry spam with proper warning suppression",
+        "Restored ability to find documents containing search terms (e.g., 61+ documents with 'strategy')",
+        "Fixed search interface showing 'No results found' when documents actually existed in database"
     ]
 }
 

@@ -82,8 +82,59 @@ class OllamaModelService(ModelServiceInterface):
                 
                 return models
                 
+        except RuntimeError as e:
+            if "Event loop is closed" in str(e):
+                logger.warning("Event loop closed, falling back to synchronous request")
+                return self._list_models_sync()
+            else:
+                logger.error(f"Failed to list Ollama models: {e}")
+                return []
         except Exception as e:
             logger.error(f"Failed to list Ollama models: {e}")
+            return []
+
+    def _list_models_sync(self) -> List[ModelInfo]:
+        """Synchronous fallback for listing models when event loop is closed."""
+        try:
+            import requests
+            
+            # Check if service is available
+            is_running, _ = check_ollama_service(self.host, self.port)
+            if not is_running:
+                return []
+            
+            response = requests.get(f"{self.base_url}/api/tags", timeout=10)
+            if response.status_code != 200:
+                logger.error(f"Failed to list Ollama models: {response.status_code}")
+                return []
+            
+            data = response.json()
+            models = []
+            
+            for model_data in data.get("models", []):
+                name = model_data.get("name", "")
+                parts = name.split(":")
+                model_name = parts[0]
+                tag = parts[1] if len(parts) > 1 else "latest"
+                
+                # Convert size from bytes to GB
+                size_bytes = model_data.get("size", 0)
+                size_gb = size_bytes / (1024**3)
+                
+                models.append(ModelInfo(
+                    name=model_name,
+                    tag=tag,
+                    size_gb=size_gb,
+                    status=ModelStatus.AVAILABLE,
+                    backend=self.backend_name,
+                    description=f"Ollama model: {name}",
+                    performance_tier="standard"
+                ))
+            
+            return models
+            
+        except Exception as e:
+            logger.error(f"Synchronous model list failed: {e}")
             return []
     
     async def get_model_info(self, model_name: str) -> Optional[ModelInfo]:
