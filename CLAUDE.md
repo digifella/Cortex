@@ -502,6 +502,145 @@ python scripts/version_manager.py --info
 4. **Verify consistency** - `python scripts/version_manager.py --check`
 5. **Commit changes** - All version updates are synchronized automatically
 
+## 🚀 Major Release & Feature Update Workflow
+
+### **MANDATORY: Complete Release Process for Major Updates**
+
+When implementing major features, bug fixes, or significant functionality changes (like Clean Start system), follow this comprehensive workflow to ensure full synchronization:
+
+#### **Phase 1: Development & Testing**
+1. **Implement core functionality** in relevant files
+2. **Update page versions** where changes were made (increment appropriately)
+3. **Test functionality thoroughly** in development environment
+4. **Document changes** with clear comments and purpose statements
+
+#### **Phase 2: Version Management (CRITICAL)**
+1. **Update Central Version Config**: `cortex_engine/version_config.py`
+   ```python
+   CORTEX_VERSION = "X.Y.Z"  # Increment major/minor/patch appropriately
+   VERSION_METADATA = {
+       "release_date": "YYYY-MM-DD",
+       "release_name": "Feature Name/Description",
+       "description": "Brief description of changes",
+       "new_features": [...],
+       "improvements": [...],
+       "bug_fixes": [...]
+   }
+   ```
+
+2. **Run Complete Version Sync**:
+   ```bash
+   # Sync all components to new version
+   python scripts/version_manager.py --sync-all
+   
+   # Update changelog with version info
+   python scripts/version_manager.py --update-changelog
+   
+   # Verify consistency across all files
+   python scripts/version_manager.py --check
+   ```
+
+3. **Manual Version Fixes** (if needed):
+   - Check main README.md version references
+   - Verify Docker batch file version strings
+   - Update splash page version displays
+
+#### **Phase 3: Docker Distribution Sync**
+1. **Copy updated version config** to docker directory:
+   ```bash
+   cp cortex_engine/version_config.py docker/cortex_engine/
+   ```
+
+2. **Sync all modified pages** to docker:
+   ```bash
+   cp pages/*.py docker/pages/  # Copy all updated pages
+   ```
+
+3. **Verify docker distribution completeness**:
+   - Main application files (Cortex_Suite.py)
+   - All page files with latest versions
+   - Updated batch install files (.bat, .sh)
+   - Synchronized documentation (README.md)
+   - Changelog files (CHANGELOG.md)
+
+#### **Phase 4: Commit & Release**
+1. **Stage all changes**:
+   ```bash
+   git add -A
+   ```
+
+2. **Create comprehensive commit message**:
+   ```bash
+   git commit -m "release: Version X.Y.Z - Feature Name
+   
+   ## 🚀 Major Release: vX.Y.Z
+   **Release Name:** Feature Description
+   **Release Date:** YYYY-MM-DD
+   
+   ### ✨ New Features
+   - Feature 1 description
+   - Feature 2 description
+   
+   ### 🚀 Improvements  
+   - Improvement 1
+   - Improvement 2
+   
+   ### 🔧 Bug Fixes
+   - Bug fix 1
+   - Bug fix 2
+   
+   ## 📋 Synchronized Components
+   - ✅ Version consistency verified
+   - ✅ Docker distribution updated
+   - ✅ Batch installers updated
+   - ✅ Documentation synchronized
+   
+   🤖 Generated with [Claude Code](https://claude.ai/code)
+   
+   Co-Authored-By: Claude <noreply@anthropic.com>"
+   ```
+
+3. **Push to remote**:
+   ```bash
+   git push origin main
+   ```
+
+#### **Phase 5: Release Verification**
+1. **Confirm version consistency** across all files
+2. **Verify Docker distribution** has all required files
+3. **Test batch installers** show correct version
+4. **Validate changelog** is updated and synced
+5. **Check documentation** reflects new version
+
+### **🔄 When to Use This Workflow**
+- **Major new features** (Clean Start, new pages, significant functionality)
+- **Critical bug fixes** (database schema errors, search failures)
+- **Architectural changes** (new utilities, refactoring)
+- **Docker distribution updates** (installation improvements)
+- **User-facing improvements** (UI enhancements, error handling)
+
+### **📋 Release Checklist Template**
+```markdown
+- [ ] Core functionality implemented and tested
+- [ ] Version config updated with appropriate increment
+- [ ] Version sync run across all components  
+- [ ] Changelog updated with release information
+- [ ] Version consistency verified (check command passes)
+- [ ] Docker distribution synchronized
+- [ ] Batch install files updated with new version
+- [ ] Documentation updated (README files)
+- [ ] Comprehensive commit message created
+- [ ] Changes pushed to remote repository
+- [ ] Release verified in target environment
+```
+
+**FAILURE TO FOLLOW THIS WORKFLOW RESULTS IN:**
+- Inconsistent version numbers across components
+- Broken Docker distributions for users
+- Missing functionality in deployed versions  
+- Incomplete documentation and changelogs
+- User confusion about feature availability
+
 #### Automatic Synchronization
 The version manager automatically updates:
 - Main application files (Cortex_Suite.py)
