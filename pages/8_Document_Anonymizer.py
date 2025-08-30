@@ -274,27 +274,25 @@ if st.session_state.get("files_to_process") and st.session_state.get("auto_proce
             
             # If no output directory specified, move files to Downloads or current directory
             if not output_dir:
-                # Try to use Downloads folder, fallback to current directory
-                try:
-                    downloads_path = Path.home() / "Downloads"
-                    if downloads_path.exists():
-                        final_output_dir = downloads_path
-                    else:
-                        final_output_dir = Path.cwd()
-                except Exception:
-                    final_output_dir = Path.cwd()
-                    
+                # In Docker environments, avoid writing to mounted Windows volumes
+                # Use container-internal temp directory for all operations
+                import tempfile
+                final_output_dir = Path(tempfile.gettempdir()) / "cortex_anonymizer"
                 ensure_directory(final_output_dir)
                 
-                # Move output files to permanent location
+                # Move output files to container-internal location
                 for input_file, output_file in results.items():
                     if not output_file.startswith("ERROR:"):
                         temp_output_path = Path(output_file)
                         if temp_output_path.parent == st.session_state.temp_anonymizer_dir:
-                            # Move file to permanent location
+                            # Move file to container-internal location
                             permanent_path = final_output_dir / temp_output_path.name
-                            shutil.move(str(temp_output_path), str(permanent_path))
-                            final_results[input_file] = str(permanent_path)
+                            try:
+                                shutil.move(str(temp_output_path), str(permanent_path))
+                                final_results[input_file] = str(permanent_path)
+                            except Exception as e:
+                                logger.warning(f"Could not move file, keeping in temp location: {e}")
+                                final_results[input_file] = output_file
                         else:
                             final_results[input_file] = output_file
                     else:
@@ -423,6 +421,7 @@ with st.expander("❓ Help & Tips"):
     - **Custom Location**: Specify in Output Configuration above
     - **File Format**: Anonymized content saved as .txt files
     - **Mapping File**: Optional reference showing original → anonymous mappings
+    - **Docker Note**: In Docker environments, files are processed in container storage for better compatibility - use download buttons to save results
     
     ### Tips for Best Results
     - **Test First**: Try with a small sample before processing large batches

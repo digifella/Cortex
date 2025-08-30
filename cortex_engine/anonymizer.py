@@ -466,6 +466,33 @@ class DocumentAnonymizer:
         
         return anonymized_text
     
+    def _detect_docker_environment(self) -> bool:
+        """Detect if running in a Docker container."""
+        try:
+            return (Path("/.dockerenv").exists() or 
+                   "DOCKER_CONTAINER" in os.environ or
+                   (Path("/proc/self/cgroup").exists() and 
+                    "docker" in Path("/proc/self/cgroup").read_text()))
+        except Exception:
+            return False
+
+    def _get_safe_output_path(self, intended_path: Union[str, Path]) -> Path:
+        """Get safe output path, avoiding Docker mount issues."""
+        intended_path = normalize_path(intended_path)
+        
+        # If in Docker and trying to write to a mounted volume, use temp directory
+        if self._detect_docker_environment():
+            # Check if path looks like a Windows mount (common Docker issue)
+            path_str = str(intended_path)
+            if any(pattern in path_str.lower() for pattern in ['/mnt/c/', '/mnt/d/', '/host/']):
+                logger.warning(f"Docker detected: Using temp directory instead of mounted volume {intended_path}")
+                import tempfile
+                temp_dir = Path(tempfile.gettempdir()) / "cortex_anonymizer"
+                ensure_directory(temp_dir)
+                return temp_dir / intended_path.name
+        
+        return intended_path
+
     def anonymize_single_file(self, input_path: Union[str, Path], 
                             output_path: Optional[Union[str, Path]] = None,
                             mapping: Optional[AnonymizationMapping] = None,
@@ -511,13 +538,17 @@ Entities replaced: {len(mapping.mappings)}
         
         anonymized_text = header + anonymized_text
         
-        # Write output
-        ensure_directory(output_path.parent)
-        with open(output_path, 'w', encoding='utf-8') as f:
+        # Write output (use safe path to avoid Docker volume issues)
+        safe_output_path = self._get_safe_output_path(output_path)
+        ensure_directory(safe_output_path.parent)
+        with open(safe_output_path, 'w', encoding='utf-8') as f:
             f.write(anonymized_text)
         
-        logger.info(f"Anonymized document saved to {output_path}")
-        return str(output_path), mapping
+        if safe_output_path != output_path:
+            logger.info(f"Anonymized document saved to safe location: {safe_output_path} (intended: {output_path})")
+        else:
+            logger.info(f"Anonymized document saved to {output_path}")
+        return str(safe_output_path), mapping
     
     def anonymize_batch(self, input_paths: List[Union[str, Path]], 
                        output_directory: Optional[Union[str, Path]] = None,
@@ -575,9 +606,10 @@ Entities replaced: {len(mapping.mappings)}
         """Save the anonymization mapping to a file for reference."""
         
         output_path = normalize_path(output_path)
-        ensure_directory(output_path.parent)
+        safe_output_path = self._get_safe_output_path(output_path)
+        ensure_directory(safe_output_path.parent)
         
-        with open(output_path, 'w', encoding='utf-8') as f:
+        with open(safe_output_path, 'w', encoding='utf-8') as f:
             f.write("ANONYMIZATION MAPPING REPORT\n")
             f.write("=" * 50 + "\n\n")
             f.write("This file contains the mapping between original entities and their anonymous replacements.\n")
