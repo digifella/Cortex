@@ -125,7 +125,7 @@ def perform_clean_start(db_path: str):
                 deleted_items.append(f"Working collections: {collections_file}")
                 logger.info(f"Clean Start: Cleared working collections: {collections_file}")
             
-            # 4. Clear ingestion logs and metadata
+            # 4. Clear ALL ingestion logs and metadata (comprehensive)
             logs_dir = project_root / "logs"
             if logs_dir.exists():
                 for log_file in logs_dir.glob("*.log"):
@@ -133,11 +133,37 @@ def perform_clean_start(db_path: str):
                     deleted_items.append(f"Log file: {log_file}")
                 logger.info(f"Clean Start: Cleared logs directory: {logs_dir}")
             
-            # 5. Clear any cached configuration files
+            # Clear ingested files log from database directory
+            chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
+            if chroma_db_dir.exists():
+                ingested_files_log = chroma_db_dir / "ingested_files.log"
+                if ingested_files_log.exists():
+                    ingested_files_log.unlink()
+                    deleted_items.append(f"Ingested files log: {ingested_files_log}")
+                    logger.info(f"Clean Start: Cleared ingested files log: {ingested_files_log}")
+            
+            # 5. Clear ALL staging and batch ingestion files (comprehensive)
+            staging_patterns = [
+                "staging_ingestion.json",
+                "staging_*.json", 
+                "staging_test.json",
+                "batch_progress.json",
+                "batch_state.json",
+                "ingestion_progress.json",
+                "failed_ingestion.json"
+            ]
+            
+            for pattern in staging_patterns:
+                for staging_file in project_root.glob(pattern):
+                    if staging_file.is_file():
+                        staging_file.unlink()
+                        deleted_items.append(f"Staging/batch file: {staging_file}")
+                        logger.info(f"Clean Start: Cleared staging file: {staging_file}")
+            
+            # 6. Clear session state and cached configuration files
             config_files_to_clear = [
                 project_root / "cortex_config.json",
-                project_root / "boilerplate.json", 
-                project_root / "staging_ingestion.json"
+                project_root / "boilerplate.json"
             ]
             
             for config_file in config_files_to_clear:
@@ -159,15 +185,26 @@ def perform_clean_start(db_path: str):
                         config_file.unlink()
                         deleted_items.append(f"Configuration file: {config_file}")
             
-            # 6. Clear ingestion recovery metadata  
+            # 7. Clear ingestion recovery metadata  
             recovery_metadata_dir = Path(wsl_db_path) / "recovery_metadata"
             if recovery_metadata_dir.exists():
                 shutil.rmtree(recovery_metadata_dir)
                 deleted_items.append(f"Recovery metadata: {recovery_metadata_dir}")
                 logger.info(f"Clean Start: Cleared recovery metadata: {recovery_metadata_dir}")
             
-            # 7. Clear any temporary files
-            temp_patterns = ["*.tmp", "*.temp", "staging_*", "temp_*"]
+            # 8. Clear Streamlit session state cache files
+            streamlit_cache_patterns = [".streamlit/cache", "__pycache__", "*.pyc"]
+            for pattern in streamlit_cache_patterns:
+                for cache_item in project_root.rglob(pattern):
+                    if cache_item.is_file():
+                        cache_item.unlink()
+                        deleted_items.append(f"Cache file: {cache_item}")
+                    elif cache_item.is_dir() and cache_item.name in ['.streamlit', '__pycache__']:
+                        shutil.rmtree(cache_item)
+                        deleted_items.append(f"Cache directory: {cache_item}")
+            
+            # 9. Clear any remaining temporary and state files
+            temp_patterns = ["*.tmp", "*.temp", "temp_*", "*.pid", "*.lock", "*_state.json"]
             for pattern in temp_patterns:
                 for temp_file in project_root.glob(pattern):
                     if temp_file.is_file():
@@ -315,12 +352,16 @@ def display_database_maintenance():
             **Clean Start will:**
             - ✅ Delete entire knowledge base directory (ChromaDB)
             - ✅ Delete knowledge graph file (.gpickle)  
-            - ✅ Clear ingestion logs and progress files
+            - ✅ Clear ALL ingestion logs and progress files
+            - ✅ Remove ingested files log from database directory
+            - ✅ Clear ALL staging and batch ingestion files (including failed ingests)
             - ✅ Reset working collections (working_collections.json)
             - ✅ Clear ingestion recovery metadata
-            - ✅ Remove cached configuration files
+            - ✅ Remove Streamlit cache and session state files
+            - ✅ Clear temporary files, lock files, and state files
+            - ✅ Reset database configuration paths
             - ✅ Fix ChromaDB schema conflicts and version issues
-            - ✅ Provide complete fresh installation state
+            - ✅ Provide completely fresh installation state
             """)
             
             st.info("**Use Clean Start when:**")
@@ -330,6 +371,9 @@ def display_database_maintenance():
             - Docker vs non-Docker database conflicts
             - ChromaDB version compatibility issues
             - System appears corrupted or inconsistent
+            - **Failed batch ingests** showing up in Knowledge Ingest page
+            - Half-finished ingestion operations need clearing
+            - Want completely fresh system without any residual files
             """)
         
         with col2:
