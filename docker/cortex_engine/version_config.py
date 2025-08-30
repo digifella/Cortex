@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.1.3"
+CORTEX_VERSION = "4.2.0"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
-    "minor": 1,
-    "patch": 3,
+    "minor": 2,
+    "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,28 +25,31 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2025-08-30",
-    "release_name": "Intelligent Model Selection & Resource Management",
-    "description": "Smart model selection based on system resources prevents memory crashes and optimizes performance across all hardware configurations",
-    "breaking_changes": [],
+    "release_name": "Streamlined Document Anonymizer Interface",
+    "description": "Complete redesign of Document Anonymizer with modern UI patterns matching Document Summarizer for consistent user experience",
+    "breaking_changes": [
+        "Document Anonymizer interface completely redesigned (functionality unchanged)"
+    ],
     "new_features": [
-        "Intelligent model selection based on available system memory and Docker resource limits",
-        "Automatic Docker environment detection with memory limit handling", 
-        "Real-time resource monitoring with user-friendly Streamlit alerts",
-        "Smart model tier selection (efficient vs powerful) based on system capabilities",
-        "Resource compatibility checking before model loading"
+        "Streamlined Document Anonymizer interface matching Document Summarizer patterns",
+        "Radio button selection between Upload File and Browse Knowledge Base",
+        "Smart knowledge base directory detection using ConfigManager",
+        "Enhanced anonymization results display with entity metrics",
+        "Interactive entity mapping table with type categorization",
+        "Improved progress tracking with status messages during processing"
     ],
     "improvements": [
-        "Default model changed from mistral-small3.2 (26GB) to mistral:7b-instruct-v0.3-q4_K_M (4.4GB)",
-        "Increased document ingestion timeout from 2 minutes to 10 minutes for large documents",
-        "Dynamic task-specific model mapping adapts to system resources",
-        "Memory usage reduced by 80%+ through intelligent model selection",
-        "Added psutil dependency for cross-platform system resource monitoring"
+        "Eliminated complex folder navigation and drag-drop complexity",
+        "Cleaner two-column layout with focused workflow",
+        "Better file selection with descriptive names and locations",
+        "Enhanced results section with preview and mapping options",
+        "More intuitive confidence threshold slider with better help text",
+        "Consistent UI patterns across Document Summarizer and Anonymizer"
     ],
     "bug_fixes": [
-        "Fixed 7-minute Ollama timeout errors during Word document ingestion",
-        "Fixed Docker container memory exhaustion causing system crashes",
-        "Fixed 800%+ CPU usage display issues in Docker Desktop (misleading metrics)",
-        "Fixed WSL memory consumption issues with large language models"
+        "Maintained Docker volume write permission fixes for ARM64 Snapdragon",
+        "Preserved container-internal temp storage for Docker environments",
+        "Fixed file handling for various document formats"
     ]
 }
 

@@ -1,436 +1,396 @@
 # ## File: pages/8_Document_Anonymizer.py
-# Version: v4.1.3
-# Date: 2025-08-28
-# Purpose: Simplified document anonymization interface with drag-and-drop processing.
-#          Processes documents to replace identifying information with generic placeholders.
-#          Auto-processes files on upload with download-only results interface.
+# Version: v4.2.0
+# Date: 2025-08-30
+# Purpose: Streamlined document anonymization interface with clean file browsing.
+#          Replaces identifying information with generic placeholders using modern UI patterns.
 
 import streamlit as st
-import os
-import json
 import sys
 from pathlib import Path
+import os
+import tempfile
+import time
 from datetime import datetime
 from typing import List, Dict, Optional
 
-# --- Project Setup ---
+# Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-# Import modules
+# Import core modules
 from cortex_engine.anonymizer import DocumentAnonymizer, AnonymizationMapping
-from cortex_engine.utils import get_logger
-from cortex_engine.utils.path_utils import (
-    normalize_path, ensure_directory, validate_path_exists,
-    process_multiple_drag_drop_paths, get_file_size_display
-)
+from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 from cortex_engine.config_manager import ConfigManager
-from cortex_engine.help_system import help_system
 
 # Set up logging
 logger = get_logger(__name__)
 
-st.set_page_config(layout="wide", page_title="Document Anonymizer")
+# Page configuration
+st.set_page_config(page_title="Document Anonymizer", layout="wide", page_icon="🎭")
 
-# Add global CSS for left-aligned folder buttons
-st.markdown("""
-<style>
-/* Left-align folder directory navigation buttons */
-.stButton > button:has-text("📁") {
-    text-align: left !important;
-    justify-content: flex-start !important;
-}
-/* Alternative selector for buttons containing folder emoji */
-button[data-testid="baseButton-secondary"]:contains("📁") {
-    text-align: left !important;
-    justify-content: flex-start !important;
-}
-/* Fallback: target all secondary buttons in directory navigation columns */
-div[data-testid="column"] .stButton > button {
-    text-align: left !important;
-    justify-content: flex-start !important;
-}
-</style>
-""", unsafe_allow_html=True)
+# Page metadata
+PAGE_VERSION = "v4.2.0"
 
-# --- Helper Functions ---
-
-def is_supported_file(file_path: Path) -> bool:
-    """Check if file format is supported for anonymization."""
-    supported_extensions = {'.txt', '.pdf', '.docx'}
-    return file_path.suffix.lower() in supported_extensions
-
-def get_file_info(file_path: Path) -> Dict:
-    """Get basic file information for display."""
-    try:
-        stat = file_path.stat()
-        return {
-            'name': file_path.name,
-            'size': get_file_size_display(file_path),
-            'modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M'),
-            'type': file_path.suffix.upper()[1:] if file_path.suffix else 'Unknown',
-            'supported': is_supported_file(file_path)
-        }
-    except Exception as e:
-        return {
-            'name': file_path.name,
-            'size': 'Unknown',
-            'modified': 'Unknown',
-            'type': 'Unknown',
-            'supported': False,
-            'error': str(e)
-        }
-
-# --- Main Interface ---
-
-st.title("📝 Document Anonymizer")
-st.caption("Replace identifying information in documents with generic placeholders")
-
-help_system.show_help_menu()
-
-# Introduction
-st.markdown("""
-The Document Anonymizer processes your documents to replace identifying information such as:
-- **People names** → Person A, Person B, etc.
-- **Company names** → Company 1, Company 2, etc.
-- **Project names** → Project 1, Project 2, etc.
-- **Email addresses** → [EMAIL]
-- **Phone numbers** → [PHONE]
-- **URLs** → [URL]
-- **Headers/footers** → [HEADER/FOOTER REMOVED]
-
-**Supported formats:** TXT, PDF, DOCX
-""")
-
-st.divider()
-
-# Configuration Section
-with st.expander("⚙️ Configuration", expanded=False):
-    col1, col2 = st.columns(2)
+def main():
+    """Main Document Anonymizer application."""
+    
+    # Initialize session state
+    if 'anonymizer_results' not in st.session_state:
+        st.session_state.anonymizer_results = {}
+    
+    if 'current_anonymization' not in st.session_state:
+        st.session_state.current_anonymization = None
+    
+    # Header
+    st.title("🎭 Document Anonymizer")
+    st.caption(f"Version: {PAGE_VERSION} • Streamlined privacy protection for your documents")
+    
+    # Info section
+    with st.expander("ℹ️ About Document Anonymizer", expanded=False):
+        st.markdown("""
+        **Protect sensitive information** by replacing identifying details with generic placeholders.
+        
+        **✨ Features:**
+        - **Smart Entity Detection**: Automatically finds people, companies, and locations
+        - **Consistent Replacement**: Same entity always gets the same placeholder (e.g., "John Smith" → "Person A")
+        - **Privacy Safe**: Perfect for sharing confidential documents for review
+        - **Multiple Formats**: PDF, Word, and text file support
+        - **Docker Compatible**: Works seamlessly in containerized environments
+        
+        **🎯 Perfect For:**
+        - Preparing documents for external review
+        - Creating demo versions of confidential files
+        - Protecting client privacy in case studies
+        - Sanitizing documents for training purposes
+        
+        **🔄 Replacement Examples:**
+        - **People**: John Smith → Person A, Jane Doe → Person B
+        - **Companies**: Acme Corp → Company 1, BigTech Inc → Company 2  
+        - **Projects**: Project Alpha → Project 1, Initiative Beta → Project 2
+        - **Contact Info**: emails → [EMAIL], phones → [PHONE], URLs → [URL]
+        """)
+    
+    # Main interface
+    col1, col2 = st.columns([1, 2])
     
     with col1:
-        shared_mapping = st.checkbox(
-            "Use shared entity mapping across files",
-            value=st.session_state.get("shared_mapping", True),
-            key="shared_mapping_checkbox",
-            help="When enabled, the same person/company will get the same anonymous name across all files"
+        st.header("📁 Document Input")
+        
+        # File input method selection
+        input_method = st.radio(
+            "Choose input method:",
+            ["Upload File", "Browse Knowledge Base"],
+            help="Upload a new file or select from your knowledge base documents"
         )
         
-        preserve_structure = st.checkbox(
-            "Preserve document structure",
-            value=st.session_state.get("preserve_structure", True),
-            key="preserve_structure_checkbox",
-            help="Maintain original formatting and structure in output files"
-        )
+        selected_file = None
+        
+        if input_method == "Upload File":
+            uploaded_file = st.file_uploader(
+                "Choose a document to anonymize:",
+                type=['pdf', 'docx', 'txt'],
+                help="Supported formats: PDF, Word documents, Text files"
+            )
+            
+            if uploaded_file:
+                # Save uploaded file temporarily with proper permissions
+                try:
+                    temp_dir = Path(tempfile.gettempdir()) / "cortex_anonymizer"
+                    temp_dir.mkdir(exist_ok=True, mode=0o755)
+                    
+                    # Create temporary file with proper extension
+                    file_extension = Path(uploaded_file.name).suffix
+                    temp_filename = f"upload_{int(time.time())}_{uploaded_file.name}"
+                    selected_file = str(temp_dir / temp_filename)
+                    
+                    # Write file with proper permissions
+                    with open(selected_file, 'wb') as tmp_file:
+                        tmp_file.write(uploaded_file.getvalue())
+                    
+                    # Set file permissions
+                    os.chmod(selected_file, 0o644)
+                    
+                    st.success(f"📄 File uploaded: {uploaded_file.name}")
+                    st.info(f"Size: {uploaded_file.size / 1024:.1f} KB")
+                    
+                except Exception as e:
+                    st.error(f"❌ Failed to save uploaded file: {str(e)}")
+                    selected_file = None
+        
+        else:  # Browse Knowledge Base
+            # Load configuration to find knowledge base documents
+            config_manager = ConfigManager()
+            config = config_manager.get_config()
+            
+            # Look for documents in knowledge base locations
+            possible_dirs = []
+            if config.get('db_path'):
+                base_path = Path(convert_windows_to_wsl_path(config['db_path']))
+                possible_dirs.extend([
+                    base_path / "documents",
+                    base_path / "source_documents",
+                    base_path.parent / "documents",
+                    base_path.parent / "source_documents"
+                ])
+            
+            # Also check common project directories
+            project_dirs = [
+                project_root / "documents",
+                project_root / "source_documents", 
+                project_root / "test_documents"
+            ]
+            possible_dirs.extend(project_dirs)
+            
+            knowledge_files = []
+            for dir_path in possible_dirs:
+                if dir_path.exists():
+                    for file_path in dir_path.glob("**/*"):
+                        if file_path.is_file() and file_path.suffix.lower() in ['.pdf', '.docx', '.txt']:
+                            knowledge_files.append(file_path)
+            
+            if knowledge_files:
+                file_names = [f"{f.name} ({f.parent.name})" for f in knowledge_files]
+                selected_idx = st.selectbox(
+                    "Select document from knowledge base:",
+                    range(len(file_names)),
+                    format_func=lambda x: file_names[x],
+                    index=None,
+                    placeholder="Choose a document..."
+                )
+                
+                if selected_idx is not None:
+                    selected_file = str(knowledge_files[selected_idx])
+                    file_info = knowledge_files[selected_idx]
+                    st.success(f"📄 Selected: {file_info.name}")
+                    st.info(f"Location: {file_info.parent}")
+            else:
+                st.warning("📁 No documents found in knowledge base directories")
+                st.info("💡 Try uploading a file instead, or add documents to your knowledge base first")
+        
+        # Anonymization settings
+        if selected_file:
+            st.divider()
+            st.subheader("⚙️ Anonymization Settings")
+            
+            confidence_threshold = st.slider(
+                "Entity Detection Confidence:",
+                min_value=0.1,
+                max_value=0.9,
+                value=0.3,
+                step=0.1,
+                help="Lower values detect more entities (may include false positives)"
+            )
+            
+            st.session_state.confidence_threshold = confidence_threshold
     
     with col2:
-        confidence_threshold = st.slider(
-            "Entity detection confidence threshold",
-            min_value=0.1,
-            max_value=1.0,
-            value=st.session_state.get("confidence_threshold", 0.3),
-            step=0.1,
-            key="confidence_threshold_slider",
-            help="Lower values catch more entities but may include false positives"
-        )
-
-# Store configuration values immediately
-st.session_state.shared_mapping = shared_mapping
-st.session_state.confidence_threshold = confidence_threshold
-st.session_state.preserve_structure = preserve_structure
-
-# File Upload Section
-st.subheader("📁 Drop Files to Anonymize")
-
-# Simple file uploader for drag-and-drop functionality
-uploaded_files = st.file_uploader(
-    "Drag and drop files here or click to browse:",
-    type=['txt', 'pdf', 'docx'],
-    accept_multiple_files=True,
-    help="Supported formats: TXT, PDF, DOCX",
-    key="anonymizer_uploader"
-)
-
-# Process files immediately when uploaded
-if uploaded_files:
-    st.success(f"📤 Processing {len(uploaded_files)} file(s)...")
-    
-    # Save uploaded files to temporary directory for processing
-    import tempfile
-    temp_dir = Path(tempfile.mkdtemp())
-    files_to_process = []
-    
-    for uploaded_file in uploaded_files:
-        # Save uploaded file to temporary location
-        temp_file_path = temp_dir / uploaded_file.name
-        with open(temp_file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        files_to_process.append(temp_file_path)
-    
-    # Store temp directory in session state for cleanup later
-    st.session_state.temp_anonymizer_dir = temp_dir
-    
-    # Process immediately
-    st.session_state.files_to_process = files_to_process
-    st.session_state.auto_process = True
-
-# Output Directory Selection
-st.subheader("📁 Output Configuration")
-
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    output_directory = st.text_input(
-        "Output directory (leave empty to use Downloads folder):",
-        value=st.session_state.get("output_directory", ""),
-        placeholder="/path/to/output or C:\\Output",
-        key="output_directory_input",
-        help="Directory where anonymized files will be saved. Leave empty for Downloads folder."
-    )
-
-with col2:
-    if st.button("Create Directory", key="create_output_dir"):
-        if output_directory:
-            try:
-                output_path = normalize_path(output_directory)
-                if output_path:
-                    ensure_directory(output_path)
-                    st.success("Directory created/verified")
-                else:
-                    st.error("Invalid path")
-            except Exception as e:
-                st.error(f"Error creating directory: {e}")
-
-# Store output directory immediately  
-st.session_state.output_directory = output_directory
-
-# Automatic Processing
-if st.session_state.get("files_to_process") and st.session_state.get("auto_process"):
-    files_to_process = st.session_state.files_to_process
-    st.session_state.auto_process = False  # Reset flag
-    
-    st.divider()
-    st.subheader("🔄 Processing Files...")
-    
-    # Filter to supported files only
-    supported_files = [f for f in files_to_process if is_supported_file(f)]
-    
-    if len(supported_files) == 0:
-        st.error("No supported files found")
-        st.stop()
-    
-    # Get configuration values
-    output_directory = st.session_state.get("output_directory", "")
-    shared_mapping = st.session_state.get("shared_mapping", True)
-    confidence_threshold = st.session_state.get("confidence_threshold", 0.3)
-    
-    # Prepare output directory
-    output_dir = None
-    if output_directory:
-        output_dir = normalize_path(output_directory)
-        if output_dir:
-            ensure_directory(output_dir)
-        else:
-            st.error("Invalid output directory")
-            st.stop()
-    
-    # Create anonymizer
-    anonymizer = DocumentAnonymizer()
-    
-    # Progress tracking
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    results_container = st.container()
-    
-    try:
-        # Run anonymization
-        status_text.text("Starting anonymization...")
+        st.header("🎭 Anonymization Process")
         
-        logger.info(f"Anonymizing {len(supported_files)} files")
-        logger.info(f"Output directory: {output_dir}")
-        logger.info(f"Files: {[str(f) for f in supported_files]}")
-        
-        results = anonymizer.anonymize_batch(
-            supported_files,
-            output_dir,
-            shared_mapping=shared_mapping,
-            confidence_threshold=confidence_threshold
-        )
-        
-        logger.info(f"Anonymization results: {results}")
-        
-        # Display results
-        progress_bar.progress(1.0)
-        status_text.text("Anonymization complete!")
-        
-        # Reset processing status
-        st.session_state.processing_status = "completed"
-        
-        # Handle output files from temporary directory
-        final_results = {}
-        if hasattr(st.session_state, 'temp_anonymizer_dir'):
-            import shutil
-            from pathlib import Path
+        if selected_file:
+            # Show file preview info
+            file_path = Path(selected_file)
+            st.markdown(f"**File:** `{file_path.name}`")
             
-            # If no output directory specified, move files to Downloads or current directory
-            if not output_dir:
-                # In Docker environments, avoid writing to mounted Windows volumes
-                # Use container-internal temp directory for all operations
-                import tempfile
-                final_output_dir = Path(tempfile.gettempdir()) / "cortex_anonymizer"
-                ensure_directory(final_output_dir)
+            # Process button
+            if st.button("🚀 Start Anonymization", type="primary", use_container_width=True):
                 
-                # Move output files to container-internal location
-                for input_file, output_file in results.items():
-                    if not output_file.startswith("ERROR:"):
-                        temp_output_path = Path(output_file)
-                        if temp_output_path.parent == st.session_state.temp_anonymizer_dir:
-                            # Move file to container-internal location
-                            permanent_path = final_output_dir / temp_output_path.name
-                            try:
-                                shutil.move(str(temp_output_path), str(permanent_path))
-                                final_results[input_file] = str(permanent_path)
-                            except Exception as e:
-                                logger.warning(f"Could not move file, keeping in temp location: {e}")
-                                final_results[input_file] = output_file
-                        else:
-                            final_results[input_file] = output_file
-                    else:
-                        final_results[input_file] = output_file
-            else:
-                final_results = results
-            
-            # Clean up temporary input files
-            try:
-                for item in st.session_state.temp_anonymizer_dir.iterdir():
-                    if item.is_file():
-                        item.unlink()
-                st.session_state.temp_anonymizer_dir.rmdir()
-                del st.session_state.temp_anonymizer_dir
-            except Exception as cleanup_error:
-                logger.warning(f"Failed to cleanup temporary files: {cleanup_error}")
-        else:
-            final_results = results
-        
-        # Store final results for download access
-        st.session_state.anonymizer_results = final_results
-        
-        with results_container:
-            st.success(f"✅ Successfully processed {len(final_results)} files")
-            
-            # Show where files were saved
-            if not output_dir:
-                downloads_path = Path.home() / "Downloads"
-                if downloads_path.exists():
-                    st.info(f"📁 **Files saved to:** {downloads_path}")
-                else:
-                    st.info(f"📁 **Files saved to:** {Path.cwd()}")
-            else:
-                st.info(f"📁 **Files saved to:** {output_dir}")
-            
-            st.markdown("### 📥 Download Anonymized Files")
-            
-            success_count = 0
-            error_count = 0
-            
-            for input_file, output_file in final_results.items():
-                col1, col2 = st.columns([3, 1])
+                # Processing with progress
+                progress_bar = st.progress(0, "🔄 Initializing anonymization...")
+                status_container = st.container()
                 
-                with col1:
-                    if output_file.startswith("ERROR:"):
-                        st.error(f"❌ {Path(input_file).name}: {output_file}")
-                        error_count += 1
-                    else:
-                        st.success(f"✅ {Path(input_file).name} → {Path(output_file).name}")
-                        success_count += 1
-                
-                with col2:
-                    if not output_file.startswith("ERROR:"):
-                        # Download button only
-                        try:
-                            output_path = Path(output_file)
-                            if output_path.exists():
-                                with open(output_file, 'r', encoding='utf-8') as f:
-                                    file_content = f.read()
-                                st.download_button(
-                                    label="💾 Download",
-                                    data=file_content,
-                                    file_name=output_path.name,
-                                    mime="text/plain",
-                                    key=f"download_{Path(input_file).stem}"
-                                )
-                            else:
-                                st.error("File not found")
-                        except Exception as e:
-                            st.error(f"Error: {str(e)[:30]}...")
-            
-            st.markdown(f"**Summary:** {success_count} successful, {error_count} errors")
-            
-            # Show mapping file if it exists
-            if shared_mapping and not output_dir:
-                downloads_path = Path.home() / "Downloads"
-                if downloads_path.exists():
-                    mapping_file = downloads_path / "anonymization_mapping.txt"
-                else:
-                    mapping_file = Path.cwd() / "anonymization_mapping.txt"
-                
-                if mapping_file.exists():
-                    st.info(f"📋 Anonymization mapping saved to: {mapping_file}")
+                try:
+                    with status_container:
+                        st.info("📖 Reading document content...")
+                    progress_bar.progress(25, "📖 Reading document...")
                     
-    except Exception as e:
-        progress_bar.progress(0)
-        status_text.text("❌ Anonymization failed!")
+                    # Initialize anonymizer
+                    anonymizer = DocumentAnonymizer()
+                    mapping = AnonymizationMapping()
+                    
+                    with status_container:
+                        st.info("🔍 Detecting entities and sensitive information...")
+                    progress_bar.progress(50, "🔍 Detecting entities...")
+                    
+                    # Process the file
+                    result_path, result_mapping = anonymizer.anonymize_single_file(
+                        input_path=selected_file,
+                        output_path=None,  # Let it auto-generate
+                        mapping=mapping,
+                        confidence_threshold=st.session_state.confidence_threshold
+                    )
+                    
+                    with status_container:
+                        st.info("🎭 Applying anonymization...")
+                    progress_bar.progress(75, "🎭 Anonymizing content...")
+                    
+                    # Store results
+                    st.session_state.current_anonymization = {
+                        'original_file': selected_file,
+                        'anonymized_file': result_path,
+                        'mapping': result_mapping,
+                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    
+                    progress_bar.progress(100, "✅ Anonymization complete!")
+                    
+                    with status_container:
+                        st.success("🎉 **Anonymization completed successfully!**")
+                        
+                        # Summary stats
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            st.metric("People", len([k for k, v in result_mapping.mappings.items() if v.startswith("Person")]))
+                        with col_b:
+                            st.metric("Companies", len([k for k, v in result_mapping.mappings.items() if v.startswith("Company")]))
+                        with col_c:
+                            st.metric("Projects", len([k for k, v in result_mapping.mappings.items() if v.startswith("Project")]))
+                    
+                except Exception as e:
+                    progress_bar.progress(0, "❌ Anonymization failed")
+                    st.error(f"❌ **Anonymization failed:** {str(e)}")
+                    logger.error(f"Anonymization error: {e}", exc_info=True)
         
-        # Clean up temporary files on error
-        if hasattr(st.session_state, 'temp_anonymizer_dir'):
+        # Results section
+        if st.session_state.current_anonymization:
+            st.divider()
+            st.subheader("📋 Anonymization Results")
+            
+            result = st.session_state.current_anonymization
+            
+            # File info
+            col_orig, col_anon = st.columns(2)
+            with col_orig:
+                st.markdown("**📄 Original File:**")
+                st.code(Path(result['original_file']).name)
+            
+            with col_anon:
+                st.markdown("**🎭 Anonymized File:**")
+                st.code(Path(result['anonymized_file']).name)
+            
+            # Download section
+            st.markdown("### 💾 Download Results")
+            
             try:
-                import shutil
-                shutil.rmtree(st.session_state.temp_anonymizer_dir, ignore_errors=True)
-                del st.session_state.temp_anonymizer_dir
-            except Exception as cleanup_error:
-                logger.warning(f"Failed to cleanup temporary files: {cleanup_error}")
+                # Read anonymized content
+                with open(result['anonymized_file'], 'r', encoding='utf-8') as f:
+                    anonymized_content = f.read()
+                
+                # Download button for anonymized file
+                st.download_button(
+                    label="📄 Download Anonymized Document",
+                    data=anonymized_content,
+                    file_name=Path(result['anonymized_file']).name,
+                    mime="text/plain",
+                    use_container_width=True
+                )
+                
+                # Generate mapping report
+                mapping_content = generate_mapping_report(result['mapping'])
+                st.download_button(
+                    label="🗂️ Download Mapping Reference", 
+                    data=mapping_content,
+                    file_name=f"anonymization_mapping_{int(time.time())}.txt",
+                    mime="text/plain",
+                    help="Reference file showing original → anonymized mappings (keep secure!)"
+                )
+                
+                # Preview section
+                with st.expander("👁️ Preview Anonymized Content", expanded=False):
+                    preview_content = anonymized_content[:2000]
+                    if len(anonymized_content) > 2000:
+                        preview_content += "\n\n... [Content truncated for preview] ..."
+                    st.text_area("Preview:", preview_content, height=300)
+                    
+                # Mapping preview
+                if result['mapping'].mappings:
+                    with st.expander("🔍 Entity Mappings", expanded=False):
+                        mapping_df = []
+                        for original, anonymized in result['mapping'].mappings.items():
+                            mapping_df.append({
+                                "Original": original,
+                                "Anonymized": anonymized,
+                                "Type": get_entity_type_from_anonymized(anonymized)
+                            })
+                        
+                        if mapping_df:
+                            import pandas as pd
+                            df = pd.DataFrame(mapping_df)
+                            st.dataframe(df, use_container_width=True, hide_index=True)
+                    
+            except Exception as e:
+                st.error(f"❌ Could not load results: {str(e)}")
         
-        st.error(f"Anonymization failed: {e}")
-        logger.error(f"Anonymization failed: {e}")
+        elif selected_file:
+            st.info("👆 Click **Start Anonymization** to process your document")
+        else:
+            st.info("👈 Select a document from the left panel to get started")
 
-# Clear previous results when new files are uploaded
-if not st.session_state.get("files_to_process") and not uploaded_files:
-    if "anonymizer_results" in st.session_state:
-        del st.session_state.anonymizer_results
-
-# Help Section  
-st.divider()
-
-with st.expander("❓ Help & Tips"):
-    st.markdown("""
-    ### How It Works
-    1. **Drop Files**: Drag and drop or browse for TXT, PDF, or DOCX files
-    2. **Automatic Processing**: Files are processed immediately upon upload  
-    3. **Download Results**: Use the download buttons to get your anonymized files
+def generate_mapping_report(mapping: AnonymizationMapping) -> str:
+    """Generate a formatted mapping report."""
+    report = []
+    report.append("ANONYMIZATION MAPPING REPORT")
+    report.append("=" * 50)
+    report.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    report.append("")
+    report.append("⚠️  KEEP THIS FILE SECURE AND SEPARATE FROM ANONYMIZED DOCUMENTS")
+    report.append("")
     
-    ### What Gets Anonymized
-    - **People names** → Person A, Person B, etc.
-    - **Company names** → Company 1, Company 2, etc.
-    - **Project names** → Project 1, Project 2, etc.
-    - **Email addresses** → [EMAIL]
-    - **Phone numbers** → [PHONE]
-    - **URLs** → [URL]
+    if mapping.mappings:
+        # Group by type
+        people = []
+        companies = []  
+        projects = []
+        other = []
+        
+        for original, anonymized in mapping.mappings.items():
+            if anonymized.startswith("Person"):
+                people.append((original, anonymized))
+            elif anonymized.startswith("Company"):
+                companies.append((original, anonymized))
+            elif anonymized.startswith("Project"):
+                projects.append((original, anonymized))
+            else:
+                other.append((original, anonymized))
+        
+        if people:
+            report.append("👥 PEOPLE:")
+            for original, anonymized in sorted(people):
+                report.append(f"  {original} → {anonymized}")
+            report.append("")
+        
+        if companies:
+            report.append("🏢 COMPANIES:")
+            for original, anonymized in sorted(companies):
+                report.append(f"  {original} → {anonymized}")
+            report.append("")
+        
+        if projects:
+            report.append("📋 PROJECTS:")
+            for original, anonymized in sorted(projects):
+                report.append(f"  {original} → {anonymized}")
+            report.append("")
+        
+        if other:
+            report.append("🔧 OTHER:")
+            for original, anonymized in sorted(other):
+                report.append(f"  {original} → {anonymized}")
+    else:
+        report.append("No entity mappings found.")
     
-    ### File Output
-    - **Default Location**: Downloads folder (or current directory as fallback)
-    - **Custom Location**: Specify in Output Configuration above
-    - **File Format**: Anonymized content saved as .txt files
-    - **Mapping File**: Optional reference showing original → anonymous mappings
-    - **Docker Note**: In Docker environments, files are processed in container storage for better compatibility - use download buttons to save results
-    
-    ### Tips for Best Results
-    - **Test First**: Try with a small sample before processing large batches
-    - **Review Output**: Always verify anonymized documents before use  
-    - **Keep Mappings Secure**: The mapping file can reverse anonymization
-    - **Use Shared Mapping**: Enable for consistent names across multiple files
-    """)
+    return "\n".join(report)
 
-# Show help modal if requested
-if st.session_state.get("show_help_modal", False):
-    help_topic = st.session_state.get("help_topic", "anonymizer")
-    help_system.show_help_modal(help_topic)
+def get_entity_type_from_anonymized(anonymized: str) -> str:
+    """Get entity type from anonymized name."""
+    if anonymized.startswith("Person"):
+        return "👥 Person"
+    elif anonymized.startswith("Company"):
+        return "🏢 Company" 
+    elif anonymized.startswith("Project"):
+        return "📋 Project"
+    elif anonymized.startswith("Location"):
+        return "📍 Location"
+    else:
+        return "🔧 Other"
+
+if __name__ == "__main__":
+    main()

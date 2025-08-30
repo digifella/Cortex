@@ -12,6 +12,32 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v4.2.0 - 2025-08-30
+
+### Streamlined Document Anonymizer Interface
+
+Complete redesign of Document Anonymizer with modern UI patterns matching Document Summarizer for consistent user experience
+
+### 🔥 Breaking Changes
+- Document Anonymizer interface completely redesigned (functionality unchanged)
+
+### ✨ New Features
+- Streamlined Document Anonymizer interface matching Document Summarizer patterns
+- Radio button selection between Upload File and Browse Knowledge Base
+- Smart knowledge base directory detection using ConfigManager
+- Enhanced anonymization results display with entity metrics
+- Interactive entity mapping table with type categorization
+- Improved progress tracking with status messages during processing
+
+### 🚀 Improvements
+- Eliminated complex folder navigation and drag-drop complexity
+- Cleaner two-column layout with focused workflow
+- Better file selection with descriptive names and locations
+- Enhanced results section with preview and mapping options
+- More intuitive confidence threshold slider with better help text
+- Consistent UI patterns across Document Summarizer and Anonymizer
+
 ## v4.1.3 - 2025-08-30
 
 ### Intelligent Model Selection & Resource Management
