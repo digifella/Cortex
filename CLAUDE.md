@@ -370,6 +370,64 @@ When preparing a Docker distribution for Windows:
    - **Progressive Activation**: Features enable automatically as models become available
    - **No Command Line Waiting**: Users interact with professional web interface instead of terminal logs
 
+## 🐳 Critical Docker vs WSL Path Handling Guidelines
+
+**CRITICAL**: This is a recurring issue that causes functionality to break. Must be understood and followed.
+
+### **Path Handling Rules by Environment**
+
+**1. Docker Container Environment (`os.path.exists('/.dockerenv')`):**
+- ✅ **Use paths EXACTLY as configured** by the user
+- ❌ **DO NOT** use `convert_windows_to_wsl_path()` - Docker handles volume mapping
+- **User path**: `/data/ai_databases` → **Use**: `/data/ai_databases` 
+- **User path**: `C:\ai_databases` → **Use**: `C:\ai_databases` (mapped by Docker volume)
+- **WHY**: Docker volumes automatically map host paths to container paths
+
+**2. WSL Environment (Windows Subsystem for Linux):**
+- ✅ **Use** `convert_windows_to_wsl_path()` for Windows-style paths
+- **User path**: `C:\ai_databases` → **Convert to**: `/mnt/c/ai_databases`
+- **User path**: `/mnt/e/data` → **Use directly**: `/mnt/e/data`
+
+**3. Native Linux/Host Environment:**
+- ✅ **Use paths directly** without conversion
+- **User path**: `/home/user/data` → **Use**: `/home/user/data`
+
+### **Detection Pattern**
+```python
+if os.path.exists('/.dockerenv'):
+    # Docker container - use path as-is, Docker volumes handle mapping
+    final_path = user_configured_path
+else:
+    # WSL/Host - use conversion if needed  
+    final_path = convert_windows_to_wsl_path(user_configured_path)
+```
+
+### **❌ Common Mistakes to AVOID**
+1. **Hardcoding Docker paths** like `/data`, `/app/data` - always use user's configured path
+2. **Using WSL conversion in Docker** - breaks because `/mnt/c/` doesn't exist in containers
+3. **Assuming path structure** - different users have different mount points and database locations
+4. **Overriding user configuration** - always respect whatever database path user has configured
+
+### **✅ Correct Implementation**
+```python
+def get_database_path(configured_path: str) -> str:
+    """Get the correct database path for current environment"""
+    if os.path.exists('/.dockerenv'):
+        # Docker: Trust user's configured path, Docker volumes handle host mapping
+        return configured_path
+    else:
+        # WSL/Host: Convert Windows paths to proper format if needed
+        return convert_windows_to_wsl_path(configured_path)
+```
+
+### **🔍 Why This Issue Keeps Recurring**
+- **Volume Mapping Confusion**: Docker `-v C:\data:/container_data` maps host to container automatically
+- **WSL Path Similarity**: WSL `/mnt/c/` looks like container paths but operates differently
+- **Environment Detection**: Must correctly detect Docker vs WSL vs Native Linux
+- **User Path Variety**: Users configure different database locations (`C:\ai_databases`, `/data`, etc.)
+
+**GOLDEN RULE**: NEVER hardcode paths. Always use user's configured database path and let Docker/WSL handle the underlying mapping.
+
 ### Critical Windows Batch File Lessons Learned
 1. **Multi-line If Statements**: Windows batch files cannot reliably parse multi-line if statements with parentheses. Use `goto` labels instead.
 2. **ErrorLevel Overwriting**: Commands like `del`, `copy`, etc. overwrite the `%errorlevel%` variable. Always check `errorlevel` immediately after the command you care about.

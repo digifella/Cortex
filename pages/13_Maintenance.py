@@ -100,23 +100,12 @@ def perform_clean_start(db_path: str):
     
     # Handle Docker environment path resolution properly
     if os.path.exists('/.dockerenv'):
-        # In Docker container - check multiple possible mount points
-        possible_docker_paths = ["/data", "/app/data", "/home/cortex/data", db_path]
-        
-        docker_db_path = None
-        for path in possible_docker_paths:
-            if os.path.exists(path):
-                docker_db_path = path
-                break
-        
-        if not docker_db_path:
-            # Fallback to /data if nothing exists (will be created)
-            docker_db_path = "/data"
-            
-        st.info(f"🐳 **Docker Mode:** Using container path `{docker_db_path}` (checked: {possible_docker_paths})")
-        final_db_path = docker_db_path
+        # In Docker container - use the configured path directly
+        # Docker volumes handle the path mapping, so we use the path as configured by user
+        final_db_path = db_path
+        st.info(f"🐳 **Docker Mode:** Using configured database path `{final_db_path}` (Docker handles volume mapping)")
     else:
-        # Non-Docker environment, use WSL path conversion
+        # Non-Docker environment, use WSL path conversion for Windows paths
         final_db_path = convert_windows_to_wsl_path(db_path)
         st.info(f"💻 **Host Mode:** Converted `{db_path}` to `{final_db_path}`")
     
