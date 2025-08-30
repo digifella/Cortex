@@ -1,6 +1,6 @@
 # ## File: Cortex_Suite.py
 # Version: v4.4.0
-# Date: 2025-08-31
+# Date: 2025-08-30
 # Purpose: Main entry point for the Cortex Suite application
 
 import streamlit as st
@@ -17,6 +17,70 @@ from cortex_engine.system_status import system_status
 from cortex_engine.version_config import get_version_display, VERSION_METADATA
 from cortex_engine.utils.model_checker import model_checker
 from cortex_engine.help_system import help_system
+
+def load_recent_changelog_entries(max_versions=3):
+    """Load recent changelog entries for What's New section"""
+    try:
+        # Try to find CHANGELOG.md in project directory or docker directory
+        changelog_paths = [
+            Path(__file__).parent / "CHANGELOG.md",  # Project root
+            Path(__file__).parent / "docker" / "CHANGELOG.md"  # Docker directory
+        ]
+        
+        changelog_content = None
+        for changelog_path in changelog_paths:
+            if changelog_path.exists():
+                with open(changelog_path, 'r', encoding='utf-8') as f:
+                    changelog_content = f.read()
+                break
+        
+        if not changelog_content:
+            return "📋 Changelog not found - using version config information instead."
+        
+        # Parse recent version entries
+        lines = changelog_content.split('\n')
+        versions = []
+        current_version = None
+        current_content = []
+        
+        for line in lines:
+            # Look for version headers (## v4.4.0 - Release Name)
+            if line.startswith('## v') and len(versions) < max_versions:
+                # Save previous version if exists
+                if current_version and current_content:
+                    versions.append({
+                        'header': current_version,
+                        'content': '\n'.join(current_content).strip()
+                    })
+                    current_content = []
+                
+                current_version = line.replace('## ', '### ')  # Convert to smaller header for display
+                
+            elif current_version and line.strip():  # Only collect non-empty lines
+                # Skip certain sections we don't want in What's New
+                if not any(skip in line.lower() for skip in ['### 🔥 breaking changes', '### breaking changes']):
+                    current_content.append(line)
+        
+        # Add the last version
+        if current_version and current_content and len(versions) < max_versions:
+            versions.append({
+                'header': current_version,
+                'content': '\n'.join(current_content).strip()
+            })
+        
+        if not versions:
+            return f"📋 **Latest Version:** {get_version_display()}\n\n{VERSION_METADATA.get('description', 'Latest updates and improvements.')}"
+        
+        # Format for display
+        result = ""
+        for version in versions:
+            result += f"{version['header']}\n{version['content']}\n\n"
+        
+        return result.strip()
+        
+    except Exception as e:
+        # Fallback to version config if changelog parsing fails
+        return f"📋 **Latest Version:** {get_version_display()}\n\n{VERSION_METADATA.get('description', 'Recent updates and improvements.')}\n\n*For complete version history, see CHANGELOG.md*"
 
 st.set_page_config(
     page_title="Cortex Suite",
@@ -99,28 +163,14 @@ else:
     st.title("🚀 Welcome to the Project Cortex Suite")
     st.caption(get_version_display())
     
-    # What's New section
+    # What's New section - automatically loaded from CHANGELOG.md
     with st.expander("✨ What's New in Recent Updates", expanded=False):
-        st.markdown("""
-        ### 🔧 v3.1.2 - Maintenance Page Consolidation (August 27, 2025)
-        - **NEW**: Consolidated Maintenance page (page 13) combining all administrative functions
-        - **IMPROVED**: Database maintenance, system terminal, setup management, and backups now in one organized location
-        - **ENHANCED**: Better UI organization with tabbed interface for admin functions
-        - **PREPARED**: Foundation laid for future password protection of sensitive operations
+        changelog_content = load_recent_changelog_entries(max_versions=3)
+        st.markdown(changelog_content)
         
-        ### 🔍 v22.4.3 - Knowledge Search Stability (August 26, 2025)  
-        - **FIXED**: Resolved Docker environment compatibility issues with database operations
-        - **ENHANCED**: Multi-strategy search approach (vector → multi-term → text fallback) for better results
-        - **IMPROVED**: Progress indicators with real-time status updates during search operations
-        - **RESOLVED**: UnboundLocalError and schema mismatch issues in Docker deployments
-        
-        ### 🎯 Previous Major Features
-        - **Enhanced Visual Processing**: Advanced LLaVA integration for image analysis and visual content understanding
-        - **GraphRAG Integration**: Automatic entity extraction and relationship mapping from ingested documents  
-        - **Hybrid Model Architecture**: Intelligent backend selection between Docker Model Runner and Ollama
-        - **Cross-Platform Support**: Seamless operation across Windows, Mac, Linux, and WSL2 environments
-        - **Docling Integration**: State-of-the-art document processing with layout preservation and OCR support
-        """)
+        # Add link to full changelog
+        st.markdown("---")
+        st.markdown("📋 **[View Complete Changelog](./CHANGELOG.md)** • All version history and detailed changes")
 
 st.markdown("""
 This is the central hub for the Cortex Suite, an integrated workbench for building a knowledge base and using it for AI-assisted proposal development.

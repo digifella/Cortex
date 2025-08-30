@@ -634,12 +634,31 @@ When implementing major features, bug fixes, or significant functionality change
 - [ ] Release verified in target environment
 ```
 
+### **📋 Automatic "What's New" System**
+
+**SOLVED**: The "What's New" section now automatically reads from CHANGELOG.md, eliminating manual synchronization issues.
+
+**How it works:**
+- `Cortex_Suite.py` contains `load_recent_changelog_entries()` function
+- Automatically parses and displays the 3 most recent versions from CHANGELOG.md  
+- Provides fallback to version config if changelog unavailable
+- Updates automatically when changelog is updated via version manager
+- **No manual maintenance required** - one less sync issue to worry about
+
+**Benefits:**
+- ✅ **Always current** - Shows latest changelog entries automatically
+- ✅ **Single source of truth** - CHANGELOG.md drives both documentation and UI
+- ✅ **Eliminates sync issues** - No more outdated "What's New" content
+- ✅ **Zero maintenance** - Works without manual intervention during releases
+
 **FAILURE TO FOLLOW THIS WORKFLOW RESULTS IN:**
 - Inconsistent version numbers across components
 - Broken Docker distributions for users
 - Missing functionality in deployed versions  
 - Incomplete documentation and changelogs
 - User confusion about feature availability
+
+**NOTE**: The "What's New" sync issue has been permanently solved via automatic changelog reading.
 
 #### Automatic Synchronization
 The version manager automatically updates:
