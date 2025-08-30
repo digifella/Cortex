@@ -1,6 +1,6 @@
 # **`README.md`**
 
-**Version:** 4.1.2 (ARM64 Compatibility & Multi-Architecture Support)
+**Version:** v4.3.0 (Critical Search Functionality Restoration)
 **Date:** 2025-08-28
 
 **Prelim:**

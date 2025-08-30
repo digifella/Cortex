@@ -14,6 +14,29 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v4.3.0 - 2025-08-30
+
+### Critical Search Functionality Restoration
+
+Major fix for search functionality with embedding dimension mismatch resolution and robust text-based fallback search system
+
+### ✨ New Features
+- Intelligent search fallback system with text-based search when vector embeddings fail
+- Enhanced search diagnostics with embedding dimension mismatch detection
+- Robust ChromaDB error handling with graceful degradation to text search
+- Multi-strategy search approach prioritizing result accuracy over search method
+- Search reliability improvements ensuring results are always returned when documents exist
+
+### 🚀 Improvements
+- Fixed critical search functionality that was returning zero results due to embedding dimension conflicts
+- Restored GraphRAG search capabilities with proper error handling and fallback mechanisms
+- Enhanced search result accuracy by implementing text-based matching when vector search fails
+- Improved search performance by detecting and avoiding incompatible embedding operations
+- Added comprehensive search debugging and error reporting for better troubleshooting
+- Strengthened ChromaDB telemetry error suppression for cleaner user experience
+- Enhanced Ollama model service with synchronous fallback for event loop issues
+
 ## v4.2.1 - 2025-08-30
 
 ### GraphRAG Search Integration
