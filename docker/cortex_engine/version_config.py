@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.4.2"
+CORTEX_VERSION = "4.5.0"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
-    "minor": 4,
-    "patch": 2,
+    "minor": 5,
+    "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,29 +25,32 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2025-08-31",
-    "release_name": "Enhanced Debug Logging & Clean Start Fixes",
-    "description": "Improved Clean Start debug logging with comprehensive step-by-step information and Docker compatibility fixes",
+    "release_name": "System Stabilization & ChromaDB Consistency Fixes",
+    "description": "Emergency stabilization after navigation redesign failure - fixed ChromaDB inconsistencies, Docker path handling, and database validation errors",
     "breaking_changes": [],
     "new_features": [
-        "Step-by-step Clean Start debug logging with visual pause for review",
-        "Comprehensive debug information display in expandable text areas", 
-        "Enhanced error logging with detailed troubleshooting information",
-        "Docker-compatible debug logging that stays visible on screen"
+        "Enhanced Clean Start debug logging with step-by-step operations display",
+        "Docker environment detection with proper path fallbacks",
+        "Advanced Database Recovery section with safer Clean Start placement",
+        "Session state synchronization with configuration values"
     ],
     "improvements": [
-        "Clean Start operations now display step-by-step with clear visual feedback",
-        "Debug information remains visible on screen for user review and copying",
-        "Enhanced Docker environment path handling and debugging", 
-        "Comprehensive error reporting with detailed troubleshooting steps",
-        "Visual pause after operations completion for thorough review",
-        "Improved debug log format with structured step-by-step information"
+        "Standardized ChromaDB settings across all components for consistent connections",
+        "Fixed working collections schema compatibility (doc_ids vs documents)",
+        "Enhanced ingestion recovery logic to not flag empty collections as issues",
+        "Improved Docker path handling with /.dockerenv detection",
+        "Better session state initialization in Knowledge Ingest page",
+        "Safer Clean Start button placement in Advanced section",
+        "Enhanced debug information display with visual pauses"
     ],
     "bug_fixes": [
-        "Fixed Clean Start debug logging visibility in Docker containers",
-        "Resolved debug information flashing too quickly to read",
-        "Fixed Docker path resolution for database cleanup operations",
-        "Corrected Clean Start operations reporting and error handling",
-        "Enhanced debug log format for better troubleshooting"
+        "Fixed ChromaDB 'different settings' instance conflicts across Knowledge Search and Collection Management",
+        "Resolved nested expander error in Maintenance page UI",
+        "Fixed Docker path hardcoding issue where Clean Start used /data/ai_databases instead of user configuration",
+        "Corrected Knowledge Ingest session state showing wrong database paths",
+        "Fixed persistent 'Fix collection inconsistencies' warnings for empty collections",
+        "Resolved navigation chaos from failed hub page implementation (rolled back to v4.4.2)",
+        "Fixed hardcoded version references in Knowledge Ingest to use centralized VERSION_STRING"
     ]
 }
 

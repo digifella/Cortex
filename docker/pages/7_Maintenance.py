@@ -1,5 +1,5 @@
 # ## File: pages/7_Maintenance.py
-# Version: v4.4.2
+# Version: v4.5.0
 # Date: 2025-08-31
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.4.2"
+PAGE_VERSION = "v4.5.0"
 
 # Import Cortex modules
 try:
@@ -472,9 +472,10 @@ def load_maintenance_config():
             config_manager = ConfigManager()
             config = config_manager.get_config()
             
-            # Map ConfigManager keys to expected keys
+            # Map ConfigManager keys to expected keys - use Docker-aware fallback
+            default_db_path = '/data' if os.path.exists('/.dockerenv') else '/tmp/cortex_db'
             maintenance_config = {
-                'db_path': config.get('ai_database_path', '/tmp/cortex_db'),
+                'db_path': config.get('ai_database_path', default_db_path),
                 'knowledge_source_path': config.get('knowledge_source_path', ''),
             }
             
@@ -549,62 +550,55 @@ def display_database_maintenance():
         st.error("Cannot load configuration for database operations")
         return
     
-    db_path = config.get('db_path', '/tmp/cortex_db')
+    # Use Docker-aware fallback
+    default_db_path = '/data' if os.path.exists('/.dockerenv') else '/tmp/cortex_db' 
+    db_path = config.get('db_path', default_db_path)
     
-    with st.expander("🚀 Clean Start - Complete System Reset", expanded=True):
-        st.markdown("### 🧹 Clean Start Function")
-        st.warning("""
-        **NEW:** Complete system reset function that addresses database schema issues, collection conflicts, and provides a fresh start.
-        This function is specifically designed to resolve ChromaDB schema errors like 'collections.config_json_str' column missing.
+    # Show debug information about path resolution
+    st.info(f"🐳 **Docker Mode:** {'Yes' if os.path.exists('/.dockerenv') else 'No'}")
+    st.info(f"📁 **Database Path:** `{db_path}`")
+    st.info(f"🔧 **Configuration:** {config}")
+    
+    st.markdown("## 🚀 Clean Start - Complete System Reset")
+    st.markdown("### 🧹 Clean Start Function")
+    st.warning("""
+    **Complete system reset function** that addresses database schema issues, collection conflicts, and provides a fresh start.
+    This function is specifically designed to resolve ChromaDB schema errors like 'collections.config_json_str' column missing.
+    """)
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown("""
+        **Clean Start will:**
+        - ✅ Delete entire knowledge base directory (ChromaDB)
+        - ✅ Delete knowledge graph file (.gpickle)  
+        - ✅ Clear ALL ingestion logs and progress files
+        - ✅ Remove ingested files log from database directory
+        - ✅ Clear ALL staging and batch ingestion files (including failed ingests)
+        - ✅ Reset working collections (working_collections.json)
+        - ✅ Clear ingestion recovery metadata
+        - ✅ Remove Streamlit cache and session state files
+        - ✅ Clear temporary files, lock files, and state files
+        - ✅ Reset database configuration paths
+        - ✅ Fix ChromaDB schema conflicts and version issues
+        - ✅ Provide completely fresh installation state
         """)
         
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            st.markdown("""
-            **Clean Start will:**
-            - ✅ Delete entire knowledge base directory (ChromaDB)
-            - ✅ Delete knowledge graph file (.gpickle)  
-            - ✅ Clear ALL ingestion logs and progress files
-            - ✅ Remove ingested files log from database directory
-            - ✅ Clear ALL staging and batch ingestion files (including failed ingests)
-            - ✅ Reset working collections (working_collections.json)
-            - ✅ Clear ingestion recovery metadata
-            - ✅ Remove Streamlit cache and session state files
-            - ✅ Clear temporary files, lock files, and state files
-            - ✅ Reset database configuration paths
-            - ✅ Fix ChromaDB schema conflicts and version issues
-            - ✅ Provide completely fresh installation state
-            """)
-            
-            st.info("**Use Clean Start when:**")
-            st.markdown("""
-            - Getting 'collections.config_json_str' schema errors
-            - Collection Management shows connection errors  
-            - Docker vs non-Docker database conflicts
-            - ChromaDB version compatibility issues
-            - System appears corrupted or inconsistent
-            - **Failed batch ingests** showing up in Knowledge Ingest page
-            - Half-finished ingestion operations need clearing
-            - Want completely fresh system without any residual files
-            """)
-        
-        with col2:
-            if st.button("🚀 Clean Start Reset", use_container_width=True, type="primary"):
-                st.session_state.show_confirm_clean_start = True
-                
-            if st.session_state.get("show_confirm_clean_start"):
-                st.error("⚠️ **COMPLETE SYSTEM RESET**")
-                st.warning("This will delete ALL data and provide a completely fresh start. All knowledge base content, collections, and configurations will be lost.")
-                
-                c1, c2 = st.columns(2)
-                if c1.button("✅ YES, CLEAN START", use_container_width=True):
-                    perform_clean_start(db_path)
-                    st.session_state.show_confirm_clean_start = False
-                    st.rerun()
-                if c2.button("❌ Cancel", use_container_width=True):
-                    st.session_state.show_confirm_clean_start = False
-                    st.rerun()
+        st.info("**Use Clean Start when:**")
+        st.markdown("""
+        - Getting 'collections.config_json_str' schema errors
+        - Collection Management shows connection errors  
+        - Docker vs non-Docker database conflicts
+        - ChromaDB version compatibility issues
+        - System appears corrupted or inconsistent
+        - **Failed batch ingests** showing up in Knowledge Ingest page
+        - Half-finished ingestion operations need clearing
+        - Want completely fresh system without any residual files
+        """)
+    
+    with col2:
+        st.info("**⚠️ Most Dangerous Operations**\n\nComplete system reset functions are now located in the **Advanced Database Recovery & Repair** section below for safety.")
 
     with st.expander("⚙️ Basic Database Operations", expanded=False):
         st.subheader("Clear Ingestion Log")
@@ -804,6 +798,66 @@ def display_database_maintenance():
         **Recover from failed ingestions** or **repair inconsistencies** in your knowledge base.
         Use this when ingestion processes are interrupted or documents seem to be missing.
         """)
+        
+        # Clean Start Reset - Moved here for safety
+        st.markdown("---")
+        st.markdown("### ⚠️ **DANGER ZONE - Complete System Reset**")
+        st.error("**This section contains destructive operations that cannot be undone!**")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown("""
+            **🚀 Clean Start Reset**
+            
+            Complete system reset function that addresses database schema issues, collection conflicts, and provides a fresh start.
+            This function is specifically designed to resolve ChromaDB schema errors like 'collections.config_json_str' column missing.
+            
+            **Clean Start will:**
+            - ✅ Delete entire knowledge base directory (ChromaDB)
+            - ✅ Delete knowledge graph file (.gpickle)  
+            - ✅ Clear ALL ingestion logs and progress files
+            - ✅ Remove ingested files log from database directory
+            - ✅ Clear ALL staging and batch ingestion files (including failed ingests)
+            - ✅ Reset working collections (working_collections.json)
+            - ✅ Clear ingestion recovery metadata
+            - ✅ Remove Streamlit cache and session state files
+            - ✅ Clear temporary files, lock files, and state files
+            - ✅ Reset database configuration paths
+            - ✅ Fix ChromaDB schema conflicts and version issues
+            - ✅ Provide completely fresh installation state
+            
+            **Use Clean Start when:**
+            - Getting 'collections.config_json_str' schema errors
+            - Collection Management shows connection errors  
+            - Docker vs non-Docker database conflicts
+            - ChromaDB version compatibility issues
+            - System appears corrupted or inconsistent
+            - **Failed batch ingests** showing up in Knowledge Ingest page
+            - Half-finished ingestion operations need clearing
+            - Want completely fresh system without any residual files
+            """)
+        
+        with col2:
+            st.warning("⚠️ **COMPLETE SYSTEM RESET**\n\nThis will delete ALL data and provide a completely fresh start. All knowledge base content, collections, and configurations will be lost.")
+            
+            if st.button("🚀 Clean Start Reset", use_container_width=True, type="secondary", help="⚠️ DANGER: This will delete everything!"):
+                st.session_state.show_confirm_clean_start = True
+                
+            if st.session_state.get("show_confirm_clean_start"):
+                st.error("⚠️ **FINAL WARNING - COMPLETE SYSTEM RESET**")
+                st.warning("This will delete ALL data and provide a completely fresh start. All knowledge base content, collections, and configurations will be lost.")
+                
+                c1, c2 = st.columns(2)
+                if c1.button("✅ YES, CLEAN START", use_container_width=True, type="primary"):
+                    perform_clean_start(db_path)
+                    st.session_state.show_confirm_clean_start = False
+                    st.rerun()
+                if c2.button("❌ Cancel", use_container_width=True):
+                    st.session_state.show_confirm_clean_start = False
+                    st.rerun()
+        
+        st.markdown("---")
         
         try:
             recovery_manager = IngestionRecoveryManager(db_path)

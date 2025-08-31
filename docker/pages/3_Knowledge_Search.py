@@ -1,5 +1,5 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v4.4.2
+# Version: v4.5.0
 # Date: 2025-08-30
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
 #          - GRAPHRAG INTEGRATION (v4.2.1): Re-enabled GraphRAG search modes with radio button
@@ -52,7 +52,7 @@ from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 logger = get_logger(__name__)
 
 # Page configuration
-PAGE_VERSION = "v4.4.2"
+PAGE_VERSION = "v4.5.0"
 
 st.set_page_config(page_title="Knowledge Search", layout="wide")
 
@@ -65,7 +65,12 @@ def get_document_type_options():
         collections = collection_mgr.collections
         doc_types = set()
         for collection in collections.values():
-            for doc in collection.get('documents', []):
+            # Handle both 'documents' and 'doc_ids' schemas for compatibility
+            docs = collection.get('documents', collection.get('doc_ids', []))
+            for doc in docs:
+                # For doc_ids schema, doc is just an ID string, so skip metadata extraction
+                if isinstance(doc, str):
+                    continue
                 doc_type = doc.get('metadata', {}).get('document_type', 'Unknown')
                 if doc_type and doc_type != 'Unknown':
                     doc_types.add(doc_type)
@@ -97,8 +102,7 @@ def validate_database(db_path, silent=False):
     try:
         # Simple ChromaDB validation without LlamaIndex
         db_settings = ChromaSettings(
-            anonymized_telemetry=False,
-            allow_reset=True
+            anonymized_telemetry=False
         )
         client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
         collection = client.get_collection(COLLECTION_NAME)
@@ -127,8 +131,7 @@ def validate_database(db_path, silent=False):
             # Try to continue with ChromaDB-only access (skip collections)
             try:
                 db_settings = ChromaSettings(
-                    anonymized_telemetry=False,
-                    allow_reset=True
+                    anonymized_telemetry=False
                 )
                 client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
                 collection = client.get_collection(COLLECTION_NAME)
@@ -265,8 +268,7 @@ def render_sidebar():
                     # Count documents
                     try:
                         db_settings = ChromaSettings(
-                            anonymized_telemetry=False,
-                            allow_reset=True
+                            anonymized_telemetry=False
                         )
                         client = chromadb.PersistentClient(path=db_dir, settings=db_settings)
                         collections = client.list_collections()
@@ -611,8 +613,7 @@ class ChromaVectorIndex:
         from cortex_engine.config import COLLECTION_NAME
         
         db_settings = ChromaSettings(
-            anonymized_telemetry=False,
-            allow_reset=True
+            anonymized_telemetry=False
         )
         self.client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
         self.collection = self.client.get_collection(COLLECTION_NAME)
@@ -680,8 +681,7 @@ def direct_chromadb_search(db_path, query, filters, top_k=20):
             # Direct ChromaDB client
             logger.info("Connecting to ChromaDB client...")
             db_settings = ChromaSettings(
-                anonymized_telemetry=False,
-                allow_reset=True
+                anonymized_telemetry=False
             )
             client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
             collection = client.get_collection(COLLECTION_NAME)
