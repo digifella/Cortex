@@ -19,6 +19,28 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v4.5.0 - 2025-08-31
+
+### System Stabilization & ChromaDB Consistency Fixes
+
+Emergency stabilization after navigation redesign failure - fixed ChromaDB inconsistencies, Docker path handling, and database validation errors
+
+### ✨ New Features
+- Enhanced Clean Start debug logging with step-by-step operations display
+- Docker environment detection with proper path fallbacks
+- Advanced Database Recovery section with safer Clean Start placement
+- Session state synchronization with configuration values
+
+### 🚀 Improvements
+- Standardized ChromaDB settings across all components for consistent connections
+- Fixed working collections schema compatibility (doc_ids vs documents)
+- Enhanced ingestion recovery logic to not flag empty collections as issues
+- Improved Docker path handling with /.dockerenv detection
+- Better session state initialization in Knowledge Ingest page
+- Safer Clean Start button placement in Advanced section
+- Enhanced debug information display with visual pauses
+
 ## v4.4.2 - 2025-08-31
 
 ### Enhanced Debug Logging & Clean Start Fixes

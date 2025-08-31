@@ -1,5 +1,5 @@
 # ## File: Proposal_Copilot.py
-# Version: v4.4.1
+# Version: v4.5.0
 # Date: 2025-07-23
 # Purpose: Core UI for drafting proposals.
 #          - REFACTOR (v28.0.0): Updated to use centralized utilities for path handling,
