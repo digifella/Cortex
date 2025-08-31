@@ -16,6 +16,79 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+
+
+## v4.4.2 - 2025-08-31
+
+### Enhanced Debug Logging & Clean Start Fixes
+
+Improved Clean Start debug logging with comprehensive step-by-step information and Docker compatibility fixes
+
+### ✨ New Features
+- Step-by-step Clean Start debug logging with visual pause for review
+- Comprehensive debug information display in expandable text areas
+- Enhanced error logging with detailed troubleshooting information
+- Docker-compatible debug logging that stays visible on screen
+
+### 🚀 Improvements
+- Clean Start operations now display step-by-step with clear visual feedback
+- Debug information remains visible on screen for user review and copying
+- Enhanced Docker environment path handling and debugging
+- Comprehensive error reporting with detailed troubleshooting steps
+- Visual pause after operations completion for thorough review
+- Improved debug log format with structured step-by-step information
+
+## v5.0.0 - 2025-08-31
+
+### Navigation Redesign & Knowledge Management Hub
+
+Major navigation restructure with centralized Knowledge Management hub, simplified 7-page menu, and sub-page organization for improved user experience
+
+### 🔥 Breaking Changes
+- Complete navigation menu restructure - pages now organized under logical hubs
+- Knowledge Management functions consolidated into single hub page
+- Sub-pages moved to hidden directory structure
+- Page numbering sequence changed from 16 items to 7 clean items
+
+### ✨ New Features
+- Knowledge Management Hub - centralized access to all knowledge operations
+- Simplified 7-page navigation menu (down from 16+ pages)
+- Hidden sub-page organization for cleaner menu structure
+- Quick-access buttons for sub-functions (Proposal Copilot, System Terminal)
+- Comprehensive debug logging for Clean Start operations with downloadable logs
+
+### 🚀 Improvements
+- Dramatically simplified user interface - 56% reduction in visible menu items
+- Logical workflow organization - related functions grouped under hubs
+- Improved navigation patterns with direct access to commonly used functions
+- Clean page numbering sequence (1-7) for better mental model
+- Enhanced user experience through reduced cognitive load
+- Better separation of core workflows from specialized tools
+- Maintained full functionality while improving discoverability
+
+## v4.4.1 - 2025-08-31
+
+### Database Management & Clean Start System
+
+Comprehensive database maintenance system with Clean Start functionality for ChromaDB schema conflict resolution and complete system reset capabilities
+
+### ✨ New Features
+- Clean Start function for complete system reset and database schema conflict resolution
+- Enhanced ChromaDB schema error detection and user guidance in Collection Management
+- Comprehensive database cleanup system addressing Docker vs non-Docker conflicts
+- Smart error handling for 'collections.config_json_str' column missing errors
+- Complete maintenance workflow with guided user experience for database issues
+
+### 🚀 Improvements
+- Enhanced Maintenance page (v4.4.0) with prominent Clean Start functionality
+- Improved Collection Management (v4.3.0) with specific schema error detection
+- Comprehensive system reset capability removing all databases, logs, and metadata
+- Docker compatibility improvements for database schema consistency
+- User-friendly error messages with actionable next steps for schema conflicts
+- Technical documentation and educational content about ChromaDB version conflicts
+- Streamlined database maintenance workflow with one-click solutions
+
 ## v4.4.0 - 2025-08-31
 
 ### Database Management & Clean Start System

@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py
-# Version: v4.4.0
+# Version: v4.5.0
 # Date: 2025-08-27
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
@@ -23,6 +23,9 @@ from typing import List
 import time
 
 import fitz
+
+# Import version from centralized config
+from cortex_engine.version_config import VERSION_STRING
 import docx
 
 # --- Project Setup ---
@@ -119,11 +122,15 @@ def initialize_state(force_reset: bool = False):
         for key in keys_to_reset:
             del st.session_state[key]
 
-    # Only set from config if not already set by user input
-    if "knowledge_source_path" not in st.session_state:
-        st.session_state.knowledge_source_path = config.get("knowledge_source_path", "")
-    if "db_path" not in st.session_state:
-        st.session_state.db_path = config.get("ai_database_path", "")
+    # Always sync with config - update session state if config has different values
+    config_knowledge_path = config.get("knowledge_source_path", "")
+    config_db_path = config.get("ai_database_path", "")
+    
+    # Update session state from config (this fixes stale session values)
+    if "knowledge_source_path" not in st.session_state or st.session_state.knowledge_source_path != config_knowledge_path:
+        st.session_state.knowledge_source_path = config_knowledge_path
+    if "db_path" not in st.session_state or st.session_state.db_path != config_db_path:
+        st.session_state.db_path = config_db_path
 
     defaults = {
         "ingestion_stage": "config", "dir_selections": {},
@@ -1977,7 +1984,7 @@ def render_recovery_section():
 # --- Main App Logic ---
 initialize_state()
 st.title("2. Knowledge Ingest")
-st.caption(f"Manage the knowledge base by ingesting new documents. App Version: v39.2.0 (Comprehensive Help System)")
+st.caption(f"Manage the knowledge base by ingesting new documents. App Version: {VERSION_STRING}")
 
 # Add help system
 help_system.show_help_menu()

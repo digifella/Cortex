@@ -6,7 +6,7 @@ set -e
 
 echo ""
 echo "==============================================="
-echo "   CORTEX SUITE v4.4.0 (Document Summarizer Optimization)"
+echo "   CORTEX SUITE v4.5.0 (Document Summarizer Optimization)"
 echo "   Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64"
 echo "   GPU acceleration, timeout fixes, and improved reliability (2025-08-29)"
 echo "   Date: $(date)"

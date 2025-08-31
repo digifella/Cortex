@@ -187,13 +187,9 @@ class IngestionRecoveryManager:
                         "count": len(missing_from_chromadb)
                     })
                 
-                # Check for empty collections
-                if len(collection_docs) == 0:
-                    issues.append({
-                        "type": "empty_collection",
-                        "collection": collection_name,
-                        "count": 0
-                    })
+                # Skip empty collections - they're not actually issues, just unused collections
+                # Empty collections are normal and don't need to be "fixed"
+                # if len(collection_docs) == 0: # Commented out - empty collections are not issues
         
         except Exception as e:
             logger.error(f"Collection consistency check failed: {e}")

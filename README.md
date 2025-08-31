@@ -1,7 +1,7 @@
 # **`README.md`**
 
-**Version:** v4.4.0 (Database Management & Clean Start System)
-**Date:** 2025-08-28
+**Version:** v4.4.1 (Database Management & Clean Start System)
+**Date:** 2025-08-31
 
 **Prelim:**
 Please be aware that the system operates in a WSL2 environment, so all paths should support linux and windows.

@@ -1,5 +1,5 @@
-# ## File: pages/13_Maintenance.py
-# Version: v4.4.0
+# ## File: pages/7_Maintenance.py
+# Version: v4.5.0
 # Date: 2025-08-31
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.4.0"
+PAGE_VERSION = "v4.5.0"
 
 # Import Cortex modules
 try:
@@ -98,60 +98,170 @@ def delete_knowledge_base(db_path: str):
 def perform_clean_start(db_path: str):
     """Perform complete system reset - removes all data, collections, logs, and configurations for fresh start."""
     
+    # Initialize comprehensive debug log
+    debug_log_lines = []
+    debug_log_lines.append("=" * 80)
+    debug_log_lines.append("CORTEX SUITE CLEAN START DEBUG LOG")
+    debug_log_lines.append("=" * 80)
+    debug_log_lines.append(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    debug_log_lines.append(f"Original DB Path: {db_path}")
+    debug_log_lines.append(f"Running in Docker: {os.path.exists('/.dockerenv')}")
+    
     # Handle Docker environment path resolution properly
     if os.path.exists('/.dockerenv'):
         # In Docker container - use the configured path directly
         # Docker volumes handle the path mapping, so we use the path as configured by user
         final_db_path = db_path
-        st.info(f"🐳 **Docker Mode:** Using configured database path `{final_db_path}` (Docker handles volume mapping)")
+        msg = f"🐳 **Docker Mode:** Using configured database path `{final_db_path}` (Docker handles volume mapping)"
+        st.info(msg)
+        debug_log_lines.append("ENVIRONMENT: Docker Container")
+        debug_log_lines.append(f"Final DB Path: {final_db_path}")
+        debug_log_lines.append("Path Conversion: None (Docker handles volume mapping)")
     else:
         # Non-Docker environment, use WSL path conversion for Windows paths
         final_db_path = convert_windows_to_wsl_path(db_path)
-        st.info(f"💻 **Host Mode:** Converted `{db_path}` to `{final_db_path}`")
+        msg = f"💻 **Host Mode:** Converted `{db_path}` to `{final_db_path}`"
+        st.info(msg)
+        debug_log_lines.append("ENVIRONMENT: Host/WSL")
+        debug_log_lines.append(f"Final DB Path: {final_db_path}")
+        debug_log_lines.append("Path Conversion: Applied WSL conversion")
+    
+    debug_log_lines.append("")
+    debug_log_lines.append("OPERATIONS LOG:")
+    debug_log_lines.append("-" * 40)
     
     try:
         deleted_items = []
         
-        # Debug information
-        st.info(f"🔍 **Debug Info:**\n- Original DB Path: `{db_path}`\n- Final Path: `{final_db_path}`\n- Running in Docker: `{os.path.exists('/.dockerenv')}`")
+        # Show current knowledge base location before deletion
+        chroma_db_dir = Path(final_db_path) / "knowledge_hub_db"
+        debug_log_lines.append(f"Target ChromaDB Directory: {chroma_db_dir}")
+        debug_log_lines.append(f"Directory Exists: {chroma_db_dir.exists()}")
         
-        with st.spinner("🧹 Performing Clean Start - Complete System Reset..."):
-            # FIRST: Clear ingested files log from database directory BEFORE deleting the directory
-            chroma_db_dir = Path(final_db_path) / "knowledge_hub_db"
-            st.write(f"🔍 Looking for ChromaDB directory at: `{chroma_db_dir}`")
-            st.write(f"🔍 Directory exists: `{chroma_db_dir.exists()}`")
+        if chroma_db_dir.exists():
+            st.warning(f"📁 **Current Knowledge Base Found:** `{chroma_db_dir}`\n\nThis directory and all contents will be permanently deleted.")
+            debug_log_lines.append("STATUS: Knowledge base directory found - will be deleted")
+        else:
+            st.info(f"📁 **Knowledge Base Location:** `{chroma_db_dir}`\n\nDirectory does not exist - will clean up other logs and configurations only.")
+            debug_log_lines.append("STATUS: No knowledge base directory found - cleanup only")
+        
+        # Show debug information clearly on screen
+        with st.expander("🔍 Pre-Operation Debug Information", expanded=True):
+            debug_display = "\n".join(debug_log_lines)
+            st.text_area("Debug Log", value=debug_display, height=200, help="Copy this information if you need to report issues")
+        
+        st.divider()
+        st.header("🧹 Clean Start Operations")
+        st.info("**The following operations will be performed step by step. You can read each step as it completes.**")
+        
+        # STEP 1: Check ChromaDB directory
+        st.subheader("Step 1: Checking ChromaDB Directory")
+        chroma_db_dir = Path(final_db_path) / "knowledge_hub_db"
+        
+        st.success(f"🔍 Looking for ChromaDB directory at: `{chroma_db_dir}`")
+        debug_log_lines.append(f"OPERATION: Checking ChromaDB directory at {chroma_db_dir}")
+        
+        st.success(f"🔍 Directory exists: `{chroma_db_dir.exists()}`")
+        debug_log_lines.append(f"RESULT: Directory exists = {chroma_db_dir.exists()}")
+        
+        # Show current step results
+        with st.expander("📋 Step 1 Results", expanded=True):
+            step1_results = f"""Path being checked: {chroma_db_dir}
+Directory exists: {chroma_db_dir.exists()}
+"""
+            st.text_area("Step 1 Debug Information", value=step1_results, height=100)
+        
+        if chroma_db_dir.exists():
+            st.subheader("Step 2: Analyzing Directory Contents")
             
-            if chroma_db_dir.exists():
-                # List all files in the directory for debugging
+            # List all files in the directory for debugging
+            try:
+                files_in_dir = list(chroma_db_dir.iterdir())
+                file_names = [f.name for f in files_in_dir if f.is_file()]
+                dir_names = [f.name for f in files_in_dir if f.is_dir()]
+                st.success(f"🔍 Files in ChromaDB directory: `{file_names}`")
+                st.success(f"🔍 Subdirectories: `{dir_names}`")
+                debug_log_lines.append(f"FILES FOUND: {file_names}")
+                debug_log_lines.append(f"SUBDIRECTORIES FOUND: {dir_names}")
+                
+                # Show directory analysis results
+                with st.expander("📋 Step 2 Results - Directory Analysis", expanded=True):
+                    step2_results = f"""Directory contents:
+Files found: {file_names}
+Subdirectories found: {dir_names}
+Total items: {len(files_in_dir)}
+"""
+                    st.text_area("Step 2 Debug Information", value=step2_results, height=120)
+                    
+            except Exception as e:
+                st.error(f"❌ Could not list directory contents: {e}")
+                debug_log_lines.append(f"ERROR: Could not list directory contents: {e}")
+            
+            st.subheader("Step 3: Checking Ingested Files Log")
+            ingested_files_log = chroma_db_dir / "ingested_files.log"
+            st.success(f"🔍 Looking for ingested files log at: `{ingested_files_log}`")
+            st.success(f"🔍 Ingested files log exists: `{ingested_files_log.exists()}`")
+            debug_log_lines.append(f"INGESTED_LOG_PATH: {ingested_files_log}")
+            debug_log_lines.append(f"INGESTED_LOG_EXISTS: {ingested_files_log.exists()}")
+            
+            # Show ingested log check results  
+            with st.expander("📋 Step 3 Results - Ingested Log Check", expanded=True):
+                step3_results = f"""Ingested files log path: {ingested_files_log}
+Log file exists: {ingested_files_log.exists()}
+"""
+                st.text_area("Step 3 Debug Information", value=step3_results, height=100)
+            
+            if ingested_files_log.exists():
+                st.subheader("Step 4: Deleting Ingested Files Log")
                 try:
-                    files_in_dir = list(chroma_db_dir.iterdir())
-                    st.write(f"🔍 Files in ChromaDB directory: `{[f.name for f in files_in_dir if f.is_file()]}`")
+                    ingested_files_log.unlink()
+                    deleted_items.append(f"Ingested files log: {ingested_files_log}")
+                    logger.info(f"Clean Start: Cleared ingested files log: {ingested_files_log}")
+                    st.success(f"✅ Successfully deleted ingested files log")
+                    debug_log_lines.append(f"SUCCESS: Deleted ingested files log")
                 except Exception as e:
-                    st.write(f"🔍 Could not list directory contents: {e}")
-                
-                ingested_files_log = chroma_db_dir / "ingested_files.log"
-                st.write(f"🔍 Looking for ingested files log at: `{ingested_files_log}`")
-                st.write(f"🔍 Ingested files log exists: `{ingested_files_log.exists()}`")
-                
-                if ingested_files_log.exists():
-                    try:
-                        ingested_files_log.unlink()
-                        deleted_items.append(f"Ingested files log: {ingested_files_log}")
-                        logger.info(f"Clean Start: Cleared ingested files log: {ingested_files_log}")
-                        st.write(f"✅ Deleted ingested files log")
-                    except Exception as e:
-                        st.write(f"❌ Failed to delete ingested files log: {e}")
-                        logger.error(f"Clean Start: Failed to delete ingested files log: {e}")
-                else:
-                    st.write(f"ℹ️ No ingested files log found to delete")
+                    st.error(f"❌ Failed to delete ingested files log: {e}")
+                    logger.error(f"Clean Start: Failed to delete ingested files log: {e}")
+                    debug_log_lines.append(f"ERROR: Failed to delete ingested files log: {e}")
             else:
-                st.write(f"ℹ️ ChromaDB directory does not exist - nothing to clean")
-            
-            # 1. Delete ChromaDB directory (vector database) - AFTER clearing the log
-            if chroma_db_dir.exists() and chroma_db_dir.is_dir():
+                st.info(f"ℹ️ No ingested files log found to delete - skipping this step")
+                debug_log_lines.append("INFO: No ingested files log found")
+        else:
+            st.warning(f"ℹ️ ChromaDB directory does not exist - skipping file-specific operations")
+            debug_log_lines.append("INFO: ChromaDB directory does not exist")
+        
+        # CRITICAL STEP: Delete ChromaDB directory (vector database)
+        st.subheader("⚠️ CRITICAL STEP: Delete ChromaDB Directory")
+        debug_log_lines.append("")
+        debug_log_lines.append("OPERATION: Attempting to delete ChromaDB directory")
+        
+        # Re-check directory existence for deletion step
+        chroma_exists_for_deletion = chroma_db_dir.exists() and chroma_db_dir.is_dir()
+        st.success(f"🔍 Directory exists for deletion: `{chroma_exists_for_deletion}`")
+        
+        if chroma_exists_for_deletion:
+            st.warning(f"⚠️ **ABOUT TO DELETE:** `{chroma_db_dir}`")
+            try:
                 shutil.rmtree(chroma_db_dir)
                 deleted_items.append(f"ChromaDB vector database: {chroma_db_dir}")
                 logger.info(f"Clean Start: Deleted ChromaDB directory: {chroma_db_dir}")
+                st.success(f"✅ **SUCCESS: Deleted ChromaDB directory** `{chroma_db_dir}`")
+                debug_log_lines.append(f"SUCCESS: Deleted ChromaDB directory {chroma_db_dir}")
+            except Exception as e:
+                st.error(f"❌ **FAILED to delete ChromaDB directory:** {e}")
+                debug_log_lines.append(f"ERROR: Failed to delete ChromaDB directory: {e}")
+        else:
+            st.info("ℹ️ ChromaDB directory does not exist - nothing to delete")
+            debug_log_lines.append("SKIP: ChromaDB directory does not exist or is not a directory")
+        
+        # Show critical step results
+        with st.expander("📋 Critical Step Results - ChromaDB Directory Deletion", expanded=True):
+            critical_results = f"""Target directory: {chroma_db_dir}
+Directory existed before deletion: {chroma_exists_for_deletion}
+Directory exists after deletion attempt: {chroma_db_dir.exists() if hasattr(chroma_db_dir, 'exists') else 'Unknown'}
+Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.exists() else 'No' if chroma_exists_for_deletion else 'N/A - Directory did not exist'}
+"""
+            st.text_area("Critical Step Debug Information", value=critical_results, height=150)
             
             # 2. Delete knowledge graph file
             graph_file = Path(final_db_path) / "knowledge_cortex.gpickle"
@@ -245,33 +355,96 @@ def perform_clean_start(db_path: str):
                         temp_file.unlink()
                         deleted_items.append(f"Temporary file: {temp_file}")
         
+        # Add final debug log entries
+        debug_log_lines.append("")
+        debug_log_lines.append("FINAL RESULTS:")
+        debug_log_lines.append("-" * 40)
+        debug_log_lines.append(f"Total items cleaned: {len(deleted_items)}")
+        debug_log_lines.append("Deleted items:")
+        for item in deleted_items:
+            debug_log_lines.append(f"  - {item}")
+        debug_log_lines.append("")
+        debug_log_lines.append("OPERATION COMPLETED SUCCESSFULLY")
+        debug_log_lines.append("=" * 80)
+        
+        # Create comprehensive final debug log
+        final_debug_log = "\n".join(debug_log_lines)
+        
         # Success message
         st.success("✅ **Clean Start completed successfully!**")
         st.markdown("### 🗑️ Cleaned Items:")
         for item in deleted_items:
             st.write(f"- {item}")
         
+        # Show final comprehensive debug log on screen
+        st.subheader("📋 Complete Debug Log")
+        st.info("**This shows everything that happened during the Clean Start operation. You can copy this information if needed.**")
+        
+        with st.expander("📋 Complete Debug Log - All Operations", expanded=True):
+            st.text_area("Complete Debug Log", value=final_debug_log, height=400, help="Copy this entire log if you need to share it for troubleshooting")
+        
+        st.success("🎉 **CLEAN START IS COMPLETE - PLEASE READ THE DEBUG INFORMATION ABOVE**")
+        st.success("🔍 **IMPORTANT:** Check the debug logs above to see exactly what was deleted and any issues that occurred.")
+        
+        # Add a prominent message that stops auto-progression
+        st.warning("⏸️ **PAUSED FOR REVIEW** - Study the debug information above, then refresh the page to continue using the system.")
+        
         st.info("""
         ### 🚀 Next Steps:
-        1. **Navigate to Knowledge Ingest page** to set database path
-        2. **Run document ingestion** to rebuild your knowledge base  
-        3. **Start fresh** - all schema conflicts should be resolved
+        1. **Review the debug logs above** to understand what was cleaned
+        2. **Navigate to Knowledge Ingest page** to set database path
+        3. **Run document ingestion** to rebuild your knowledge base  
+        4. **Start fresh** - all schema conflicts should be resolved
         
         Your system now has a completely clean slate and should work without any ChromaDB schema errors.
         """)
         
+        # STOP EXECUTION HERE so user can read everything
+        st.stop()
+        
         logger.info(f"Clean Start completed successfully - {len(deleted_items)} items cleaned")
         
     except Exception as e:
+        # Add error to debug log
+        debug_log_lines.append("")
+        debug_log_lines.append("CRITICAL ERROR:")
+        debug_log_lines.append("-" * 40)
+        debug_log_lines.append(f"Error: {str(e)}")
+        debug_log_lines.append(f"Error Type: {type(e).__name__}")
+        debug_log_lines.append("OPERATION FAILED")
+        debug_log_lines.append("=" * 80)
+        
+        # Create debug log even for failed operations
+        error_debug_log = "\n".join(debug_log_lines)
+        
         error_msg = f"Clean Start failed: {e}"
         logger.error(f"Clean Start error: {e}")
         st.error(f"❌ {error_msg}")
+        
+        # Show error debug log on screen
+        st.subheader("📋 Error Debug Log")
+        st.error("**An error occurred during Clean Start. This shows what was attempted before the error:**")
+        
+        with st.expander("📋 Error Debug Log - All Operations Before Error", expanded=True):
+            st.text_area("Error Debug Log", value=error_debug_log, height=400, help="Copy this error log for troubleshooting")
+        
+        st.error("🚨 **CLEAN START FAILED - PLEASE READ THE ERROR DEBUG INFORMATION ABOVE**")
+        st.error("🔍 **IMPORTANT:** The error debug log above shows exactly what was attempted before the failure.")
+        
+        # Add a prominent message that stops auto-progression
+        st.warning("⏸️ **PAUSED FOR ERROR REVIEW** - Study the error information above for troubleshooting.")
+        
         st.error("""
-        **If Clean Start fails:**
-        1. Try manually deleting the database directory
-        2. Restart the application 
-        3. Check logs for detailed error information
+        ### 🛠️ Troubleshooting Steps:
+        1. **Review the error debug log above** to understand what failed
+        2. Try manually deleting the database directory if permissions issue
+        3. Restart the application if needed
+        4. **Copy the error debug log above** for detailed troubleshooting information
+        5. Check Docker container has proper permissions to the mounted directories
         """)
+        
+        # STOP EXECUTION HERE so user can read error information
+        st.stop()
 
 @st.cache_resource
 def init_chroma_client(db_path):
@@ -299,9 +472,10 @@ def load_maintenance_config():
             config_manager = ConfigManager()
             config = config_manager.get_config()
             
-            # Map ConfigManager keys to expected keys
+            # Map ConfigManager keys to expected keys - use Docker-aware fallback
+            default_db_path = '/data' if os.path.exists('/.dockerenv') else '/tmp/cortex_db'
             maintenance_config = {
-                'db_path': config.get('ai_database_path', '/tmp/cortex_db'),
+                'db_path': config.get('ai_database_path', default_db_path),
                 'knowledge_source_path': config.get('knowledge_source_path', ''),
             }
             
@@ -351,8 +525,14 @@ def delete_knowledge_base(db_path):
 
 def display_header():
     """Display page header with navigation and information"""
-    st.title("🔧 Maintenance & Administration")
+    st.title("🔧 7. Maintenance & Administration")
     st.caption(f"Version: {PAGE_VERSION} • Consolidated System Maintenance Interface")
+    
+    # Quick access to System Terminal
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("💻 Open System Terminal", use_container_width=True, help="Access the secure system terminal for command execution"):
+            st.switch_page("pages/_System_Terminal.py")
     
     st.markdown("""
     **⚠️ Important:** This page contains powerful system maintenance functions that can modify or delete data.  
@@ -370,62 +550,55 @@ def display_database_maintenance():
         st.error("Cannot load configuration for database operations")
         return
     
-    db_path = config.get('db_path', '/tmp/cortex_db')
+    # Use Docker-aware fallback
+    default_db_path = '/data' if os.path.exists('/.dockerenv') else '/tmp/cortex_db' 
+    db_path = config.get('db_path', default_db_path)
     
-    with st.expander("🚀 Clean Start - Complete System Reset", expanded=True):
-        st.markdown("### 🧹 Clean Start Function")
-        st.warning("""
-        **NEW:** Complete system reset function that addresses database schema issues, collection conflicts, and provides a fresh start.
-        This function is specifically designed to resolve ChromaDB schema errors like 'collections.config_json_str' column missing.
+    # Show debug information about path resolution
+    st.info(f"🐳 **Docker Mode:** {'Yes' if os.path.exists('/.dockerenv') else 'No'}")
+    st.info(f"📁 **Database Path:** `{db_path}`")
+    st.info(f"🔧 **Configuration:** {config}")
+    
+    st.markdown("## 🚀 Clean Start - Complete System Reset")
+    st.markdown("### 🧹 Clean Start Function")
+    st.warning("""
+    **Complete system reset function** that addresses database schema issues, collection conflicts, and provides a fresh start.
+    This function is specifically designed to resolve ChromaDB schema errors like 'collections.config_json_str' column missing.
+    """)
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown("""
+        **Clean Start will:**
+        - ✅ Delete entire knowledge base directory (ChromaDB)
+        - ✅ Delete knowledge graph file (.gpickle)  
+        - ✅ Clear ALL ingestion logs and progress files
+        - ✅ Remove ingested files log from database directory
+        - ✅ Clear ALL staging and batch ingestion files (including failed ingests)
+        - ✅ Reset working collections (working_collections.json)
+        - ✅ Clear ingestion recovery metadata
+        - ✅ Remove Streamlit cache and session state files
+        - ✅ Clear temporary files, lock files, and state files
+        - ✅ Reset database configuration paths
+        - ✅ Fix ChromaDB schema conflicts and version issues
+        - ✅ Provide completely fresh installation state
         """)
         
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            st.markdown("""
-            **Clean Start will:**
-            - ✅ Delete entire knowledge base directory (ChromaDB)
-            - ✅ Delete knowledge graph file (.gpickle)  
-            - ✅ Clear ALL ingestion logs and progress files
-            - ✅ Remove ingested files log from database directory
-            - ✅ Clear ALL staging and batch ingestion files (including failed ingests)
-            - ✅ Reset working collections (working_collections.json)
-            - ✅ Clear ingestion recovery metadata
-            - ✅ Remove Streamlit cache and session state files
-            - ✅ Clear temporary files, lock files, and state files
-            - ✅ Reset database configuration paths
-            - ✅ Fix ChromaDB schema conflicts and version issues
-            - ✅ Provide completely fresh installation state
-            """)
-            
-            st.info("**Use Clean Start when:**")
-            st.markdown("""
-            - Getting 'collections.config_json_str' schema errors
-            - Collection Management shows connection errors  
-            - Docker vs non-Docker database conflicts
-            - ChromaDB version compatibility issues
-            - System appears corrupted or inconsistent
-            - **Failed batch ingests** showing up in Knowledge Ingest page
-            - Half-finished ingestion operations need clearing
-            - Want completely fresh system without any residual files
-            """)
-        
-        with col2:
-            if st.button("🚀 Clean Start Reset", use_container_width=True, type="primary"):
-                st.session_state.show_confirm_clean_start = True
-                
-            if st.session_state.get("show_confirm_clean_start"):
-                st.error("⚠️ **COMPLETE SYSTEM RESET**")
-                st.warning("This will delete ALL data and provide a completely fresh start. All knowledge base content, collections, and configurations will be lost.")
-                
-                c1, c2 = st.columns(2)
-                if c1.button("✅ YES, CLEAN START", use_container_width=True):
-                    perform_clean_start(db_path)
-                    st.session_state.show_confirm_clean_start = False
-                    st.rerun()
-                if c2.button("❌ Cancel", use_container_width=True):
-                    st.session_state.show_confirm_clean_start = False
-                    st.rerun()
+        st.info("**Use Clean Start when:**")
+        st.markdown("""
+        - Getting 'collections.config_json_str' schema errors
+        - Collection Management shows connection errors  
+        - Docker vs non-Docker database conflicts
+        - ChromaDB version compatibility issues
+        - System appears corrupted or inconsistent
+        - **Failed batch ingests** showing up in Knowledge Ingest page
+        - Half-finished ingestion operations need clearing
+        - Want completely fresh system without any residual files
+        """)
+    
+    with col2:
+        st.info("**⚠️ Most Dangerous Operations**\n\nComplete system reset functions are now located in the **Advanced Database Recovery & Repair** section below for safety.")
 
     with st.expander("⚙️ Basic Database Operations", expanded=False):
         st.subheader("Clear Ingestion Log")
@@ -625,6 +798,66 @@ def display_database_maintenance():
         **Recover from failed ingestions** or **repair inconsistencies** in your knowledge base.
         Use this when ingestion processes are interrupted or documents seem to be missing.
         """)
+        
+        # Clean Start Reset - Moved here for safety
+        st.markdown("---")
+        st.markdown("### ⚠️ **DANGER ZONE - Complete System Reset**")
+        st.error("**This section contains destructive operations that cannot be undone!**")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown("""
+            **🚀 Clean Start Reset**
+            
+            Complete system reset function that addresses database schema issues, collection conflicts, and provides a fresh start.
+            This function is specifically designed to resolve ChromaDB schema errors like 'collections.config_json_str' column missing.
+            
+            **Clean Start will:**
+            - ✅ Delete entire knowledge base directory (ChromaDB)
+            - ✅ Delete knowledge graph file (.gpickle)  
+            - ✅ Clear ALL ingestion logs and progress files
+            - ✅ Remove ingested files log from database directory
+            - ✅ Clear ALL staging and batch ingestion files (including failed ingests)
+            - ✅ Reset working collections (working_collections.json)
+            - ✅ Clear ingestion recovery metadata
+            - ✅ Remove Streamlit cache and session state files
+            - ✅ Clear temporary files, lock files, and state files
+            - ✅ Reset database configuration paths
+            - ✅ Fix ChromaDB schema conflicts and version issues
+            - ✅ Provide completely fresh installation state
+            
+            **Use Clean Start when:**
+            - Getting 'collections.config_json_str' schema errors
+            - Collection Management shows connection errors  
+            - Docker vs non-Docker database conflicts
+            - ChromaDB version compatibility issues
+            - System appears corrupted or inconsistent
+            - **Failed batch ingests** showing up in Knowledge Ingest page
+            - Half-finished ingestion operations need clearing
+            - Want completely fresh system without any residual files
+            """)
+        
+        with col2:
+            st.warning("⚠️ **COMPLETE SYSTEM RESET**\n\nThis will delete ALL data and provide a completely fresh start. All knowledge base content, collections, and configurations will be lost.")
+            
+            if st.button("🚀 Clean Start Reset", use_container_width=True, type="secondary", help="⚠️ DANGER: This will delete everything!"):
+                st.session_state.show_confirm_clean_start = True
+                
+            if st.session_state.get("show_confirm_clean_start"):
+                st.error("⚠️ **FINAL WARNING - COMPLETE SYSTEM RESET**")
+                st.warning("This will delete ALL data and provide a completely fresh start. All knowledge base content, collections, and configurations will be lost.")
+                
+                c1, c2 = st.columns(2)
+                if c1.button("✅ YES, CLEAN START", use_container_width=True, type="primary"):
+                    perform_clean_start(db_path)
+                    st.session_state.show_confirm_clean_start = False
+                    st.rerun()
+                if c2.button("❌ Cancel", use_container_width=True):
+                    st.session_state.show_confirm_clean_start = False
+                    st.rerun()
+        
+        st.markdown("---")
         
         try:
             recovery_manager = IngestionRecoveryManager(db_path)

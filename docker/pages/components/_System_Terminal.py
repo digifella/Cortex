@@ -17,7 +17,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.4.0"
+PAGE_VERSION = "v4.4.1"
 
 def main():
     """Main function displaying redirect information"""

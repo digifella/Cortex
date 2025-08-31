@@ -1,6 +1,6 @@
-# ## File: pages/6_Proposal_Step_2_Make.py
-# Version: v4.3.0
-# Date: 2025-07-15
+# ## File: pages/5_Proposal_Step_2_Make.py
+# Version: v4.5.0
+# Date: 2025-08-31
 # Purpose: A central hub for creating, loading, and managing proposals.
 #          - FEATURE (v2.2.0): Added a confirmation step before deleting a
 #            proposal to prevent accidental data loss.
@@ -26,8 +26,16 @@ prop_mgr = ProposalManager()
 if 'confirming_delete_proposal_id' not in st.session_state:
     st.session_state.confirming_delete_proposal_id = None
 
-st.title("🗂️ 6. Proposal Step 2 Make")
+st.title("🗂️ 5. Proposal Step 2 Make")
 st.caption("Create a new proposal or load an existing one to continue working.")
+
+# Quick access to Proposal Copilot
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    if st.button("🚀 Open Proposal Copilot", use_container_width=True, help="Access the Proposal Copilot for AI-assisted writing and editing"):
+        st.switch_page("pages/_Proposal_Copilot.py")
+
+st.divider()
 
 # Add help system
 help_system.show_help_menu()
@@ -62,7 +70,7 @@ with st.expander("🚀 Create a New Proposal", expanded=True):
                             del st.session_state[key]
 
                     # Switch to the co-pilot page
-                    st.switch_page("pages/Proposal_Copilot.py")
+                    st.switch_page("pages/_Proposal_Copilot.py")
             else:
                 st.error("Please enter a name for the proposal.")
 
@@ -109,7 +117,7 @@ else:
                 if st.button("Load", key=f"load_{p['id']}", use_container_width=True):
                      with st.spinner(f"Loading '{p['name']}'..."):
                         st.session_state['current_proposal_id'] = p['id']
-                        st.switch_page("pages/Proposal_Copilot.py")
+                        st.switch_page("pages/_Proposal_Copilot.py")
             with col5:
                 if st.button("❌", key=f"del_{p['id']}", use_container_width=True):
                     # Set the proposal to be confirmed for deletion

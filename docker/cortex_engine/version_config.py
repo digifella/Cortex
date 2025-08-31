@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.4.0"
+CORTEX_VERSION = "4.4.2"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
     "minor": 4,
-    "patch": 0,
+    "patch": 2,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,32 +25,29 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2025-08-31",
-    "release_name": "Database Management & Clean Start System",
-    "description": "Comprehensive database maintenance system with Clean Start functionality for ChromaDB schema conflict resolution and complete system reset capabilities",
+    "release_name": "Enhanced Debug Logging & Clean Start Fixes",
+    "description": "Improved Clean Start debug logging with comprehensive step-by-step information and Docker compatibility fixes",
     "breaking_changes": [],
     "new_features": [
-        "Clean Start function for complete system reset and database schema conflict resolution",
-        "Enhanced ChromaDB schema error detection and user guidance in Collection Management",
-        "Comprehensive database cleanup system addressing Docker vs non-Docker conflicts",
-        "Smart error handling for 'collections.config_json_str' column missing errors",
-        "Complete maintenance workflow with guided user experience for database issues"
+        "Step-by-step Clean Start debug logging with visual pause for review",
+        "Comprehensive debug information display in expandable text areas", 
+        "Enhanced error logging with detailed troubleshooting information",
+        "Docker-compatible debug logging that stays visible on screen"
     ],
     "improvements": [
-        "Enhanced Maintenance page (v4.4.0) with prominent Clean Start functionality",
-        "Improved Collection Management (v4.3.0) with specific schema error detection",
-        "Comprehensive system reset capability removing all databases, logs, and metadata",
-        "Docker compatibility improvements for database schema consistency",
-        "User-friendly error messages with actionable next steps for schema conflicts",
-        "Technical documentation and educational content about ChromaDB version conflicts",
-        "Streamlined database maintenance workflow with one-click solutions"
+        "Clean Start operations now display step-by-step with clear visual feedback",
+        "Debug information remains visible on screen for user review and copying",
+        "Enhanced Docker environment path handling and debugging", 
+        "Comprehensive error reporting with detailed troubleshooting steps",
+        "Visual pause after operations completion for thorough review",
+        "Improved debug log format with structured step-by-step information"
     ],
     "bug_fixes": [
-        "CRITICAL: Fixed ChromaDB 'collections.config_json_str' column missing schema errors",
-        "Resolved Docker vs non-Docker database compatibility conflicts",
-        "Fixed Collection Management page failing to load due to schema mismatches",
-        "Eliminated database corruption issues through comprehensive Clean Start reset",
-        "Fixed inconsistent database states between different deployment environments",
-        "Resolved ChromaDB version incompatibility issues with complete schema refresh"
+        "Fixed Clean Start debug logging visibility in Docker containers",
+        "Resolved debug information flashing too quickly to read",
+        "Fixed Docker path resolution for database cleanup operations",
+        "Corrected Clean Start operations reporting and error handling",
+        "Enhanced debug log format for better troubleshooting"
     ]
 }
 

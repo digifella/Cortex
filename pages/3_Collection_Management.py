@@ -1,5 +1,5 @@
 # ## File: pages/4_Collection_Management.py
-# Version: v4.4.0
+# Version: v4.5.0
 # Date: 2025-08-28
 # Purpose: A UI for managing Working Collections only.
 #          Knowledge base maintenance functions moved to Maintenance page (page 13).
@@ -45,8 +45,7 @@ def init_chroma_client(db_path):
         
     try:
         db_settings = ChromaSettings(
-            anonymized_telemetry=False,
-            allow_reset=True
+            anonymized_telemetry=False
         )
         return chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
     except Exception as e:

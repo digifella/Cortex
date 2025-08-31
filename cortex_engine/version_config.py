@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.4.0"
+CORTEX_VERSION = "4.5.0"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
-    "minor": 4,
+    "minor": 5,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -25,32 +25,32 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2025-08-31",
-    "release_name": "Database Management & Clean Start System",
-    "description": "Comprehensive database maintenance system with Clean Start functionality for ChromaDB schema conflict resolution and complete system reset capabilities",
+    "release_name": "System Stabilization & ChromaDB Consistency Fixes",
+    "description": "Emergency stabilization after navigation redesign failure - fixed ChromaDB inconsistencies, Docker path handling, and database validation errors",
     "breaking_changes": [],
     "new_features": [
-        "Clean Start function for complete system reset and database schema conflict resolution",
-        "Enhanced ChromaDB schema error detection and user guidance in Collection Management",
-        "Comprehensive database cleanup system addressing Docker vs non-Docker conflicts",
-        "Smart error handling for 'collections.config_json_str' column missing errors",
-        "Complete maintenance workflow with guided user experience for database issues"
+        "Enhanced Clean Start debug logging with step-by-step operations display",
+        "Docker environment detection with proper path fallbacks",
+        "Advanced Database Recovery section with safer Clean Start placement",
+        "Session state synchronization with configuration values"
     ],
     "improvements": [
-        "Enhanced Maintenance page (v4.4.0) with prominent Clean Start functionality",
-        "Improved Collection Management (v4.3.0) with specific schema error detection",
-        "Comprehensive system reset capability removing all databases, logs, and metadata",
-        "Docker compatibility improvements for database schema consistency",
-        "User-friendly error messages with actionable next steps for schema conflicts",
-        "Technical documentation and educational content about ChromaDB version conflicts",
-        "Streamlined database maintenance workflow with one-click solutions"
+        "Standardized ChromaDB settings across all components for consistent connections",
+        "Fixed working collections schema compatibility (doc_ids vs documents)",
+        "Enhanced ingestion recovery logic to not flag empty collections as issues",
+        "Improved Docker path handling with /.dockerenv detection",
+        "Better session state initialization in Knowledge Ingest page",
+        "Safer Clean Start button placement in Advanced section",
+        "Enhanced debug information display with visual pauses"
     ],
     "bug_fixes": [
-        "CRITICAL: Fixed ChromaDB 'collections.config_json_str' column missing schema errors",
-        "Resolved Docker vs non-Docker database compatibility conflicts",
-        "Fixed Collection Management page failing to load due to schema mismatches",
-        "Eliminated database corruption issues through comprehensive Clean Start reset",
-        "Fixed inconsistent database states between different deployment environments",
-        "Resolved ChromaDB version incompatibility issues with complete schema refresh"
+        "Fixed ChromaDB 'different settings' instance conflicts across Knowledge Search and Collection Management",
+        "Resolved nested expander error in Maintenance page UI",
+        "Fixed Docker path hardcoding issue where Clean Start used /data/ai_databases instead of user configuration",
+        "Corrected Knowledge Ingest session state showing wrong database paths",
+        "Fixed persistent 'Fix collection inconsistencies' warnings for empty collections",
+        "Resolved navigation chaos from failed hub page implementation (rolled back to v4.4.2)",
+        "Fixed hardcoded version references in Knowledge Ingest to use centralized VERSION_STRING"
     ]
 }
 
