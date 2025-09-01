@@ -528,6 +528,82 @@ with summary_col4:
     avg_docs = total_documents / max(non_empty_collections, 1)
     st.metric("📊 Avg Docs/Collection", f"{avg_docs:.1f}")
 
+# Collection Management Actions
+if total_collections > 1 or (total_collections == 1 and total_documents > 0):
+    with st.expander("🧹 Collection Management Tools", expanded=False):
+        st.markdown("**Bulk Collection Operations**")
+        
+        # Get empty collections count
+        empty_collections = [c for c in collections_list if len(c.get('doc_ids', [])) == 0]
+        empty_count = len(empty_collections)
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**Clear Empty Collections**")
+            st.caption(f"Remove {empty_count} collections with no documents")
+            if empty_count > 0:
+                if st.button("🗑️ Remove Empty Collections", key="clear_empty"):
+                    try:
+                        cleared = collection_mgr.clear_empty_collections()
+                        if cleared:
+                            st.success(f"✅ Removed {len(cleared)} empty collections: {', '.join(cleared.keys())}")
+                            st.rerun()
+                        else:
+                            st.info("No empty collections found to remove.")
+                    except Exception as e:
+                        st.error(f"Error removing empty collections: {e}")
+            else:
+                st.info("No empty collections to remove.")
+        
+        with col2:
+            st.markdown("**Clear All Documents**")
+            st.caption(f"Remove all documents from all {total_collections} collections")
+            if total_documents > 0:
+                if st.checkbox("⚠️ I understand this will remove all document references", key="confirm_clear_docs"):
+                    if st.button("📝 Clear All Documents", key="clear_all_docs", type="primary"):
+                        try:
+                            # Clear documents from all collections but keep collections
+                            for collection in collections_list:
+                                collection_name = collection['name']
+                                doc_ids = collection.get('doc_ids', [])
+                                if doc_ids:
+                                    collection_mgr.collections[collection_name]['doc_ids'] = []
+                                    collection_mgr.collections[collection_name]['modified_at'] = datetime.now().isoformat()
+                            
+                            collection_mgr._save()
+                            st.success(f"✅ Cleared documents from all collections ({total_documents} document references removed)")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error clearing documents: {e}")
+            else:
+                st.info("No documents to clear.")
+        
+        with col3:
+            st.markdown("**Reset All Collections**")
+            st.caption("Remove all collections except 'default'")
+            if total_collections > 1:
+                if st.checkbox("⚠️ I understand this will delete all custom collections", key="confirm_clear_all"):
+                    if st.button("🚨 Reset Collections", key="clear_all_collections", type="primary"):
+                        try:
+                            cleared = collection_mgr.clear_all_collections()
+                            if cleared:
+                                cleared_names = [name for name in cleared.keys() if name != "default"]
+                                default_cleared = cleared.get("default", 0)
+                                message = f"✅ Reset complete!"
+                                if cleared_names:
+                                    message += f" Removed {len(cleared_names)} collections: {', '.join(cleared_names)}."
+                                if default_cleared > 0:
+                                    message += f" Cleared {default_cleared} documents from default collection."
+                                st.success(message)
+                                st.rerun()
+                            else:
+                                st.info("No collections to clear.")
+                        except Exception as e:
+                            st.error(f"Error clearing collections: {e}")
+            else:
+                st.info("Only default collection exists.")
+
 st.divider()
 
 # Collection filtering

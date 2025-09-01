@@ -21,25 +21,68 @@ logger = get_logger(__name__)
 
 # Configuration
 PROJECT_ROOT = get_project_root()
+# Default fallback - will be overridden by get_collections_file_path()
 COLLECTIONS_FILE = str(PROJECT_ROOT / "working_collections.json")
+
+def get_collections_file_path():
+    """Get the correct path for collections file based on configured KB database path."""
+    try:
+        from .config_manager import ConfigManager
+        config_manager = ConfigManager()
+        config = config_manager.get_config()
+        db_path = config.get('ai_database_path')
+        
+        if db_path:
+            # Convert to WSL path and store collections in the KB database directory
+            wsl_db_path = convert_windows_to_wsl_path(db_path)
+            collections_path = os.path.join(wsl_db_path, "working_collections.json")
+            return collections_path
+    except Exception as e:
+        logger.warning(f"Could not get KB database path, using project root: {e}")
+    
+    # Fallback to project root
+    return COLLECTIONS_FILE
 
 class WorkingCollectionManager:
     """Manages CRUD operations for working collections stored in a JSON file."""
 
     def __init__(self):
+        self.collections_file = get_collections_file_path()
         self.collections = self._load()
 
     def _load(self):
         """Load collections from file with proper error handling."""
         collections = {}
-        if os.path.exists(COLLECTIONS_FILE):
+        
+        # Ensure the directory exists
+        collections_dir = os.path.dirname(self.collections_file)
+        if collections_dir and not os.path.exists(collections_dir):
             try:
-                with open(COLLECTIONS_FILE, 'r') as f:
+                os.makedirs(collections_dir, exist_ok=True)
+            except Exception as e:
+                logger.warning(f"Could not create collections directory: {e}")
+        
+        if os.path.exists(self.collections_file):
+            try:
+                with open(self.collections_file, 'r') as f:
                     collections = json.load(f)
-                logger.debug(f"Loaded {len(collections)} collections from {COLLECTIONS_FILE}")
+                logger.debug(f"Loaded {len(collections)} collections from {self.collections_file}")
             except (json.JSONDecodeError, IOError) as e:
                 logger.warning(f"Failed to load collections file, starting with empty collections: {e}")
                 collections = {}
+        else:
+            # Try to migrate from old location if it exists
+            old_collections_file = COLLECTIONS_FILE
+            if os.path.exists(old_collections_file) and old_collections_file != self.collections_file:
+                try:
+                    logger.info(f"Migrating collections from {old_collections_file} to {self.collections_file}")
+                    shutil.copy2(old_collections_file, self.collections_file)
+                    with open(self.collections_file, 'r') as f:
+                        collections = json.load(f)
+                    logger.info(f"Successfully migrated {len(collections)} collections")
+                except Exception as e:
+                    logger.warning(f"Failed to migrate collections: {e}")
+                    collections = {}
 
         now_iso = datetime.now().isoformat()
         for name, data in collections.items():
@@ -56,9 +99,14 @@ class WorkingCollectionManager:
     def _save(self):
         """Save collections to file with proper error handling."""
         try:
-            with open(COLLECTIONS_FILE, 'w') as f:
+            # Ensure directory exists
+            collections_dir = os.path.dirname(self.collections_file)
+            if collections_dir and not os.path.exists(collections_dir):
+                os.makedirs(collections_dir, exist_ok=True)
+                
+            with open(self.collections_file, 'w') as f:
                 json.dump(self.collections, f, indent=4)
-            logger.debug(f"Collections saved to {COLLECTIONS_FILE}")
+            logger.debug(f"Collections saved to {self.collections_file}")
             return True
         except IOError as e:
             logger.error(f"Failed to save collections: {e}")
@@ -306,3 +354,63 @@ class WorkingCollectionManager:
                 
         except Exception as e:
             logger.error(f"Failed to update collections after deduplication: {e}")
+    
+    def clear_all_collections(self) -> dict:
+        """Clear all collections except default. Returns summary of cleared collections."""
+        cleared_collections = {}
+        collections_to_clear = [name for name in self.collections.keys() if name != "default"]
+        
+        for name in collections_to_clear:
+            doc_count = len(self.collections[name].get("doc_ids", []))
+            cleared_collections[name] = doc_count
+            del self.collections[name]
+        
+        # Also clear default collection documents but keep the collection
+        default_doc_count = len(self.collections["default"].get("doc_ids", []))
+        if default_doc_count > 0:
+            self.collections["default"]["doc_ids"] = []
+            self.collections["default"]["modified_at"] = datetime.now().isoformat()
+            cleared_collections["default"] = default_doc_count
+        
+        if cleared_collections:
+            self._save()
+            logger.info(f"Cleared {len(cleared_collections)} collections")
+        
+        return cleared_collections
+    
+    def clear_empty_collections(self) -> dict:
+        """Remove collections that have no documents. Returns summary of removed collections."""
+        empty_collections = {}
+        collections_to_remove = []
+        
+        for name, data in self.collections.items():
+            if name != "default":  # Never remove default
+                doc_ids = data.get("doc_ids", [])
+                if not doc_ids:  # Empty collection
+                    collections_to_remove.append(name)
+                    empty_collections[name] = {
+                        "created_at": data.get("created_at", "Unknown"),
+                        "modified_at": data.get("modified_at", "Unknown")
+                    }
+        
+        for name in collections_to_remove:
+            del self.collections[name]
+        
+        if empty_collections:
+            self._save()
+            logger.info(f"Removed {len(empty_collections)} empty collections")
+        
+        return empty_collections
+    
+    def get_collections_summary(self) -> dict:
+        """Get a summary of all collections with document counts."""
+        summary = {}
+        for name, data in self.collections.items():
+            doc_count = len(data.get("doc_ids", []))
+            summary[name] = {
+                "document_count": doc_count,
+                "created_at": data.get("created_at", "Unknown"),
+                "modified_at": data.get("modified_at", "Unknown"),
+                "is_empty": doc_count == 0
+            }
+        return summary
