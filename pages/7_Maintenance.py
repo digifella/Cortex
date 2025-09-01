@@ -92,14 +92,28 @@ def delete_ingested_document_database(db_path: str):
                 errors.append(error_msg)
                 logger.error(error_msg)
         
-        # Delete collections file
+        # Delete collections file from both locations (to prevent auto-migration)
+        old_collections_file = Path(__file__).parent.parent / "working_collections.json"
+        
+        # Delete from KB database path
         if collections_file.exists():
             try:
                 collections_file.unlink()
-                deleted_items.append(f"Collections file: {collections_file}")
-                logger.info(f"Successfully deleted collections file: {collections_file}")
+                deleted_items.append(f"Collections file (KB database): {collections_file}")
+                logger.info(f"Successfully deleted collections file from KB database: {collections_file}")
             except Exception as e:
-                error_msg = f"Failed to delete collections file: {e}"
+                error_msg = f"Failed to delete collections file from KB database: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete from project root (prevents auto-migration)
+        if old_collections_file.exists():
+            try:
+                old_collections_file.unlink()
+                deleted_items.append(f"Collections file (project root): {old_collections_file}")
+                logger.info(f"Successfully deleted collections file from project root: {old_collections_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete collections file from project root: {e}"
                 errors.append(error_msg)
                 logger.error(error_msg)
         
@@ -565,13 +579,26 @@ def delete_ingested_document_database_simple(db_path):
                 errors.append(error_msg)
                 logger.error(error_msg)
         
+        # Delete collections from both locations (prevents auto-migration)
+        old_collections_file = Path(__file__).parent.parent / "working_collections.json"
+        
         if collections_file.exists():
             try:
                 collections_file.unlink()
-                deleted_items.append("Collections")
-                logger.info(f"Collections file deleted: {collections_file}")
+                deleted_items.append("Collections (KB database)")
+                logger.info(f"Collections file deleted from KB database: {collections_file}")
             except Exception as e:
-                error_msg = f"Failed to delete collections file: {e}"
+                error_msg = f"Failed to delete collections file from KB database: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        if old_collections_file.exists():
+            try:
+                old_collections_file.unlink()
+                deleted_items.append("Collections (project root)")
+                logger.info(f"Collections file deleted from project root: {old_collections_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete collections file from project root: {e}"
                 errors.append(error_msg)
                 logger.error(error_msg)
         
