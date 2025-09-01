@@ -420,162 +420,206 @@ def perform_search(base_index, query, filters, search_mode="Traditional Vector S
 
 def graphrag_enhanced_search(db_path, query, filters, top_k=20):
     """GraphRAG enhanced search using knowledge graph context"""
-    try:
-        from cortex_engine.graphrag_integration import get_graphrag_integration
-        
-        # Initialize GraphRAG integration
-        graphrag = get_graphrag_integration(db_path)
-        
-        # Initialize vector index for GraphRAG (needed for enhanced search)
-        wsl_db_path = convert_windows_to_wsl_path(db_path)
-        chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
-        
-        if not os.path.isdir(chroma_db_path):
-            st.error(f"Database not found: {chroma_db_path}")
-            return []
-        
-        # Create a simple vector index interface for GraphRAG
-        vector_index = ChromaVectorIndex(chroma_db_path)
-        
-        # Use GraphRAG enhanced search
-        raw_results = graphrag.enhanced_search(
-            query=query, 
-            vector_index=vector_index,
-            use_graph_context=True,
-            max_hops=2
-        )
-        
-        # Format results for display
-        formatted_results = []
-        for i, result in enumerate(raw_results[:top_k]):
-            # Extract content and metadata
-            if hasattr(result, 'text'):
-                content = result.text
-                metadata = getattr(result, 'metadata', {})
-            elif isinstance(result, dict):
-                content = result.get('content', result.get('text', ''))
-                metadata = result.get('metadata', {})
-            else:
-                content = str(result)
-                metadata = {}
-            
-            formatted_result = {
-                'rank': i + 1,
-                'score': metadata.get('score', 0.8),  # GraphRAG default score
-                'text': content,
-                'file_path': metadata.get('file_path', 'Unknown'),
-                'file_name': metadata.get('file_name', 'Unknown'),
-                'document_type': metadata.get('document_type', 'Unknown'),
-                'proposal_outcome': metadata.get('proposal_outcome', 'N/A'),
-                'chunk_id': metadata.get('chunk_id', f'chunk_{i}'),
-                'doc_id': metadata.get('doc_id', f'doc_{i}'),
-                'graph_context': metadata.get('graph_context', 'Enhanced with entity relationships')
-            }
-            
-            # Apply post-search filtering
-            if apply_post_search_filters(formatted_result, filters):
-                formatted_results.append(formatted_result)
-        
-        logger.info(f"GraphRAG enhanced search returned {len(formatted_results)} results")
-        return formatted_results
-        
-    except ImportError as e:
-        logger.warning(f"GraphRAG not available: {e}")
-        st.warning("⚠️ GraphRAG not available, falling back to traditional search")
-        return direct_chromadb_search(db_path, query, filters, top_k)
-    except Exception as e:
-        logger.error(f"GraphRAG search failed: {e}")
-        st.warning(f"⚠️ GraphRAG search failed: {e}. Falling back to traditional search.")
-        return direct_chromadb_search(db_path, query, filters, top_k)
-
-
-def hybrid_search(db_path, query, filters, top_k=20):
-    """Hybrid search combining vector and GraphRAG results"""
-    try:
-        from cortex_engine.graphrag_integration import get_graphrag_integration
-        
-        # Get both search results
-        vector_results = direct_chromadb_search(db_path, query, filters, top_k//2)
-        
+    import concurrent.futures
+    
+    def graphrag_search_with_timeout():
         try:
+            from cortex_engine.graphrag_integration import get_graphrag_integration
+            
+            # Initialize GraphRAG integration
             graphrag = get_graphrag_integration(db_path)
+            
+            # Initialize vector index for GraphRAG (needed for enhanced search)
             wsl_db_path = convert_windows_to_wsl_path(db_path)
             chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
             
-            # Create vector index interface
+            if not os.path.isdir(chroma_db_path):
+                st.error(f"Database not found: {chroma_db_path}")
+                return []
+            
+            # Create a simple vector index interface for GraphRAG
             vector_index = ChromaVectorIndex(chroma_db_path)
             
-            # Get GraphRAG results
-            graphrag_raw = graphrag.enhanced_search(
-                query=query,
+            # Use GraphRAG enhanced search
+            raw_results = graphrag.enhanced_search(
+                query=query, 
                 vector_index=vector_index,
                 use_graph_context=True,
                 max_hops=2
             )
             
-            # Format GraphRAG results
-            graphrag_results = []
-            for i, result in enumerate(graphrag_raw[:top_k//2]):
+            # Debug logging for GraphRAG results
+            logger.info(f"GraphRAG raw_results count: {len(raw_results) if raw_results else 0}")
+            if not raw_results:
+                logger.warning("GraphRAG enhanced_search returned no results - falling back to direct vector search")
+                # Fallback to direct vector search if GraphRAG returns nothing
+                raw_results = vector_index.as_retriever(similarity_top_k=top_k).retrieve(query)
+                logger.info(f"Vector fallback returned {len(raw_results)} results")
+            
+            # Format results for display
+            formatted_results = []
+            for i, result in enumerate(raw_results[:top_k]):
+                # Extract content and metadata
                 if hasattr(result, 'text'):
                     content = result.text
                     metadata = getattr(result, 'metadata', {})
+                elif isinstance(result, dict):
+                    content = result.get('content', result.get('text', ''))
+                    metadata = result.get('metadata', {})
                 else:
                     content = str(result)
                     metadata = {}
                 
                 formatted_result = {
-                    'rank': i + len(vector_results) + 1,
-                    'score': metadata.get('score', 0.75),
+                    'rank': i + 1,
+                    'score': metadata.get('score', 0.8),  # GraphRAG default score
                     'text': content,
                     'file_path': metadata.get('file_path', 'Unknown'),
                     'file_name': metadata.get('file_name', 'Unknown'),
                     'document_type': metadata.get('document_type', 'Unknown'),
                     'proposal_outcome': metadata.get('proposal_outcome', 'N/A'),
-                    'chunk_id': metadata.get('chunk_id', f'graphrag_chunk_{i}'),
-                    'doc_id': metadata.get('doc_id', f'graphrag_doc_{i}'),
-                    'search_source': 'GraphRAG Enhanced'
+                    'chunk_id': metadata.get('chunk_id', f'chunk_{i}'),
+                    'doc_id': metadata.get('doc_id', f'doc_{i}'),
+                    'graph_context': metadata.get('graph_context', 'Enhanced with entity relationships')
                 }
                 
+                # Apply post-search filtering
                 if apply_post_search_filters(formatted_result, filters):
-                    graphrag_results.append(formatted_result)
+                    formatted_results.append(formatted_result)
+            
+            logger.info(f"GraphRAG enhanced search returned {len(formatted_results)} results")
+            return formatted_results
+            
+        except ImportError as e:
+            logger.warning(f"GraphRAG not available: {e}")
+            st.warning("⚠️ GraphRAG not available, falling back to traditional search")
+            return direct_chromadb_search(db_path, query, filters, top_k)
+        except Exception as e:
+            logger.error(f"GraphRAG search failed: {e}")
+            st.warning(f"⚠️ GraphRAG search failed: {e}. Falling back to traditional search.")
+            return direct_chromadb_search(db_path, query, filters, top_k)
+    
+    # Run GraphRAG search with timeout protection
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(graphrag_search_with_timeout)
+            try:
+                results = future.result(timeout=45)  # 45 second timeout for GraphRAG
+                return results
+            except concurrent.futures.TimeoutError:
+                logger.error("GraphRAG search timed out after 45 seconds")
+                st.error("⏱️ GraphRAG search timed out. Falling back to traditional search.")
+                return direct_chromadb_search(db_path, query, filters, top_k)
+    except Exception as e:
+        logger.error(f"GraphRAG search wrapper failed: {e}")
+        return direct_chromadb_search(db_path, query, filters, top_k)
+
+
+def hybrid_search(db_path, query, filters, top_k=20):
+    """Hybrid search combining vector and GraphRAG results"""
+    import concurrent.futures
+    
+    def hybrid_search_with_timeout():
+        try:
+            from cortex_engine.graphrag_integration import get_graphrag_integration
+            
+            # Get both search results
+            vector_results = direct_chromadb_search(db_path, query, filters, top_k//2)
+            
+            try:
+                graphrag = get_graphrag_integration(db_path)
+                wsl_db_path = convert_windows_to_wsl_path(db_path)
+                chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+                
+                # Create vector index interface
+                vector_index = ChromaVectorIndex(chroma_db_path)
+                
+                # Get GraphRAG results
+                graphrag_raw = graphrag.enhanced_search(
+                    query=query,
+                    vector_index=vector_index,
+                    use_graph_context=True,
+                    max_hops=2
+                )
+                
+                # Format GraphRAG results
+                graphrag_results = []
+                for i, result in enumerate(graphrag_raw[:top_k//2]):
+                    if hasattr(result, 'text'):
+                        content = result.text
+                        metadata = getattr(result, 'metadata', {})
+                    else:
+                        content = str(result)
+                        metadata = {}
+                    
+                    formatted_result = {
+                        'rank': i + len(vector_results) + 1,
+                        'score': metadata.get('score', 0.75),
+                        'text': content,
+                        'file_path': metadata.get('file_path', 'Unknown'),
+                        'file_name': metadata.get('file_name', 'Unknown'),
+                        'document_type': metadata.get('document_type', 'Unknown'),
+                        'proposal_outcome': metadata.get('proposal_outcome', 'N/A'),
+                        'chunk_id': metadata.get('chunk_id', f'graphrag_chunk_{i}'),
+                        'doc_id': metadata.get('doc_id', f'graphrag_doc_{i}'),
+                        'search_source': 'GraphRAG Enhanced'
+                    }
+                    
+                    if apply_post_search_filters(formatted_result, filters):
+                        graphrag_results.append(formatted_result)
+                
+            except Exception as e:
+                logger.warning(f"GraphRAG portion of hybrid search failed: {e}")
+                graphrag_results = []
+            
+            # Mark vector results
+            for result in vector_results:
+                result['search_source'] = 'Vector Search'
+            
+            # Combine and deduplicate results by doc_id
+            combined_results = {}
+            all_results = vector_results + graphrag_results
+            
+            for result in all_results:
+                doc_id = result['doc_id']
+                if doc_id not in combined_results:
+                    combined_results[doc_id] = result
+                else:
+                    # Keep result with higher score
+                    if result['score'] > combined_results[doc_id]['score']:
+                        combined_results[doc_id] = result
+                        combined_results[doc_id]['search_source'] = 'Hybrid (Vector + GraphRAG)'
+            
+            # Sort by score and limit
+            final_results = list(combined_results.values())
+            final_results.sort(key=lambda x: x['score'], reverse=True)
+            final_results = final_results[:top_k]
+            
+            # Update ranks
+            for i, result in enumerate(final_results):
+                result['rank'] = i + 1
+            
+            logger.info(f"Hybrid search returned {len(final_results)} combined results")
+            return final_results
             
         except Exception as e:
-            logger.warning(f"GraphRAG portion of hybrid search failed: {e}")
-            graphrag_results = []
-        
-        # Mark vector results
-        for result in vector_results:
-            result['search_source'] = 'Vector Search'
-        
-        # Combine and deduplicate results by doc_id
-        combined_results = {}
-        all_results = vector_results + graphrag_results
-        
-        for result in all_results:
-            doc_id = result['doc_id']
-            if doc_id not in combined_results:
-                combined_results[doc_id] = result
-            else:
-                # Keep result with higher score
-                if result['score'] > combined_results[doc_id]['score']:
-                    combined_results[doc_id] = result
-                    combined_results[doc_id]['search_source'] = 'Hybrid (Vector + GraphRAG)'
-        
-        # Sort by score and limit
-        final_results = list(combined_results.values())
-        final_results.sort(key=lambda x: x['score'], reverse=True)
-        final_results = final_results[:top_k]
-        
-        # Update ranks
-        for i, result in enumerate(final_results):
-            result['rank'] = i + 1
-        
-        logger.info(f"Hybrid search returned {len(final_results)} combined results")
-        return final_results
-        
+            logger.error(f"Hybrid search failed: {e}")
+            st.warning(f"⚠️ Hybrid search failed: {e}. Using traditional search.")
+            return direct_chromadb_search(db_path, query, filters, top_k)
+    
+    # Run hybrid search with timeout protection
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(hybrid_search_with_timeout)
+            try:
+                results = future.result(timeout=60)  # 60 second timeout for hybrid search
+                return results
+            except concurrent.futures.TimeoutError:
+                logger.error("Hybrid search timed out after 60 seconds")
+                st.error("⏱️ Hybrid search timed out. Falling back to traditional search.")
+                return direct_chromadb_search(db_path, query, filters, top_k)
     except Exception as e:
-        logger.error(f"Hybrid search failed: {e}")
-        st.warning(f"⚠️ Hybrid search failed: {e}. Using traditional search.")
+        logger.error(f"Hybrid search wrapper failed: {e}")
         return direct_chromadb_search(db_path, query, filters, top_k)
 
 

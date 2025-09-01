@@ -20,6 +20,27 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v4.5.1 - 2025-09-01
+
+### Enhanced Search & Docker Stability
+
+Improved search functionality with timeout protection, better error handling, and Docker path stability fixes
+
+### ✨ New Features
+- GraphRAG retroactive extraction utility for existing knowledge bases
+- Comprehensive timeout protection for GraphRAG and hybrid search operations
+- Enhanced batch ingestion error recovery with user-friendly guidance
+- Improved search fallback mechanisms when GraphRAG components fail
+
+### 🚀 Improvements
+- Added 45-second timeout for GraphRAG Enhanced search with automatic fallback
+- Added 60-second timeout for Hybrid search with graceful degradation
+- Enhanced Knowledge Ingest session state handling to preserve user-entered paths
+- Better error messages and recovery options for corrupted batch states
+- Improved hybrid search deduplication logic for optimal result combination
+- Enhanced GraphRAG search debugging with detailed logging
+
 ## v4.5.0 - 2025-08-31
 
 ### System Stabilization & ChromaDB Consistency Fixes

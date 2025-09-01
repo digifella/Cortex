@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py
-# Version: v4.5.0
+# Version: v4.5.1
 # Date: 2025-08-27
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
@@ -127,9 +127,10 @@ def initialize_state(force_reset: bool = False):
     config_db_path = config.get("ai_database_path", "")
     
     # Update session state from config (this fixes stale session values)
-    if "knowledge_source_path" not in st.session_state or st.session_state.knowledge_source_path != config_knowledge_path:
+    # But ONLY if the session state is empty/uninitialized - don't overwrite user input
+    if "knowledge_source_path" not in st.session_state:
         st.session_state.knowledge_source_path = config_knowledge_path
-    if "db_path" not in st.session_state or st.session_state.db_path != config_db_path:
+    if "db_path" not in st.session_state:
         st.session_state.db_path = config_db_path
 
     defaults = {
@@ -960,12 +961,27 @@ def auto_resume_from_batch_config(batch_manager: BatchState) -> bool:
         scan_config = batch_manager.get_scan_config()
         if not scan_config:
             # Try to recover from staging file if scan config is missing
-            st.warning("⚠️ No scan configuration found in batch state")
+            st.warning("⚠️ No scan configuration found in batch state - this can happen after a system crash")
+            st.info("📝 **To resume processing:** Please re-enter your original paths below and select your directories again.")
+            
+            # Add option to clear corrupted batch state
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🗑️ Clear Corrupted Batch", type="secondary", use_container_width=True):
+                    batch_manager.clear_batch()
+                    st.success("✅ Corrupted batch state cleared. You can now start a new scan.")
+                    st.rerun()
+            with col2:
+                if st.button("📁 Go to Configuration", type="primary", use_container_width=True):
+                    st.session_state.ingestion_stage = "config"
+                    st.rerun()
+            
             return try_resume_from_staging_file(batch_manager)
             
         return resume_from_scan_config(batch_manager, scan_config)
     except Exception as e:
-        st.error(f"❌ Auto-resume failed: {e}")
+        st.error(f"❌ Failed to resume batch automatically: {e}")
+        st.info("💡 **Tip:** Try clearing the batch state and starting fresh if this persists.")
         return False
 
 def try_resume_from_staging_file(batch_manager: BatchState) -> bool:
@@ -974,6 +990,7 @@ def try_resume_from_staging_file(batch_manager: BatchState) -> bool:
         staging_file = Path(__file__).parent.parent / "staging_ingestion.json"
         if not staging_file.exists():
             st.error("❌ No staging file found to resume from")
+            st.info("🔄 **No recovery options available.** Please start a new scan with your original paths.")
             return False
         
         st.info("🔄 Found existing staging file - attempting to resume from metadata review stage")
@@ -985,6 +1002,7 @@ def try_resume_from_staging_file(batch_manager: BatchState) -> bool:
         
     except Exception as e:
         st.error(f"❌ Failed to resume from staging file: {e}")
+        st.info("💡 **Recovery suggestion:** Clear the batch state and start a new scan.")
         return False
 
 def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> bool:

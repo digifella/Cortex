@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.5.0"
+CORTEX_VERSION = "4.5.1"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
     "minor": 5,
-    "patch": 0,
+    "patch": 1,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,33 +24,31 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-08-31",
-    "release_name": "System Stabilization & ChromaDB Consistency Fixes",
-    "description": "Emergency stabilization after navigation redesign failure - fixed ChromaDB inconsistencies, Docker path handling, and database validation errors",
+    "release_date": "2025-09-01",
+    "release_name": "Enhanced Search & Docker Stability",
+    "description": "Improved search functionality with timeout protection, better error handling, and Docker path stability fixes",
     "breaking_changes": [],
     "new_features": [
-        "Enhanced Clean Start debug logging with step-by-step operations display",
-        "Docker environment detection with proper path fallbacks",
-        "Advanced Database Recovery section with safer Clean Start placement",
-        "Session state synchronization with configuration values"
+        "GraphRAG retroactive extraction utility for existing knowledge bases",
+        "Comprehensive timeout protection for GraphRAG and hybrid search operations",
+        "Enhanced batch ingestion error recovery with user-friendly guidance",
+        "Improved search fallback mechanisms when GraphRAG components fail"
     ],
     "improvements": [
-        "Standardized ChromaDB settings across all components for consistent connections",
-        "Fixed working collections schema compatibility (doc_ids vs documents)",
-        "Enhanced ingestion recovery logic to not flag empty collections as issues",
-        "Improved Docker path handling with /.dockerenv detection",
-        "Better session state initialization in Knowledge Ingest page",
-        "Safer Clean Start button placement in Advanced section",
-        "Enhanced debug information display with visual pauses"
+        "Added 45-second timeout for GraphRAG Enhanced search with automatic fallback",
+        "Added 60-second timeout for Hybrid search with graceful degradation",
+        "Enhanced Knowledge Ingest session state handling to preserve user-entered paths",
+        "Better error messages and recovery options for corrupted batch states",
+        "Improved hybrid search deduplication logic for optimal result combination",
+        "Enhanced GraphRAG search debugging with detailed logging"
     ],
     "bug_fixes": [
-        "Fixed ChromaDB 'different settings' instance conflicts across Knowledge Search and Collection Management",
-        "Resolved nested expander error in Maintenance page UI",
-        "Fixed Docker path hardcoding issue where Clean Start used /data/ai_databases instead of user configuration",
-        "Corrected Knowledge Ingest session state showing wrong database paths",
-        "Fixed persistent 'Fix collection inconsistencies' warnings for empty collections",
-        "Resolved navigation chaos from failed hub page implementation (rolled back to v4.4.2)",
-        "Fixed hardcoded version references in Knowledge Ingest to use centralized VERSION_STRING"
+        "Fixed Knowledge Ingest overwriting custom paths with config defaults after crashes",
+        "Fixed GraphRAG Enhanced search returning no results due to fallback logic issues",
+        "Fixed hybrid search timeouts in Docker environments",
+        "Resolved batch resume failures with clear recovery instructions",
+        "Fixed aggressive session state sync overriding user input in real-time",
+        "Corrected search result counting discrepancies between search modes"
     ]
 }
 
