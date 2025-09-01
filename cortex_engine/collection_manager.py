@@ -70,19 +70,6 @@ class WorkingCollectionManager:
             except (json.JSONDecodeError, IOError) as e:
                 logger.warning(f"Failed to load collections file, starting with empty collections: {e}")
                 collections = {}
-        else:
-            # Try to migrate from old location if it exists
-            old_collections_file = COLLECTIONS_FILE
-            if os.path.exists(old_collections_file) and old_collections_file != self.collections_file:
-                try:
-                    logger.info(f"Migrating collections from {old_collections_file} to {self.collections_file}")
-                    shutil.copy2(old_collections_file, self.collections_file)
-                    with open(self.collections_file, 'r') as f:
-                        collections = json.load(f)
-                    logger.info(f"Successfully migrated {len(collections)} collections")
-                except Exception as e:
-                    logger.warning(f"Failed to migrate collections: {e}")
-                    collections = {}
 
         now_iso = datetime.now().isoformat()
         for name, data in collections.items():
