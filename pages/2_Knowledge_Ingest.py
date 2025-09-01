@@ -1922,24 +1922,39 @@ def check_recovery_needed():
         if not db_path:
             return False, []
         
+        # Check if we recently dismissed recovery warnings
+        dismiss_key = f"recovery_dismissed_{hash(db_path)}"
+        if st.session_state.get(dismiss_key, False):
+            return False, []
+        
         recovery_manager = IngestionRecoveryManager(db_path)
         analysis = recovery_manager.analyze_ingestion_state()
         
         issues = []
-        if analysis.get("statistics", {}).get("orphaned_count", 0) > 0:
-            issues.append(f"Found {analysis['statistics']['orphaned_count']} orphaned documents")
         
-        if analysis.get("statistics", {}).get("broken_collections", 0) > 0:
-            issues.append(f"Found {analysis['statistics']['broken_collections']} broken collections")
+        # Only show orphaned documents warning if there are many (more than 10)
+        # Small numbers may be normal during batch processing
+        orphaned_count = analysis.get("statistics", {}).get("orphaned_count", 0)
+        if orphaned_count > 10:
+            issues.append(f"Found {orphaned_count} orphaned documents")
         
-        # Check for recent failed ingestions
+        # Only show broken collections if they actually exist
+        broken_collections = analysis.get("statistics", {}).get("broken_collections", 0)
+        if broken_collections > 0:
+            issues.append(f"Found {broken_collections} broken collections")
+        
+        # Only show high-priority recommendations
         if "recommendations" in analysis and analysis["recommendations"]:
-            # Convert recommendation dicts to string descriptions
-            for rec in analysis["recommendations"][:2]:
-                if isinstance(rec, dict):
-                    issues.append(rec.get("description", "Recovery action needed"))
-                else:
-                    issues.append(str(rec))
+            high_priority_recs = [rec for rec in analysis["recommendations"] 
+                                 if isinstance(rec, dict) and rec.get("priority") == "high"]
+            
+            for rec in high_priority_recs[:2]:  # Limit to 2 high-priority recommendations
+                issues.append(rec.get("description", "Recovery action needed"))
+        
+        # Don't show warnings if there are only minor issues and ChromaDB has documents
+        chromadb_count = analysis.get("statistics", {}).get("chromadb_docs_count", 0)
+        if len(issues) <= 1 and chromadb_count > 0 and orphaned_count < 50:
+            return False, []
         
         return len(issues) > 0, issues
         
@@ -1973,18 +1988,22 @@ def render_recovery_section():
                         st.rerun()
                 with col2:
                     if st.button("🚫 Dismiss (Hide Until Next Issue)", use_container_width=True):
-                        st.session_state.recovery_dismissed = True
+                        config_manager = ConfigManager()
+                        config = config_manager.get_config()
+                        db_path = config.get("ai_database_path", "")
+                        dismiss_key = f"recovery_dismissed_{hash(db_path)}"
+                        st.session_state[dismiss_key] = True
                         st.rerun()
         
         # Show maintenance tools access when no issues but tools requested  
-        elif not recovery_needed and not show_maintenance and not st.session_state.get("recovery_dismissed", False):
+        elif not recovery_needed and not show_maintenance:
             # Redirect to maintenance page for advanced tools
             st.info("💡 **Database maintenance and recovery tools** have been moved to the dedicated **Maintenance** page for better organization.")
             if st.button("🔧 Open Maintenance Page", use_container_width=True, help="Access advanced database repair and recovery features"):
                 st.switch_page("pages/13_Maintenance.py")
         
-        # Show urgent recovery message if issues detected
-        if show_maintenance or (recovery_needed and not st.session_state.get("recovery_dismissed", False)):
+        # Show urgent recovery message if issues detected (already handled by check_recovery_needed dismiss logic)
+        if show_maintenance or recovery_needed:
             st.warning("⚠️ **Database issues detected!** Advanced recovery tools are available on the **Maintenance** page.")
             col1, col2 = st.columns(2)
             with col1:
@@ -1992,7 +2011,11 @@ def render_recovery_section():
                     st.switch_page("pages/13_Maintenance.py")
             with col2:
                 if st.button("Dismiss Warning", use_container_width=True):
-                    st.session_state.recovery_dismissed = True
+                    config_manager = ConfigManager()
+                    config = config_manager.get_config()
+                    db_path = config.get("ai_database_path", "")
+                    dismiss_key = f"recovery_dismissed_{hash(db_path)}"
+                    st.session_state[dismiss_key] = True
                     st.rerun()
     
     except Exception as e:

@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.5.1"
+CORTEX_VERSION = "4.5.2"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
     "minor": 5,
-    "patch": 1,
+    "patch": 2,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,30 +25,23 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2025-09-01",
-    "release_name": "Enhanced Search & Docker Stability",
-    "description": "Improved search functionality with timeout protection, better error handling, and Docker path stability fixes",
+    "release_name": "Database Maintenance UI Fixes", 
+    "description": "Fixed persistent database maintenance warnings and improved error detection logic",
     "breaking_changes": [],
     "new_features": [
-        "GraphRAG retroactive extraction utility for existing knowledge bases",
-        "Comprehensive timeout protection for GraphRAG and hybrid search operations",
-        "Enhanced batch ingestion error recovery with user-friendly guidance",
-        "Improved search fallback mechanisms when GraphRAG components fail"
+        "Enhanced database maintenance warning dismissal with per-database persistence",
+        "Intelligent false-positive detection for database health checks"
     ],
     "improvements": [
-        "Added 45-second timeout for GraphRAG Enhanced search with automatic fallback",
-        "Added 60-second timeout for Hybrid search with graceful degradation",
-        "Enhanced Knowledge Ingest session state handling to preserve user-entered paths",
-        "Better error messages and recovery options for corrupted batch states",
-        "Improved hybrid search deduplication logic for optimal result combination",
-        "Enhanced GraphRAG search debugging with detailed logging"
+        "More conservative database health check thresholds to reduce false alarms",
+        "Better detection of healthy databases with minor issues during normal operation",
+        "Enhanced recovery warning logic that considers database size and activity"
     ],
     "bug_fixes": [
-        "Fixed Knowledge Ingest overwriting custom paths with config defaults after crashes",
-        "Fixed GraphRAG Enhanced search returning no results due to fallback logic issues",
-        "Fixed hybrid search timeouts in Docker environments",
-        "Resolved batch resume failures with clear recovery instructions",
-        "Fixed aggressive session state sync overriding user input in real-time",
-        "Corrected search result counting discrepancies between search modes"
+        "Fixed persistent database maintenance warnings showing after successful ingestion",
+        "Resolved false positive orphaned document alerts for healthy databases",
+        "Fixed recovery warnings not being properly dismissed per database instance",
+        "Corrected over-sensitive database health checks causing unnecessary alerts"
     ]
 }
 
