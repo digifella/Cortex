@@ -760,9 +760,21 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
     
     # Show error information if there are errors
     if batch_status.get('error_count', 0) > 0:
-        st.error(f"⚠️ **{batch_status['error_count']} errors encountered.** " + 
-                f"Progress: {batch_status['completed']}/{batch_status['total_files']} files completed. " +
-                "Check logs for details or clear batch to restart with fresh setup.")
+        error_count = batch_status['error_count']
+        completed = batch_status['completed']
+        total = batch_status['total_files']
+        success_rate = round((completed / total) * 100, 1) if total > 0 else 0
+        
+        # Use warning instead of error for normal processing issues
+        if success_rate >= 95:
+            st.warning(f"📝 **{error_count} files skipped** during processing " +
+                      f"({success_rate}% success rate: {completed}/{total} files completed). " +
+                      "Common causes: corrupted files, unsupported formats, or metadata extraction issues. " +
+                      "Check logs for details if needed.")
+        else:
+            st.error(f"⚠️ **{error_count} errors encountered** " + 
+                    f"({success_rate}% success rate: {completed}/{total} files completed). " +
+                    "Check logs for details or clear batch to restart with fresh setup.")
 
     # Consolidated action buttons
     col1, col2, col3, col4 = st.columns(4)
@@ -817,19 +829,43 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                 with open(ingestion_log_path, 'r') as log_file:
                     log_content = log_file.read()
                     if log_content.strip():
-                        # Show last 50 lines
                         log_lines = log_content.strip().split('\n')
-                        recent_lines = log_lines[-50:] if len(log_lines) > 50 else log_lines
                         
-                        log_col1, log_col2 = st.columns([3, 1])
+                        # Enhanced log display controls
+                        log_col1, log_col2, log_col3 = st.columns([2, 1, 1])
                         with log_col1:
-                            st.code('\n'.join(recent_lines), language='text', line_numbers=True)
+                            # Line count selector
+                            line_options = [25, 50, 100, 200, len(log_lines)]
+                            line_labels = ["Last 25 lines", "Last 50 lines", "Last 100 lines", "Last 200 lines", f"All {len(log_lines)} lines"]
+                            selected_lines = st.selectbox("Log Display:", 
+                                                         options=line_options,
+                                                         format_func=lambda x: line_labels[line_options.index(x)],
+                                                         index=1,  # Default to 50 lines
+                                                         key="log_display_lines")
                         with log_col2:
+                            if st.button("🔄 Refresh Logs", key="refresh_logs"):
+                                st.rerun()
+                        with log_col3:
                             if st.button("❌ Hide Logs", key="hide_logs"):
                                 st.session_state.show_logs = False
                                 st.rerun()
-                            if st.button("🔄 Refresh Logs", key="refresh_logs"):
-                                st.rerun()
+                        
+                        # Select lines to display
+                        if selected_lines >= len(log_lines):
+                            display_lines = log_lines
+                            st.caption(f"Showing all {len(log_lines)} log entries")
+                        else:
+                            display_lines = log_lines[-selected_lines:]
+                            st.caption(f"Showing last {selected_lines} of {len(log_lines)} log entries")
+                        
+                        # Use text_area for better scrolling with scroll bar
+                        log_text = '\n'.join(f"{i+1:4d}: {line}" for i, line in enumerate(display_lines))
+                        st.text_area("📝 Ingestion Log Output:", 
+                                   value=log_text,
+                                   height=400,
+                                   disabled=True,
+                                   key="log_display_area",
+                                   help="Use scroll bar or arrow keys to navigate through log entries")
                     else:
                         st.info("No log entries found.")
             except Exception as e:
