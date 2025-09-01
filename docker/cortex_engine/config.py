@@ -30,7 +30,7 @@ LOGS_DIR.mkdir(exist_ok=True) # Ensure the logs directory exists
 
 # UNIFIED LOG: Tracks all processed or excluded files. Stored inside the DB dir.
 INGESTED_FILES_LOG = "ingested_files.log"
-STAGING_INGESTION_FILE = str(PROJECT_ROOT / "staging_ingestion.json")
+STAGING_INGESTION_FILE = os.path.join(BASE_DATA_PATH, "staging_ingestion.json")
 
 # Centralize logs into the 'logs' directory
 INGESTION_LOG_PATH = str(LOGS_DIR / "ingestion.log")
