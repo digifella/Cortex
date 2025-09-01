@@ -20,6 +20,48 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+
+## v4.6.0 - 2025-09-01
+
+### Enhanced Collection Management & Database Clarity
+
+Major improvements to collection management, database deletion clarity, and error handling
+
+### ✨ New Features
+- Comprehensive collection clearing functions in Collection Management
+- Enhanced log display with scrollable interface and line count selection
+- Clear Empty Collections, Clear All Documents, and Reset Collections tools
+- Improved error messaging for batch ingestion with success rate context
+
+### 🚀 Improvements
+- Collections now stored in KB database path for better organization
+- Simplified collection management with single storage location
+- Enhanced database deletion with granular error reporting
+- Better log display with proper scroll controls and navigation
+- Clearer database deletion terminology (Ingested Document Database vs Knowledge Base)
+- More informative error messages showing success rates for batch operations
+
+## v4.5.1 - 2025-09-01
+
+### Enhanced Search & Docker Stability
+
+Improved search functionality with timeout protection, better error handling, and Docker path stability fixes
+
+### ✨ New Features
+- GraphRAG retroactive extraction utility for existing knowledge bases
+- Comprehensive timeout protection for GraphRAG and hybrid search operations
+- Enhanced batch ingestion error recovery with user-friendly guidance
+- Improved search fallback mechanisms when GraphRAG components fail
+
+### 🚀 Improvements
+- Added 45-second timeout for GraphRAG Enhanced search with automatic fallback
+- Added 60-second timeout for Hybrid search with graceful degradation
+- Enhanced Knowledge Ingest session state handling to preserve user-entered paths
+- Better error messages and recovery options for corrupted batch states
+- Improved hybrid search deduplication logic for optimal result combination
+- Enhanced GraphRAG search debugging with detailed logging
+
 ## v4.5.0 - 2025-08-31
 
 ### System Stabilization & ChromaDB Consistency Fixes
