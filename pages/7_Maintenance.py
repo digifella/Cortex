@@ -68,35 +68,56 @@ def delete_ingested_document_database(db_path: str):
     
     try:
         deleted_items = []
+        errors = []
         
         # Delete ChromaDB directory
         if chroma_db_dir.exists() and chroma_db_dir.is_dir():
-            shutil.rmtree(chroma_db_dir)
-            deleted_items.append(f"ChromaDB directory: {chroma_db_dir}")
-            logger.info(f"Successfully deleted ChromaDB directory: {chroma_db_dir}")
+            try:
+                shutil.rmtree(chroma_db_dir)
+                deleted_items.append(f"ChromaDB directory: {chroma_db_dir}")
+                logger.info(f"Successfully deleted ChromaDB directory: {chroma_db_dir}")
+            except Exception as e:
+                error_msg = f"Failed to delete ChromaDB directory: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
         
         # Delete knowledge graph file
         if graph_file.exists():
-            graph_file.unlink()
-            deleted_items.append(f"Knowledge graph: {graph_file}")
-            logger.info(f"Successfully deleted knowledge graph: {graph_file}")
+            try:
+                graph_file.unlink()
+                deleted_items.append(f"Knowledge graph: {graph_file}")
+                logger.info(f"Successfully deleted knowledge graph: {graph_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete knowledge graph file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
         
         # Delete collections file
         if collections_file.exists():
-            collections_file.unlink()
-            deleted_items.append(f"Collections file: {collections_file}")
-            logger.info(f"Successfully deleted collections file: {collections_file}")
+            try:
+                collections_file.unlink()
+                deleted_items.append(f"Collections file: {collections_file}")
+                logger.info(f"Successfully deleted collections file: {collections_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete collections file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
         
+        # Report results
         if deleted_items:
             st.success(f"✅ Successfully deleted ingested document database components:\\n" + "\\n".join(f"- {item}" for item in deleted_items))
             logger.info("Ingested document database deletion completed successfully")
-        else:
+        
+        if errors:
+            st.error(f"❌ Some items could not be deleted:\\n" + "\\n".join(f"- {error}" for error in errors))
+            
+        if not deleted_items and not errors:
             st.warning("⚠️ No ingested document database components found to delete.")
             logger.warning(f"No ingested document database found at: {wsl_db_path}")
             
     except Exception as e:
-        error_msg = f"Failed to delete knowledge base: {e}"
-        logger.error(f"Knowledge base deletion failed: {e}")
+        error_msg = f"Failed to delete ingested document database: {e}"
+        logger.error(f"Ingested document database deletion failed: {e}")
         st.error(f"❌ {error_msg}")
     
     # Reset the confirmation state  
@@ -532,25 +553,45 @@ def delete_ingested_document_database_simple(db_path):
         graph_file = Path(wsl_db_path) / "knowledge_cortex.gpickle"
         
         deleted_items = []
+        errors = []
         
         if kb_dir.exists():
-            shutil.rmtree(kb_dir)
-            deleted_items.append("ChromaDB database")
-            logger.info(f"ChromaDB database deleted: {kb_dir}")
+            try:
+                shutil.rmtree(kb_dir)
+                deleted_items.append("ChromaDB database")
+                logger.info(f"ChromaDB database deleted: {kb_dir}")
+            except Exception as e:
+                error_msg = f"Failed to delete ChromaDB database: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
         
         if collections_file.exists():
-            collections_file.unlink()
-            deleted_items.append("Collections")
-            logger.info(f"Collections file deleted: {collections_file}")
+            try:
+                collections_file.unlink()
+                deleted_items.append("Collections")
+                logger.info(f"Collections file deleted: {collections_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete collections file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
         
         if graph_file.exists():
-            graph_file.unlink()
-            deleted_items.append("Knowledge graph")
-            logger.info(f"Knowledge graph deleted: {graph_file}")
+            try:
+                graph_file.unlink()
+                deleted_items.append("Knowledge graph")
+                logger.info(f"Knowledge graph deleted: {graph_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete knowledge graph: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
         
         if deleted_items:
             st.success(f"✅ Ingested document database deleted successfully: {', '.join(deleted_items)}")
-        else:
+        
+        if errors:
+            st.error(f"❌ Some items could not be deleted: {', '.join(errors)}")
+            
+        if not deleted_items and not errors:
             st.warning("No ingested document database components found to delete.")
     except Exception as e:
         st.error(f"❌ Failed to delete ingested document database: {e}")
