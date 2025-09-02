@@ -1,5 +1,5 @@
 # ## File: pages/7_Maintenance.py
-# Version: v4.5.0
+# Version: v4.6.0
 # Date: 2025-08-31
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.5.0"
+PAGE_VERSION = "v4.6.1"
 
 # Import Cortex modules
 try:
@@ -59,37 +59,89 @@ if 'show_confirm_clean_start' not in st.session_state:
 if 'maintenance_config' not in st.session_state:
     st.session_state.maintenance_config = None
 
-def delete_knowledge_base(db_path: str):
-    """Delete the knowledge base with proper error handling and logging."""
+def delete_ingested_document_database(db_path: str):
+    """Delete the ingested document database with proper error handling and logging."""
     wsl_db_path = convert_windows_to_wsl_path(db_path)
     chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
     graph_file = Path(wsl_db_path) / "knowledge_cortex.gpickle"
+    collections_file = Path(wsl_db_path) / "working_collections.json"
+    batch_state_file = Path(wsl_db_path) / "batch_state.json"
+    staging_file = Path(wsl_db_path) / "staging_ingestion.json"
     
     try:
         deleted_items = []
+        errors = []
         
         # Delete ChromaDB directory
         if chroma_db_dir.exists() and chroma_db_dir.is_dir():
-            shutil.rmtree(chroma_db_dir)
-            deleted_items.append(f"ChromaDB directory: {chroma_db_dir}")
-            logger.info(f"Successfully deleted ChromaDB directory: {chroma_db_dir}")
+            try:
+                shutil.rmtree(chroma_db_dir)
+                deleted_items.append(f"ChromaDB directory: {chroma_db_dir}")
+                logger.info(f"Successfully deleted ChromaDB directory: {chroma_db_dir}")
+            except Exception as e:
+                error_msg = f"Failed to delete ChromaDB directory: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
         
         # Delete knowledge graph file
         if graph_file.exists():
-            graph_file.unlink()
-            deleted_items.append(f"Knowledge graph: {graph_file}")
-            logger.info(f"Successfully deleted knowledge graph: {graph_file}")
+            try:
+                graph_file.unlink()
+                deleted_items.append(f"Knowledge graph: {graph_file}")
+                logger.info(f"Successfully deleted knowledge graph: {graph_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete knowledge graph file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
         
+        # Delete collections file (only stored in KB database path now)
+        if collections_file.exists():
+            try:
+                collections_file.unlink()
+                deleted_items.append(f"Collections file: {collections_file}")
+                logger.info(f"Successfully deleted collections file: {collections_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete collections file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete batch state file
+        if batch_state_file.exists():
+            try:
+                batch_state_file.unlink()
+                deleted_items.append(f"Batch state file: {batch_state_file}")
+                logger.info(f"Successfully deleted batch state file: {batch_state_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete batch state file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete staging ingestion file
+        if staging_file.exists():
+            try:
+                staging_file.unlink()
+                deleted_items.append(f"Staging file: {staging_file}")
+                logger.info(f"Successfully deleted staging file: {staging_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete staging file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Report results
         if deleted_items:
-            st.success(f"✅ Successfully deleted knowledge base components:\\n" + "\\n".join(f"- {item}" for item in deleted_items))
-            logger.info("Knowledge base deletion completed successfully")
-        else:
-            st.warning("⚠️ No knowledge base components found to delete.")
-            logger.warning(f"No knowledge base found at: {wsl_db_path}")
+            st.success(f"✅ Successfully deleted ingested document database components:\\n" + "\\n".join(f"- {item}" for item in deleted_items))
+            logger.info("Ingested document database deletion completed successfully")
+        
+        if errors:
+            st.error(f"❌ Some items could not be deleted:\\n" + "\\n".join(f"- {error}" for error in errors))
+            
+        if not deleted_items and not errors:
+            st.warning("⚠️ No ingested document database components found to delete.")
+            logger.warning(f"No ingested document database found at: {wsl_db_path}")
             
     except Exception as e:
-        error_msg = f"Failed to delete knowledge base: {e}"
-        logger.error(f"Knowledge base deletion failed: {e}")
+        error_msg = f"Failed to delete ingested document database: {e}"
+        logger.error(f"Ingested document database deletion failed: {e}")
         st.error(f"❌ {error_msg}")
     
     # Reset the confirmation state  
@@ -270,13 +322,22 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
                 deleted_items.append(f"Knowledge graph: {graph_file}")
                 logger.info(f"Clean Start: Deleted knowledge graph: {graph_file}")
             
-            # 3. Clear working collections
+            # 3. Clear working collections (check both locations)
             project_root = Path(__file__).parent.parent
-            collections_file = project_root / "working_collections.json"
-            if collections_file.exists():
-                collections_file.unlink()
-                deleted_items.append(f"Working collections: {collections_file}")
-                logger.info(f"Clean Start: Cleared working collections: {collections_file}")
+            old_collections_file = project_root / "working_collections.json"
+            new_collections_file = Path(final_db_path) / "working_collections.json"
+            
+            # Delete from project root if it exists
+            if old_collections_file.exists():
+                old_collections_file.unlink()
+                deleted_items.append(f"Working collections (old location): {old_collections_file}")
+                logger.info(f"Clean Start: Cleared working collections from project root: {old_collections_file}")
+            
+            # Delete from KB database path if it exists
+            if new_collections_file.exists():
+                new_collections_file.unlink()
+                deleted_items.append(f"Working collections: {new_collections_file}")
+                logger.info(f"Clean Start: Cleared working collections from KB database: {new_collections_file}")
             
             # 4. Clear ALL ingestion logs and metadata (comprehensive)
             logs_dir = project_root / "logs"
@@ -297,12 +358,22 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
                 "failed_ingestion.json"
             ]
             
+            # Clear from project root (legacy location)
             for pattern in staging_patterns:
                 for staging_file in project_root.glob(pattern):
                     if staging_file.is_file():
                         staging_file.unlink()
-                        deleted_items.append(f"Staging/batch file: {staging_file}")
-                        logger.info(f"Clean Start: Cleared staging file: {staging_file}")
+                        deleted_items.append(f"Staging/batch file (project): {staging_file}")
+                        logger.info(f"Clean Start: Cleared staging file from project: {staging_file}")
+            
+            # Clear from database path (current location)  
+            db_path_obj = Path(wsl_db_path)
+            for pattern in staging_patterns:
+                for staging_file in db_path_obj.glob(pattern):
+                    if staging_file.is_file():
+                        staging_file.unlink()
+                        deleted_items.append(f"Staging/batch file (database): {staging_file}")
+                        logger.info(f"Clean Start: Cleared staging file from database: {staging_file}")
             
             # 6. Clear session state and cached configuration files
             config_files_to_clear = [
@@ -507,21 +578,83 @@ def clear_ingestion_log_file():
         st.error(f"❌ Failed to clear ingestion log: {e}")
         logger.error(f"Failed to clear ingestion log: {e}")
 
-def delete_knowledge_base(db_path):
-    """Permanently delete the entire knowledge base"""
+def delete_ingested_document_database_simple(db_path):
+    """Permanently delete the entire ingested document database (simple version)"""
     try:
         wsl_db_path = convert_windows_to_wsl_path(db_path)
         kb_dir = Path(wsl_db_path) / "knowledge_hub_db"
+        collections_file = Path(wsl_db_path) / "working_collections.json"
+        graph_file = Path(wsl_db_path) / "knowledge_cortex.gpickle"
+        batch_state_file = Path(wsl_db_path) / "batch_state.json"
+        staging_file = Path(wsl_db_path) / "staging_ingestion.json"
+        
+        deleted_items = []
+        errors = []
         
         if kb_dir.exists():
-            shutil.rmtree(kb_dir)
-            st.success(f"✅ Knowledge base deleted successfully: {kb_dir}")
-            logger.info(f"Knowledge base deleted: {kb_dir}")
-        else:
-            st.warning(f"Knowledge base directory not found: {kb_dir}")
+            try:
+                shutil.rmtree(kb_dir)
+                deleted_items.append("ChromaDB database")
+                logger.info(f"ChromaDB database deleted: {kb_dir}")
+            except Exception as e:
+                error_msg = f"Failed to delete ChromaDB database: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete collections file (only stored in KB database path now)
+        if collections_file.exists():
+            try:
+                collections_file.unlink()
+                deleted_items.append("Collections")
+                logger.info(f"Collections file deleted: {collections_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete collections file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        if graph_file.exists():
+            try:
+                graph_file.unlink()
+                deleted_items.append("Knowledge graph")
+                logger.info(f"Knowledge graph deleted: {graph_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete knowledge graph: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete batch state file
+        if batch_state_file.exists():
+            try:
+                batch_state_file.unlink()
+                deleted_items.append("Batch state")
+                logger.info(f"Batch state file deleted: {batch_state_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete batch state file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete staging file
+        if staging_file.exists():
+            try:
+                staging_file.unlink()
+                deleted_items.append("Staging file")
+                logger.info(f"Staging file deleted: {staging_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete staging file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        if deleted_items:
+            st.success(f"✅ Ingested document database deleted successfully: {', '.join(deleted_items)}")
+        
+        if errors:
+            st.error(f"❌ Some items could not be deleted: {', '.join(errors)}")
+            
+        if not deleted_items and not errors:
+            st.warning("No ingested document database components found to delete.")
     except Exception as e:
-        st.error(f"❌ Failed to delete knowledge base: {e}")
-        logger.error(f"Failed to delete knowledge base: {e}")
+        st.error(f"❌ Failed to delete ingested document database: {e}")
+        logger.error(f"Failed to delete ingested document database: {e}")
 
 def display_header():
     """Display page header with navigation and information"""
@@ -571,8 +704,9 @@ def display_database_maintenance():
     with col1:
         st.markdown("""
         **Clean Start will:**
-        - ✅ Delete entire knowledge base directory (ChromaDB)
+        - ✅ Delete entire ingested document database (ChromaDB)
         - ✅ Delete knowledge graph file (.gpickle)  
+        - ✅ Delete collections file (working_collections.json)
         - ✅ Clear ALL ingestion logs and progress files
         - ✅ Remove ingested files log from database directory
         - ✅ Clear ALL staging and batch ingestion files (including failed ingests)
@@ -620,17 +754,18 @@ def display_database_maintenance():
         
         st.divider()
         
-        st.subheader("Delete Entire Knowledge Base")
+        st.subheader("Delete Ingested Document Database")
         st.error("⚠️ **DANGER:** This is the most destructive action.")
+        st.caption("This will delete the processed/ingested documents database, NOT your source Knowledge Base files.")
         
-        if st.button("Permanently Delete Knowledge Base...", type="primary"):
+        if st.button("Permanently Delete Ingested Document Database...", type="primary"):
             st.session_state.show_confirm_delete_kb = True
             
         if st.session_state.get("show_confirm_delete_kb"):
-            st.warning(f"This will permanently delete the entire **knowledge_hub_db** directory. This action cannot be undone.")
+            st.warning(f"This will permanently delete the **ingested document database** (ChromaDB + Collections + Knowledge Graph). Your source documents will NOT be affected. This action cannot be undone.")
             c1, c2 = st.columns(2)
-            if c1.button("YES, DELETE EVERYTHING", use_container_width=True):
-                delete_knowledge_base(db_path)
+            if c1.button("YES, DELETE INGESTED DATABASE", use_container_width=True):
+                delete_ingested_document_database(db_path)
                 st.session_state.show_confirm_delete_kb = False
                 st.rerun()
             if c2.button("Cancel Deletion", use_container_width=True):

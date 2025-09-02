@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.6.0"
+PAGE_VERSION = "v4.6.1"
 
 # Import Cortex modules
 try:
@@ -65,6 +65,8 @@ def delete_ingested_document_database(db_path: str):
     chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
     graph_file = Path(wsl_db_path) / "knowledge_cortex.gpickle"
     collections_file = Path(wsl_db_path) / "working_collections.json"
+    batch_state_file = Path(wsl_db_path) / "batch_state.json"
+    staging_file = Path(wsl_db_path) / "staging_ingestion.json"
     
     try:
         deleted_items = []
@@ -100,6 +102,28 @@ def delete_ingested_document_database(db_path: str):
                 logger.info(f"Successfully deleted collections file: {collections_file}")
             except Exception as e:
                 error_msg = f"Failed to delete collections file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete batch state file
+        if batch_state_file.exists():
+            try:
+                batch_state_file.unlink()
+                deleted_items.append(f"Batch state file: {batch_state_file}")
+                logger.info(f"Successfully deleted batch state file: {batch_state_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete batch state file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete staging ingestion file
+        if staging_file.exists():
+            try:
+                staging_file.unlink()
+                deleted_items.append(f"Staging file: {staging_file}")
+                logger.info(f"Successfully deleted staging file: {staging_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete staging file: {e}"
                 errors.append(error_msg)
                 logger.error(error_msg)
         
@@ -334,12 +358,22 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
                 "failed_ingestion.json"
             ]
             
+            # Clear from project root (legacy location)
             for pattern in staging_patterns:
                 for staging_file in project_root.glob(pattern):
                     if staging_file.is_file():
                         staging_file.unlink()
-                        deleted_items.append(f"Staging/batch file: {staging_file}")
-                        logger.info(f"Clean Start: Cleared staging file: {staging_file}")
+                        deleted_items.append(f"Staging/batch file (project): {staging_file}")
+                        logger.info(f"Clean Start: Cleared staging file from project: {staging_file}")
+            
+            # Clear from database path (current location)  
+            db_path_obj = Path(wsl_db_path)
+            for pattern in staging_patterns:
+                for staging_file in db_path_obj.glob(pattern):
+                    if staging_file.is_file():
+                        staging_file.unlink()
+                        deleted_items.append(f"Staging/batch file (database): {staging_file}")
+                        logger.info(f"Clean Start: Cleared staging file from database: {staging_file}")
             
             # 6. Clear session state and cached configuration files
             config_files_to_clear = [
@@ -551,6 +585,8 @@ def delete_ingested_document_database_simple(db_path):
         kb_dir = Path(wsl_db_path) / "knowledge_hub_db"
         collections_file = Path(wsl_db_path) / "working_collections.json"
         graph_file = Path(wsl_db_path) / "knowledge_cortex.gpickle"
+        batch_state_file = Path(wsl_db_path) / "batch_state.json"
+        staging_file = Path(wsl_db_path) / "staging_ingestion.json"
         
         deleted_items = []
         errors = []
@@ -583,6 +619,28 @@ def delete_ingested_document_database_simple(db_path):
                 logger.info(f"Knowledge graph deleted: {graph_file}")
             except Exception as e:
                 error_msg = f"Failed to delete knowledge graph: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete batch state file
+        if batch_state_file.exists():
+            try:
+                batch_state_file.unlink()
+                deleted_items.append("Batch state")
+                logger.info(f"Batch state file deleted: {batch_state_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete batch state file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete staging file
+        if staging_file.exists():
+            try:
+                staging_file.unlink()
+                deleted_items.append("Staging file")
+                logger.info(f"Staging file deleted: {staging_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete staging file: {e}"
                 errors.append(error_msg)
                 logger.error(error_msg)
         
