@@ -92,8 +92,12 @@ from cortex_engine.graph_manager import EnhancedGraphManager
 from cortex_engine.batch_manager import BatchState
 
 LOG_FILE = INGESTION_LOG_PATH
-STAGING_FILE = STAGING_INGESTION_FILE
+# STAGING_FILE will be set dynamically based on runtime db_path
 COLLECTIONS_FILE = str(project_root / "working_collections.json")
+
+def get_staging_file_path(db_path: str) -> str:
+    """Get the staging file path for the given database path"""
+    return os.path.join(db_path, "staging_ingestion.json")
 
 # Define supported image extensions - Enhanced Visual Processing Support
 IMAGE_EXTENSIONS = {
@@ -543,7 +547,9 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None):
             batch_manager.clear_batch()
             batch_manager.create_batch(include_paths)
     
-    if fresh_start and os.path.exists(STAGING_FILE): os.remove(STAGING_FILE)
+    # Get staging file path based on batch manager's db_path
+    staging_file = get_staging_file_path(batch_manager.db_path) if batch_manager else STAGING_INGESTION_FILE
+    if fresh_start and os.path.exists(staging_file): os.remove(staging_file)
     
     # Initialize entity extractor
     entity_extractor = EntityExtractor()
@@ -708,14 +714,15 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None):
         if batch_manager:
             batch_manager.update_progress(file_path_str)
 
-    with open(STAGING_FILE, 'w') as f: 
+    with open(staging_file, 'w') as f: 
         json.dump(staged_docs, f, indent=2)
-    logging.info(f"--- Analysis complete. {len(staged_docs)} documents written to staging file. ---")
+    logging.info(f"--- Analysis complete. {len(staged_docs)} documents written to staging file: {staging_file} ---")
 
 def finalize_ingestion(db_path: str, args=None):
     logging.info(f"--- Starting Stage 3: Finalize from Staging with Graph Building (Cortex v13.0.0) ---")
-    if not os.path.exists(STAGING_FILE): 
-        logging.error("Staging file not found.")
+    staging_file = get_staging_file_path(db_path)
+    if not os.path.exists(staging_file): 
+        logging.error(f"Staging file not found at: {staging_file}")
         return
     
     chroma_db_path = os.path.join(db_path, "knowledge_hub_db")
@@ -725,7 +732,7 @@ def finalize_ingestion(db_path: str, args=None):
     graph_file_path = os.path.join(db_path, "knowledge_cortex.gpickle")
     graph_manager = EnhancedGraphManager(graph_file_path)
     
-    with open(STAGING_FILE, 'r') as f: 
+    with open(staging_file, 'r') as f: 
         docs_to_process = [DocumentMetadata(**data) for data in json.load(f)]
 
     docs_to_index_paths, metadata_map, doc_ids_to_add_to_default = [], {}, []
@@ -810,8 +817,8 @@ def finalize_ingestion(db_path: str, args=None):
 
     if not docs_to_index_paths:
         logging.warning("No new, valid documents to ingest. Finalization complete.")
-        if os.path.exists(STAGING_FILE): 
-            os.remove(STAGING_FILE)
+        if os.path.exists(staging_file): 
+            os.remove(staging_file)
         return
 
     # Save the graph
@@ -847,7 +854,7 @@ def finalize_ingestion(db_path: str, args=None):
     
     for doc in documents_for_indexing: 
         write_to_processed_log(processed_log_path, doc.metadata['doc_posix_path'], doc.metadata['doc_id'])
-    os.remove(STAGING_FILE)
+    os.remove(staging_file)
 
     if doc_ids_to_add_to_default:
         logging.info(f"Adding {len(doc_ids_to_add_to_default)} new documents to the 'default' collection.")
