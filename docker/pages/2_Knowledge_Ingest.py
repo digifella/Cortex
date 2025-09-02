@@ -1,6 +1,6 @@
 # ## File: pages/2_Knowledge_Ingest.py
-# Version: v4.5.1
-# Date: 2025-08-27
+# Version: v4.6.1
+# Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
 #            for better organization and UI cleanup. Functions moved: clear_ingestion_log_file,
@@ -506,8 +506,74 @@ def render_batch_processing_ui():
         st.markdown("---")
     
     if not files_to_process and not batch_status["active"]:
-        st.success("Batch processing complete. No new documents found based on your criteria.")
-        if st.button("⬅️ Back to Configuration", key="back_config_no_files"): 
+        st.success("✅ Batch processing complete!")
+        
+        # Check if there are successfully processed documents for collection creation
+        if not st.session_state.get('last_ingested_doc_ids'):
+            # Populate document IDs from successfully processed files
+            try:
+                from cortex_engine.ingestion_recovery import IngestionRecoveryManager
+                wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+                recovery_manager = IngestionRecoveryManager(wsl_db_path)
+                
+                # Get recently ingested documents
+                recent_docs = recovery_manager.get_recently_ingested_documents()
+                if recent_docs:
+                    # Extract document IDs from recent ingestion
+                    doc_ids = []
+                    for doc_info in recent_docs[:50]:  # Limit to most recent 50
+                        if isinstance(doc_info, dict) and 'doc_id' in doc_info:
+                            doc_ids.append(doc_info['doc_id'])
+                        elif isinstance(doc_info, str):
+                            doc_ids.append(doc_info)
+                    
+                    if doc_ids:
+                        st.session_state.last_ingested_doc_ids = doc_ids
+                        logger.info(f"Populated {len(doc_ids)} document IDs for collection creation")
+            except Exception as e:
+                logger.error(f"Failed to populate document IDs for collection: {e}")
+        
+        # Show collection creation option if we have successfully processed documents
+        if st.session_state.get('last_ingested_doc_ids'):
+            with st.form("batch_completion_collection"):
+                st.subheader("📂 Create Collection from Successfully Processed Documents")
+                success_count = len(st.session_state.last_ingested_doc_ids)
+                st.info(f"You have {success_count} successfully processed documents available for collection creation.")
+                
+                collection_name = st.text_input(
+                    "Collection Name", 
+                    placeholder="e.g., Recent Import - Documents",
+                    help="Name for the new collection containing successfully processed documents"
+                )
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.form_submit_button("📂 Create Collection", type="primary", use_container_width=True):
+                        if collection_name:
+                            collection_mgr = WorkingCollectionManager()
+                            if collection_name in collection_mgr.get_collection_names():
+                                st.error(f"Collection '{collection_name}' already exists. Please choose a different name.")
+                            else:
+                                try:
+                                    collection_mgr.add_docs_by_id_to_collection(collection_name, st.session_state.last_ingested_doc_ids)
+                                    st.success(f"✅ Successfully created collection '{collection_name}' with {success_count} documents!")
+                                    st.session_state.last_ingested_doc_ids = []  # Clear after successful creation
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to create collection: {e}")
+                        else:
+                            st.warning("Please provide a name for the collection.")
+                
+                with col2:
+                    if st.form_submit_button("Skip", use_container_width=True):
+                        st.session_state.last_ingested_doc_ids = []  # Clear the list
+                        st.info("Skipped collection creation.")
+                        st.rerun()
+        else:
+            st.info("No successfully processed documents found for collection creation.")
+        
+        st.markdown("---")
+        if st.button("⬅️ Back to Configuration", key="back_config_no_files", use_container_width=True): 
             initialize_state(force_reset=True)
             st.rerun()
         return
@@ -760,9 +826,99 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
     
     # Show error information if there are errors
     if batch_status.get('error_count', 0) > 0:
-        st.error(f"⚠️ **{batch_status['error_count']} errors encountered.** " + 
-                f"Progress: {batch_status['completed']}/{batch_status['total_files']} files completed. " +
-                "Check logs for details or clear batch to restart with fresh setup.")
+        error_count = batch_status['error_count']
+        completed = batch_status['completed']
+        total = batch_status['total_files']
+        success_rate = round((completed / total) * 100, 1) if total > 0 else 0
+        
+        # Use warning instead of error for normal processing issues
+        if success_rate >= 95:
+            st.warning(f"📝 **{error_count} files skipped** during processing " +
+                      f"({success_rate}% success rate: {completed}/{total} files completed). " +
+                      "Common causes: corrupted files, unsupported formats, or metadata extraction issues. " +
+                      "Check logs for details if needed.")
+        else:
+            st.error(f"⚠️ **{error_count} errors encountered** " + 
+                    f"({success_rate}% success rate: {completed}/{total} files completed). " +
+                    "Check logs for details or clear batch to restart with fresh setup.")
+
+    # Check if batch is effectively complete (no remaining files) but still marked as active
+    if batch_status.get('remaining', 0) == 0 and batch_status.get('completed', 0) > 0:
+        st.success("🎉 **Batch Processing Complete!** All files have been processed.")
+        
+        # Populate document IDs if not already done
+        if not st.session_state.get('last_ingested_doc_ids'):
+            try:
+                from cortex_engine.ingestion_recovery import IngestionRecoveryManager
+                wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+                recovery_manager = IngestionRecoveryManager(wsl_db_path)
+                
+                # Get recently ingested documents
+                recent_docs = recovery_manager.get_recently_ingested_documents()
+                if recent_docs:
+                    doc_ids = []
+                    for doc_info in recent_docs[:50]:  # Limit to most recent 50
+                        if isinstance(doc_info, dict) and 'doc_id' in doc_info:
+                            doc_ids.append(doc_info['doc_id'])
+                        elif isinstance(doc_info, str):
+                            doc_ids.append(doc_info)
+                    
+                    if doc_ids:
+                        st.session_state.last_ingested_doc_ids = doc_ids
+                        logger.info(f"Populated {len(doc_ids)} document IDs for collection creation")
+            except Exception as e:
+                logger.error(f"Failed to populate document IDs for collection: {e}")
+        
+        # Show collection creation option
+        if st.session_state.get('last_ingested_doc_ids'):
+            with st.form("active_batch_completion_collection"):
+                st.subheader("📂 Create Collection from Processed Documents")
+                success_count = len(st.session_state.last_ingested_doc_ids)
+                error_count = batch_status.get('error_count', 0)
+                
+                if error_count > 0:
+                    st.info(f"✅ **{success_count} documents successfully processed** (with {error_count} errors)")
+                else:
+                    st.info(f"✅ **{success_count} documents successfully processed**")
+                
+                collection_name = st.text_input(
+                    "Collection Name", 
+                    placeholder="e.g., Batch Import - Documents",
+                    help="Name for the new collection containing successfully processed documents"
+                )
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    if st.form_submit_button("📂 Create Collection", type="primary", use_container_width=True):
+                        if collection_name:
+                            collection_mgr = WorkingCollectionManager()
+                            if collection_name in collection_mgr.get_collection_names():
+                                st.error(f"Collection '{collection_name}' already exists. Please choose a different name.")
+                            else:
+                                try:
+                                    collection_mgr.add_docs_by_id_to_collection(collection_name, st.session_state.last_ingested_doc_ids)
+                                    st.success(f"✅ Successfully created collection '{collection_name}' with {success_count} documents!")
+                                    st.session_state.last_ingested_doc_ids = []
+                                    batch_manager.clear_batch()  # Clear the completed batch
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to create collection: {e}")
+                        else:
+                            st.warning("Please provide a name for the collection.")
+                
+                with col2:
+                    if st.form_submit_button("Skip Collection", use_container_width=True):
+                        st.session_state.last_ingested_doc_ids = []
+                        batch_manager.clear_batch()  # Clear the completed batch
+                        st.info("Skipped collection creation and cleared batch.")
+                        st.rerun()
+                        
+                with col3:
+                    if st.form_submit_button("Clear Batch", use_container_width=True):
+                        st.session_state.last_ingested_doc_ids = []
+                        batch_manager.clear_batch()
+                        st.success("Batch cleared.")
+                        st.rerun()
 
     # Consolidated action buttons
     col1, col2, col3, col4 = st.columns(4)
@@ -817,19 +973,43 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                 with open(ingestion_log_path, 'r') as log_file:
                     log_content = log_file.read()
                     if log_content.strip():
-                        # Show last 50 lines
                         log_lines = log_content.strip().split('\n')
-                        recent_lines = log_lines[-50:] if len(log_lines) > 50 else log_lines
                         
-                        log_col1, log_col2 = st.columns([3, 1])
+                        # Enhanced log display controls
+                        log_col1, log_col2, log_col3 = st.columns([2, 1, 1])
                         with log_col1:
-                            st.code('\n'.join(recent_lines), language='text', line_numbers=True)
+                            # Line count selector
+                            line_options = [25, 50, 100, 200, len(log_lines)]
+                            line_labels = ["Last 25 lines", "Last 50 lines", "Last 100 lines", "Last 200 lines", f"All {len(log_lines)} lines"]
+                            selected_lines = st.selectbox("Log Display:", 
+                                                         options=line_options,
+                                                         format_func=lambda x: line_labels[line_options.index(x)],
+                                                         index=1,  # Default to 50 lines
+                                                         key="log_display_lines")
                         with log_col2:
+                            if st.button("🔄 Refresh Logs", key="refresh_logs"):
+                                st.rerun()
+                        with log_col3:
                             if st.button("❌ Hide Logs", key="hide_logs"):
                                 st.session_state.show_logs = False
                                 st.rerun()
-                            if st.button("🔄 Refresh Logs", key="refresh_logs"):
-                                st.rerun()
+                        
+                        # Select lines to display
+                        if selected_lines >= len(log_lines):
+                            display_lines = log_lines
+                            st.caption(f"Showing all {len(log_lines)} log entries")
+                        else:
+                            display_lines = log_lines[-selected_lines:]
+                            st.caption(f"Showing last {selected_lines} of {len(log_lines)} log entries")
+                        
+                        # Use text_area for better scrolling with scroll bar
+                        log_text = '\n'.join(f"{i+1:4d}: {line}" for i, line in enumerate(display_lines))
+                        st.text_area("📝 Ingestion Log Output:", 
+                                   value=log_text,
+                                   height=400,
+                                   disabled=True,
+                                   key="log_display_area",
+                                   help="Use scroll bar or arrow keys to navigate through log entries")
                     else:
                         st.info("No log entries found.")
             except Exception as e:
@@ -1922,24 +2102,39 @@ def check_recovery_needed():
         if not db_path:
             return False, []
         
+        # Check if we recently dismissed recovery warnings
+        dismiss_key = f"recovery_dismissed_{hash(db_path)}"
+        if st.session_state.get(dismiss_key, False):
+            return False, []
+        
         recovery_manager = IngestionRecoveryManager(db_path)
         analysis = recovery_manager.analyze_ingestion_state()
         
         issues = []
-        if analysis.get("statistics", {}).get("orphaned_count", 0) > 0:
-            issues.append(f"Found {analysis['statistics']['orphaned_count']} orphaned documents")
         
-        if analysis.get("statistics", {}).get("broken_collections", 0) > 0:
-            issues.append(f"Found {analysis['statistics']['broken_collections']} broken collections")
+        # Only show orphaned documents warning if there are many (more than 10)
+        # Small numbers may be normal during batch processing
+        orphaned_count = analysis.get("statistics", {}).get("orphaned_count", 0)
+        if orphaned_count > 10:
+            issues.append(f"Found {orphaned_count} orphaned documents")
         
-        # Check for recent failed ingestions
+        # Only show broken collections if they actually exist
+        broken_collections = analysis.get("statistics", {}).get("broken_collections", 0)
+        if broken_collections > 0:
+            issues.append(f"Found {broken_collections} broken collections")
+        
+        # Only show high-priority recommendations
         if "recommendations" in analysis and analysis["recommendations"]:
-            # Convert recommendation dicts to string descriptions
-            for rec in analysis["recommendations"][:2]:
-                if isinstance(rec, dict):
-                    issues.append(rec.get("description", "Recovery action needed"))
-                else:
-                    issues.append(str(rec))
+            high_priority_recs = [rec for rec in analysis["recommendations"] 
+                                 if isinstance(rec, dict) and rec.get("priority") == "high"]
+            
+            for rec in high_priority_recs[:2]:  # Limit to 2 high-priority recommendations
+                issues.append(rec.get("description", "Recovery action needed"))
+        
+        # Don't show warnings if there are only minor issues and ChromaDB has documents
+        chromadb_count = analysis.get("statistics", {}).get("chromadb_docs_count", 0)
+        if len(issues) <= 1 and chromadb_count > 0 and orphaned_count < 50:
+            return False, []
         
         return len(issues) > 0, issues
         
@@ -1973,18 +2168,22 @@ def render_recovery_section():
                         st.rerun()
                 with col2:
                     if st.button("🚫 Dismiss (Hide Until Next Issue)", use_container_width=True):
-                        st.session_state.recovery_dismissed = True
+                        config_manager = ConfigManager()
+                        config = config_manager.get_config()
+                        db_path = config.get("ai_database_path", "")
+                        dismiss_key = f"recovery_dismissed_{hash(db_path)}"
+                        st.session_state[dismiss_key] = True
                         st.rerun()
         
         # Show maintenance tools access when no issues but tools requested  
-        elif not recovery_needed and not show_maintenance and not st.session_state.get("recovery_dismissed", False):
+        elif not recovery_needed and not show_maintenance:
             # Redirect to maintenance page for advanced tools
             st.info("💡 **Database maintenance and recovery tools** have been moved to the dedicated **Maintenance** page for better organization.")
             if st.button("🔧 Open Maintenance Page", use_container_width=True, help="Access advanced database repair and recovery features"):
                 st.switch_page("pages/13_Maintenance.py")
         
-        # Show urgent recovery message if issues detected
-        if show_maintenance or (recovery_needed and not st.session_state.get("recovery_dismissed", False)):
+        # Show urgent recovery message if issues detected (already handled by check_recovery_needed dismiss logic)
+        if show_maintenance or recovery_needed:
             st.warning("⚠️ **Database issues detected!** Advanced recovery tools are available on the **Maintenance** page.")
             col1, col2 = st.columns(2)
             with col1:
@@ -1992,7 +2191,11 @@ def render_recovery_section():
                     st.switch_page("pages/13_Maintenance.py")
             with col2:
                 if st.button("Dismiss Warning", use_container_width=True):
-                    st.session_state.recovery_dismissed = True
+                    config_manager = ConfigManager()
+                    config = config_manager.get_config()
+                    db_path = config.get("ai_database_path", "")
+                    dismiss_key = f"recovery_dismissed_{hash(db_path)}"
+                    st.session_state[dismiss_key] = True
                     st.rerun()
     
     except Exception as e:

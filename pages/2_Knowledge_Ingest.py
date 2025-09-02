@@ -1,6 +1,6 @@
 # ## File: pages/2_Knowledge_Ingest.py
-# Version: v4.6.0
-# Date: 2025-08-27
+# Version: v4.6.1
+# Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
 #            for better organization and UI cleanup. Functions moved: clear_ingestion_log_file,
@@ -506,8 +506,74 @@ def render_batch_processing_ui():
         st.markdown("---")
     
     if not files_to_process and not batch_status["active"]:
-        st.success("Batch processing complete. No new documents found based on your criteria.")
-        if st.button("⬅️ Back to Configuration", key="back_config_no_files"): 
+        st.success("✅ Batch processing complete!")
+        
+        # Check if there are successfully processed documents for collection creation
+        if not st.session_state.get('last_ingested_doc_ids'):
+            # Populate document IDs from successfully processed files
+            try:
+                from cortex_engine.ingestion_recovery import IngestionRecoveryManager
+                wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+                recovery_manager = IngestionRecoveryManager(wsl_db_path)
+                
+                # Get recently ingested documents
+                recent_docs = recovery_manager.get_recently_ingested_documents()
+                if recent_docs:
+                    # Extract document IDs from recent ingestion
+                    doc_ids = []
+                    for doc_info in recent_docs[:50]:  # Limit to most recent 50
+                        if isinstance(doc_info, dict) and 'doc_id' in doc_info:
+                            doc_ids.append(doc_info['doc_id'])
+                        elif isinstance(doc_info, str):
+                            doc_ids.append(doc_info)
+                    
+                    if doc_ids:
+                        st.session_state.last_ingested_doc_ids = doc_ids
+                        logger.info(f"Populated {len(doc_ids)} document IDs for collection creation")
+            except Exception as e:
+                logger.error(f"Failed to populate document IDs for collection: {e}")
+        
+        # Show collection creation option if we have successfully processed documents
+        if st.session_state.get('last_ingested_doc_ids'):
+            with st.form("batch_completion_collection"):
+                st.subheader("📂 Create Collection from Successfully Processed Documents")
+                success_count = len(st.session_state.last_ingested_doc_ids)
+                st.info(f"You have {success_count} successfully processed documents available for collection creation.")
+                
+                collection_name = st.text_input(
+                    "Collection Name", 
+                    placeholder="e.g., Recent Import - Documents",
+                    help="Name for the new collection containing successfully processed documents"
+                )
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.form_submit_button("📂 Create Collection", type="primary", use_container_width=True):
+                        if collection_name:
+                            collection_mgr = WorkingCollectionManager()
+                            if collection_name in collection_mgr.get_collection_names():
+                                st.error(f"Collection '{collection_name}' already exists. Please choose a different name.")
+                            else:
+                                try:
+                                    collection_mgr.add_docs_by_id_to_collection(collection_name, st.session_state.last_ingested_doc_ids)
+                                    st.success(f"✅ Successfully created collection '{collection_name}' with {success_count} documents!")
+                                    st.session_state.last_ingested_doc_ids = []  # Clear after successful creation
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to create collection: {e}")
+                        else:
+                            st.warning("Please provide a name for the collection.")
+                
+                with col2:
+                    if st.form_submit_button("Skip", use_container_width=True):
+                        st.session_state.last_ingested_doc_ids = []  # Clear the list
+                        st.info("Skipped collection creation.")
+                        st.rerun()
+        else:
+            st.info("No successfully processed documents found for collection creation.")
+        
+        st.markdown("---")
+        if st.button("⬅️ Back to Configuration", key="back_config_no_files", use_container_width=True): 
             initialize_state(force_reset=True)
             st.rerun()
         return
@@ -775,6 +841,84 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
             st.error(f"⚠️ **{error_count} errors encountered** " + 
                     f"({success_rate}% success rate: {completed}/{total} files completed). " +
                     "Check logs for details or clear batch to restart with fresh setup.")
+
+    # Check if batch is effectively complete (no remaining files) but still marked as active
+    if batch_status.get('remaining', 0) == 0 and batch_status.get('completed', 0) > 0:
+        st.success("🎉 **Batch Processing Complete!** All files have been processed.")
+        
+        # Populate document IDs if not already done
+        if not st.session_state.get('last_ingested_doc_ids'):
+            try:
+                from cortex_engine.ingestion_recovery import IngestionRecoveryManager
+                wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+                recovery_manager = IngestionRecoveryManager(wsl_db_path)
+                
+                # Get recently ingested documents
+                recent_docs = recovery_manager.get_recently_ingested_documents()
+                if recent_docs:
+                    doc_ids = []
+                    for doc_info in recent_docs[:50]:  # Limit to most recent 50
+                        if isinstance(doc_info, dict) and 'doc_id' in doc_info:
+                            doc_ids.append(doc_info['doc_id'])
+                        elif isinstance(doc_info, str):
+                            doc_ids.append(doc_info)
+                    
+                    if doc_ids:
+                        st.session_state.last_ingested_doc_ids = doc_ids
+                        logger.info(f"Populated {len(doc_ids)} document IDs for collection creation")
+            except Exception as e:
+                logger.error(f"Failed to populate document IDs for collection: {e}")
+        
+        # Show collection creation option
+        if st.session_state.get('last_ingested_doc_ids'):
+            with st.form("active_batch_completion_collection"):
+                st.subheader("📂 Create Collection from Processed Documents")
+                success_count = len(st.session_state.last_ingested_doc_ids)
+                error_count = batch_status.get('error_count', 0)
+                
+                if error_count > 0:
+                    st.info(f"✅ **{success_count} documents successfully processed** (with {error_count} errors)")
+                else:
+                    st.info(f"✅ **{success_count} documents successfully processed**")
+                
+                collection_name = st.text_input(
+                    "Collection Name", 
+                    placeholder="e.g., Batch Import - Documents",
+                    help="Name for the new collection containing successfully processed documents"
+                )
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    if st.form_submit_button("📂 Create Collection", type="primary", use_container_width=True):
+                        if collection_name:
+                            collection_mgr = WorkingCollectionManager()
+                            if collection_name in collection_mgr.get_collection_names():
+                                st.error(f"Collection '{collection_name}' already exists. Please choose a different name.")
+                            else:
+                                try:
+                                    collection_mgr.add_docs_by_id_to_collection(collection_name, st.session_state.last_ingested_doc_ids)
+                                    st.success(f"✅ Successfully created collection '{collection_name}' with {success_count} documents!")
+                                    st.session_state.last_ingested_doc_ids = []
+                                    batch_manager.clear_batch()  # Clear the completed batch
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to create collection: {e}")
+                        else:
+                            st.warning("Please provide a name for the collection.")
+                
+                with col2:
+                    if st.form_submit_button("Skip Collection", use_container_width=True):
+                        st.session_state.last_ingested_doc_ids = []
+                        batch_manager.clear_batch()  # Clear the completed batch
+                        st.info("Skipped collection creation and cleared batch.")
+                        st.rerun()
+                        
+                with col3:
+                    if st.form_submit_button("Clear Batch", use_container_width=True):
+                        st.session_state.last_ingested_doc_ids = []
+                        batch_manager.clear_batch()
+                        st.success("Batch cleared.")
+                        st.rerun()
 
     # Consolidated action buttons
     col1, col2, col3, col4 = st.columns(4)
