@@ -1,5 +1,5 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v4.6.0
+# Version: v4.7.0
 # Date: 2025-08-30
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
 #          - GRAPHRAG INTEGRATION (v4.2.1): Re-enabled GraphRAG search modes with radio button
@@ -47,12 +47,13 @@ warnings.filterwarnings("ignore", message=".*Failed to send telemetry.*")
 from cortex_engine.config import EMBED_MODEL, COLLECTION_NAME, KB_LLM_MODEL
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
+from cortex_engine.embedding_service import embed_query
 
 # Set up logging
 logger = get_logger(__name__)
 
 # Page configuration
-PAGE_VERSION = "v4.6.0"
+PAGE_VERSION = "v4.7.0"
 
 st.set_page_config(page_title="Knowledge Search", layout="wide")
 
@@ -148,6 +149,17 @@ def validate_database(db_path, silent=False):
                 logger.error(f"ChromaDB access failed: {chroma_e}")
                 return None
         else:
+            # Handle Chroma tenant/database errors gracefully
+            if "tenant" in str(e) or "default_tenant" in str(e):
+                msg = (
+                    "❌ Database validation failed: Chroma tenant/database mismatch.\n\n"
+                    "This can happen after a Chroma upgrade or copying DBs between environments.\n"
+                    "Try: deleting the 'knowledge_hub_db' folder under your AI database path and re-ingesting."
+                )
+                if not silent:
+                    st.error(msg)
+                logger.error(f"Chroma tenant error at {chroma_db_path}: {e}")
+                return None
             if not silent:
                 st.error(f"❌ Database validation failed: {e}")
             logger.error(f"Error validating database at {chroma_db_path}: {e}")
@@ -523,8 +535,9 @@ def hybrid_search(db_path, query, filters, top_k=20):
         try:
             from cortex_engine.graphrag_integration import get_graphrag_integration
             
-            # Get both search results
-            vector_results = direct_chromadb_search(db_path, query, filters, top_k//2)
+            # Get both search results (do not halve top_k)
+            # Start with vector results so Hybrid never returns fewer than Traditional
+            vector_results = direct_chromadb_search(db_path, query, filters, top_k)
             
             try:
                 graphrag = get_graphrag_integration(db_path)
@@ -544,7 +557,7 @@ def hybrid_search(db_path, query, filters, top_k=20):
                 
                 # Format GraphRAG results
                 graphrag_results = []
-                for i, result in enumerate(graphrag_raw[:top_k//2]):
+                for i, result in enumerate(graphrag_raw[:top_k]):
                     if hasattr(result, 'text'):
                         content = result.text
                         metadata = getattr(result, 'metadata', {})
@@ -553,7 +566,7 @@ def hybrid_search(db_path, query, filters, top_k=20):
                         metadata = {}
                     
                     formatted_result = {
-                        'rank': i + len(vector_results) + 1,
+                        'rank': i + 1,
                         'score': metadata.get('score', 0.75),
                         'text': content,
                         'file_path': metadata.get('file_path', 'Unknown'),
@@ -576,22 +589,14 @@ def hybrid_search(db_path, query, filters, top_k=20):
             for result in vector_results:
                 result['search_source'] = 'Vector Search'
             
-            # Combine and deduplicate results by doc_id
-            combined_results = {}
-            all_results = vector_results + graphrag_results
-            
-            for result in all_results:
-                doc_id = result['doc_id']
-                if doc_id not in combined_results:
-                    combined_results[doc_id] = result
-                else:
-                    # Keep result with higher score
-                    if result['score'] > combined_results[doc_id]['score']:
-                        combined_results[doc_id] = result
-                        combined_results[doc_id]['search_source'] = 'Hybrid (Vector + GraphRAG)'
-            
-            # Sort by score and limit
-            final_results = list(combined_results.values())
+            # Combine: start with vector (ensures at least vector count), then add unique GraphRAG
+            combined_by_id = {r['doc_id']: r for r in vector_results}
+            for r in graphrag_results:
+                if r['doc_id'] not in combined_by_id:
+                    combined_by_id[r['doc_id']] = r
+
+            # Sort by score, cap to top_k, update ranks
+            final_results = list(combined_by_id.values())
             final_results.sort(key=lambda x: x['score'], reverse=True)
             final_results = final_results[:top_k]
             
@@ -655,13 +660,13 @@ class ChromaVectorIndex:
         import chromadb
         from chromadb.config import Settings as ChromaSettings
         from cortex_engine.config import COLLECTION_NAME
-        
+
         db_settings = ChromaSettings(
             anonymized_telemetry=False
         )
         self.client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
         self.collection = self.client.get_collection(COLLECTION_NAME)
-    
+
     def as_retriever(self, similarity_top_k=10):
         """Create a retriever interface for GraphRAG"""
         return ChromaRetriever(self.collection, similarity_top_k)
@@ -676,8 +681,11 @@ class ChromaRetriever:
     def retrieve(self, query):
         """Retrieve documents for GraphRAG"""
         try:
+            # Generate embeddings using centralized embedding service
+            query_embedding = embed_query(query)
+            
             results = self.collection.query(
-                query_texts=[query],
+                query_embeddings=[query_embedding],  # Use pre-generated embeddings
                 n_results=self.top_k
             )
             
@@ -742,16 +750,17 @@ def direct_chromadb_search(db_path, query, filters, top_k=20):
             # Multi-strategy search approach for better results
             logger.info("Executing multi-strategy ChromaDB search...")
             
-            # Strategy 1: Try vector search with original query
+            # Strategy 1: Try vector search with original query (explicit embeddings)
             results = None
             search_strategy = "vector"
             
             try:
+                q_emb = embed_query(query)
                 results = collection.query(
-                    query_texts=[query],
+                    query_embeddings=[q_emb],
                     n_results=top_k
                 )
-                logger.info("ChromaDB vector query completed successfully")
+                logger.info("ChromaDB vector query completed successfully (embeddings)")
                 
                 # Check if we got good results
                 if results and results.get('documents') and results['documents'][0]:
@@ -1014,7 +1023,7 @@ def render_search_results(results, filters):
             filter_text += f" ({filters.get('filter_operator', 'AND')} logic)"
         st.info(f"🔍 Active filters: {filter_text}")
     
-    st.success(f"✅ Found {len(results)} results from 4201 documents")
+    st.success(f"✅ Found {len(results)} results")
     
     # Bulk collection actions
     if len(results) > 1:
@@ -1388,7 +1397,26 @@ def main():
                         filter_text += f" ({config.get('filter_operator', 'AND')} logic)"
                     st.write(f"🔍 Filters: {filter_text}")
                 
-                st.write("📊 Analyzing 4201 documents...")
+                # Show dynamic document count if available
+                try:
+                    wsl_db_path = convert_windows_to_wsl_path(config.get('db_path_input') or config.get('ai_database_path') or st.session_state.get('db_path_input', ''))
+                    chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+                    db_settings = ChromaSettings(anonymized_telemetry=False)
+                    client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+                    try:
+                        col = client.get_collection(COLLECTION_NAME)
+                        total_docs = col.count()
+                    except Exception:
+                        # Fallback: sum across collections
+                        total_docs = 0
+                        for c in client.list_collections():
+                            try:
+                                total_docs += c.count()
+                            except Exception:
+                                pass
+                    st.write(f"📊 Analyzing {total_docs} documents...")
+                except Exception:
+                    st.write("📊 Analyzing documents...")
                 
                 # Perform search with selected mode
                 search_mode = st.session_state.get('search_mode_selection', 'Traditional Vector Search')

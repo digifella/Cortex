@@ -166,6 +166,7 @@ class DocumentMetadata(BaseModel):
     exclude_from_final: bool = False
     extracted_entities: List[Dict] = Field(default_factory=list)
     extracted_relationships: List[Dict] = Field(default_factory=list)
+    target_collection: Optional[str] = None  # Collection assignment for finalization
 
 def load_processed_files_log(log_path: str) -> Dict[str, str]:
     if not os.path.exists(log_path): return {}
@@ -525,7 +526,7 @@ def extract_entities_and_relationships(doc_text: str, metadata: Dict, entity_ext
         logging.error(f"Failed to extract entities: {e}")
         return [], []
 
-def analyze_documents(include_paths: List[str], fresh_start: bool, args=None):
+def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, target_collection: str = None):
     logging.info(f"--- Starting Stage 2: Document Analysis with Graph Extraction (Cortex v13.0.0) ---")
     
     # Initialize batch manager if db_path is available
@@ -550,6 +551,9 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None):
     # Get staging file path based on batch manager's db_path
     staging_file = get_staging_file_path(batch_manager.db_path) if batch_manager else STAGING_INGESTION_FILE
     if fresh_start and os.path.exists(staging_file): os.remove(staging_file)
+    
+    if target_collection:
+        logging.info(f"Collection assignment configured: documents will be assigned to '{target_collection}'")
     
     # Initialize entity extractor
     entity_extractor = EntityExtractor()
@@ -714,9 +718,19 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None):
         if batch_manager:
             batch_manager.update_progress(file_path_str)
 
+    # Create staging data structure with collection assignment
+    staging_data = {
+        "documents": staged_docs,  # staged_docs already contains dicts from doc_meta.model_dump()
+        "target_collection": target_collection,
+        "created_at": str(datetime.now()),
+        "version": "2.0"  # New format with collection assignment
+    }
+    
     with open(staging_file, 'w') as f: 
-        json.dump(staged_docs, f, indent=2)
-    logging.info(f"--- Analysis complete. {len(staged_docs)} documents written to staging file: {staging_file} ---")
+        json.dump(staging_data, f, indent=2)
+    
+    collection_info = f" -> '{target_collection}'" if target_collection else " -> 'default'"
+    logging.info(f"--- Analysis complete. {len(staged_docs)} documents staged{collection_info} at {staging_file} ---")
 
 def finalize_ingestion(db_path: str, args=None):
     logging.info(f"--- Starting Stage 3: Finalize from Staging with Graph Building (Cortex v13.0.0) ---")
@@ -733,7 +747,17 @@ def finalize_ingestion(db_path: str, args=None):
     graph_manager = EnhancedGraphManager(graph_file_path)
     
     with open(staging_file, 'r') as f: 
-        docs_to_process = [DocumentMetadata(**data) for data in json.load(f)]
+        staging_data = json.load(f)
+    
+    # Handle both old format (list) and new format (dict with metadata)
+    if isinstance(staging_data, list):
+        docs_to_process = [DocumentMetadata(**data) for data in staging_data]
+        target_collection = None  # No collection assignment for old format
+    else:
+        docs_to_process = [DocumentMetadata(**data) for data in staging_data.get('documents', [])]
+        target_collection = staging_data.get('target_collection', None)
+    
+    logging.info(f"Target collection for finalization: {target_collection or 'default'}")
 
     docs_to_index_paths, metadata_map, doc_ids_to_add_to_default = [], {}, []
     processed_log_path = os.path.join(chroma_db_path, INGESTED_FILES_LOG)
@@ -857,27 +881,16 @@ def finalize_ingestion(db_path: str, args=None):
     os.remove(staging_file)
 
     if doc_ids_to_add_to_default:
-        logging.info(f"Adding {len(doc_ids_to_add_to_default)} new documents to the 'default' collection.")
+        # Use target collection if specified, otherwise default
+        collection_name = target_collection or "default"
+        logging.info(f"Adding {len(doc_ids_to_add_to_default)} new documents to the '{collection_name}' collection.")
         try:
-            collections_data = {}
-            if os.path.exists(COLLECTIONS_FILE):
-                with open(COLLECTIONS_FILE, 'r') as f: 
-                    collections_data = json.load(f)
-            if "default" not in collections_data: 
-                collections_data["default"] = {"name": "default", "doc_ids": []}
-            existing_ids = set(collections_data["default"].get("doc_ids", []))
-            new_ids_added = 0
-            for doc_id in doc_ids_to_add_to_default:
-                if doc_id not in existing_ids: 
-                    collections_data["default"]["doc_ids"].append(doc_id)
-                    existing_ids.add(doc_id)
-                    new_ids_added += 1
-            if new_ids_added > 0:
-                with open(COLLECTIONS_FILE, 'w') as f: 
-                    json.dump(collections_data, f, indent=4)
-                logging.info(f"Successfully updated 'default' collection.")
-        except Exception as e: 
-            logging.error(f"Could not automatically add documents to default collection: {e}")
+            from cortex_engine.collection_manager import WorkingCollectionManager
+            collection_mgr = WorkingCollectionManager()
+            collection_mgr.add_docs_by_id_to_collection(collection_name, doc_ids_to_add_to_default)
+            logging.info("Collections updated via WorkingCollectionManager (Docker)")
+        except Exception as e:
+            logging.error(f"Could not automatically add documents to '{collection_name}' collection: {e}")
     
     logging.info("--- Finalization complete. Knowledge base and graph are up to date. ---")
 
@@ -892,6 +905,8 @@ def main():
                        help="Skip VLM image processing for faster ingestion")
     parser.add_argument("--resume", action="store_true",
                        help="Resume from existing batch state (opposite of --fresh)")
+    parser.add_argument("--target-collection", type=str, default=None,
+                       help="Target collection for document assignment")
     args = parser.parse_args()
 
     initialize_script()
@@ -903,7 +918,7 @@ def main():
                 sys.exit(1)
             # Resume takes precedence over fresh
             fresh_start = args.fresh and not args.resume
-            analyze_documents(args.include, fresh_start, args)
+            analyze_documents(args.include, fresh_start, args, getattr(args, 'target_collection', None))
         elif args.finalize_from_staging:
             finalize_ingestion(args.db_path, args)
         else:

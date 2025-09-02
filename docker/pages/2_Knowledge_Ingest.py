@@ -113,6 +113,90 @@ def get_document_type_options():
 DOC_TYPE_OPTIONS = get_document_type_options()
 PROPOSAL_OUTCOME_OPTIONS = RichMetadata.model_fields['proposal_outcome'].annotation.__args__
 
+def build_ingestion_command(wsl_db_path, files_to_process, target_collection=None, resume=False):
+    """Build ingestion command with collection assignment support"""
+    command = [
+        sys.executable, "-m", "cortex_engine.ingest_cortex", 
+        "--analyze-only", "--db-path", wsl_db_path, 
+        "--include", *files_to_process
+    ]
+    
+    if resume:
+        command.append("--resume")
+    
+    if target_collection:
+        command.extend(["--target-collection", target_collection])
+    
+    return command
+
+def should_auto_finalize():
+    """Check if automatic finalization should proceed"""
+    try:
+        from cortex_engine.ingest_cortex import get_staging_file_path
+        from cortex_engine.utils import convert_windows_to_wsl_path
+        import os
+        import json
+        
+        # Check if we have a database path
+        if not st.session_state.get('db_path'):
+            return False
+            
+        wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+        staging_file = get_staging_file_path(wsl_db_path)
+        
+        # Check if staging file exists and has documents
+        if os.path.exists(staging_file):
+            with open(staging_file, 'r') as f:
+                staging_data = json.load(f)
+            
+            # Handle both old and new staging formats
+            if isinstance(staging_data, list):
+                return len(staging_data) > 0
+            else:
+                return len(staging_data.get('documents', [])) > 0
+        
+        return False
+    except Exception as e:
+        logger.error(f"Error checking auto-finalization: {e}")
+        return False
+
+def start_automatic_finalization():
+    """Start automatic finalization subprocess"""
+    try:
+        from cortex_engine.utils import convert_windows_to_wsl_path
+        
+        wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+        
+        # Build finalization command
+        command = [
+            sys.executable, "-m", "cortex_engine.ingest_cortex", 
+            "--finalize-from-staging", "--db-path", wsl_db_path
+        ]
+        
+        # Add skip image processing flag if enabled
+        if st.session_state.get("skip_image_processing", False):
+            command.append("--skip-image-processing")
+        
+        # Start finalization subprocess
+        st.session_state.log_messages = ["Starting automatic finalization..."]
+        st.session_state.ingestion_stage = "finalizing"
+        st.session_state.ingestion_process = subprocess.Popen(
+            command, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.STDOUT, 
+            text=True, 
+            bufsize=1, 
+            universal_newlines=True
+        )
+        
+        logger.info(f"Started automatic finalization with command: {' '.join(command[:4])}...")
+        
+    except Exception as e:
+        logger.error(f"Failed to start automatic finalization: {e}")
+        st.error(f"❌ Failed to start automatic finalization: {e}")
+        # Fall back to manual mode
+        st.session_state.ingestion_stage = "metadata_review"
+
 def initialize_state(force_reset: bool = False):
     config_manager = ConfigManager()
     config = config_manager.get_config()
@@ -684,12 +768,9 @@ def render_batch_processing_ui():
                         st.session_state.ingestion_stage = "analysis_running"
                         st.session_state.batch_mode_active = True
                         
-                        # Build command with resume flag
-                        command = [
-                            sys.executable, "-m", "cortex_engine.ingest_cortex", 
-                            "--analyze-only", "--db-path", wsl_db_path, 
-                            "--include", *files_to_process, "--resume"
-                        ]
+                        # Build command with resume flag and collection assignment
+                        target_collection = st.session_state.get('target_collection_name', '')
+                        command = build_ingestion_command(wsl_db_path, files_to_process, target_collection, resume=True)
                         
                         # Debug logging
                         logger.info(f"Starting batch processing with {len(files_to_process)} files")
@@ -720,12 +801,9 @@ def render_batch_processing_ui():
                     st.session_state.ingestion_stage = "analysis_running"
                     st.session_state.batch_mode_active = True
                     
-                    # Build command
-                    command = [
-                        sys.executable, "-m", "cortex_engine.ingest_cortex", 
-                        "--analyze-only", "--db-path", wsl_db_path, 
-                        "--include", *files_to_process
-                    ]
+                    # Build command with collection assignment
+                    target_collection = st.session_state.get('target_collection_name', '')
+                    command = build_ingestion_command(wsl_db_path, files_to_process, target_collection)
                     
                     # Debug logging
                     logger.info(f"Starting batch processing with {len(files_to_process)} files")
@@ -1298,11 +1376,8 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
             st.session_state.batch_mode_active = True
             
             # Build and start the ingestion command
-            command = [
-                sys.executable, "-m", "cortex_engine.ingest_cortex", 
-                "--analyze-only", "--db-path", wsl_db_path, 
-                "--include", *files_to_process, "--resume"
-            ]
+            target_collection = st.session_state.get('target_collection_name', '')
+            command = build_ingestion_command(wsl_db_path, files_to_process, target_collection, resume=True)
             
             try:
                 st.session_state.ingestion_process = subprocess.Popen(
@@ -1644,7 +1719,8 @@ def render_pre_analysis_ui():
             for fp in globally_ignored: ingested_log[fp] = "user_excluded"
             with open(ingested_log_path, 'w') as f: json.dump(ingested_log, f, indent=4)
         st.session_state.log_messages = []; st.session_state.ingestion_stage = "analysis_running"
-        command = [sys.executable, "-m", "cortex_engine.ingest_cortex", "--analyze-only", "--db-path", wsl_db_path, "--include", *globally_selected]
+        target_collection = st.session_state.get('target_collection_name', '')
+        command = build_ingestion_command(wsl_db_path, globally_selected, target_collection)
         st.session_state.ingestion_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
         st.rerun()
 
@@ -1728,7 +1804,13 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
 
         if on_complete_stage == "metadata_review":
             load_staged_files()
-
+            
+            # Check if we should automatically proceed to finalization
+            if should_auto_finalize():
+                st.info("🚀 Analysis completed successfully! Starting automatic finalization...")
+                start_automatic_finalization()
+                return  # Exit early to avoid setting stage to metadata_review
+            
         st.session_state.ingestion_stage = on_complete_stage
         st.rerun()
 

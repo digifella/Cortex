@@ -16,19 +16,18 @@ from datetime import datetime
 import json
 
 from pydantic import BaseModel, ValidationError
-from llama_index.core import Document
 import chromadb
 
 from .utils.logging_utils import get_logger
 from .utils.file_utils import get_file_hash
 from .ingest_cortex import (
-    RichMetadata, DocumentMetadata, 
+    RichMetadata, DocumentMetadata,
     load_processed_files_log, get_document_content,
-    create_document_with_entities
 )
 from .entity_extractor import EntityExtractor
 from .graph_manager import EnhancedGraphManager
 from .config import INGESTED_FILES_LOG, COLLECTION_NAME
+from .embedding_service import embed_texts
 
 logger = get_logger(__name__)
 
@@ -242,19 +241,24 @@ class AsyncIngestionEngine:
             extracted_relationships=[r.dict() if hasattr(r, 'dict') else r for r in relationships]
         )
         
-        # Create and store document
-        document = create_document_with_entities(
-            content_result['content'],
-            doc_metadata,
-            entities,
-            relationships
-        )
-        
-        # Add to vector store
+        # Prepare metadata consistent with primary ingestion
+        flat_metadata = {
+            "doc_id": doc_metadata.doc_id,
+            "file_name": doc_metadata.file_name,
+            "doc_posix_path": doc_metadata.doc_posix_path,
+            "last_modified_date": doc_metadata.last_modified_date,
+            # Minimal rich fields to keep search filters stable
+            "document_type": "Other",
+            "proposal_outcome": "N/A",
+        }
+
+        # Add to vector store with explicit embedding
         if self.collection:
+            embedding = embed_texts([content_result['content']])[0]
             self.collection.add(
-                documents=[document.text],
-                metadatas=[document.metadata],
+                documents=[content_result['content']],
+                metadatas=[flat_metadata],
+                embeddings=[embedding],
                 ids=[doc_metadata.doc_id]
             )
         

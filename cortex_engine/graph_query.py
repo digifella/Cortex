@@ -280,13 +280,21 @@ class GraphQueryEngine:
         # Simple entity extraction from query
         query_lower = query.lower()
         
+        # Map singular entity types to plural keys
+        entity_type_map = {
+            'person': 'people',
+            'organization': 'organizations', 
+            'project': 'projects'
+        }
+        
         # Check against known entities in graph
         for entity_type in ['person', 'organization', 'project']:
             if entity_type in self.graph.entity_index:
                 for entity_id in self.graph.entity_index[entity_type]:
                     entity_name = entity_id.split(':', 1)[1].lower()
                     if entity_name in query_lower or any(word in query_lower for word in entity_name.split()):
-                        entities[entity_type + 's'].add(entity_id)
+                        plural_key = entity_type_map[entity_type]
+                        entities[plural_key].add(entity_id)
         
         return entities
     

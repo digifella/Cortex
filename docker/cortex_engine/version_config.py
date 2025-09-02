@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.5.1"
+CORTEX_VERSION = "4.7.0"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
-    "minor": 5,
-    "patch": 1,
+    "minor": 7,
+    "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,31 +24,29 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-09-01",
-    "release_name": "Enhanced Search & Docker Stability",
-    "description": "Improved search functionality with timeout protection, better error handling, and Docker path stability fixes",
+    "release_date": "2025-09-02",
+    "release_name": "Search Stability & Batch Finalization",
+    "description": "Stabilized search embeddings, improved Hybrid results, fixed batch finalization collections, Docker parity, and UX helpers",
     "breaking_changes": [],
     "new_features": [
-        "GraphRAG retroactive extraction utility for existing knowledge bases",
-        "Comprehensive timeout protection for GraphRAG and hybrid search operations",
-        "Enhanced batch ingestion error recovery with user-friendly guidance",
-        "Improved search fallback mechanisms when GraphRAG components fail"
+        "Centralized embedding service powering search and async ingest",
+        "Hybrid search now unions vector + graph results without underflow",
+        "Retry Finalization button when staging is present",
+        "Collections migration health check from project root to external DB"
     ],
     "improvements": [
-        "Added 45-second timeout for GraphRAG Enhanced search with automatic fallback",
-        "Added 60-second timeout for Hybrid search with graceful degradation",
-        "Enhanced Knowledge Ingest session state handling to preserve user-entered paths",
-        "Better error messages and recovery options for corrupted batch states",
-        "Improved hybrid search deduplication logic for optimal result combination",
-        "Enhanced GraphRAG search debugging with detailed logging"
+        "Direct Chroma queries use explicit query_embeddings for reliability",
+        "GraphRAG adapter no longer imports LlamaIndex in search path",
+        "Batch finalization writes collections to external DB via manager",
+        "Docker ingest uses same collection manager for parity",
+        "Finalization success toast with collection and counts",
+        "Collections file quick preview and path display"
     ],
     "bug_fixes": [
-        "Fixed Knowledge Ingest overwriting custom paths with config defaults after crashes",
-        "Fixed GraphRAG Enhanced search returning no results due to fallback logic issues",
-        "Fixed hybrid search timeouts in Docker environments",
-        "Resolved batch resume failures with clear recovery instructions",
-        "Fixed aggressive session state sync overriding user input in real-time",
-        "Corrected search result counting discrepancies between search modes"
+        "Fixed post-ingest search failures due to embedding mismatches",
+        "Resolved batch finalization not creating collections in external path",
+        "Clarified Chroma tenant/DB validation errors with guidance",
+        "Prevented Hybrid search from returning fewer results than Traditional"
     ]
 }
 

@@ -6,6 +6,32 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## v4.7.0 - 2025-09-02
+
+### Search Stability & Batch Finalization
+
+Stabilized search embeddings, improved Hybrid results, fixed batch finalization collections, Docker parity, and UX helpers.
+
+### ✨ New Features
+- Centralized embedding service powering search and async ingest
+- Hybrid search now unions vector + graph results without underflow
+- Retry Finalization button when staging is present
+- Collections migration health check from project root to external DB
+
+### 🚀 Improvements
+- Direct Chroma queries use explicit `query_embeddings` for reliability
+- GraphRAG adapter no longer imports LlamaIndex in search path
+- Batch finalization writes collections to external DB via manager
+- Docker ingest uses same collection manager for parity
+- Finalization success toast with collection and counts
+- Collections file quick preview and path display
+
+### 🐞 Bug Fixes
+- Fixed post-ingest search failures due to embedding mismatches
+- Resolved batch finalization not creating collections in external path
+- Clarified Chroma tenant/DB validation errors with guidance
+- Prevented Hybrid search from returning fewer results than Traditional
+
 
 
 

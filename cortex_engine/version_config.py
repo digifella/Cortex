@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.6.0"
+CORTEX_VERSION = "4.7.0"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
-    "minor": 6,
+    "minor": 7,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -24,31 +24,29 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-09-01",
-    "release_name": "Enhanced Collection Management & Database Clarity", 
-    "description": "Major improvements to collection management, database deletion clarity, and error handling",
+    "release_date": "2025-09-02",
+    "release_name": "Search Stability & Batch Finalization",
+    "description": "Stabilized search embeddings, improved Hybrid results, fixed batch finalization collections, Docker parity, and UX helpers",
     "breaking_changes": [],
     "new_features": [
-        "Comprehensive collection clearing functions in Collection Management",
-        "Enhanced log display with scrollable interface and line count selection",
-        "Clear Empty Collections, Clear All Documents, and Reset Collections tools",
-        "Improved error messaging for batch ingestion with success rate context"
+        "Centralized embedding service powering search and async ingest",
+        "Hybrid search now unions vector + graph results without underflow",
+        "Retry Finalization button when staging is present",
+        "Collections migration health check from project root to external DB"
     ],
     "improvements": [
-        "Collections now stored in KB database path for better organization",
-        "Simplified collection management with single storage location",
-        "Enhanced database deletion with granular error reporting",
-        "Better log display with proper scroll controls and navigation",
-        "Clearer database deletion terminology (Ingested Document Database vs Knowledge Base)",
-        "More informative error messages showing success rates for batch operations"
+        "Direct Chroma queries use explicit query_embeddings for reliability",
+        "GraphRAG adapter no longer imports LlamaIndex in search path",
+        "Batch finalization writes collections to external DB via manager",
+        "Docker ingest uses same collection manager for parity",
+        "Finalization success toast with collection and counts",
+        "Collections file quick preview and path display"
     ],
     "bug_fixes": [
-        "Fixed collections file reappearance after database deletion and Streamlit restart",
-        "Resolved auto-migration causing unexpected file recreation",
-        "Fixed database deletion not properly removing collections file",
-        "Corrected dual-location collections storage causing confusion",
-        "Enhanced database deletion error handling to prevent silent failures",
-        "Fixed persistent database maintenance warnings showing after successful ingestion"
+        "Fixed post-ingest search failures due to embedding mismatches",
+        "Resolved batch finalization not creating collections in external path",
+        "Clarified Chroma tenant/DB validation errors with guidance",
+        "Prevented Hybrid search from returning fewer results than Traditional"
     ]
 }
 
