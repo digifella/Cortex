@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py
-# Version: v4.6.1
+# Version: v4.6.2
 # Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
@@ -144,7 +144,8 @@ def initialize_state(force_reset: bool = False):
         "log_messages": [], "filter_exclude_common": True, "filter_prefer_docx": True,
         "filter_deduplicate": True, "enable_pattern_exclusion": False,
         "exclude_patterns_input": "", "show_confirm_clear_log": False,
-        "show_confirm_delete_kb": False, "last_ingested_doc_ids": []
+        "show_confirm_delete_kb": False, "last_ingested_doc_ids": [],
+        "target_collection_name": "", "collection_assignment_mode": "default"
     }
     for key, val in defaults.items():
         if key not in st.session_state: st.session_state[key] = val
@@ -535,40 +536,71 @@ def render_batch_processing_ui():
         
         # Show collection creation option if we have successfully processed documents
         if st.session_state.get('last_ingested_doc_ids'):
-            with st.form("batch_completion_collection"):
-                st.subheader("📂 Create Collection from Successfully Processed Documents")
-                success_count = len(st.session_state.last_ingested_doc_ids)
-                st.info(f"You have {success_count} successfully processed documents available for collection creation.")
-                
-                collection_name = st.text_input(
-                    "Collection Name", 
-                    placeholder="e.g., Recent Import - Documents",
-                    help="Name for the new collection containing successfully processed documents"
-                )
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.form_submit_button("📂 Create Collection", type="primary", use_container_width=True):
-                        if collection_name:
-                            collection_mgr = WorkingCollectionManager()
-                            if collection_name in collection_mgr.get_collection_names():
-                                st.error(f"Collection '{collection_name}' already exists. Please choose a different name.")
-                            else:
-                                try:
-                                    collection_mgr.add_docs_by_id_to_collection(collection_name, st.session_state.last_ingested_doc_ids)
-                                    st.success(f"✅ Successfully created collection '{collection_name}' with {success_count} documents!")
-                                    st.session_state.last_ingested_doc_ids = []  # Clear after successful creation
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Failed to create collection: {e}")
+            # Check for pre-configured target collection
+            target_collection = st.session_state.get('target_collection_name', '')
+            
+            if target_collection:
+                # Auto-assign to target collection
+                try:
+                    collection_mgr = WorkingCollectionManager()
+                    existing_collections = collection_mgr.get_collection_names()
+                    
+                    if target_collection not in existing_collections:
+                        # Create new collection
+                        if collection_mgr.create_collection(target_collection):
+                            st.success(f"✅ Created new collection: **{target_collection}**")
                         else:
-                            st.warning("Please provide a name for the collection.")
-                
-                with col2:
-                    if st.form_submit_button("Skip", use_container_width=True):
-                        st.session_state.last_ingested_doc_ids = []  # Clear the list
-                        st.info("Skipped collection creation.")
-                        st.rerun()
+                            st.error(f"❌ Failed to create collection: {target_collection}")
+                            target_collection = ""
+                    
+                    if target_collection:
+                        # Assign documents to target collection
+                        collection_mgr.add_docs_by_id_to_collection(target_collection, st.session_state.last_ingested_doc_ids)
+                        success_count = len(st.session_state.last_ingested_doc_ids)
+                        st.success(f"🎯 **{success_count} documents automatically assigned** to collection: **{target_collection}**")
+                        st.session_state.last_ingested_doc_ids = []
+                        st.session_state.target_collection_name = ""
+                        
+                except Exception as e:
+                    st.error(f"❌ Failed to assign to collection '{target_collection}': {e}")
+                    target_collection = ""  # Fall back to manual
+            
+            # Manual collection creation (if no target or auto-assignment failed)
+            if not target_collection and st.session_state.get('last_ingested_doc_ids'):
+                with st.form("batch_completion_collection"):
+                    st.subheader("📂 Create Collection from Successfully Processed Documents")
+                    success_count = len(st.session_state.last_ingested_doc_ids)
+                    st.info(f"You have {success_count} successfully processed documents available for collection creation.")
+                    
+                    collection_name = st.text_input(
+                        "Collection Name", 
+                        placeholder="e.g., Recent Import - Documents",
+                        help="Name for the new collection containing successfully processed documents"
+                    )
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.form_submit_button("📂 Create Collection", type="primary", use_container_width=True):
+                            if collection_name:
+                                collection_mgr = WorkingCollectionManager()
+                                if collection_name in collection_mgr.get_collection_names():
+                                    st.error(f"Collection '{collection_name}' already exists. Please choose a different name.")
+                                else:
+                                    try:
+                                        collection_mgr.add_docs_by_id_to_collection(collection_name, st.session_state.last_ingested_doc_ids)
+                                        st.success(f"✅ Successfully created collection '{collection_name}' with {success_count} documents!")
+                                        st.session_state.last_ingested_doc_ids = []  # Clear after successful creation
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Failed to create collection: {e}")
+                            else:
+                                st.warning("Please provide a name for the collection.")
+                    
+                    with col2:
+                        if st.form_submit_button("Skip", use_container_width=True):
+                            st.session_state.last_ingested_doc_ids = []  # Clear the list
+                            st.info("Skipped collection creation.")
+                            st.rerun()
         else:
             st.info("No successfully processed documents found for collection creation.")
         
@@ -871,54 +903,92 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
         
         # Show collection creation option
         if st.session_state.get('last_ingested_doc_ids'):
-            with st.form("active_batch_completion_collection"):
-                st.subheader("📂 Create Collection from Processed Documents")
-                success_count = len(st.session_state.last_ingested_doc_ids)
-                error_count = batch_status.get('error_count', 0)
-                
-                if error_count > 0:
-                    st.info(f"✅ **{success_count} documents successfully processed** (with {error_count} errors)")
-                else:
-                    st.info(f"✅ **{success_count} documents successfully processed**")
-                
-                collection_name = st.text_input(
-                    "Collection Name", 
-                    placeholder="e.g., Batch Import - Documents",
-                    help="Name for the new collection containing successfully processed documents"
-                )
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    if st.form_submit_button("📂 Create Collection", type="primary", use_container_width=True):
-                        if collection_name:
-                            collection_mgr = WorkingCollectionManager()
-                            if collection_name in collection_mgr.get_collection_names():
-                                st.error(f"Collection '{collection_name}' already exists. Please choose a different name.")
-                            else:
-                                try:
-                                    collection_mgr.add_docs_by_id_to_collection(collection_name, st.session_state.last_ingested_doc_ids)
-                                    st.success(f"✅ Successfully created collection '{collection_name}' with {success_count} documents!")
-                                    st.session_state.last_ingested_doc_ids = []
-                                    batch_manager.clear_batch()  # Clear the completed batch
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Failed to create collection: {e}")
+            # Check for pre-configured target collection
+            target_collection = st.session_state.get('target_collection_name', '')
+            
+            if target_collection:
+                # Auto-assign to target collection
+                try:
+                    collection_mgr = WorkingCollectionManager()
+                    existing_collections = collection_mgr.get_collection_names()
+                    
+                    if target_collection not in existing_collections:
+                        # Create new collection
+                        if collection_mgr.create_collection(target_collection):
+                            st.success(f"✅ Created new collection: **{target_collection}**")
                         else:
-                            st.warning("Please provide a name for the collection.")
-                
-                with col2:
-                    if st.form_submit_button("Skip Collection", use_container_width=True):
-                        st.session_state.last_ingested_doc_ids = []
-                        batch_manager.clear_batch()  # Clear the completed batch
-                        st.info("Skipped collection creation and cleared batch.")
-                        st.rerun()
+                            st.error(f"❌ Failed to create collection: {target_collection}")
+                            target_collection = ""
+                    
+                    if target_collection:
+                        # Assign documents to target collection
+                        collection_mgr.add_docs_by_id_to_collection(target_collection, st.session_state.last_ingested_doc_ids)
+                        success_count = len(st.session_state.last_ingested_doc_ids)
+                        error_count = batch_status.get('error_count', 0)
                         
-                with col3:
-                    if st.form_submit_button("Clear Batch", use_container_width=True):
+                        if error_count > 0:
+                            st.success(f"🎯 **{success_count} documents automatically assigned** to collection: **{target_collection}** (with {error_count} errors)")
+                        else:
+                            st.success(f"🎯 **{success_count} documents automatically assigned** to collection: **{target_collection}**")
+                            
                         st.session_state.last_ingested_doc_ids = []
-                        batch_manager.clear_batch()
-                        st.success("Batch cleared.")
-                        st.rerun()
+                        st.session_state.target_collection_name = ""
+                        batch_manager.clear_batch()  # Clear the completed batch
+                        
+                except Exception as e:
+                    st.error(f"❌ Failed to assign to collection '{target_collection}': {e}")
+                    target_collection = ""  # Fall back to manual
+            
+            # Manual collection creation (if no target or auto-assignment failed)
+            if not target_collection and st.session_state.get('last_ingested_doc_ids'):
+                with st.form("active_batch_completion_collection"):
+                    st.subheader("📂 Create Collection from Processed Documents")
+                    success_count = len(st.session_state.last_ingested_doc_ids)
+                    error_count = batch_status.get('error_count', 0)
+                    
+                    if error_count > 0:
+                        st.info(f"✅ **{success_count} documents successfully processed** (with {error_count} errors)")
+                    else:
+                        st.info(f"✅ **{success_count} documents successfully processed**")
+                    
+                    collection_name = st.text_input(
+                        "Collection Name", 
+                        placeholder="e.g., Batch Import - Documents",
+                        help="Name for the new collection containing successfully processed documents"
+                    )
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if st.form_submit_button("📂 Create Collection", type="primary", use_container_width=True):
+                            if collection_name:
+                                collection_mgr = WorkingCollectionManager()
+                                if collection_name in collection_mgr.get_collection_names():
+                                    st.error(f"Collection '{collection_name}' already exists. Please choose a different name.")
+                                else:
+                                    try:
+                                        collection_mgr.add_docs_by_id_to_collection(collection_name, st.session_state.last_ingested_doc_ids)
+                                        st.success(f"✅ Successfully created collection '{collection_name}' with {success_count} documents!")
+                                        st.session_state.last_ingested_doc_ids = []
+                                        batch_manager.clear_batch()  # Clear the completed batch
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Failed to create collection: {e}")
+                            else:
+                                st.warning("Please provide a name for the collection.")
+                    
+                    with col2:
+                        if st.form_submit_button("Skip Collection", use_container_width=True):
+                            st.session_state.last_ingested_doc_ids = []
+                            batch_manager.clear_batch()  # Clear the completed batch
+                            st.info("Skipped collection creation and cleared batch.")
+                            st.rerun()
+                            
+                    with col3:
+                        if st.form_submit_button("Clear Batch", use_container_width=True):
+                            st.session_state.last_ingested_doc_ids = []
+                            batch_manager.clear_batch()
+                            st.success("Batch cleared.")
+                            st.rerun()
 
     # Consolidated action buttons
     col1, col2, col3, col4 = st.columns(4)
@@ -1332,7 +1402,79 @@ def render_config_and_scan_ui():
                 help="🚀 **Recommended for large collections (100+ files)**: Automatically processes all files without manual review. Failed documents are logged to 'ingest_failures.log' for later inspection. Perfect for initial bulk imports or when you trust your document quality.")
     
     st.markdown("---")
-    st.markdown("**5. Advanced Options**")
+    st.markdown("**5. Collection Assignment**")
+    
+    # Collection assignment section
+    try:
+        collection_mgr = WorkingCollectionManager()
+        existing_collections = collection_mgr.get_collection_names()
+    except Exception as e:
+        existing_collections = []
+        logger.warning(f"Could not load existing collections: {e}")
+    
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        # Collection assignment options
+        assignment_mode = st.radio(
+            "Where should the ingested documents be assigned?",
+            options=["default", "existing", "new"],
+            format_func=lambda x: {
+                "default": "📂 Default Collection (no organization)",
+                "existing": "📁 Add to Existing Collection", 
+                "new": "✨ Create New Collection"
+            }[x],
+            key="collection_assignment_mode",
+            help="Choose how to organize your documents during ingestion"
+        )
+        
+        # Initialize collection assignment in session state
+        if "target_collection_name" not in st.session_state:
+            st.session_state.target_collection_name = ""
+            
+        if assignment_mode == "existing":
+            if existing_collections:
+                selected_collection = st.selectbox(
+                    "Select existing collection:",
+                    options=existing_collections,
+                    help="Documents will be added to this existing collection"
+                )
+                st.session_state.target_collection_name = selected_collection
+            else:
+                st.warning("⚠️ No existing collections found. Create a new collection or ingest without assignment.")
+                st.session_state.target_collection_name = ""
+                
+        elif assignment_mode == "new":
+            new_collection_name = st.text_input(
+                "New collection name:",
+                placeholder="e.g., Project Alpha Documents",
+                help="Enter a name for the new collection to organize these documents"
+            )
+            if new_collection_name:
+                if new_collection_name in existing_collections:
+                    st.error(f"❌ Collection '{new_collection_name}' already exists. Choose a different name or select the existing collection.")
+                    st.session_state.target_collection_name = ""
+                else:
+                    st.session_state.target_collection_name = new_collection_name
+            else:
+                st.session_state.target_collection_name = ""
+        else:  # default
+            st.session_state.target_collection_name = ""
+    
+    with col2:
+        st.markdown("**📋 Assignment Summary**")
+        if assignment_mode == "default":
+            st.info("Documents will be available in the general knowledge base without specific collection organization.")
+        elif assignment_mode == "existing" and st.session_state.target_collection_name:
+            st.success(f"✅ **Target:** {st.session_state.target_collection_name}")
+            st.caption("Documents will be added to this existing collection.")
+        elif assignment_mode == "new" and st.session_state.target_collection_name:
+            st.success(f"✨ **New Collection:** {st.session_state.target_collection_name}")
+            st.caption("This collection will be created and populated with the ingested documents.")
+        else:
+            st.warning("⚠️ Collection assignment incomplete")
+    
+    st.markdown("---")
+    st.markdown("**6. Advanced Options**")
     with st.expander("Filtering & Pattern-Based Exclusion"):
         st.info("The 'Smart Filtering' options below provide robust, default exclusions. Use 'Pattern-Based' for more specific needs.")
         col1, col2 = st.columns(2)
@@ -1592,11 +1734,49 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
 
 def render_completion_screen():
     st.success("✅ Finalization complete! Your knowledge base is up to date.")
+    
+    # Check if documents should be automatically assigned to a target collection
+    target_collection = st.session_state.get('target_collection_name', '')
+    doc_ids = st.session_state.get('last_ingested_doc_ids', [])
+    
+    if doc_ids and target_collection:
+        try:
+            collection_mgr = WorkingCollectionManager()
+            
+            # Check if target collection needs to be created or already exists
+            existing_collections = collection_mgr.get_collection_names()
+            
+            if target_collection not in existing_collections:
+                # Create new collection
+                if collection_mgr.create_collection(target_collection):
+                    st.success(f"✅ Created new collection: **{target_collection}**")
+                else:
+                    st.error(f"❌ Failed to create collection: {target_collection}")
+                    target_collection = ""  # Fall back to manual assignment
+            
+            if target_collection:
+                # Assign documents to the target collection
+                collection_mgr.add_docs_by_id_to_collection(target_collection, doc_ids)
+                st.success(f"🎯 **{len(doc_ids)} documents automatically assigned** to collection: **{target_collection}**")
+                st.session_state.last_ingested_doc_ids = []  # Clear after successful assignment
+                st.session_state.target_collection_name = ""  # Clear target collection
+                
+        except Exception as e:
+            st.error(f"❌ Failed to assign documents to collection '{target_collection}': {e}")
+            logger.error(f"Collection assignment failed: {e}")
+            # Fall through to manual assignment option
+    
+    # Manual collection creation option (if no automatic assignment or if it failed)
     if st.session_state.get('last_ingested_doc_ids'):
         with st.form("new_collection_from_ingest"):
             st.markdown("---")
-            st.subheader("Organize Your New Knowledge")
-            st.info(f"You've just added {len(st.session_state.last_ingested_doc_ids)} new documents. Save them as a new collection for easy access later.")
+            st.subheader("📂 Manual Collection Assignment")
+            
+            if target_collection:
+                st.info(f"Collection assignment to '{target_collection}' failed. You can manually create a different collection below.")
+            else:
+                st.info(f"You've just added {len(st.session_state.last_ingested_doc_ids)} new documents. Save them as a new collection for easy access later.")
+                
             collection_name = st.text_input("New Collection Name", placeholder="e.g., Project Phoenix Discovery")
             if st.form_submit_button("Create Collection", type="primary"):
                 if collection_name:
