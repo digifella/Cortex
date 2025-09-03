@@ -20,7 +20,7 @@ import logging
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.graph_manager import EnhancedGraphManager
 from cortex_engine.utils.logging_utils import get_logger
-from cortex_engine.utils.path_utils import convert_windows_to_wsl_path
+from cortex_engine.utils.path_utils import convert_to_docker_mount_path
 
 # Configure logging
 logger = get_logger(__name__)
@@ -37,7 +37,7 @@ class KnowledgeAnalytics:
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
         self.config = config_manager.get_config()
-        self.db_path = convert_windows_to_wsl_path(self.config.get('ai_database_path', '/mnt/f/ai_databases'))
+        self.db_path = convert_to_docker_mount_path(self.config.get('ai_database_path', '/mnt/f/ai_databases'))
         self.project_root = Path(__file__).parent.parent
         self.graph_manager = None
         self._initialize_engines()

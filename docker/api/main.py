@@ -23,7 +23,7 @@ from cortex_engine.async_query import AsyncSearchEngine, AsyncQueryConfig, Async
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.utils.logging_utils import get_logger
-from cortex_engine.utils.path_utils import convert_windows_to_wsl_path
+from cortex_engine.utils.path_utils import convert_to_docker_mount_path
 from cortex_engine.exceptions import *
 from cortex_engine.backup_manager import BackupManager, BackupMetadata, RestoreMetadata
 
@@ -153,7 +153,7 @@ async def startup_event():
         # Initialize config manager
         config_manager = ConfigManager()
         config = config_manager.get_config()
-        db_path = convert_windows_to_wsl_path(config.get('ai_database_path', '/mnt/f/ai_databases'))
+        db_path = convert_to_docker_mount_path(config.get('ai_database_path', '/mnt/f/ai_databases'))
         
         # Ensure database directory exists
         os.makedirs(db_path, exist_ok=True)

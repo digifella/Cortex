@@ -83,7 +83,14 @@ from cortex_engine.config import INGESTION_LOG_PATH, STAGING_INGESTION_FILE, ING
 from cortex_engine.utils.file_utils import get_file_hash
 from cortex_engine.utils.logging_utils import get_logger
 from cortex_engine.utils.smart_ollama_llm import create_smart_ollama_llm
-from cortex_engine.migration_to_docling import create_migration_manager
+try:
+    from cortex_engine.migration_to_docling import create_migration_manager
+except Exception:
+    def create_migration_manager():  # graceful fallback if module missing
+        class _Noop:
+            def migrate(self, *args, **kwargs):
+                return None
+        return _Noop()
 
 logger = get_logger(__name__)
 from cortex_engine.query_cortex import describe_image_with_vlm_for_ingestion

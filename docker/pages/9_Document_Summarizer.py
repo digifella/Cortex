@@ -18,7 +18,7 @@ sys.path.insert(0, str(project_root))
 
 # Import core modules
 from cortex_engine.document_summarizer import DocumentSummarizer, SummaryResult
-from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
+from cortex_engine.utils import get_logger, convert_to_docker_mount_path
 from cortex_engine.config_manager import ConfigManager
 
 # Set up logging
@@ -119,7 +119,7 @@ def main():
             # Look for anonymized documents in common locations
             possible_dirs = []
             if config.get('db_path'):
-                base_path = Path(convert_windows_to_wsl_path(config['db_path']))
+                base_path = Path(convert_to_docker_mount_path(config['db_path']))
                 possible_dirs.extend([
                     base_path / "anonymized_documents",
                     base_path / "anonymized",

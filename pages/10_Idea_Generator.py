@@ -26,7 +26,7 @@ os.environ['NLTK_DATA'] = nltk_data_dir
 from cortex_engine.idea_generator import IdeaGenerator
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.config import EMBED_MODEL, COLLECTION_NAME
-from cortex_engine.utils import convert_windows_to_wsl_path, get_logger
+from cortex_engine.utils import convert_to_docker_mount_path, get_logger
 from cortex_engine.session_state import initialize_app_session_state
 
 # Vector index components
@@ -48,10 +48,10 @@ def load_vector_index(db_path):
             return None
         
         logger.info(f"Loading vector index from database path: {db_path}")
-        wsl_db_path = convert_windows_to_wsl_path(db_path)
-        chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+        safe_db_path = convert_to_docker_mount_path(db_path)
+        chroma_db_path = os.path.join(safe_db_path, "knowledge_hub_db")
         
-        logger.info(f"Converted to WSL path: {wsl_db_path}")
+        logger.info(f"Resolved container DB path: {safe_db_path}")
         logger.info(f"ChromaDB path: {chroma_db_path}")
         
         if not os.path.isdir(chroma_db_path):

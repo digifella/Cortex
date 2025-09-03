@@ -259,7 +259,7 @@ with st.sidebar:
     # Import required modules for database checking
     try:
         from cortex_engine.session_state import initialize_app_session_state
-        from cortex_engine.utils import convert_windows_to_wsl_path
+        from cortex_engine.utils import convert_to_docker_mount_path
         import os
         
         # Initialize session state to get database path
@@ -269,7 +269,7 @@ with st.sidebar:
         
         if current_db_path:
             # Convert and check paths
-            wsl_path = convert_windows_to_wsl_path(current_db_path)
+            wsl_path = convert_to_docker_mount_path(current_db_path)
             chroma_path = os.path.join(wsl_path, "knowledge_hub_db")
             
             # Display current path

@@ -17,7 +17,7 @@ from typing import Dict, List, Set, Tuple, Optional, Any
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 
-from cortex_engine.utils import convert_windows_to_wsl_path, get_logger
+from cortex_engine.utils import convert_to_docker_mount_path, get_logger
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.config import COLLECTION_NAME, INGESTED_FILES_LOG
 
@@ -31,7 +31,7 @@ class IngestionRecoveryManager:
     def __init__(self, db_path: str):
         """Initialize the recovery manager with database path."""
         self.db_path = db_path
-        self.wsl_db_path = convert_windows_to_wsl_path(db_path)
+        self.wsl_db_path = convert_to_docker_mount_path(db_path)
         self.chroma_db_path = os.path.join(self.wsl_db_path, "knowledge_hub_db")
         self.ingested_log_path = os.path.join(self.chroma_db_path, INGESTED_FILES_LOG)
         self.collection_mgr = WorkingCollectionManager()

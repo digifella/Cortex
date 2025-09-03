@@ -46,7 +46,7 @@ warnings.filterwarnings("ignore", message=".*Failed to send telemetry.*")
 # Import project modules
 from cortex_engine.config import EMBED_MODEL, COLLECTION_NAME, KB_LLM_MODEL
 from cortex_engine.collection_manager import WorkingCollectionManager
-from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
+from cortex_engine.utils import get_logger, convert_to_docker_mount_path, convert_windows_to_wsl_path
 from cortex_engine.embedding_service import embed_query
 
 # Set up logging
@@ -92,8 +92,8 @@ def validate_database(db_path, silent=False):
             st.warning("Database path is not configured.")
         return None
         
-    wsl_db_path = convert_windows_to_wsl_path(db_path)
-    chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+    safe_db_path = convert_to_docker_mount_path(db_path)
+    chroma_db_path = os.path.join(safe_db_path, "knowledge_hub_db")
     
     if not os.path.isdir(chroma_db_path):
         if not silent:
@@ -1399,8 +1399,8 @@ def main():
                 
                 # Show dynamic document count if available
                 try:
-                    wsl_db_path = convert_windows_to_wsl_path(config.get('db_path_input') or config.get('ai_database_path') or st.session_state.get('db_path_input', ''))
-                    chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+                    safe_db_path = convert_to_docker_mount_path(config.get('db_path_input') or config.get('ai_database_path') or st.session_state.get('db_path_input', ''))
+                    chroma_db_path = os.path.join(safe_db_path, "knowledge_hub_db")
                     db_settings = ChromaSettings(anonymized_telemetry=False)
                     client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
                     try:

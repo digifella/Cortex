@@ -27,7 +27,7 @@ class GraphRAGRetroactiveExtractor:
     """Utility to add GraphRAG entities to existing knowledge bases"""
     
     def __init__(self, db_path: str):
-        self.db_path = convert_windows_to_wsl_path(db_path)
+        self.db_path = convert_to_docker_mount_path(db_path)
         self.chroma_db_path = os.path.join(self.db_path, "knowledge_hub_db")
         self.graph_file_path = os.path.join(self.db_path, "knowledge_cortex.gpickle")
         

@@ -37,7 +37,13 @@ from cortex_engine.utils import convert_windows_to_wsl_path, get_logger, validat
 from cortex_engine.utils.model_checker import model_checker
 from cortex_engine.config import STAGING_INGESTION_FILE, INGESTED_FILES_LOG, DEFAULT_EXCLUSION_PATTERNS_STR
 from cortex_engine.config_manager import ConfigManager
-from cortex_engine.ingest_cortex import RichMetadata
+# Avoid importing heavy ingest engine at module import; only need static options
+try:
+    from cortex_engine.ingest_cortex import RichMetadata
+    _HAS_RICH_METADATA = True
+except Exception:
+    RichMetadata = None
+    _HAS_RICH_METADATA = False
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.document_type_manager import get_document_type_manager
 from cortex_engine.help_system import help_system
@@ -111,13 +117,16 @@ def get_document_type_options():
     return ["Any"] + doc_type_manager.get_all_document_types()
 
 DOC_TYPE_OPTIONS = get_document_type_options()
-PROPOSAL_OUTCOME_OPTIONS = RichMetadata.model_fields['proposal_outcome'].annotation.__args__
+if _HAS_RICH_METADATA and hasattr(RichMetadata, 'model_fields'):
+    PROPOSAL_OUTCOME_OPTIONS = RichMetadata.model_fields['proposal_outcome'].annotation.__args__
+else:
+    PROPOSAL_OUTCOME_OPTIONS = ("Won", "Lost", "Pending", "N/A")
 
-def build_ingestion_command(wsl_db_path, files_to_process, target_collection=None, resume=False):
+def build_ingestion_command(container_db_path, files_to_process, target_collection=None, resume=False):
     """Build ingestion command with collection assignment support"""
     command = [
         sys.executable, "-m", "cortex_engine.ingest_cortex", 
-        "--analyze-only", "--db-path", wsl_db_path, 
+        "--analyze-only", "--db-path", container_db_path, 
         "--include", *files_to_process
     ]
     
@@ -133,7 +142,7 @@ def should_auto_finalize():
     """Check if automatic finalization should proceed"""
     try:
         from cortex_engine.ingest_cortex import get_staging_file_path
-        from cortex_engine.utils import convert_windows_to_wsl_path
+        from cortex_engine.utils import convert_to_docker_mount_path
         import os
         import json
         
@@ -141,8 +150,8 @@ def should_auto_finalize():
         if not st.session_state.get('db_path'):
             return False
             
-        wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
-        staging_file = get_staging_file_path(wsl_db_path)
+        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+        staging_file = get_staging_file_path(container_db_path)
         
         # Check if staging file exists and has documents
         if os.path.exists(staging_file):
@@ -163,9 +172,9 @@ def should_auto_finalize():
 def start_automatic_finalization():
     """Start automatic finalization subprocess"""
     try:
-        from cortex_engine.utils import convert_windows_to_wsl_path
+        from cortex_engine.utils import convert_to_docker_mount_path
         
-        wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+        wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
         
         # Build finalization command
         command = [
@@ -303,7 +312,7 @@ def load_staged_files():
             st.error(f"Error reading staging file: {e}"); st.session_state.staged_files = []
 
 def scan_for_files(selected_dirs: List[str]):
-    wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+    wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
     chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
     ingested_log_path = chroma_db_dir / INGESTED_FILES_LOG
 
@@ -406,7 +415,7 @@ def scan_for_files(selected_dirs: List[str]):
     
     # Handle resume mode - create batch state with proper filtering
     if st.session_state.get("resume_mode_enabled"):
-        wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+        wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
         batch_manager = BatchState(wsl_db_path)
         
         # Create batch with resume logic, passing the scan configuration
@@ -485,7 +494,7 @@ def render_batch_processing_ui():
     files_to_process = st.session_state.get("files_to_review", [])
     
     # Check for existing batch state
-    wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+    wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
     batch_manager = BatchState(wsl_db_path)
     batch_status = batch_manager.get_status()
     
@@ -598,7 +607,7 @@ def render_batch_processing_ui():
             # Populate document IDs from successfully processed files
             try:
                 from cortex_engine.ingestion_recovery import IngestionRecoveryManager
-                wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+                wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
                 recovery_manager = IngestionRecoveryManager(wsl_db_path)
                 
                 # Get recently ingested documents
@@ -960,7 +969,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
         if not st.session_state.get('last_ingested_doc_ids'):
             try:
                 from cortex_engine.ingestion_recovery import IngestionRecoveryManager
-                wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+                wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
                 recovery_manager = IngestionRecoveryManager(wsl_db_path)
                 
                 # Get recently ingested documents
@@ -1361,7 +1370,7 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
         files_to_process = st.session_state.get("files_to_review", [])
         if files_to_process:
             # Start the actual ingestion process
-            wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+            wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
             batch_manager_instance = BatchState(wsl_db_path)
             
             # For chunked processing, get current chunk files
@@ -1570,7 +1579,7 @@ def render_config_and_scan_ui():
             if st.session_state.enable_pattern_exclusion: st.text_area("File Patterns (one per line)", key="exclude_patterns_input", height=150)
 
     st.markdown("---")
-    is_db_path_valid = os.path.isdir(os.path.dirname(convert_windows_to_wsl_path(st.session_state.db_path)))
+    is_db_path_valid = os.path.isdir(os.path.dirname(convert_to_docker_mount_path(st.session_state.db_path)))
     selected_to_scan = [path for path, selected in st.session_state.dir_selections.items() if selected]
 
     if st.button(f"🔎 Scan {len(selected_to_scan)} Selected Director(y/ies) for New Files", type="primary", use_container_width=True, disabled=not selected_to_scan):
@@ -1706,7 +1715,7 @@ def render_pre_analysis_ui():
     proc_c1, proc_c2 = st.columns(2)
     if proc_c1.button("⬅️ Back to Configuration", use_container_width=True): initialize_state(force_reset=True); st.rerun()
     if proc_c2.button(f"Process {len(globally_selected)} files & Ignore {len(globally_ignored)}", type="primary", use_container_width=True, disabled=not globally_selected):
-        wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+        wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
         if globally_ignored:
             chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
             chroma_db_dir.mkdir(parents=True, exist_ok=True)
@@ -1733,7 +1742,7 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
     with col1:
         if st.button("⏸️ Pause", key="pause_processing", use_container_width=True):
             # Get batch manager and pause the batch
-            wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+            wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
             batch_manager = BatchState(wsl_db_path)
             batch_manager.pause_batch()
             st.success("Pause requested")
@@ -1930,7 +1939,7 @@ def render_metadata_review_ui():
                 with open(STAGING_INGESTION_FILE, 'w') as f: 
                     json.dump(st.session_state.edited_staged_files, f, indent=2)
 
-                wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+                wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
                 if not wsl_db_path or not Path(wsl_db_path).exists():
                     st.error(f"Database path is invalid or does not exist: {wsl_db_path}")
                     st.stop()
@@ -1975,7 +1984,7 @@ def render_metadata_review_ui():
             with open(STAGING_INGESTION_FILE, 'w') as f: 
                 json.dump(final_files_to_process, f, indent=2)
 
-            wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+            wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
             if not wsl_db_path or not Path(wsl_db_path).exists():
                 st.error(f"Database path is invalid or does not exist: {wsl_db_path}")
                 st.stop()
@@ -2074,7 +2083,7 @@ def render_metadata_review_ui():
         st.session_state.last_ingested_doc_ids = doc_ids_to_ingest
         with open(STAGING_INGESTION_FILE, 'w') as f: json.dump(final_files_to_process, f, indent=2)
 
-        wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+        wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
         if not wsl_db_path or not Path(wsl_db_path).exists():
              st.error(f"Database path is invalid or does not exist: {wsl_db_path}"); st.stop()
 
@@ -2369,7 +2378,7 @@ def check_recovery_needed():
         if st.session_state.get(dismiss_key, False):
             return False, []
         
-        recovery_manager = IngestionRecoveryManager(db_path)
+        recovery_manager = IngestionRecoveryManager(convert_to_docker_mount_path(db_path))
         analysis = recovery_manager.analyze_ingestion_state()
         
         issues = []
@@ -2505,7 +2514,7 @@ with col1:
             if db_path:
                 from cortex_engine.utils import convert_windows_to_wsl_path
                 wsl_db_path = convert_windows_to_wsl_path(db_path)
-                chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+                chroma_db_path = os.path.join(convert_to_docker_mount_path(wsl_db_path), "knowledge_hub_db")
                 ingested_log_path = os.path.join(chroma_db_path, "ingested_files.log")
                 
                 if os.path.exists(ingested_log_path):
@@ -2548,7 +2557,7 @@ with col2:
             if db_path:
                 from cortex_engine.utils import convert_windows_to_wsl_path
                 wsl_db_path = convert_windows_to_wsl_path(db_path)
-                chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+                chroma_db_path = os.path.join(convert_to_docker_mount_path(wsl_db_path), "knowledge_hub_db")
                 ingested_log_path = os.path.join(chroma_db_path, "ingested_files.log")
                 
                 if os.path.exists(ingested_log_path):
@@ -2594,7 +2603,7 @@ except Exception as e:
                 if db_path:
                     from cortex_engine.utils import convert_windows_to_wsl_path
                     wsl_db_path = convert_windows_to_wsl_path(db_path)
-                    chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+                    chroma_db_path = os.path.join(convert_to_docker_mount_path(wsl_db_path), "knowledge_hub_db")
                     ingested_log_path = os.path.join(chroma_db_path, "ingested_files.log")
                     
                     if os.path.exists(ingested_log_path):
@@ -2634,7 +2643,7 @@ if st.session_state.get("show_help_modal", False):
 help_system.show_contextual_help("ingest")
 
 # Check for existing batch state and show resume option
-wsl_db_path = convert_windows_to_wsl_path(st.session_state.db_path)
+wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
 batch_manager = BatchState(wsl_db_path)
 batch_status = batch_manager.get_status()
 

@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Import centralized utilities
-from .utils import convert_windows_to_wsl_path, get_project_root, get_logger
+from .utils import convert_windows_to_wsl_path, convert_to_docker_mount_path, get_project_root, get_logger
 from .utils.file_utils import get_file_hash
 from .exceptions import CollectionError, PathError
 
@@ -33,9 +33,9 @@ def get_collections_file_path():
         db_path = config.get('ai_database_path')
         
         if db_path:
-            # Convert to WSL path and store collections in the KB database directory
-            wsl_db_path = convert_windows_to_wsl_path(db_path)
-            collections_path = os.path.join(wsl_db_path, "working_collections.json")
+            # Convert to a container-visible path in Docker; otherwise WSL/posix
+            safe_db_path = convert_to_docker_mount_path(db_path)
+            collections_path = os.path.join(safe_db_path, "working_collections.json")
             return collections_path
     except Exception as e:
         logger.warning(f"Could not get KB database path, using project root: {e}")
@@ -165,9 +165,9 @@ class WorkingCollectionManager:
             return [], []
         
         try:
-            wsl_output_dir = convert_windows_to_wsl_path(output_dir)
-            Path(wsl_output_dir).mkdir(parents=True, exist_ok=True)
-            logger.info(f"Exporting {len(doc_ids)} documents from collection '{name}' to {wsl_output_dir}")
+            safe_output_dir = convert_to_docker_mount_path(output_dir)
+            Path(safe_output_dir).mkdir(parents=True, exist_ok=True)
+            logger.info(f"Exporting {len(doc_ids)} documents from collection '{name}' to {safe_output_dir}")
             
             results = vector_collection.get(where={"doc_id": {"$in": doc_ids}}, include=["metadatas"])
             source_paths = set(meta['doc_posix_path'] for meta in results['metadatas'] if 'doc_posix_path' in meta)
@@ -175,7 +175,7 @@ class WorkingCollectionManager:
             
             for src_path_str in source_paths:
                 src_path = Path(src_path_str)
-                dest_path = Path(wsl_output_dir) / src_path.name
+                dest_path = Path(safe_output_dir) / src_path.name
                 try:
                     if src_path.exists():
                         shutil.copy(src_path, dest_path)

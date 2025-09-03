@@ -9,9 +9,9 @@ setlocal enabledelayedexpansion
 
 echo.
 echo ===============================================
-echo    CORTEX SUITE v4.6.0 (Document Summarizer Optimization)
+echo    CORTEX SUITE v4.7.0 (Search Stability & Docker Parity)
 echo    Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64
-echo    GPU acceleration, timeout fixes, and improved reliability (2025-08-29)
+echo    GPU acceleration, timeout fixes, and improved reliability (2025-09-02)
 echo    Date: %date% %time%
 echo ===============================================
 echo.
@@ -584,4 +584,3 @@ pause
 
 
 exit /b 1
-

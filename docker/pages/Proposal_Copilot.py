@@ -24,7 +24,7 @@ from llama_index.llms.ollama import Ollama
 from chromadb.config import Settings as ChromaSettings
 
 # Import centralized utilities
-from cortex_engine.utils import convert_windows_to_wsl_path, get_logger
+from cortex_engine.utils import convert_to_docker_mount_path, get_logger
 from cortex_engine.config import EMBED_MODEL, LLM_MODEL, COLLECTION_NAME
 from cortex_engine.instruction_parser import CortexInstruction, parse_template_for_instructions
 from cortex_engine.task_engine import TaskExecutionEngine
@@ -261,7 +261,7 @@ initialize_session_state()
 
 config_mgr = ConfigManager()
 raw_db_path = config_mgr.get_config().get("ai_database_path", DEFAULT_DB_PATH)
-wsl_db_path = convert_windows_to_wsl_path(raw_db_path)
+wsl_db_path = convert_to_docker_mount_path(raw_db_path)
 index, collection_mgr = load_system(wsl_db_path)
 
 if st.session_state.loaded_proposal_id != st.session_state.current_proposal_id:

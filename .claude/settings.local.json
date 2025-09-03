@@ -57,7 +57,8 @@
       "Read(/mnt/f/ai_databases/knowledge_hub_db/**)",
       "Read(/mnt/f/ai_databases/knowledge_hub_db/**)",
       "Read(/mnt/c/Users/paul/**)",
-      "Read(/mnt/c/Users/paul/**)"
+      "Read(/mnt/c/Users/paul/**)",
+      "Bash(git checkout:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",

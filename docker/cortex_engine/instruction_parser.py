@@ -1,91 +1,84 @@
-# ## File: cortex_engine/instruction_parser.py
-# Version: 4.0.0 (Unified Parser)
-# Date: 2025-07-15
-# Purpose: A unified module to parse .docx files and define instruction structures.
-#          - CRITICAL FIX (v4.0.0): Restored the 'parse_template_for_instructions'
-#            function required by the Proposal Co-pilot, which was erroneously
-#            removed during previous refactoring. This file now contains all
-#            necessary parsing functions for the entire suite.
-
-import re
-import docx
+from docx.oxml.table import CT_Tbl
+from docx.oxml.text.paragraph import CT_P
+from docx.table import Table, _Cell
+from docx.text.paragraph import Paragraph
+from dataclasses import dataclass
+from typing import List, Optional, Union
 import io
-from typing import List, Optional, NamedTuple, Dict
+import docx
 
-# This is the instruction object used by the original, powerful co-pilot.
-class CortexInstruction(NamedTuple):
+
+def iter_block_items(parent):
+    """Yield each paragraph and table child within parent, in document order.
+
+    Works for a Document or _Cell parent. Based on python-docx cookbook pattern.
+    """
+    if hasattr(parent, "element") and hasattr(parent.element, "body"):
+        parent_elm = parent.element.body
+    else:
+        parent_elm = parent._tc
+
+    for child in parent_elm.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, parent)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, parent)
+
+
+@dataclass
+class CortexInstruction:
     section_heading: str
     instruction_raw: str
     task_type: str
-    parameter: str
-    placeholder_paragraph: docx.text.paragraph.Paragraph
-    sub_instruction: Optional[str] = None
+    parameter: Optional[str] = ""
+    placeholder_paragraph: Optional[str] = ""
+    sub_instruction: Optional[str] = ""
 
-INSTRUCTION_REGEX = re.compile(r"\[([A-Z_]+)(?:::(.*?))?\]")
 
-def parse_template_for_instructions(doc: docx.document.Document) -> List[CortexInstruction]:
-    """
-    (RESTORED) Parses a docx Document object to find Cortex instructions
-    and sub-instructions for the Proposal Co-pilot.
+def parse_template_for_instructions(doc: Union[bytes, 'docx.document.Document']) -> List[CortexInstruction]:
+    """Minimal parser that scans a .docx for bracketed Cortex placeholders.
+
+    Looks for tokens like [GENERATE_FROM_KB_ONLY], [PROMPT_HUMAN], etc. and returns a list.
     """
     instructions: List[CortexInstruction] = []
-    paragraphs = list(doc.paragraphs)
-
-    for i, p in enumerate(paragraphs):
-        p_text = p.text.strip()
-        match = INSTRUCTION_REGEX.search(p_text)
-
-        if match:
-            task_type, parameter = match.groups()
-            parameter = parameter or ""
-            heading_text = "Unknown Section"
-            sub_instruction_text = None
-
-            if (i + 1) < len(paragraphs):
-                next_p_text = paragraphs[i + 1].text.strip()
-                if next_p_text.startswith("##"):
-                    sub_instruction_text = next_p_text.lstrip('#- ').strip()
-
-            for j in range(i - 1, -1, -1):
-                prev_p = paragraphs[j]
-                prev_p_text = prev_p.text.strip()
-                is_heading_style = prev_p.style.name.startswith('Heading')
-                is_heading_text_marker = prev_p_text.lower().startswith('section:')
-
-                if is_heading_style or is_heading_text_marker:
-                    heading_text_raw = prev_p_text.split(':', 1)[1] if is_heading_text_marker else prev_p_text
-                    heading_text = heading_text_raw.strip().strip(' "\'■\t*-')
-                    break
-
-            instruction = CortexInstruction(
-                section_heading=heading_text,
-                instruction_raw=p_text,
-                task_type=task_type.strip(),
-                parameter=parameter.strip(),
-                placeholder_paragraph=p,
-                sub_instruction=sub_instruction_text
-            )
-            instructions.append(instruction)
-
+    try:
+        if isinstance(doc, bytes):
+            d = docx.Document(io.BytesIO(doc))
+        else:
+            d = doc
+        current_heading = "Document"
+        for block in iter_block_items(d):
+            text = ""
+            if isinstance(block, Paragraph):
+                text = block.text or ""
+                # Simple heading detection
+                try:
+                    if block.style and block.style.name and block.style.name.startswith('Heading'):
+                        current_heading = text or current_heading
+                        continue
+                except Exception:
+                    pass
+            elif isinstance(block, Table):
+                for r in block.rows:
+                    for c in r.cells:
+                        if c.text:
+                            text += c.text + "\n"
+            if "[" in text and "]" in text:
+                # Extract simple [TOKEN] markers
+                parts = text.split("[")
+                for part in parts[1:]:
+                    token = part.split("]", 1)[0].strip()
+                    if token:
+                        # Map token to task_type; default pass-through
+                        task = token
+                        instructions.append(CortexInstruction(
+                            section_heading=current_heading,
+                            instruction_raw=token,
+                            task_type=task,
+                            parameter="",
+                            placeholder_paragraph=text.strip(),
+                            sub_instruction="",
+                        ))
+    except Exception:
+        pass
     return instructions
-
-# This function is used by the new Template Editor.
-def iter_block_items(parent):
-    """
-    Yield each paragraph and table child within *parent*, in document order.
-    """
-    if isinstance(parent, docx.document.Document):
-        parent_elm = parent.element.body
-    elif isinstance(parent, docx.table._Cell):
-        parent_elm = parent._tc
-    else:
-        try:
-            parent_elm = parent._element
-        except AttributeError:
-            raise ValueError("Unsupported parent type for iter_block_items")
-
-    for child in parent_elm.iterchildren():
-        if isinstance(child, docx.oxml.text.paragraph.CT_P):
-            yield docx.text.paragraph.Paragraph(child, parent)
-        elif isinstance(child, docx.oxml.table.CT_Tbl):
-            yield docx.table.Table(child, parent)

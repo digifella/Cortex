@@ -60,21 +60,55 @@ def convert_windows_to_wsl_path(path_str: Union[str, Path, None]) -> str:
 
 def convert_to_docker_mount_path(path_str: Union[str, Path, None]) -> str:
     """
-    Convert user paths to Docker container mount paths.
-    Specifically designed for Docker environments where Windows drives are mounted.
+    Convert host paths to container-visible paths when running in Docker.
     
-    Args:
-        path_str: User-entered path (Windows, WSL, or Linux format)
-        
-    Returns:
-        Docker container mount path
-        
-    Examples:
-        'E:\\KB_Test' -> '/mnt/e/KB_Test'
-        'C:\\Users\\docs' -> '/mnt/c/Users/docs'  
-        '/mnt/e/KB_Test' -> '/mnt/e/KB_Test' (unchanged)
+    - In Docker, Windows drives are typically mounted at '/host_mnt/<drive>/' by Docker Desktop.
+      Example: 'C:\\ai_databases' -> '/host_mnt/c/ai_databases'
+    - Outside Docker, fall back to WSL-style conversion ('/mnt/<drive>/...').
+    - If the path already looks like a POSIX path (starts with '/'), return as-is.
     """
-    return convert_windows_to_wsl_path(path_str)
+    if not path_str:
+        return ""
+
+    raw = str(path_str).strip()
+
+    # If already POSIX-like, return unchanged
+    if raw.startswith('/'):
+        return raw
+
+    # Detect Docker container
+    in_docker = os.path.exists('/.dockerenv') or os.environ.get('container') or os.environ.get('DOCKER_CONTAINER')
+
+    # Normalize backslashes first
+    normalized_path = raw.replace('\\', '/')
+
+    # Windows drive pattern
+    m = re.match(r'^([a-zA-Z]):/(.*)', normalized_path)
+    if m:
+        drive, rest = m.groups()
+        if in_docker:
+            # Prefer explicit container mount if provided
+            ai_db_env = os.environ.get('AI_DATABASE_PATH')
+            if ai_db_env:
+                return ai_db_env
+            return f"/host_mnt/{drive.lower()}/{rest}"
+        else:
+            return f"/mnt/{drive.lower()}/{rest}"
+
+    # Bare drive letter (e.g., 'D:')
+    m = re.match(r'^([a-zA-Z]):$', normalized_path)
+    if m:
+        drive = m.group(1)
+        if in_docker:
+            ai_db_env = os.environ.get('AI_DATABASE_PATH')
+            if ai_db_env:
+                return ai_db_env
+            return f"/host_mnt/{drive.lower()}"
+        else:
+            return f"/mnt/{drive.lower()}"
+
+    # No special handling needed
+    return convert_windows_to_wsl_path(raw)
 
 
 def normalize_path(path_str: Union[str, Path, None]) -> Optional[Path]:

@@ -19,7 +19,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 # Import centralized utilities
-from cortex_engine.utils import convert_windows_to_wsl_path, get_logger
+from cortex_engine.utils import convert_to_docker_mount_path, get_logger
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.session_state import initialize_app_session_state
 from cortex_engine.config import COLLECTION_NAME
@@ -35,8 +35,8 @@ def init_chroma_client(db_path):
         st.error("Database path not configured. Please configure it in Knowledge Ingest.")
         return None
         
-    wsl_db_path = convert_windows_to_wsl_path(db_path)
-    chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+    safe_db_path = convert_to_docker_mount_path(db_path)
+    chroma_db_path = os.path.join(safe_db_path, "knowledge_hub_db")
     
     
     if not os.path.isdir(chroma_db_path):

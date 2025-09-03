@@ -32,7 +32,7 @@ PAGE_VERSION = "v4.6.1"
 try:
     from cortex_engine.config import INGESTED_FILES_LOG
     from cortex_engine.config_manager import ConfigManager
-    from cortex_engine.utils import get_logger, convert_windows_to_wsl_path, ensure_directory
+    from cortex_engine.utils import get_logger, convert_to_docker_mount_path, ensure_directory
     from cortex_engine.utils.command_executor import display_command_executor_widget, SafeCommandExecutor
     from cortex_engine.ingestion_recovery import IngestionRecoveryManager
     from cortex_engine.collection_manager import WorkingCollectionManager
@@ -61,7 +61,7 @@ if 'maintenance_config' not in st.session_state:
 
 def delete_ingested_document_database(db_path: str):
     """Delete the ingested document database with proper error handling and logging."""
-    wsl_db_path = convert_windows_to_wsl_path(db_path)
+    wsl_db_path = convert_to_docker_mount_path(db_path)
     chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
     graph_file = Path(wsl_db_path) / "knowledge_cortex.gpickle"
     collections_file = Path(wsl_db_path) / "working_collections.json"
@@ -171,7 +171,7 @@ def perform_clean_start(db_path: str):
         debug_log_lines.append("Path Conversion: None (Docker handles volume mapping)")
     else:
         # Non-Docker environment, use WSL path conversion for Windows paths
-        final_db_path = convert_windows_to_wsl_path(db_path)
+        final_db_path = convert_to_docker_mount_path(db_path)
         msg = f"💻 **Host Mode:** Converted `{db_path}` to `{final_db_path}`"
         st.info(msg)
         debug_log_lines.append("ENVIRONMENT: Host/WSL")
@@ -523,7 +523,7 @@ def init_chroma_client(db_path):
     if not db_path:
         return None
         
-    wsl_db_path = convert_windows_to_wsl_path(db_path)
+    wsl_db_path = convert_to_docker_mount_path(db_path)
     chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
     
     if not os.path.isdir(chroma_db_path):
@@ -565,7 +565,7 @@ def clear_ingestion_log_file():
             return
         
         db_path = config.get('db_path', '/tmp/cortex_db')
-        wsl_db_path = convert_windows_to_wsl_path(db_path)
+        wsl_db_path = convert_to_docker_mount_path(db_path)
         log_path = Path(wsl_db_path) / "knowledge_hub_db" / INGESTED_FILES_LOG
         
         if log_path.exists():

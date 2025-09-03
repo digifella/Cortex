@@ -19,6 +19,7 @@
         },
         "Research & Analysis": {
             "types": [
+                "Case Study / Trophy",
                 "Research Paper",
                 "Analysis Report"
             ],
@@ -62,7 +63,10 @@
         "biography": "CV",
         "curriculum vitae": "CV",
         "resume": "CV",
-        "agenda": "Meeting Minutes",
+        "agenda": "Agenda",
+        "minutes": "Minutes",
+        "meeting minutes": "Minutes",
+        "action items": "Action Items",
         "proposal": "Proposal/Quote",
         "quote": "Proposal/Quote",
         "quotation": "Proposal/Quote",
@@ -80,10 +84,8 @@
         "email": "Email Correspondence",
         "correspondence": "Email Correspondence",
         "financial": "Financial Report",
-        "research": "Research Paper",
-        "minutes": "Meeting Minutes",
-        "action items": "Meeting Minutes"
+        "research": "Research Paper"
     },
-    "created_at": "2025-07-26T13:55:18.733074",
-    "modified_at": "2025-07-26T15:43:59.379821"
+    "created_at": "2025-09-03T06:10:21.165558",
+    "modified_at": "2025-09-03T06:10:21.172392"
 }
