@@ -198,6 +198,15 @@ docker buildx build --platform linux/amd64,linux/arm64 -t cortex-suite .
 ```
 
 #### **🔍 Architecture Detection**
+
+### Docker Status & Known Issues
+
+- Rebuild after updates: when docker/ files change, rebuild the image to pick them up: `docker compose down && docker compose build --no-cache && docker compose up -d`.
+- Ingest staging diagnostics: if the UI shows “Analysis complete, but no documents were staged for review”, the ingest page now displays the container path to `staging_ingestion.json`, whether it exists, and the parsed document count. If the file contains documents, click “Retry Finalization” to complete the flow.
+- Knowledge Search fallback: if the project root page is not present in the image, Docker falls back to a minimal search implementation with direct Chroma queries.
+- .docx reader warnings: Docker may log `DocxReader.load_data() got an unexpected keyword argument 'file_path'`. Analysis proceeds, but a reader‑normalization pass is planned.
+- Logs inside container: use `docker exec -it <container> bash` then `tail -n 120 -f /home/cortex/logs/ingestion.log` (or `/app/logs/ingestion.log` depending on image path).
+
 Check your system architecture:
 ```bash
 # Check processor type
