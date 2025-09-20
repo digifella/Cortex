@@ -2129,6 +2129,12 @@ def render_metadata_review_ui():
                         else:
                             staged_count = len(data)
                         st.caption(f"Parsed staged documents: {staged_count}")
+                        # If staging contains docs but UI set is empty, offer a retry finalize
+                        if staged_count > 0:
+                            st.info("Staging file contains documents. You can retry automatic finalization.")
+                            if st.button("🚀 Retry Finalization", type="primary", key="retry_finalize_btn"):
+                                start_automatic_finalization()
+                                st.stop()
                         with st.expander("Show staging JSON (first 2KB)", expanded=False):
                             preview = json.dumps(data, indent=2)
                             st.text_area("staging_ingestion.json", value=preview[:2048], height=200)
