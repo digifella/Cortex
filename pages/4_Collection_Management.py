@@ -84,7 +84,7 @@ chroma_client = init_chroma_client(db_path)
 if not chroma_client: st.stop()
 
 try:
-vector_collection = chroma_client.get_collection(name=COLLECTION_NAME)
+    vector_collection = chroma_client.get_collection(name=COLLECTION_NAME)
 except Exception as e:
     error_msg = str(e)
     
