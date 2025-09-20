@@ -26,6 +26,7 @@ class SetupStep(Enum):
     """Setup steps in order."""
     WELCOME = "welcome"
     ENVIRONMENT_CHECK = "environment_check"
+    STORAGE_CONFIGURATION = "storage_configuration"
     MODEL_STRATEGY = "model_strategy"
     API_CONFIGURATION = "api_configuration"
     MODEL_INSTALLATION = "model_installation"
@@ -255,6 +256,8 @@ class SetupManager:
                 return await self._step_welcome()
             elif step == SetupStep.ENVIRONMENT_CHECK:
                 return await self._step_environment_check()
+            elif step == SetupStep.STORAGE_CONFIGURATION:
+                return await self._step_storage_configuration(user_input)
             elif step == SetupStep.MODEL_STRATEGY:
                 return await self._step_model_strategy(user_input)
             elif step == SetupStep.API_CONFIGURATION:
@@ -387,10 +390,79 @@ You can use Cortex Suite entirely locally or enhance it with cloud APIs for adva
             status=status,
             message=message,
             details={"checks": results},
-            next_step=SetupStep.MODEL_STRATEGY
+            next_step=SetupStep.STORAGE_CONFIGURATION
         )
         
         self._update_progress(SetupStep.ENVIRONMENT_CHECK, result)
+        return result
+
+    async def _step_storage_configuration(self, user_input: Dict[str, Any]) -> SetupStepResult:
+        """Configure knowledge base storage location and provide Docker mapping guidance."""
+        # If no input yet, present options
+        if not user_input or "storage_mode" not in user_input:
+            message = (
+                "📦 Storage Configuration:\n\n"
+                "Choose where to store your knowledge base (ChromaDB + metadata).\n\n"
+                "• Docker volume (default, persists across restarts)\n"
+                "• Bind to host folder (recommended for easy backups and OS access)\n\n"
+                "If you select a host folder, you'll need to restart Docker for mapping to take effect."
+            )
+            return SetupStepResult(
+                step=SetupStep.STORAGE_CONFIGURATION,
+                status=SetupStatus.IN_PROGRESS,
+                message=message,
+                details={"awaiting_input": True},
+            )
+
+        storage_mode = user_input.get("storage_mode", "volume")
+        host_ai_db = (user_input.get("host_ai_database_path") or "").strip()
+        host_source = (user_input.get("host_source_path") or "").strip()
+
+        # Persist selection into setup configuration
+        self._progress.configuration["storage_mode"] = storage_mode
+        if host_ai_db:
+            self._progress.configuration["host_ai_database_path"] = host_ai_db
+        if host_source:
+            self._progress.configuration["host_source_path"] = host_source
+
+        # Prepare .env suggestions for Docker Compose and launchers
+        env_suggestions = []
+        if storage_mode == "host_bind":
+            if host_ai_db:
+                env_suggestions.append(f"WINDOWS_AI_DATABASE_PATH={host_ai_db}")
+            if host_source:
+                env_suggestions.append(f"WINDOWS_KNOWLEDGE_SOURCE_PATH={host_source}")
+
+        # Determine environment
+        in_docker = bool(os.path.exists('/.dockerenv') or os.environ.get('container') or os.environ.get('DOCKER_CONTAINER'))
+
+        # Construct user guidance
+        lines = []
+        if storage_mode == "volume":
+            lines.append("✅ Using Docker volume for /data (persists unless volume is removed).")
+            lines.append("App path remains: /data/ai_databases")
+        else:
+            lines.append("✅ Selected host bind mount for knowledge base.")
+            lines.append("Set these lines in your project's docker/.env (or via launcher prompts):")
+            lines.extend([f"  {s}" for s in env_suggestions] or ["  WINDOWS_AI_DATABASE_PATH=/path/to/ai_databases"])
+            lines.append("")
+            if in_docker:
+                lines.append("🔁 Then restart Docker for mappings to apply:")
+                lines.append("  docker compose down")
+                lines.append("  docker compose up -d --build")
+            else:
+                lines.append("🔁 If using docker-compose: run down/up so bindings are active.")
+
+        message = "\n".join(lines)
+
+        result = SetupStepResult(
+            step=SetupStep.STORAGE_CONFIGURATION,
+            status=SetupStatus.COMPLETED,
+            message=message,
+            details={"env_suggestions": env_suggestions},
+            next_step=SetupStep.MODEL_STRATEGY
+        )
+        self._update_progress(SetupStep.STORAGE_CONFIGURATION, result)
         return result
     
     async def _step_model_strategy(self, user_input: Dict[str, Any]) -> SetupStepResult:

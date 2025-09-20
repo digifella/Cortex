@@ -1,5 +1,5 @@
 # ## File: pages/7_Maintenance.py
-# Version: v4.6.0
+# Version: v4.7.0
 # Date: 2025-08-31
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.6.1"
+PAGE_VERSION = "v4.7.0"
 
 # Import Cortex modules
 try:
@@ -1191,6 +1191,77 @@ def display_backup_management():
                             st.success(f"✅ Backup created successfully: {backup_id}")
                         except Exception as e:
                             st.error(f"❌ Backup failed: {e}")
+
+        # Export to external location (Host/Filesystem) — non-Docker parity
+        with st.expander("📤 Export Backup To External Location", expanded=False):
+            st.caption("Copies your entire knowledge base (Chroma, graph, collections, logs) to a folder you choose.")
+
+            def _resolve_destination(p: str) -> Path:
+                # Convert Windows or POSIX input to a usable local path (handles WSL too)
+                p = (p or '').strip()
+                if not p:
+                    return Path('')
+                resolved = convert_windows_to_wsl_path(p)
+                return Path(resolved)
+
+            dest_root_input = st.text_input(
+                "Destination folder (e.g., C:/CortexBackups or /home/user/CortexBackups)",
+                placeholder="C:/CortexBackups or /home/you/CortexBackups",
+                key="kb_external_backup_dest_host"
+            )
+
+            backup_name_hint = datetime.now().strftime("cortex_kb_backup_%Y%m%d_%H%M%S")
+            dest_backup_name = st.text_input("Backup folder name", value=backup_name_hint, key="kb_external_backup_name_host")
+
+            if st.button("📤 Export Now", use_container_width=True, key="btn_export_external_backup_host"):
+                try:
+                    dest_root = _resolve_destination(dest_root_input)
+                    if not dest_root or str(dest_root) == ".":
+                        st.error("Please provide a valid destination path.")
+                        st.stop()
+
+                    # Ensure destination base exists
+                    dest_root.mkdir(parents=True, exist_ok=True)
+
+                    # Source paths
+                    src_base = Path(convert_windows_to_wsl_path(db_path))
+                    chroma_src = src_base / "knowledge_hub_db"
+                    files_to_copy = [
+                        (src_base / "working_collections.json", "working_collections.json"),
+                        (src_base / "knowledge_cortex.gpickle", "knowledge_cortex.gpickle"),
+                        (src_base / "batch_state.json", "batch_state.json"),
+                        (src_base / "staging_ingestion.json", "staging_ingestion.json"),
+                    ]
+
+                    # Prevent exporting into the same KB folder
+                    dest_dir = dest_root / dest_backup_name
+                    if str(dest_dir.resolve()) == str(src_base.resolve()) or str(dest_root.resolve()) == str(src_base.resolve()):
+                        st.error("Destination cannot be the same as the knowledge base path.")
+                        st.stop()
+
+                    # Create destination
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Copy ChromaDB directory if exists
+                    if chroma_src.exists():
+                        st.info("Copying ChromaDB directory (this may take a while)...")
+                        shutil.copytree(chroma_src, dest_dir / "knowledge_hub_db", dirs_exist_ok=True)
+
+                    # Copy other files
+                    copied_files = 0
+                    for src_path, name in files_to_copy:
+                        if src_path.exists():
+                            shutil.copy2(src_path, dest_dir / name)
+                            copied_files += 1
+
+                    st.success(f"✅ Export complete to: {dest_dir}")
+                    st.caption(f"Copied extra files: {copied_files}")
+                except PermissionError as pe:
+                    st.error(f"Permission denied writing to destination: {pe}")
+                except FileNotFoundError as fe:
+                    st.error(f"Destination not found: {fe}")
+                except Exception as e:
+                    st.error(f"Export failed: {e}")
         
         with st.expander("📋 Manage Existing Backups", expanded=False):
             try:

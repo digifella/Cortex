@@ -94,6 +94,7 @@ except Exception:
 
 logger = get_logger(__name__)
 from cortex_engine.query_cortex import describe_image_with_vlm_for_ingestion
+from cortex_engine.embedding_adapters import EmbeddingServiceAdapter
 from cortex_engine.entity_extractor import EntityExtractor, ExtractedEntity, ExtractedRelationship
 from cortex_engine.graph_manager import EnhancedGraphManager
 from cortex_engine.batch_manager import BatchState
@@ -140,19 +141,29 @@ def initialize_script():
     logging.info("--- Script Initialized: Configuring models... ---")
     
     # Check if Ollama is available before configuring
-    from cortex_engine.utils.ollama_utils import check_ollama_service, format_ollama_error_for_user
+from cortex_engine.utils.ollama_utils import check_ollama_service, format_ollama_error_for_user
     
-    is_running, error_msg = check_ollama_service()
+    chk = check_ollama_service()
+    # Backward compatible unpack
+    is_running = chk[0]
+    error_msg = chk[1] if len(chk) > 1 else None
+    resolved_url = chk[2] if len(chk) > 2 else None
     if not is_running:
         logging.warning(f"Ollama service not available: {error_msg}")
         logging.warning("AI-enhanced metadata extraction will be disabled. Documents will be processed with basic metadata only.")
         Settings.llm = None  # Will be handled in analysis function
     else:
-        Settings.llm = create_smart_ollama_llm(model="mistral:7b-instruct-v0.3-q4_K_M", request_timeout=600.0)
-        logging.info("Ollama connected successfully with modern API")
+        Settings.llm = create_smart_ollama_llm(model="mistral:7b-instruct-v0.3-q4_K_M", request_timeout=600.0, base_url=resolved_url)
+        logging.info(f"Ollama connected successfully at {resolved_url}")
     
-    Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
-    logging.info(f"Models configured (Embed: {EMBED_MODEL}).")
+    # Unify embeddings with search/async via adapter around embedding_service (Docker)
+    try:
+        Settings.embed_model = EmbeddingServiceAdapter(model_name=EMBED_MODEL)
+        logging.info(f"Models configured via EmbeddingServiceAdapter (Embed: {EMBED_MODEL}).")
+    except Exception as e:
+        logging.warning(f"EmbeddingServiceAdapter failed ({e}); falling back to HuggingFaceEmbedding")
+        Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+        logging.info(f"Models configured (Embed: {EMBED_MODEL}).")
 
 class RichMetadata(BaseModel):
     document_type: Literal[
@@ -535,6 +546,7 @@ def extract_entities_and_relationships(doc_text: str, metadata: Dict, entity_ext
 
 def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, target_collection: str = None):
     logging.info(f"--- Starting Stage 2: Document Analysis with Graph Extraction (Cortex v13.0.0) ---")
+    print("CORTEX_STAGE::ANALYSIS_START", flush=True)
     
     # Initialize batch manager if db_path is available
     batch_manager = None
@@ -738,9 +750,11 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
     
     collection_info = f" -> '{target_collection}'" if target_collection else " -> 'default'"
     logging.info(f"--- Analysis complete. {len(staged_docs)} documents staged{collection_info} at {staging_file} ---")
+    print(f"CORTEX_STAGE::ANALYSIS_DONE::{len(staged_docs)}::{staging_file}", flush=True)
 
 def finalize_ingestion(db_path: str, args=None):
     logging.info(f"--- Starting Stage 3: Finalize from Staging with Graph Building (Cortex v13.0.0) ---")
+    print("CORTEX_STAGE::FINALIZE_START", flush=True)
     staging_file = get_staging_file_path(db_path)
     if not os.path.exists(staging_file): 
         logging.error(f"Staging file not found at: {staging_file}")
@@ -900,6 +914,7 @@ def finalize_ingestion(db_path: str, args=None):
             logging.error(f"Could not automatically add documents to '{collection_name}' collection: {e}")
     
     logging.info("--- Finalization complete. Knowledge base and graph are up to date. ---")
+    print("CORTEX_STAGE::FINALIZE_DONE", flush=True)
 
 def main():
     parser = argparse.ArgumentParser(description="Cortex Ingestion Engine with GraphRAG")

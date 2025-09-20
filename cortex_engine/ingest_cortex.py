@@ -94,6 +94,7 @@ except Exception:
 
 logger = get_logger(__name__)
 from cortex_engine.query_cortex import describe_image_with_vlm_for_ingestion
+from cortex_engine.embedding_adapters import EmbeddingServiceAdapter
 from cortex_engine.entity_extractor import EntityExtractor, ExtractedEntity, ExtractedRelationship
 from cortex_engine.graph_manager import EnhancedGraphManager
 from cortex_engine.batch_manager import BatchState
@@ -150,8 +151,14 @@ def initialize_script():
         Settings.llm = create_smart_ollama_llm(model="mistral:7b-instruct-v0.3-q4_K_M", request_timeout=600.0)
         logging.info("Ollama connected successfully with modern API")
     
-    Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
-    logging.info(f"Models configured (Embed: {EMBED_MODEL}).")
+    # Unify embeddings with search/async via adapter around embedding_service
+    try:
+        Settings.embed_model = EmbeddingServiceAdapter(model_name=EMBED_MODEL)
+        logging.info(f"Models configured via EmbeddingServiceAdapter (Embed: {EMBED_MODEL}).")
+    except Exception as e:
+        logging.warning(f"EmbeddingServiceAdapter failed ({e}); falling back to HuggingFaceEmbedding")
+        Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+        logging.info(f"Models configured (Embed: {EMBED_MODEL}).")
 
 class RichMetadata(BaseModel):
     document_type: Literal[

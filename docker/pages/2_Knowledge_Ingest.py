@@ -33,7 +33,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 # Import centralized utilities
-from cortex_engine.utils import convert_windows_to_wsl_path, get_logger, validate_path_exists, convert_to_docker_mount_path
+from cortex_engine.utils import convert_windows_to_wsl_path, get_logger, validate_path_exists, convert_to_docker_mount_path, convert_source_path_to_docker_mount
 from cortex_engine.utils.model_checker import model_checker
 from cortex_engine.config import STAGING_INGESTION_FILE, INGESTED_FILES_LOG, DEFAULT_EXCLUSION_PATTERNS_STR
 from cortex_engine.config_manager import ConfigManager
@@ -303,13 +303,34 @@ def get_full_file_content(file_path_str: str) -> str:
         return f"[Error generating preview: {e}]"
 
 def load_staged_files():
+    """Load staged files located next to the configured DB path."""
     st.session_state.staged_files = []
-    staging_path = Path(STAGING_INGESTION_FILE)
-    if staging_path.exists():
-        try:
-            with open(staging_path, 'r') as f: st.session_state.staged_files = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            st.error(f"Error reading staging file: {e}"); st.session_state.staged_files = []
+    try:
+        from cortex_engine.ingest_cortex import get_staging_file_path
+        wsl_db_path = convert_to_docker_mount_path(st.session_state.get('db_path', ''))
+        staging_path = Path(get_staging_file_path(wsl_db_path)) if wsl_db_path else None
+        if staging_path and staging_path.exists():
+            try:
+                with open(staging_path, 'r') as f:
+                    data = json.load(f)
+                # Support both old (list) and new (dict) formats
+                if isinstance(data, dict):
+                    st.session_state.staged_files = data.get('documents', [])
+                else:
+                    st.session_state.staged_files = data
+            except (json.JSONDecodeError, IOError) as e:
+                st.error(f"Error reading staging file: {e}")
+                st.session_state.staged_files = []
+    except Exception:
+        # Fallback to legacy location as last resort
+        legacy = Path(STAGING_INGESTION_FILE)
+        if legacy.exists():
+            try:
+                with open(legacy, 'r') as f:
+                    data = json.load(f)
+                st.session_state.staged_files = data.get('documents', data) if isinstance(data, dict) else data
+            except Exception:
+                st.session_state.staged_files = []
 
 def scan_for_files(selected_dirs: List[str]):
     wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
@@ -324,6 +345,7 @@ def scan_for_files(selected_dirs: List[str]):
 
     # Enhanced file scanning with progress monitoring
     all_files = []
+    excluded_unsupported = 0
     
     # Create progress containers
     scan_progress_container = st.empty()
@@ -333,7 +355,7 @@ def scan_for_files(selected_dirs: List[str]):
     total_scan_start = time.time()
     
     for dir_idx, dir_path in enumerate(selected_dirs, 1):
-        wsl_dir_path = convert_windows_to_wsl_path(dir_path)
+        wsl_dir_path = convert_source_path_to_docker_mount(dir_path)
         dir_name = Path(dir_path).name
         
         # Update progress display
@@ -375,35 +397,55 @@ def scan_for_files(selected_dirs: List[str]):
     filter_progress_container = st.empty()
     filter_progress_container.info("🔍 **Applying filters and exclusions...**")
     
-    candidate_files = [f.as_posix() for f in all_files if f.as_posix() not in ingested_files and f.suffix.lower() not in UNSUPPORTED_EXTENSIONS]
+    candidate_files = []
+    for f in all_files:
+        if f.as_posix() in ingested_files:
+            continue
+        if f.suffix.lower() in UNSUPPORTED_EXTENSIONS:
+            excluded_unsupported += 1
+            continue
+        candidate_files.append(f.as_posix())
     filter_progress_container.text(f"📋 After excluding unsupported formats: {len(candidate_files)} files")
 
+    excluded_common = 0
     if st.session_state.filter_exclude_common:
         exclude_keywords = [
             "working", "temp", "archive", "ignore", "backup", "node_modules",
             ".git", "exclude", "draft", "invoice", "timesheet", "contract", "receipt",
-            "data", "prezi.app"
+            "prezi.app"
         ]
+        # Remove "data" from exclusions as it conflicts with Docker mount paths like /data/
+        before = len(candidate_files)
         candidate_files = [f for f in candidate_files if not any(k in part.lower() for k in exclude_keywords for part in Path(f).parts)]
+        excluded_common = before - len(candidate_files)
         filter_progress_container.text(f"📋 After excluding common folders: {len(candidate_files)} files")
 
+    excluded_patterns = 0
     if st.session_state.enable_pattern_exclusion:
         patterns = [p.strip() for p in st.session_state.exclude_patterns_input.split('\n') if p.strip()]
+        before = len(candidate_files)
         candidate_files = [f for f in candidate_files if not any(fnmatch(Path(f).name, p) for p in patterns)]
+        excluded_patterns = before - len(candidate_files)
         filter_progress_container.text(f"📋 After pattern exclusions: {len(candidate_files)} files")
 
+    preferred_docx_removed = 0
     if st.session_state.filter_prefer_docx:
         docx_stems = {Path(f).stem for f in candidate_files if f.lower().endswith('.docx')}
+        before = len(candidate_files)
         candidate_files = [f for f in candidate_files if not (f.lower().endswith('.pdf') and Path(f).stem in docx_stems)]
+        preferred_docx_removed = before - len(candidate_files)
         filter_progress_container.text(f"📋 After preferring .docx over .pdf: {len(candidate_files)} files")
 
+    dedup_removed = 0
     if st.session_state.filter_deduplicate:
         grouped_files = defaultdict(list)
         for f_path in candidate_files:
             pattern = r'[\s_-]*(v\d+(\.\d+)*|draft|\d{8}|final|revised)[\s_-]*'
             normalized = re.sub(pattern, "", Path(f_path).stem, flags=re.IGNORECASE).strip()
             grouped_files[normalized].append(f_path)
+        before = len(candidate_files)
         candidate_files = [max(file_list, key=lambda f: Path(f).stat().st_mtime) if len(file_list) > 1 else file_list[0] for _, file_list in grouped_files.items()]
+        dedup_removed = before - len(candidate_files)
         filter_progress_container.text(f"📋 After deduplication: {len(candidate_files)} files")
     
     # Final summary
@@ -412,6 +454,19 @@ def scan_for_files(selected_dirs: List[str]):
     st.session_state.files_to_review = sorted(candidate_files)
     st.session_state.file_selections = {fp: True for fp in st.session_state.files_to_review}
     st.session_state.review_page = 0
+
+    # Persist stats for troubleshooting on the next screen
+    st.session_state.last_scan_stats = {
+        "selected_dirs": selected_dirs,
+        "total_scanned": len(all_files),
+        "candidate_after_unsupported": len(all_files) - excluded_unsupported,
+        "excluded_unsupported": excluded_unsupported,
+        "excluded_common": excluded_common,
+        "excluded_patterns": excluded_patterns,
+        "preferred_docx_removed": preferred_docx_removed,
+        "dedup_removed": dedup_removed,
+        "final_candidates": len(candidate_files)
+    }
     
     # Handle resume mode - create batch state with proper filtering
     if st.session_state.get("resume_mode_enabled"):
@@ -452,7 +507,7 @@ def scan_for_files(selected_dirs: List[str]):
 
 def log_failed_documents(failed_docs, db_path):
     """Log documents that failed during batch processing to a separate failure log."""
-    wsl_db_path = convert_windows_to_wsl_path(db_path)
+    wsl_db_path = convert_to_docker_mount_path(db_path)
     chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
     chroma_db_dir.mkdir(parents=True, exist_ok=True)
     
@@ -600,6 +655,21 @@ def render_batch_processing_ui():
         st.markdown("---")
     
     if not files_to_process and not batch_status["active"]:
+        # Distinguish between "nothing to do" and "actually completed"
+        last_scan = batch_manager.get_scan_config() if 'batch_manager' in locals() else {}
+        if not st.session_state.get('files_to_review') and not last_scan:
+            st.warning("No files selected for batch processing. Please go back, select directories, and run a scan.")
+            with st.expander("Troubleshooting", expanded=False):
+                st.write("- Ensure the Source path is correct and visible inside the container.")
+                st.write("- Click 'Scan Selected Directories' to populate files.")
+                st.write("- You should see a summary like 'Filtering complete! N files ready'.")
+            st.markdown("---")
+            if st.button("⬅️ Back to Configuration", key="back_config_no_selection", use_container_width=True):
+                initialize_state(force_reset=False)
+                st.session_state.ingestion_stage = "config"
+                st.rerun()
+            return
+
         st.success("✅ Batch processing complete!")
         
         # Check if there are successfully processed documents for collection creation
@@ -1427,17 +1497,87 @@ def render_config_and_scan_ui():
     st.text_input("2. Database Storage Path (Destination)", key="db_path",
                   help="💾 Path where your knowledge base will be stored. This directory will contain the processed documents, embeddings, and knowledge graph. Needs sufficient space for your document collection.")
     st.markdown("---")
+    # Diagnostics expander
+    with st.expander("🛠️ Diagnostics", expanded=False):
+        try:
+            src = st.session_state.get('knowledge_source_path', '')
+            dbp = st.session_state.get('db_path', '')
+            src_resolved = convert_to_docker_mount_path(src)
+            db_resolved = convert_to_docker_mount_path(dbp)
+            st.caption(f"Resolved Source (container): {src_resolved}")
+            st.caption(f"Resolved DB (container): {db_resolved}")
+            # Existence checks
+            st.write(f"Source exists: {Path(src_resolved).exists()}")
+            st.write(f"DB parent exists: {Path(db_resolved).parent.exists() if db_resolved else False}")
+            st.write(f"DB parent writable: {os.access(Path(db_resolved).parent, os.W_OK) if db_resolved else False}")
+            # List sample subdirs
+            if Path(src_resolved).exists():
+                subdirs = [d.name for d in os.scandir(src_resolved) if d.is_dir()]
+                st.write(f"Subdirectories ({min(len(subdirs), 10)} shown): {subdirs[:10]}")
+            # Show queued count
+            queued = len(st.session_state.get('files_to_review', []))
+            st.write(f"Queued files: {queued}")
+            # Quick path test
+            if st.button("Run Quick Path Test"):
+                try:
+                    # Prefer selected directories; otherwise test the root source
+                    selections = [p for p, sel in st.session_state.get('dir_selections', {}).items() if sel]
+                    test_paths = selections if selections else ([src] if src else [])
+                    if not test_paths:
+                        st.warning("No source path set. Enter a Source path first.")
+                    else:
+                        total_files = 0
+                        total_candidates = 0
+                        sample = []
+                        for raw in test_paths[:3]:  # Limit to first 3 selections for speed
+                            test_resolved = convert_to_docker_mount_path(raw)
+                            p = Path(test_resolved)
+                            if not p.exists():
+                                st.warning(f"Path not found: {raw} -> {test_resolved}")
+                                continue
+                            count = 0
+                            cand = 0
+                            local_sample = []
+                            for fp in p.rglob('*'):
+                                if fp.is_file():
+                                    count += 1
+                                    if fp.suffix.lower() not in UNSUPPORTED_EXTENSIONS:
+                                        cand += 1
+                                        if len(local_sample) < 10:
+                                            local_sample.append(fp.as_posix())
+                            total_files += count
+                            total_candidates += cand
+                            st.info(f"{raw} -> {test_resolved}: {count} files, {cand} candidate(s) after filtering")
+                            if local_sample:
+                                st.caption("Sample:")
+                                for s in local_sample:
+                                    st.write(f"• {s}")
+                        st.success(f"Quick test complete. Total files: {total_files}, candidates after filtering: {total_candidates}")
+                except Exception as e:
+                    st.error(f"Quick path test failed: {e}")
+            # Tail ingestion log
+            if st.button("Tail Ingestion Log (200 lines)"):
+                log_path = Path(__file__).parent.parent / 'logs' / 'ingestion.log'
+                try:
+                    with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines = f.readlines()[-200:]
+                    st.code(''.join(lines), language='log')
+                except Exception as e:
+                    st.warning(f"Could not read log: {e}")
+        except Exception as e:
+            st.warning(f"Diagnostics unavailable: {e}")
+
     st.markdown("**3. Select Directories to Scan**")
 
     root_display_path = st.session_state.knowledge_source_path
-    root_wsl_path = convert_windows_to_wsl_path(root_display_path)
+    root_wsl_path = convert_to_docker_mount_path(root_display_path)
     # Use Docker-aware path validation that checks both normal and Docker mount paths
     is_knowledge_path_valid = validate_path_exists(root_display_path, must_be_dir=True)
 
     if is_knowledge_path_valid:
         current_display_path = st.session_state.directory_scan_path
         st.text_input("Current Directory:", current_display_path, disabled=True)
-        current_scan_path_wsl = Path(convert_windows_to_wsl_path(current_display_path))
+        current_scan_path_wsl = Path(convert_to_docker_mount_path(current_display_path))
         try:
             subdirs = sorted([d.name for d in os.scandir(current_scan_path_wsl) if d.is_dir()], key=str.lower)
             c1, c2, c3 = st.columns(3)
@@ -1474,10 +1614,22 @@ def render_config_and_scan_ui():
                             )
             else:
                 st.write("No subdirectories found in the current directory.")
+            # Quick action: select the current directory itself (always available)
+            with st.container():
+                cur_selected = st.session_state.dir_selections.get(current_display_path, False)
+                if st.checkbox("Include current directory", value=cur_selected, key="include_current_dir"):
+                    st.session_state.dir_selections[current_display_path] = True
+                else:
+                    if current_display_path in st.session_state.dir_selections:
+                        st.session_state.dir_selections[current_display_path] = False
         except Exception as e:
             st.warning(f"Could not read directory: {e}")
     else:
         st.warning("Please provide a valid root source path to enable navigation.")
+        # Show diagnostic hint about how the container resolved the path
+        if root_display_path:
+            st.caption(f"Container attempted path: `{root_wsl_path}`")
+            st.caption("If this path does not exist in the container, ensure the drive is shared in Docker Desktop or enter the container's mounted path (e.g., `/data/kb`).")
 
     st.markdown("---")
     st.markdown("**4. Processing Mode**")
@@ -1579,7 +1731,9 @@ def render_config_and_scan_ui():
             if st.session_state.enable_pattern_exclusion: st.text_area("File Patterns (one per line)", key="exclude_patterns_input", height=150)
 
     st.markdown("---")
-    is_db_path_valid = os.path.isdir(os.path.dirname(convert_to_docker_mount_path(st.session_state.db_path)))
+    db_resolved_for_check = convert_to_docker_mount_path(st.session_state.db_path)
+    db_parent = os.path.dirname(db_resolved_for_check) if db_resolved_for_check else ""
+    is_db_path_valid = os.path.isdir(db_parent) and os.access(db_parent, os.W_OK)
     selected_to_scan = [path for path, selected in st.session_state.dir_selections.items() if selected]
 
     if st.button(f"🔎 Scan {len(selected_to_scan)} Selected Director(y/ies) for New Files", type="primary", use_container_width=True, disabled=not selected_to_scan):
@@ -1642,8 +1796,11 @@ def render_config_and_scan_ui():
             scan_for_files(selected_to_scan)
             st.rerun()
         else:
-            if not is_knowledge_path_valid: st.error(f"Root Source Path is not valid.")
-            if not is_db_path_valid: st.error(f"DB Path's parent is not valid.")
+            if not is_knowledge_path_valid:
+                st.error(f"Root Source Path is not valid.")
+            if not is_db_path_valid:
+                st.error(f"DB Path is not writable by the container. Resolved: `{db_resolved_for_check}`")
+                st.info("Tip: Use a container-mounted path like `/data/ai_databases` and bind it to your Windows folder with `-v C:\\\\ai_databases:/data/ai_databases`. Alternatively, enable Docker Desktop drive sharing and set DOCKER_HOST_MOUNT_ROOT so writes go to a writable host mount.")
 
     with st.expander("⚙️ Database Maintenance"):
         st.info("Database maintenance functions have been moved to the dedicated **Maintenance** page for better organization and security.")
@@ -1661,8 +1818,50 @@ def render_pre_analysis_ui():
     files_to_review = st.session_state.get("files_to_review", [])
     total_files = len(files_to_review)
 
+    # Auto-recover if the scan results were lost between reruns (occasionally seen in Docker)
     if not files_to_review:
+        try:
+            scan_cfg = st.session_state.get("current_scan_config") or {}
+            selected_dirs = scan_cfg.get("selected_directories") or []
+            # Prevent infinite retries
+            auto_retries = st.session_state.get("_pre_analysis_autoscan_retries", 0)
+            if selected_dirs and auto_retries < 1:
+                st.info("🔄 Restoring scan results from last configuration...")
+                st.session_state._pre_analysis_autoscan_retries = auto_retries + 1
+                # Re-run the scan using the same filters and directory selections
+                scan_for_files(selected_dirs)
+                st.rerun()
+        except Exception as _auto_err:
+            # Fall through to the normal empty state UI if recovery fails
+            pass
+
+    if not st.session_state.get("files_to_review", []):
+        stats = st.session_state.get("last_scan_stats", {})
         st.success("Scan complete. No new documents found based on your criteria.")
+        if stats:
+            with st.expander("🔎 Last Scan Details", expanded=True):
+                st.caption(f"Selected directories: {len(stats.get('selected_dirs', []))}")
+                if stats.get('selected_dirs'):
+                    for d in stats['selected_dirs'][:6]:
+                        st.write(f"• {d}")
+                    if len(stats['selected_dirs']) > 6:
+                        st.write(f"… and {len(stats['selected_dirs'])-6} more")
+                st.write(f"Total files scanned: {stats.get('total_scanned', 0)}")
+                st.write(f"Excluded (unsupported): {stats.get('excluded_unsupported', 0)}")
+                st.write(f"Excluded (common folders): {stats.get('excluded_common', 0)}")
+                st.write(f"Excluded (patterns): {stats.get('excluded_patterns', 0)}")
+                st.write(f"Removed (prefer DOCX): {stats.get('preferred_docx_removed', 0)}")
+                st.write(f"Removed (deduplication): {stats.get('dedup_removed', 0)}")
+                st.write(f"Final candidates: {stats.get('final_candidates', 0)}")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔄 Force Re‑scan Now", key="force_rescan_preanalysis", use_container_width=True):
+                    sel = (st.session_state.get("current_scan_config") or {}).get("selected_directories") or []
+                    if sel:
+                        scan_for_files(sel)
+                        st.rerun()
+                    else:
+                        st.warning("No selected directories were saved with the last scan.")
         if st.button("⬅️ Back to Configuration", key="back_config_no_new_docs"): initialize_state(force_reset=True); st.rerun()
         return
 
@@ -1936,10 +2135,12 @@ def render_metadata_review_ui():
             if valid_files:
                 # Auto-proceed to finalization
                 st.session_state.last_ingested_doc_ids = [doc['doc_id'] for doc in valid_files if not doc.get('exclude_from_final')]
-                with open(STAGING_INGESTION_FILE, 'w') as f: 
-                    json.dump(st.session_state.edited_staged_files, f, indent=2)
-
+                # Persist staging next to the configured DB path
+                from cortex_engine.ingest_cortex import get_staging_file_path
                 wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                staging_file = get_staging_file_path(wsl_db_path)
+                with open(staging_file, 'w') as f:
+                    json.dump(st.session_state.edited_staged_files, f, indent=2)
                 if not wsl_db_path or not Path(wsl_db_path).exists():
                     st.error(f"Database path is invalid or does not exist: {wsl_db_path}")
                     st.stop()
@@ -1981,10 +2182,12 @@ def render_metadata_review_ui():
             final_files_to_process = st.session_state.edited_staged_files
             doc_ids_to_ingest = [doc['doc_id'] for doc in final_files_to_process if not doc.get('exclude_from_final')]
             st.session_state.last_ingested_doc_ids = doc_ids_to_ingest
-            with open(STAGING_INGESTION_FILE, 'w') as f: 
-                json.dump(final_files_to_process, f, indent=2)
-
+            # Persist staging next to the configured DB path
+            from cortex_engine.ingest_cortex import get_staging_file_path
             wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+            staging_file = get_staging_file_path(wsl_db_path)
+            with open(staging_file, 'w') as f:
+                json.dump(final_files_to_process, f, indent=2)
             if not wsl_db_path or not Path(wsl_db_path).exists():
                 st.error(f"Database path is invalid or does not exist: {wsl_db_path}")
                 st.stop()
@@ -2081,7 +2284,11 @@ def render_metadata_review_ui():
         final_files_to_process = st.session_state.edited_staged_files
         doc_ids_to_ingest = [doc['doc_id'] for doc in final_files_to_process if not doc.get('exclude_from_final')]
         st.session_state.last_ingested_doc_ids = doc_ids_to_ingest
-        with open(STAGING_INGESTION_FILE, 'w') as f: json.dump(final_files_to_process, f, indent=2)
+        # Persist staging next to the configured DB path
+        from cortex_engine.ingest_cortex import get_staging_file_path
+        staging_file = get_staging_file_path(wsl_db_path)
+        with open(staging_file, 'w') as f:
+            json.dump(final_files_to_process, f, indent=2)
 
         wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
         if not wsl_db_path or not Path(wsl_db_path).exists():
@@ -2483,16 +2690,18 @@ help_system.show_help_menu()
 
 # Check and display Ollama status prominently
 try:
-    from cortex_engine.utils.ollama_utils import check_ollama_service, get_ollama_status_message, get_ollama_instructions
-    
-    is_running, error_msg = check_ollama_service()
+    from cortex_engine.utils.ollama_utils import check_ollama_service, get_ollama_instructions
+    chk = check_ollama_service()
+    is_running = chk[0]
+    error_msg = chk[1] if len(chk) > 1 else None
+    resolved_url = chk[2] if len(chk) > 2 else None
     if not is_running:
-        st.warning(f"⚠️ {get_ollama_status_message(is_running, error_msg)}")
+        st.warning(f"⚠️ Ollama not running or unreachable: {error_msg}")
         with st.expander("ℹ️ **Important: Limited AI Functionality**", expanded=False):
             st.info("**Impact:** Documents will be processed with basic metadata only. AI-enhanced analysis, summaries, and tagging will be unavailable.")
             st.markdown(get_ollama_instructions())
     else:
-        st.success("✅ Ollama service is running - Full AI capabilities available")
+        st.success(f"✅ Ollama service is running at {resolved_url or 'configured endpoint'}")
 except Exception as e:
     st.warning(f"Unable to check Ollama status: {e}")
 
@@ -2513,7 +2722,7 @@ with col1:
             
             if db_path:
                 from cortex_engine.utils import convert_windows_to_wsl_path
-                wsl_db_path = convert_windows_to_wsl_path(db_path)
+                wsl_db_path = convert_to_docker_mount_path(db_path)
                 chroma_db_path = os.path.join(convert_to_docker_mount_path(wsl_db_path), "knowledge_hub_db")
                 ingested_log_path = os.path.join(chroma_db_path, "ingested_files.log")
                 
@@ -2556,7 +2765,7 @@ with col2:
             
             if db_path:
                 from cortex_engine.utils import convert_windows_to_wsl_path
-                wsl_db_path = convert_windows_to_wsl_path(db_path)
+                wsl_db_path = convert_to_docker_mount_path(db_path)
                 chroma_db_path = os.path.join(convert_to_docker_mount_path(wsl_db_path), "knowledge_hub_db")
                 ingested_log_path = os.path.join(chroma_db_path, "ingested_files.log")
                 
@@ -2602,7 +2811,7 @@ except Exception as e:
                 
                 if db_path:
                     from cortex_engine.utils import convert_windows_to_wsl_path
-                    wsl_db_path = convert_windows_to_wsl_path(db_path)
+                    wsl_db_path = convert_to_docker_mount_path(db_path)
                     chroma_db_path = os.path.join(convert_to_docker_mount_path(wsl_db_path), "knowledge_hub_db")
                     ingested_log_path = os.path.join(chroma_db_path, "ingested_files.log")
                     
@@ -2735,11 +2944,47 @@ if st.session_state.get("show_maintenance", False):
     render_document_type_management()
 else:
     # Normal ingestion workflow
+    # Safety guard: if we somehow landed in a running/completed stage without any files or active batch,
+    # reset to configuration to avoid a confusing "complete" message with no work done.
+    try:
+        wsl_db_path = convert_to_docker_mount_path(st.session_state.get('db_path', ''))
+        # Avoid creating batch manager if DB location is not writable to prevent read-only FS errors
+        bm = None
+        if wsl_db_path:
+            kb_parent = Path(wsl_db_path).parent
+            if kb_parent.exists() and os.access(kb_parent, os.W_OK):
+                try:
+                    bm = BatchState(wsl_db_path)
+                except Exception as e:
+                    logger.warning(f"Batch manager unavailable: {e}")
+        status = bm.get_status() if bm else {"active": False}
+    except Exception:
+        status = {"active": False}
+
+    if st.session_state.get('ingestion_stage') in {"batch_processing", "analysis_running", "metadata_review", "finalizing", "config_done"} \
+       and not status.get('active') \
+       and not st.session_state.get('files_to_review') \
+       and not st.session_state.get('staged_files'):
+        st.session_state.ingestion_stage = "config"
+
     stage = st.session_state.get("ingestion_stage", "config")
-    if stage == "config": render_config_and_scan_ui()
+    if stage == "config":
+        # Small visibility metrics
+        queued = len(st.session_state.get('files_to_review', []))
+        st.caption(f"Queued files: {queued}")
+        render_config_and_scan_ui()
     elif stage == "pre_analysis": render_pre_analysis_ui()
-    elif stage == "batch_processing": render_batch_processing_ui()
-    elif stage == "analysis_running": render_log_and_review_ui("Live Analysis Log", "metadata_review")
+    elif stage == "batch_processing":
+        queued = len(st.session_state.get('files_to_review', []))
+        st.caption(f"Queued files: {queued}")
+        render_batch_processing_ui()
+    elif stage == "analysis_running":
+        queued = len(st.session_state.get('files_to_review', []))
+        st.caption(f"Queued files: {queued}")
+        render_log_and_review_ui("Live Analysis Log", "metadata_review")
     elif stage == "metadata_review": render_metadata_review_ui()
-    elif stage == "finalizing": render_log_and_review_ui("Live Finalization Log", "config_done")
+    elif stage == "finalizing":
+        queued = len(st.session_state.get('files_to_review', []))
+        st.caption(f"Queued files: {queued}")
+        render_log_and_review_ui("Live Finalization Log", "config_done")
     elif stage == "config_done": render_completion_screen()

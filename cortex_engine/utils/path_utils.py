@@ -58,26 +58,92 @@ def convert_windows_to_wsl_path(path_str: Union[str, Path, None]) -> str:
     return normalized_path
 
 
-def convert_to_docker_mount_path(path_str: Union[str, Path, None]) -> str:
+def _in_docker() -> bool:
+    return bool(os.path.exists('/.dockerenv') or os.environ.get('container') or os.environ.get('DOCKER_CONTAINER'))
+
+
+def _resolve_docker_host_path(drive: str, rest: str) -> str:
+    """Try common Docker Desktop host mount roots and return the first that exists."""
+    drive = drive.lower()
+    # Allow override via env
+    preferred_root = os.environ.get('DOCKER_HOST_MOUNT_ROOT')
+    candidate_roots = [r for r in [preferred_root, '/host_mnt', '/run/desktop/mnt/host', '/mnt'] if r]
+    for root in candidate_roots:
+        candidate = f"{root}/{drive}/{rest}"
+        if os.path.exists(candidate):
+            return candidate
+    # Fall back to the first root even if it doesn't exist yet
+    return f"{candidate_roots[0]}/{drive}/{rest}" if candidate_roots else f"/host_mnt/{drive}/{rest}"
+
+
+def convert_source_path_to_docker_mount(path_str: Union[str, Path, None]) -> str:
     """
-    Convert host paths to container-visible paths when running in Docker.
-    
-    - In Docker, Windows drives are typically mounted at '/host_mnt/<drive>/' by Docker Desktop.
-      Example: 'C:\\ai_databases' -> '/host_mnt/c/ai_databases'
-    - Outside Docker, fall back to WSL-style conversion ('/mnt/<drive>/...').
-    - If the path already looks like a POSIX path (starts with '/'), return as-is.
+    Convert a source directory path to Docker mount path - specifically for ingestion source directories.
+    Unlike convert_to_docker_mount_path, this never routes to AI_DATABASE_PATH.
     """
     if not path_str:
         return ""
 
     raw = str(path_str).strip()
+    in_docker = _in_docker()
 
-    # If already POSIX-like, return unchanged
+    # Special-case: POSIX-looking inputs
     if raw.startswith('/'):
+        if in_docker:
+            mnt_match = re.match(r'^/mnt/([a-zA-Z])/(.*)$', raw)
+            if mnt_match:
+                drive, rest = mnt_match.groups()
+                # For source directories, always map to Docker Desktop's host mount root
+                return _resolve_docker_host_path(drive, rest)
         return raw
 
-    # Detect Docker container
+    # Normalize backslashes first for Windows-style inputs
+    normalized_path = raw.replace('\\', '/')
+
+    # Windows drive patterns (C:/..., D:/...)
+    m = re.match(r'^([a-zA-Z]):/(.*)', normalized_path)
+    if m:
+        drive, rest = m.groups()
+        if in_docker:
+            # For source directories, resolve to an existing host mount path inside the container
+            return _resolve_docker_host_path(drive, rest)
+        return f"/mnt/{drive.lower()}/{rest}"
+
+    # Bare drive letter (e.g., 'D:')
+    m = re.match(r'^([a-zA-Z]):$', normalized_path)
+    if m:
+        drive = m.group(1)
+        if in_docker:
+            return _resolve_docker_host_path(drive, '')
+        return f"/mnt/{drive.lower()}"
+
+    # Fallback to general conversion
+    return convert_windows_to_wsl_path(raw)
+
+
+def convert_to_docker_mount_path(path_str: Union[str, Path, None]) -> str:
+    """
+    Convert host paths to container-visible paths when running in Docker.
+    - In Docker, prefer `AI_DATABASE_PATH` or known host mount roots over `/mnt/*`.
+    - Outside Docker, return WSL-style conversions.
+    """
+    if not path_str:
+        return ""
+
+    raw = str(path_str).strip()
     in_docker = os.path.exists('/.dockerenv') or os.environ.get('container') or os.environ.get('DOCKER_CONTAINER')
+
+    # If already POSIX-like, handle WSL-style mounts specially when in Docker
+    if raw.startswith('/'):
+        if in_docker:
+            mnt = re.match(r'^/mnt/([a-zA-Z])/(.*)$', raw)
+            if mnt:
+                drive, rest = mnt.groups()
+                ai_db_env = os.environ.get('AI_DATABASE_PATH')
+                if ai_db_env and ai_db_env.strip():
+                    return ai_db_env.rstrip('/')
+                return f"/host_mnt/{drive.lower()}/{rest}"
+        return raw
 
     # Normalize backslashes first
     normalized_path = raw.replace('\\', '/')
@@ -87,10 +153,9 @@ def convert_to_docker_mount_path(path_str: Union[str, Path, None]) -> str:
     if m:
         drive, rest = m.groups()
         if in_docker:
-            # Prefer explicit container mount if provided
             ai_db_env = os.environ.get('AI_DATABASE_PATH')
-            if ai_db_env:
-                return ai_db_env
+            if ai_db_env and ai_db_env.strip():
+                return ai_db_env.rstrip('/')
             return f"/host_mnt/{drive.lower()}/{rest}"
         else:
             return f"/mnt/{drive.lower()}/{rest}"
@@ -101,8 +166,8 @@ def convert_to_docker_mount_path(path_str: Union[str, Path, None]) -> str:
         drive = m.group(1)
         if in_docker:
             ai_db_env = os.environ.get('AI_DATABASE_PATH')
-            if ai_db_env:
-                return ai_db_env
+            if ai_db_env and ai_db_env.strip():
+                return ai_db_env.rstrip('/')
             return f"/host_mnt/{drive.lower()}"
         else:
             return f"/mnt/{drive.lower()}"

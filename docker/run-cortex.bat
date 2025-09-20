@@ -323,6 +323,40 @@ if errorlevel 1 goto build_failed
 
 echo ** Starting Cortex Suite...
 
+REM Read existing host mappings from .env (if any)
+set "ENV_AI_DB_PATH="
+set "ENV_SOURCE_PATH="
+for /f "tokens=1* delims==" %%A in ('findstr /B "WINDOWS_AI_DATABASE_PATH=" .env 2^>nul') do set "ENV_AI_DB_PATH=%%B"
+for /f "tokens=1* delims==" %%A in ('findstr /B "WINDOWS_KNOWLEDGE_SOURCE_PATH=" .env 2^>nul') do set "ENV_SOURCE_PATH=%%B"
+
+REM Offer interactive storage mapping if AI DB path not set (linear flow, no parens)
+if defined ENV_AI_DB_PATH goto SKIP_AI_DB_PROMPT
+echo.
+echo STORAGE: Configure host folder mapping [optional]
+set "USE_HOST_AI_DB=N"
+set /p USE_HOST_AI_DB=Use host folder for AI database? (y/N): 
+if /I "%USE_HOST_AI_DB%" NEQ "Y" goto SKIP_AI_DB_PROMPT
+set "HOST_AI_DB="
+set /p HOST_AI_DB=Enter host path for AI database (e.g., C:\ai_databases): 
+if not defined HOST_AI_DB goto SKIP_AI_DB_PROMPT
+set "HOST_AI_DB=%HOST_AI_DB:"=%"
+>>.env echo WINDOWS_AI_DATABASE_PATH=%HOST_AI_DB%
+set "ENV_AI_DB_PATH=%HOST_AI_DB%"
+:SKIP_AI_DB_PROMPT
+
+REM Offer knowledge source mapping if not set (linear flow)
+if defined ENV_SOURCE_PATH goto SKIP_SRC_PROMPT
+set "USE_HOST_SRC=N"
+set /p USE_HOST_SRC=Bind a host folder for Knowledge Source (documents to ingest)? (y/N): 
+if /I "%USE_HOST_SRC%" NEQ "Y" goto SKIP_SRC_PROMPT
+set "HOST_SRC="
+set /p HOST_SRC=Enter host path for Knowledge Source (e.g., C:\Knowledge): 
+if not defined HOST_SRC goto SKIP_SRC_PROMPT
+set "HOST_SRC=%HOST_SRC:"=%" 
+>>.env echo WINDOWS_KNOWLEDGE_SOURCE_PATH=%HOST_SRC%
+set "ENV_SOURCE_PATH=%HOST_SRC%"
+:SKIP_SRC_PROMPT
+
 
 REM Ultra-simple approach: Just use the most common case that includes E drive
 echo DETECT: Checking for user directories to mount...
@@ -353,6 +387,16 @@ if not errorlevel 1 (
     echo INFO: This is optimal for ARM64 PCs, Apple Silicon, and Intel systems without NVIDIA GPUs
     set DOCKER_CMD=docker run -d --name cortex-suite -p 8501:8501 -p 8000:8000 -v cortex_data:/data -v cortex_logs:/home/cortex/app/logs -v cortex_ollama:/home/cortex/.ollama
 )
+
+REM Add host bind mounts for AI database and Knowledge Source if configured (no paren blocks)
+if not defined ENV_AI_DB_PATH goto SKIP_AI_DB_MOUNT
+echo   MOUNT: Mapping AI database to host: %ENV_AI_DB_PATH% ^-> /data/ai_databases
+set DOCKER_CMD=!DOCKER_CMD! -v "%ENV_AI_DB_PATH%":/data/ai_databases
+:SKIP_AI_DB_MOUNT
+if not defined ENV_SOURCE_PATH goto SKIP_SRC_MOUNT
+echo   MOUNT: Mapping Knowledge Source to host (read-only): %ENV_SOURCE_PATH% ^-> /data/knowledge_base
+set DOCKER_CMD=!DOCKER_CMD! -v "%ENV_SOURCE_PATH%":/data/knowledge_base:ro
+:SKIP_SRC_MOUNT
 
 REM Always mount entire C:\ drive if it exists (should always exist on Windows)
 if exist "C:\" (

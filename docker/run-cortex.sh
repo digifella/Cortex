@@ -68,6 +68,58 @@ if [ ! -f .env ]; then
     fi
 fi
 
+# Read any existing host mapping from .env
+ENV_AI_DB_PATH=$(grep -E '^WINDOWS_AI_DATABASE_PATH=' .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+ENV_SOURCE_PATH=$(grep -E '^WINDOWS_KNOWLEDGE_SOURCE_PATH=' .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+
+# Offer interactive storage mapping (once) if not set in .env
+ADD_AI_DB_MOUNT=""
+ADD_SOURCE_MOUNT=""
+
+if [ -z "$ENV_AI_DB_PATH" ]; then
+    echo ""
+    echo "📦 Storage Setup"
+    echo "Would you like to store the AI database on a host folder (for easy backups)?"
+    read -p "Use host folder for AI database? (y/N): " USE_HOST_AI_DB
+    if [[ "$USE_HOST_AI_DB" =~ ^[Yy]$ ]]; then
+        read -p "Enter host path for AI database (e.g., /Users/you/ai_databases): " HOST_AI_DB
+        if [ -n "$HOST_AI_DB" ]; then
+            # Persist to .env for future runs
+            if grep -q '^WINDOWS_AI_DATABASE_PATH=' .env; then
+                sed -i.bak "s|^WINDOWS_AI_DATABASE_PATH=.*|WINDOWS_AI_DATABASE_PATH=$HOST_AI_DB|" .env
+            else
+                echo "WINDOWS_AI_DATABASE_PATH=$HOST_AI_DB" >> .env
+            fi
+            ENV_AI_DB_PATH="$HOST_AI_DB"
+        fi
+    fi
+fi
+
+if [ -z "$ENV_SOURCE_PATH" ]; then
+    read -p "Bind a host folder for Knowledge Source (documents to ingest)? (y/N): " USE_HOST_SRC
+    if [[ "$USE_HOST_SRC" =~ ^[Yy]$ ]]; then
+        read -p "Enter host path for Knowledge Source (e.g., /Users/you/Knowledge): " HOST_SRC
+        if [ -n "$HOST_SRC" ]; then
+            if grep -q '^WINDOWS_KNOWLEDGE_SOURCE_PATH=' .env; then
+                sed -i.bak "s|^WINDOWS_KNOWLEDGE_SOURCE_PATH=.*|WINDOWS_KNOWLEDGE_SOURCE_PATH=$HOST_SRC|" .env
+            else
+                echo "WINDOWS_KNOWLEDGE_SOURCE_PATH=$HOST_SRC" >> .env
+            fi
+            ENV_SOURCE_PATH="$HOST_SRC"
+        fi
+    fi
+fi
+
+# Translate any configured host paths into -v mounts
+if [ -n "$ENV_AI_DB_PATH" ]; then
+    ADD_AI_DB_MOUNT="-v \"$ENV_AI_DB_PATH\":/data/ai_databases"
+    echo "  📁 Mapping AI database to host: $ENV_AI_DB_PATH -> /data/ai_databases"
+fi
+if [ -n "$ENV_SOURCE_PATH" ]; then
+    ADD_SOURCE_MOUNT="-v \"$ENV_SOURCE_PATH\":/data/knowledge_base:ro"
+    echo "  📁 Mapping Knowledge Source to host (read-only): $ENV_SOURCE_PATH -> /data/knowledge_base"
+fi
+
 # Build the image
 echo "🔨 Building Cortex Suite (this may take a while)..."
 echo "    This includes downloading Python packages and system dependencies..."
@@ -182,6 +234,8 @@ docker run -d \
     -p 8501:8501 \
     -p 8000:8000 \
     -v cortex_data:/data \
+    $ADD_AI_DB_MOUNT \
+    $ADD_SOURCE_MOUNT \
     -v cortex_logs:/home/cortex/app/logs \
     -v cortex_ollama:/home/cortex/.ollama \
     $USER_VOLUME_MOUNTS \

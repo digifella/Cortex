@@ -33,7 +33,7 @@ WORKDIR /home/cortex/app
 COPY --chown=cortex:cortex requirements.txt .
 
 # Install Python dependencies (architecture-neutral)
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --retries 3 --timeout 60 -r requirements.txt
 
 # PyTorch installation is now handled in requirements.txt with CPU-only wheels
 # This provides universal compatibility across x86_64, ARM64, and Snapdragon architectures

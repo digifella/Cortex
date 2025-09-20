@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py
-# Version: v4.6.2
+# Version: v4.7.0
 # Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
@@ -404,8 +404,9 @@ def scan_for_files(selected_dirs: List[str]):
         exclude_keywords = [
             "working", "temp", "archive", "ignore", "backup", "node_modules",
             ".git", "exclude", "draft", "invoice", "timesheet", "contract", "receipt",
-            "data", "prezi.app"
+            "prezi.app"
         ]
+        # Remove "data" from exclusions as it conflicts with Docker mount paths like /data/
         candidate_files = [f for f in candidate_files if not any(k in part.lower() for k in exclude_keywords for part in Path(f).parts)]
         filter_progress_container.text(f"📋 After excluding common folders: {len(candidate_files)} files")
 
