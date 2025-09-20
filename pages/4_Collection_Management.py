@@ -85,6 +85,34 @@ if not chroma_client: st.stop()
 
 try:
     vector_collection = chroma_client.get_collection(name=COLLECTION_NAME)
+    # Quick diagnostics to help verify DB connectivity
+    with st.container(border=True):
+        st.markdown("### 🔎 Knowledge Base Diagnostics")
+        try:
+            doc_count = vector_collection.count()
+        except Exception as _diag_e:
+            doc_count = 0
+        st.write(f"📊 Vector store documents: {doc_count}")
+        
+        # Offer a rescue sync: populate 'default' collection from vector store IDs
+        st.caption("If collections appear empty but the vector store has documents, you can sync the 'default' collection from the vector store IDs.")
+        if st.button("🔄 Sync 'default' collection from vector store", help="Populate 'default' with all vector store document IDs"):
+            try:
+                all_ids = vector_collection.get(include=["ids"]).get("ids", [])
+                if isinstance(all_ids, list) and all_ids and isinstance(all_ids[0], list):
+                    # Flatten if nested
+                    flat_ids = [i for sub in all_ids for i in sub]
+                else:
+                    flat_ids = all_ids if isinstance(all_ids, list) else []
+                if not flat_ids:
+                    st.warning("No IDs returned from vector store.")
+                else:
+                    mgr = WorkingCollectionManager()
+                    mgr.add_docs_by_id_to_collection("default", flat_ids)
+                    st.success(f"✅ Added {len(flat_ids)} IDs to 'default' collection.")
+                    st.rerun()
+            except Exception as se:
+                st.error(f"Sync failed: {se}")
 except Exception as e:
     error_msg = str(e)
     
