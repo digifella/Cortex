@@ -33,10 +33,10 @@ class EmbeddingServiceAdapter(BaseEmbedding):  # type: ignore
     def get_text_embedding(self, text: str) -> List[float]:
         return embed_query(text)
 
-    def get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+    def get_text_embeddings(self, texts: List[str], *args, **kwargs) -> List[List[float]]:
         return embed_texts(texts)
 
-    def get_text_embedding_batch(self, texts: List[str]) -> List[List[float]]:
+    def get_text_embedding_batch(self, texts: List[str], *args, **kwargs) -> List[List[float]]:
         return embed_texts(texts)
 
     def get_agg_embedding_from_queries(self, queries: List[str]) -> List[float]:
@@ -49,4 +49,3 @@ class EmbeddingServiceAdapter(BaseEmbedding):  # type: ignore
             for i, val in enumerate(v):
                 sums[i] += val
         return [s / len(vecs) for s in sums]
-

@@ -44,11 +44,13 @@ class EmbeddingServiceAdapter(BaseEmbedding):  # type: ignore
         return embed_query(text)
 
     # Batch embeddings
-    def get_text_embeddings(self, texts: List[str]) -> List[List[float]]:  # noqa: D401
+    def get_text_embeddings(self, texts: List[str], *args, **kwargs) -> List[List[float]]:  # noqa: D401
+        # Accept optional args/kwargs like show_progress used by some LlamaIndex versions
         return embed_texts(texts)
 
     # Some LlamaIndex versions call this batch method name
-    def get_text_embedding_batch(self, texts: List[str]) -> List[List[float]]:
+    def get_text_embedding_batch(self, texts: List[str], *args, **kwargs) -> List[List[float]]:
+        # Accept optional args/kwargs like show_progress
         return embed_texts(texts)
 
     # Optional utility used by some pipelines (aggregate multi-query)
@@ -63,4 +65,3 @@ class EmbeddingServiceAdapter(BaseEmbedding):  # type: ignore
             for i, val in enumerate(v):
                 sums[i] += val
         return [s / len(vecs) for s in sums]
-
