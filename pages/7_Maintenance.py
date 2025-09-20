@@ -181,7 +181,7 @@ def perform_clean_start(db_path: str):
     debug_log_lines.append("")
     debug_log_lines.append("OPERATIONS LOG:")
     debug_log_lines.append("-" * 40)
-    
+
     try:
         deleted_items = []
         
@@ -197,11 +197,27 @@ def perform_clean_start(db_path: str):
             st.info(f"📁 **Knowledge Base Location:** `{chroma_db_dir}`\n\nDirectory does not exist - will clean up other logs and configurations only.")
             debug_log_lines.append("STATUS: No knowledge base directory found - cleanup only")
         
-        # Show debug information clearly on screen (avoid nested expanders)
+        # Show debug information with clear path mapping and current file status
         with st.container(border=True):
-            st.markdown("#### 🔍 Pre-Operation Debug Information")
+            st.markdown("#### 🔍 Pre‑Operation Debug Information")
+            st.write(f"Windows path: `{db_path}`")
+            st.write(f"Resolved path: `{final_db_path}`")
+            # Current state check
+            st.markdown("**Current State Check**")
+            items = [
+                ("ChromaDB directory", Path(final_db_path) / "knowledge_hub_db"),
+                ("Collections file", Path(final_db_path) / "working_collections.json"),
+                ("Staging file", Path(final_db_path) / "staging_ingestion.json"),
+                ("Batch state", Path(final_db_path) / "batch_state.json"),
+                ("Knowledge graph", Path(final_db_path) / "knowledge_cortex.gpickle"),
+            ]
+            for label, p in items:
+                exists = p.exists()
+                icon = "✅" if exists else "⚪"
+                st.write(f"{icon} {label}: `{p}` (exists={exists})")
+            # Append to debug buffer as well
             debug_display = "\n".join(debug_log_lines)
-            st.text_area("Debug Log", value=debug_display, height=200, help="Copy this information if you need to report issues")
+            st.text_area("Debug Log", value=debug_display, height=140, help="Copy this info if you need to report issues")
         
         st.divider()
         st.header("🧹 Clean Start Operations")
@@ -451,6 +467,21 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
         st.markdown("### 🗑️ Cleaned Items:")
         for item in deleted_items:
             st.write(f"- {item}")
+
+        # Final verification
+        with st.container(border=True):
+            st.markdown("#### ✅ Final Verification")
+            items = [
+                ("ChromaDB directory", Path(final_db_path) / "knowledge_hub_db"),
+                ("Collections file", Path(final_db_path) / "working_collections.json"),
+                ("Staging file", Path(final_db_path) / "staging_ingestion.json"),
+                ("Batch state", Path(final_db_path) / "batch_state.json"),
+                ("Knowledge graph", Path(final_db_path) / "knowledge_cortex.gpickle"),
+            ]
+            for label, p in items:
+                exists = p.exists()
+                icon = "❌" if exists else "✅"
+                st.write(f"{icon} {label}: `{p}` (exists={exists})")
         
         # Show final comprehensive debug log on screen
         st.subheader("📋 Complete Debug Log")

@@ -197,10 +197,25 @@ def perform_clean_start(db_path: str):
             st.info(f"📁 **Knowledge Base Location:** `{chroma_db_dir}`\n\nDirectory does not exist - will clean up other logs and configurations only.")
             debug_log_lines.append("STATUS: No knowledge base directory found - cleanup only")
         
-        # Show debug information clearly on screen
-        with st.expander("🔍 Pre-Operation Debug Information", expanded=True):
+        # Show debug information with clear path mapping and current file status
+        with st.container(border=True):
+            st.markdown("#### 🔍 Pre‑Operation Debug Information")
+            st.write(f"Container path: `{final_db_path}`")
+            # Current state check
+            st.markdown("**Current State Check**")
+            items = [
+                ("ChromaDB directory", Path(final_db_path) / "knowledge_hub_db"),
+                ("Collections file", Path(final_db_path) / "working_collections.json"),
+                ("Staging file", Path(final_db_path) / "staging_ingestion.json"),
+                ("Batch state", Path(final_db_path) / "batch_state.json"),
+                ("Knowledge graph", Path(final_db_path) / "knowledge_cortex.gpickle"),
+            ]
+            for label, p in items:
+                exists = p.exists()
+                icon = "✅" if exists else "⚪"
+                st.write(f"{icon} {label}: `{p}` (exists={exists})")
             debug_display = "\n".join(debug_log_lines)
-            st.text_area("Debug Log", value=debug_display, height=200, help="Copy this information if you need to report issues")
+            st.text_area("Debug Log", value=debug_display, height=140, help="Copy this info if you need to report issues")
         
         st.divider()
         st.header("🧹 Clean Start Operations")
@@ -217,7 +232,7 @@ def perform_clean_start(db_path: str):
         debug_log_lines.append(f"RESULT: Directory exists = {chroma_db_dir.exists()}")
         
         # Show current step results
-        with st.expander("📋 Step 1 Results", expanded=True):
+        with st.container(border=True):
             step1_results = f"""Path being checked: {chroma_db_dir}
 Directory exists: {chroma_db_dir.exists()}
 """
@@ -451,7 +466,8 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
         st.subheader("📋 Complete Debug Log")
         st.info("**This shows everything that happened during the Clean Start operation. You can copy this information if needed.**")
         
-        with st.expander("📋 Complete Debug Log - All Operations", expanded=True):
+        with st.container(border=True):
+            st.markdown("#### 📋 Complete Debug Log - All Operations")
             st.text_area("Complete Debug Log", value=final_debug_log, height=400, help="Copy this entire log if you need to share it for troubleshooting")
         
         st.success("🎉 **CLEAN START IS COMPLETE - PLEASE READ THE DEBUG INFORMATION ABOVE**")
