@@ -683,14 +683,76 @@ def display_database_maintenance():
         st.error("Cannot load configuration for database operations")
         return
     
-    # Use Docker-aware fallback
-    default_db_path = '/data' if os.path.exists('/.dockerenv') else '/tmp/cortex_db' 
-    db_path = config.get('db_path', default_db_path)
-    
-    # Show debug information about path resolution
-    st.info(f"🐳 **Docker Mode:** {'Yes' if os.path.exists('/.dockerenv') else 'No'}")
-    st.info(f"📁 **Database Path:** `{db_path}`")
-    st.info(f"🔧 **Configuration:** {config}")
+    # Use Docker-aware fallback and allow quick correction
+    default_db_path = '/app/data/ai_databases' if os.path.exists('/.dockerenv') else 'C:/ai_databases' 
+    db_path = config.get('ai_database_path', config.get('db_path', default_db_path))
+
+    # Database Path Configuration block
+    with st.container(border=True):
+        st.subheader("📁 Database Path Configuration")
+        docker_mode = os.path.exists('/.dockerenv')
+        st.caption(f"Environment: {'🐳 Docker' if docker_mode else '💻 Host'}")
+
+        # Current value and normalized preview
+        current_input = st.text_input(
+            "AI Database Path",
+            value=db_path,
+            help="Enter the folder that contains your knowledge base (e.g., C:/ai_databases)."
+        )
+        try:
+            preview = convert_windows_to_wsl_path(current_input)
+            st.code(f"Resolved path: {preview}")
+        except Exception:
+            pass
+
+        # Quick scan for likely locations
+        def scan_candidates():
+            cands = []
+            drives = list("CDEFGHIJKLMNOPQRSTUVWXYZ")
+            for d in drives:
+                base = f"{d}:/ai_databases"
+                wsl = convert_windows_to_wsl_path(base)
+                kb = os.path.join(wsl, "knowledge_hub_db")
+                if os.path.isdir(wsl) or os.path.isdir(kb):
+                    cands.append(base)
+            # Add Docker defaults
+            if docker_mode:
+                for p in ["/app/data/ai_databases", "/data", "/workspace/data/ai_databases"]:
+                    if os.path.isdir(p) or os.path.isdir(os.path.join(p, "knowledge_hub_db")):
+                        cands.append(p)
+            return sorted(set(cands))
+
+        cols = st.columns([1,1,1])
+        with cols[0]:
+            if st.button("🔎 Scan Common Locations", use_container_width=True, key="scan_db_locations"):
+                st.session_state.discovered_db_paths = scan_candidates()
+                st.rerun()
+        with cols[1]:
+            if st.button("💾 Save Path", use_container_width=True, key="save_db_path"):
+                try:
+                    ConfigManager().update_config({"ai_database_path": current_input})
+                    if 'maintenance_config' in st.session_state and st.session_state.maintenance_config:
+                        st.session_state.maintenance_config['db_path'] = current_input
+                    st.success("✅ Database path saved")
+                except Exception as e:
+                    st.error(f"Failed to save path: {e}")
+
+        # Show discovered candidates, if any
+        if st.session_state.get('discovered_db_paths'):
+            choice = st.selectbox(
+                "Discovered database locations",
+                st.session_state.discovered_db_paths,
+                help="Select a discovered location to populate the field above."
+            )
+            if st.button("Use Selected Location", key="use_selected_db_loc"):
+                try:
+                    ConfigManager().update_config({"ai_database_path": choice})
+                    if 'maintenance_config' in st.session_state and st.session_state.maintenance_config:
+                        st.session_state.maintenance_config['db_path'] = choice
+                    st.success(f"✅ Path set to {choice}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to set path: {e}")
     
     st.markdown("## 🚀 Clean Start - Complete System Reset")
     st.markdown("### 🧹 Clean Start Function")
