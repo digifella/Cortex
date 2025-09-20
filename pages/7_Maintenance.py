@@ -197,8 +197,9 @@ def perform_clean_start(db_path: str):
             st.info(f"📁 **Knowledge Base Location:** `{chroma_db_dir}`\n\nDirectory does not exist - will clean up other logs and configurations only.")
             debug_log_lines.append("STATUS: No knowledge base directory found - cleanup only")
         
-        # Show debug information clearly on screen
-        with st.expander("🔍 Pre-Operation Debug Information", expanded=True):
+        # Show debug information clearly on screen (avoid nested expanders)
+        with st.container(border=True):
+            st.markdown("#### 🔍 Pre-Operation Debug Information")
             debug_display = "\n".join(debug_log_lines)
             st.text_area("Debug Log", value=debug_display, height=200, help="Copy this information if you need to report issues")
         
@@ -216,8 +217,9 @@ def perform_clean_start(db_path: str):
         st.success(f"🔍 Directory exists: `{chroma_db_dir.exists()}`")
         debug_log_lines.append(f"RESULT: Directory exists = {chroma_db_dir.exists()}")
         
-        # Show current step results
-        with st.expander("📋 Step 1 Results", expanded=True):
+        # Show current step results (non-expander)
+        with st.container(border=True):
+            st.markdown("#### 📋 Step 1 Results")
             step1_results = f"""Path being checked: {chroma_db_dir}
 Directory exists: {chroma_db_dir.exists()}
 """
@@ -236,8 +238,9 @@ Directory exists: {chroma_db_dir.exists()}
                 debug_log_lines.append(f"FILES FOUND: {file_names}")
                 debug_log_lines.append(f"SUBDIRECTORIES FOUND: {dir_names}")
                 
-                # Show directory analysis results
-                with st.expander("📋 Step 2 Results - Directory Analysis", expanded=True):
+                # Show directory analysis results (non-expander)
+                with st.container(border=True):
+                    st.markdown("#### 📋 Step 2 Results - Directory Analysis")
                     step2_results = f"""Directory contents:
 Files found: {file_names}
 Subdirectories found: {dir_names}
@@ -256,8 +259,9 @@ Total items: {len(files_in_dir)}
             debug_log_lines.append(f"INGESTED_LOG_PATH: {ingested_files_log}")
             debug_log_lines.append(f"INGESTED_LOG_EXISTS: {ingested_files_log.exists()}")
             
-            # Show ingested log check results  
-            with st.expander("📋 Step 3 Results - Ingested Log Check", expanded=True):
+            # Show ingested log check results (non-expander)
+            with st.container(border=True):
+                st.markdown("#### 📋 Step 3 Results - Ingested Log Check")
                 step3_results = f"""Ingested files log path: {ingested_files_log}
 Log file exists: {ingested_files_log.exists()}
 """
@@ -492,11 +496,11 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
         logger.error(f"Clean Start error: {e}")
         st.error(f"❌ {error_msg}")
         
-        # Show error debug log on screen
+        # Show error debug log on screen (avoid nested expanders)
         st.subheader("📋 Error Debug Log")
         st.error("**An error occurred during Clean Start. This shows what was attempted before the error:**")
-        
-        with st.expander("📋 Error Debug Log - All Operations Before Error", expanded=True):
+        with st.container(border=True):
+            st.markdown("#### 📋 Error Debug Log - All Operations Before Error")
             st.text_area("Error Debug Log", value=error_debug_log, height=400, help="Copy this error log for troubleshooting")
         
         st.error("🚨 **CLEAN START FAILED - PLEASE READ THE ERROR DEBUG INFORMATION ABOVE**")
@@ -699,6 +703,8 @@ def display_database_maintenance():
             value=db_path,
             help="Enter the folder that contains your knowledge base (e.g., C:/ai_databases)."
         )
+        # Keep the most recent user input in session state for downstream actions
+        st.session_state["maintenance_current_db_input"] = current_input
         try:
             preview = convert_windows_to_wsl_path(current_input)
             st.code(f"Resolved path: {preview}")
@@ -734,6 +740,7 @@ def display_database_maintenance():
                     if 'maintenance_config' in st.session_state and st.session_state.maintenance_config:
                         st.session_state.maintenance_config['db_path'] = current_input
                     st.success("✅ Database path saved")
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Failed to save path: {e}")
 
@@ -1047,7 +1054,9 @@ def display_database_maintenance():
                 
                 c1, c2 = st.columns(2)
                 if c1.button("✅ YES, CLEAN START", use_container_width=True, type="primary"):
-                    perform_clean_start(db_path)
+                    # Use freshest input from the configuration block if available
+                    fresh_path = st.session_state.get('maintenance_current_db_input', db_path)
+                    perform_clean_start(fresh_path)
                     st.session_state.show_confirm_clean_start = False
                     st.rerun()
                 if c2.button("❌ Cancel", use_container_width=True):
