@@ -2113,6 +2113,29 @@ def render_metadata_review_ui():
     edited_files = st.session_state.edited_staged_files
     if not edited_files:
         st.success("Analysis complete, but no documents were staged for review.")
+        # EXTRA DIAGNOSTICS: Show staging file path and parsed count
+        try:
+            from cortex_engine.ingest_cortex import get_staging_file_path
+            wsl_db_path = convert_to_docker_mount_path(st.session_state.get('db_path', ''))
+            staging_path = Path(get_staging_file_path(wsl_db_path)) if wsl_db_path else None
+            if staging_path:
+                st.caption(f"Staging file: `{staging_path}` (exists={staging_path.exists()})")
+                if staging_path.exists():
+                    try:
+                        with open(staging_path, 'r') as f:
+                            data = json.load(f)
+                        if isinstance(data, dict):
+                            staged_count = len(data.get('documents', []))
+                        else:
+                            staged_count = len(data)
+                        st.caption(f"Parsed staged documents: {staged_count}")
+                        with st.expander("Show staging JSON (first 2KB)", expanded=False):
+                            preview = json.dumps(data, indent=2)
+                            st.text_area("staging_ingestion.json", value=preview[:2048], height=200)
+                    except Exception as pe:
+                        st.warning(f"Could not read staging file: {pe}")
+        except Exception as e:
+            logger.warning(f"Diagnostics error: {e}")
         st.info("Check `logs/ingestion.log` for details.")
         if st.button("⬅️ Back to Configuration", key="back_config_no_staged_docs"): initialize_state(force_reset=True); st.rerun()
         return
