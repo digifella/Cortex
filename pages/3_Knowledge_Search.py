@@ -1443,6 +1443,13 @@ def main():
         st.info(f"Showing previous search results for: '{st.session_state.get('last_search_query', '')}'")
         render_search_results(st.session_state.last_search_results, config)
 
+    # Consistent version footer
+    try:
+        from cortex_engine.ui_components import render_version_footer
+        render_version_footer()
+    except Exception:
+        pass
+
 
 if __name__ == "__main__":
     main()

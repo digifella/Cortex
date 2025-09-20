@@ -20,6 +20,7 @@ sys.path.insert(0, str(project_root))
 from llama_index.core import Settings, VectorStoreIndex
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from cortex_engine.embedding_adapters import EmbeddingServiceAdapter
 from llama_index.llms.ollama import Ollama
 from chromadb.config import Settings as ChromaSettings
 
@@ -82,7 +83,10 @@ def load_system(_db_path):
                 st.stop()
             
             Settings.llm = Ollama(model=LLM_MODEL, request_timeout=300.0)
-            Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL, device="cuda")
+            try:
+                Settings.embed_model = EmbeddingServiceAdapter(model_name=EMBED_MODEL)
+            except Exception:
+                Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL, device="cuda")
             db_settings = ChromaSettings(anonymized_telemetry=False)
             db = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
             chroma_collection = db.get_or_create_collection(COLLECTION_NAME)

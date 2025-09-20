@@ -8,6 +8,7 @@ Date: 2025-08-13
 
 import streamlit as st
 from typing import Dict, Optional, Any, Tuple
+from .version_config import get_version_footer
 from .llm_service import create_llm_service, TaskType, LLMProvider
 
 def llm_provider_selector(task_type: str, key_prefix: str = "", help_text: str = None) -> Tuple[str, Dict[str, Any]]:
@@ -263,6 +264,15 @@ def export_buttons(data: Dict[str, Any], filename_prefix: str,
                     )
                 except Exception as e:
                     st.error(f"JSON export failed: {e}")
+
+def render_version_footer(show_divider: bool = True):
+    """Render a consistent version footer across pages using version_config."""
+    try:
+        if show_divider:
+            st.markdown("---")
+        st.caption(get_version_footer())
+    except Exception:
+        pass
 
 def _generate_markdown_export(data: Dict[str, Any]) -> str:
     """Generate markdown content from data structure."""

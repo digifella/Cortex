@@ -84,7 +84,7 @@ chroma_client = init_chroma_client(db_path)
 if not chroma_client: st.stop()
 
 try:
-    vector_collection = chroma_client.get_collection(name=COLLECTION_NAME)
+vector_collection = chroma_client.get_collection(name=COLLECTION_NAME)
 except Exception as e:
     error_msg = str(e)
     
@@ -812,3 +812,11 @@ for collection in page_collections:
                     if st.button("DELETE PERMANENTLY", type="primary", key=f"delete_btn_{name}"):
                         collection_mgr.delete_collection(name)
                         st.success(f"Successfully deleted collection '{name}'."); st.rerun()
+
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass
