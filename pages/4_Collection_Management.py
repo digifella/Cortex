@@ -94,11 +94,29 @@ try:
             doc_count = 0
         st.write(f"📊 Vector store documents: {doc_count}")
         
+        # Show available Chroma collections and their counts (helps detect name mismatches)
+        try:
+            available = chroma_client.list_collections()
+            if available:
+                cols_info = []
+                for c in available:
+                    try:
+                        c_obj = chroma_client.get_collection(c.name)
+                        cols_info.append((c.name, c_obj.count()))
+                    except Exception:
+                        cols_info.append((c.name, "?"))
+                pretty = ", ".join([f"{n} (count={cnt})" for n, cnt in cols_info])
+                st.caption(f"Available Chroma collections: {pretty}")
+        except Exception:
+            pass
+        
         # Offer a rescue sync: populate 'default' collection from vector store IDs
         st.caption("If collections appear empty but the vector store has documents, you can sync the 'default' collection from the vector store IDs.")
         if st.button("🔄 Sync 'default' collection from vector store", help="Populate 'default' with all vector store document IDs"):
             try:
-                all_ids = vector_collection.get(include=["ids"]).get("ids", [])
+                # Chroma 'get' does not accept 'ids' in include; ids are always returned.
+                # Request metadatas (cheap) so we can pull ids reliably.
+                all_ids = vector_collection.get(include=["metadatas"]).get("ids", [])
                 if isinstance(all_ids, list) and all_ids and isinstance(all_ids[0], list):
                     # Flatten if nested
                     flat_ids = [i for sub in all_ids for i in sub]
