@@ -310,8 +310,9 @@ Log file exists: {ingested_files_log.exists()}
             st.info("ℹ️ ChromaDB directory does not exist - nothing to delete")
             debug_log_lines.append("SKIP: ChromaDB directory does not exist or is not a directory")
         
-        # Show critical step results
-        with st.expander("📋 Critical Step Results - ChromaDB Directory Deletion", expanded=True):
+        # Show critical step results (non-expander)
+        with st.container(border=True):
+            st.markdown("#### 📋 Critical Step Results - ChromaDB Directory Deletion")
             critical_results = f"""Target directory: {chroma_db_dir}
 Directory existed before deletion: {chroma_exists_for_deletion}
 Directory exists after deletion attempt: {chroma_db_dir.exists() if hasattr(chroma_db_dir, 'exists') else 'Unknown'}
@@ -455,7 +456,8 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
         st.subheader("📋 Complete Debug Log")
         st.info("**This shows everything that happened during the Clean Start operation. You can copy this information if needed.**")
         
-        with st.expander("📋 Complete Debug Log - All Operations", expanded=True):
+        with st.container(border=True):
+            st.markdown("#### 📋 Complete Debug Log - All Operations")
             st.text_area("Complete Debug Log", value=final_debug_log, height=400, help="Copy this entire log if you need to share it for troubleshooting")
         
         st.success("🎉 **CLEAN START IS COMPLETE - PLEASE READ THE DEBUG INFORMATION ABOVE**")
