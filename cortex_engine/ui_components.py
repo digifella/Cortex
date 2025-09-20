@@ -6,6 +6,7 @@ Version: 1.0.0
 Date: 2025-08-13
 """
 
+import os
 import streamlit as st
 from typing import Dict, Optional, Any, Tuple
 from .version_config import get_version_footer
@@ -266,11 +267,13 @@ def export_buttons(data: Dict[str, Any], filename_prefix: str,
                     st.error(f"JSON export failed: {e}")
 
 def render_version_footer(show_divider: bool = True):
-    """Render a consistent version footer across pages using version_config."""
+    """Render a consistent version footer with environment indicator."""
     try:
+        env = "🐳 Docker" if os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') else "💻 Local"
+        footer = get_version_footer()
         if show_divider:
             st.markdown("---")
-        st.caption(get_version_footer())
+        st.caption(f"{footer} • {env}")
     except Exception:
         pass
 
