@@ -371,8 +371,8 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
                         deleted_items.append(f"Staging/batch file (project): {staging_file}")
                         logger.info(f"Clean Start: Cleared staging file from project: {staging_file}")
             
-            # Clear from database path (current location)  
-            db_path_obj = Path(wsl_db_path)
+            # Clear from database path (current location)
+            db_path_obj = Path(final_db_path)
             for pattern in staging_patterns:
                 for staging_file in db_path_obj.glob(pattern):
                     if staging_file.is_file():
