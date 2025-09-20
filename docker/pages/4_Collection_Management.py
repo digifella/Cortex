@@ -736,3 +736,10 @@ for collection in page_collections:
                     if st.button("DELETE PERMANENTLY", type="primary", key=f"delete_btn_{name}"):
                         collection_mgr.delete_collection(name)
                         st.success(f"Successfully deleted collection '{name}'."); st.rerun()
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass

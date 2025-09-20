@@ -433,3 +433,10 @@ if st.session_state.get('parsed_instructions'):
     if st.session_state.generated_doc_bytes:
         dl_filename = f"DRAFT_{st.session_state.get('proposal_name', 'proposal').replace(' ', '_')}.docx"
         st.download_button("📥 Download Generated Proposal", st.session_state.generated_doc_bytes, file_name=dl_filename)
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass

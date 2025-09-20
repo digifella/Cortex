@@ -2988,3 +2988,10 @@ else:
         st.caption(f"Queued files: {queued}")
         render_log_and_review_ui("Live Finalization Log", "config_done")
     elif stage == "config_done": render_completion_screen()
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass

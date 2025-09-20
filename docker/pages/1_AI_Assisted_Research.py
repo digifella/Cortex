@@ -405,3 +405,10 @@ if current_step != "start":
     st.divider()
     if st.button("↩️ Start New Research Topic"):
         reset_research_state()
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass
