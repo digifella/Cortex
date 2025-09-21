@@ -6,6 +6,27 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+
+## v4.8.0 - 2025-09-21
+
+### Module Harmonization & Path Standardization
+
+Complete module synchronization between main and docker, standardized path handling, and GraphRAG integration fixes
+
+### ✨ New Features
+- Docker version now has complete module parity with main project
+- Full EntityExtractor implementation in docker for GraphRAG functionality
+- Enhanced directory processing with recursive file discovery
+- Comprehensive module synchronization including missing utilities
+
+### 🚀 Improvements
+- Replaced all hardcoded paths with centralized get_default_ai_database_path() calls
+- Direct script execution in subprocess to avoid module resolution confusion
+- Synchronized API signatures between main and docker versions
+- Added safety checks for batch status to prevent KeyError crashes
+- Consistent Ollama service checking across all environments
+- Complete docker distribution with all missing core modules
+
 ### 🚧 Known Issues (Docker)
 - In some container runs, the ingest UI may briefly report “Analysis complete, but no documents were staged for review” while the staging file does contain documents. A new diagnostics block now shows the exact staging path, parsed count, and a Retry Finalization button to complete the flow.
 - Knowledge Search now has a Docker‑local fallback implementation when the project root page is not present in the image; functionality is minimal (direct Chroma search) until the full page is bundled.

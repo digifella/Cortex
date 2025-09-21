@@ -1,5 +1,5 @@
 # ## File: pages/7_Maintenance.py
-# Version: v4.7.0
+# Version: v4.8.0
 # Date: 2025-08-31
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.7.0"
+PAGE_VERSION = "v4.8.0"
 
 # Import Cortex modules
 try:
@@ -580,8 +580,9 @@ def load_maintenance_config():
             config_manager = ConfigManager()
             config = config_manager.get_config()
             
-            # Map ConfigManager keys to expected keys - use Docker-aware fallback
-            default_db_path = '/data' if os.path.exists('/.dockerenv') else '/tmp/cortex_db'
+            # Map ConfigManager keys to expected keys - use proper default path detection
+            from cortex_engine.utils.default_paths import get_default_ai_database_path
+            default_db_path = get_default_ai_database_path()
             maintenance_config = {
                 'db_path': config.get('ai_database_path', default_db_path),
                 'knowledge_source_path': config.get('knowledge_source_path', ''),
@@ -601,7 +602,8 @@ def clear_ingestion_log_file():
         if not config:
             return
         
-        db_path = config.get('db_path', '/tmp/cortex_db')
+        from cortex_engine.utils.default_paths import get_default_ai_database_path
+        db_path = config.get('db_path', get_default_ai_database_path())
         wsl_db_path = convert_windows_to_wsl_path(db_path)
         log_path = Path(wsl_db_path) / "knowledge_hub_db" / INGESTED_FILES_LOG
         
@@ -720,8 +722,9 @@ def display_database_maintenance():
         st.error("Cannot load configuration for database operations")
         return
     
-    # Use Docker-aware fallback and allow quick correction
-    default_db_path = '/app/data/ai_databases' if os.path.exists('/.dockerenv') else 'C:/ai_databases' 
+    # Use proper default path detection
+    from cortex_engine.utils.default_paths import get_default_ai_database_path
+    default_db_path = get_default_ai_database_path()
     db_path = config.get('ai_database_path', config.get('db_path', default_db_path))
 
     # Database Path Configuration block
@@ -1274,7 +1277,8 @@ def display_backup_management():
         return
     
     try:
-        db_path = config.get('db_path', '/tmp/cortex_db')
+        from cortex_engine.utils.default_paths import get_default_ai_database_path
+        db_path = config.get('db_path', get_default_ai_database_path())
         # Convert to proper WSL path format for backup manager
         wsl_db_path = convert_windows_to_wsl_path(db_path)
         

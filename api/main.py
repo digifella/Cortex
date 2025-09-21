@@ -153,7 +153,8 @@ async def startup_event():
         # Initialize config manager
         config_manager = ConfigManager()
         config = config_manager.get_config()
-        db_path = convert_windows_to_wsl_path(config.get('ai_database_path', '/mnt/f/ai_databases'))
+        from cortex_engine.utils.default_paths import get_default_ai_database_path
+        db_path = convert_windows_to_wsl_path(config.get('ai_database_path', get_default_ai_database_path()))
         
         # Ensure database directory exists
         os.makedirs(db_path, exist_ok=True)

@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.7.0"
+CORTEX_VERSION = "4.8.0"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
-    "minor": 7,
+    "minor": 8,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -24,29 +24,31 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-09-02",
-    "release_name": "Search Stability & Batch Finalization",
-    "description": "Stabilized search embeddings, improved Hybrid results, fixed batch finalization collections, Docker parity, and UX helpers",
+    "release_date": "2025-09-21",
+    "release_name": "Module Harmonization & Path Standardization",
+    "description": "Complete module synchronization between main and docker, standardized path handling, and GraphRAG integration fixes",
     "breaking_changes": [],
     "new_features": [
-        "Centralized embedding service powering search and async ingest",
-        "Hybrid search now unions vector + graph results without underflow",
-        "Retry Finalization button when staging is present",
-        "Collections migration health check from project root to external DB"
+        "Docker version now has complete module parity with main project",
+        "Full EntityExtractor implementation in docker for GraphRAG functionality", 
+        "Enhanced directory processing with recursive file discovery",
+        "Comprehensive module synchronization including missing utilities"
     ],
     "improvements": [
-        "Direct Chroma queries use explicit query_embeddings for reliability",
-        "GraphRAG adapter no longer imports LlamaIndex in search path",
-        "Batch finalization writes collections to external DB via manager",
-        "Docker ingest uses same collection manager for parity",
-        "Finalization success toast with collection and counts",
-        "Collections file quick preview and path display"
+        "Replaced all hardcoded paths with centralized get_default_ai_database_path() calls",
+        "Direct script execution in subprocess to avoid module resolution confusion",
+        "Synchronized API signatures between main and docker versions",
+        "Added safety checks for batch status to prevent KeyError crashes",
+        "Consistent Ollama service checking across all environments",
+        "Complete docker distribution with all missing core modules"
     ],
     "bug_fixes": [
-        "Fixed post-ingest search failures due to embedding mismatches",
-        "Resolved batch finalization not creating collections in external path",
-        "Clarified Chroma tenant/DB validation errors with guidance",
-        "Prevented Hybrid search from returning fewer results than Traditional"
+        "Fixed GraphRAG empty knowledge graph due to stub EntityExtractor in docker",
+        "Resolved BatchState missing is_paused() method causing AttributeError",
+        "Fixed Ollama status unpacking error from mismatched return values",
+        "Corrected KeyError 'total_files' in batch status display",
+        "Fixed import errors for missing utility modules in docker version",
+        "Resolved module resolution confusion between main and docker paths"
     ]
 }
 

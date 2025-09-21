@@ -1,5 +1,5 @@
-# ## File: pages/2_Knowledge_Ingest.py
-# Version: v4.6.2
+# ## File: pages/2_Knowledge_Ingest.py [DOCKER VERSION]
+# Version: v4.7.0
 # Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
@@ -33,17 +33,11 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 # Import centralized utilities
-from cortex_engine.utils import convert_windows_to_wsl_path, get_logger, validate_path_exists, convert_to_docker_mount_path, convert_source_path_to_docker_mount
+from cortex_engine.utils import convert_windows_to_wsl_path, get_logger, validate_path_exists, convert_to_docker_mount_path
 from cortex_engine.utils.model_checker import model_checker
 from cortex_engine.config import STAGING_INGESTION_FILE, INGESTED_FILES_LOG, DEFAULT_EXCLUSION_PATTERNS_STR
 from cortex_engine.config_manager import ConfigManager
-# Avoid importing heavy ingest engine at module import; only need static options
-try:
-    from cortex_engine.ingest_cortex import RichMetadata
-    _HAS_RICH_METADATA = True
-except Exception:
-    RichMetadata = None
-    _HAS_RICH_METADATA = False
+from cortex_engine.ingest_cortex import RichMetadata
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.document_type_manager import get_document_type_manager
 from cortex_engine.help_system import help_system
@@ -117,15 +111,14 @@ def get_document_type_options():
     return ["Any"] + doc_type_manager.get_all_document_types()
 
 DOC_TYPE_OPTIONS = get_document_type_options()
-if _HAS_RICH_METADATA and hasattr(RichMetadata, 'model_fields'):
-    PROPOSAL_OUTCOME_OPTIONS = RichMetadata.model_fields['proposal_outcome'].annotation.__args__
-else:
-    PROPOSAL_OUTCOME_OPTIONS = ("Won", "Lost", "Pending", "N/A")
+PROPOSAL_OUTCOME_OPTIONS = RichMetadata.model_fields['proposal_outcome'].annotation.__args__
 
 def build_ingestion_command(container_db_path, files_to_process, target_collection=None, resume=False):
     """Build ingestion command with collection assignment support"""
+    # Use direct script path to avoid module resolution confusion
+    script_path = project_root / "cortex_engine" / "ingest_cortex.py"
     command = [
-        sys.executable, "-m", "cortex_engine.ingest_cortex", 
+        sys.executable, str(script_path), 
         "--analyze-only", "--db-path", container_db_path, 
         "--include", *files_to_process
     ]
@@ -142,7 +135,7 @@ def should_auto_finalize():
     """Check if automatic finalization should proceed"""
     try:
         from cortex_engine.ingest_cortex import get_staging_file_path
-        from cortex_engine.utils import convert_to_docker_mount_path
+        from cortex_engine.utils import convert_windows_to_wsl_path
         import os
         import json
         
@@ -172,14 +165,14 @@ def should_auto_finalize():
 def start_automatic_finalization():
     """Start automatic finalization subprocess"""
     try:
-        from cortex_engine.utils import convert_to_docker_mount_path
+        from cortex_engine.utils import convert_windows_to_wsl_path
         
-        wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
         
         # Build finalization command
         command = [
             sys.executable, "-m", "cortex_engine.ingest_cortex", 
-            "--finalize-from-staging", "--db-path", wsl_db_path
+            "--finalize-from-staging", "--db-path", container_db_path
         ]
         
         # Add skip image processing flag if enabled
@@ -205,6 +198,37 @@ def start_automatic_finalization():
         st.error(f"❌ Failed to start automatic finalization: {e}")
         # Fall back to manual mode
         st.session_state.ingestion_stage = "metadata_review"
+
+def show_collection_migration_healthcheck():
+    """Warn if a project-root collections file exists and offer migration to external DB path."""
+    try:
+        project_collections = (Path(__file__).parent.parent / "working_collections.json")
+        mgr = WorkingCollectionManager()
+        external_path = Path(mgr.collections_file)
+        # If a project-root collections file exists and is different from external path
+        if project_collections.exists() and project_collections.resolve() != external_path.resolve():
+            st.warning("Detected collections file in project root. Migrate to external database path to avoid inconsistencies.")
+            col_a, col_b = st.columns([1,2])
+            with col_a:
+                if st.button("🔄 Migrate Collections", key="migrate_collections"):
+                    try:
+                        # Load both sets
+                        import json
+                        with open(project_collections, 'r') as f:
+                            project_data = json.load(f)
+                        external_data = mgr.collections or {}
+                        # Merge doc_ids per collection
+                        for name, data in project_data.items():
+                            ids = data.get('doc_ids', data if isinstance(data, list) else [])
+                            mgr.add_docs_by_id_to_collection(name, ids)
+                        st.success("Collections migrated to external DB path.")
+                    except Exception as me:
+                        st.error(f"Failed to migrate collections: {me}")
+            with col_b:
+                st.caption(f"Project file: {project_collections}\nExternal file: {external_path}")
+    except Exception:
+        # Non-fatal; just skip if anything goes wrong
+        pass
 
 def initialize_state(force_reset: bool = False):
     config_manager = ConfigManager()
@@ -303,38 +327,20 @@ def get_full_file_content(file_path_str: str) -> str:
         return f"[Error generating preview: {e}]"
 
 def load_staged_files():
-    """Load staged files located next to the configured DB path."""
     st.session_state.staged_files = []
-    try:
-        from cortex_engine.ingest_cortex import get_staging_file_path
-        wsl_db_path = convert_to_docker_mount_path(st.session_state.get('db_path', ''))
-        staging_path = Path(get_staging_file_path(wsl_db_path)) if wsl_db_path else None
-        if staging_path and staging_path.exists():
+    # Use database-specific staging path instead of hardcoded project path
+    if st.session_state.get('db_path'):
+        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+        staging_path = Path(container_db_path) / "staging_ingestion.json"
+        if staging_path.exists():
             try:
-                with open(staging_path, 'r') as f:
-                    data = json.load(f)
-                # Support both old (list) and new (dict) formats
-                if isinstance(data, dict):
-                    st.session_state.staged_files = data.get('documents', [])
-                else:
-                    st.session_state.staged_files = data
+                with open(staging_path, 'r') as f: st.session_state.staged_files = json.load(f)
             except (json.JSONDecodeError, IOError) as e:
-                st.error(f"Error reading staging file: {e}")
-                st.session_state.staged_files = []
-    except Exception:
-        # Fallback to legacy location as last resort
-        legacy = Path(STAGING_INGESTION_FILE)
-        if legacy.exists():
-            try:
-                with open(legacy, 'r') as f:
-                    data = json.load(f)
-                st.session_state.staged_files = data.get('documents', data) if isinstance(data, dict) else data
-            except Exception:
-                st.session_state.staged_files = []
+                st.error(f"Error reading staging file: {e}"); st.session_state.staged_files = []
 
 def scan_for_files(selected_dirs: List[str]):
-    wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-    chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
+    container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+    chroma_db_dir = Path(container_db_path) / "knowledge_hub_db"
     ingested_log_path = chroma_db_dir / INGESTED_FILES_LOG
 
     ingested_files = {}
@@ -345,7 +351,6 @@ def scan_for_files(selected_dirs: List[str]):
 
     # Enhanced file scanning with progress monitoring
     all_files = []
-    excluded_unsupported = 0
     
     # Create progress containers
     scan_progress_container = st.empty()
@@ -355,7 +360,7 @@ def scan_for_files(selected_dirs: List[str]):
     total_scan_start = time.time()
     
     for dir_idx, dir_path in enumerate(selected_dirs, 1):
-        wsl_dir_path = convert_source_path_to_docker_mount(dir_path)
+        wsl_dir_path = convert_windows_to_wsl_path(dir_path)
         dir_name = Path(dir_path).name
         
         # Update progress display
@@ -397,17 +402,9 @@ def scan_for_files(selected_dirs: List[str]):
     filter_progress_container = st.empty()
     filter_progress_container.info("🔍 **Applying filters and exclusions...**")
     
-    candidate_files = []
-    for f in all_files:
-        if f.as_posix() in ingested_files:
-            continue
-        if f.suffix.lower() in UNSUPPORTED_EXTENSIONS:
-            excluded_unsupported += 1
-            continue
-        candidate_files.append(f.as_posix())
+    candidate_files = [f.as_posix() for f in all_files if f.as_posix() not in ingested_files and f.suffix.lower() not in UNSUPPORTED_EXTENSIONS]
     filter_progress_container.text(f"📋 After excluding unsupported formats: {len(candidate_files)} files")
 
-    excluded_common = 0
     if st.session_state.filter_exclude_common:
         exclude_keywords = [
             "working", "temp", "archive", "ignore", "backup", "node_modules",
@@ -415,37 +412,26 @@ def scan_for_files(selected_dirs: List[str]):
             "prezi.app"
         ]
         # Remove "data" from exclusions as it conflicts with Docker mount paths like /data/
-        before = len(candidate_files)
         candidate_files = [f for f in candidate_files if not any(k in part.lower() for k in exclude_keywords for part in Path(f).parts)]
-        excluded_common = before - len(candidate_files)
         filter_progress_container.text(f"📋 After excluding common folders: {len(candidate_files)} files")
 
-    excluded_patterns = 0
     if st.session_state.enable_pattern_exclusion:
         patterns = [p.strip() for p in st.session_state.exclude_patterns_input.split('\n') if p.strip()]
-        before = len(candidate_files)
         candidate_files = [f for f in candidate_files if not any(fnmatch(Path(f).name, p) for p in patterns)]
-        excluded_patterns = before - len(candidate_files)
         filter_progress_container.text(f"📋 After pattern exclusions: {len(candidate_files)} files")
 
-    preferred_docx_removed = 0
     if st.session_state.filter_prefer_docx:
         docx_stems = {Path(f).stem for f in candidate_files if f.lower().endswith('.docx')}
-        before = len(candidate_files)
         candidate_files = [f for f in candidate_files if not (f.lower().endswith('.pdf') and Path(f).stem in docx_stems)]
-        preferred_docx_removed = before - len(candidate_files)
         filter_progress_container.text(f"📋 After preferring .docx over .pdf: {len(candidate_files)} files")
 
-    dedup_removed = 0
     if st.session_state.filter_deduplicate:
         grouped_files = defaultdict(list)
         for f_path in candidate_files:
             pattern = r'[\s_-]*(v\d+(\.\d+)*|draft|\d{8}|final|revised)[\s_-]*'
             normalized = re.sub(pattern, "", Path(f_path).stem, flags=re.IGNORECASE).strip()
             grouped_files[normalized].append(f_path)
-        before = len(candidate_files)
         candidate_files = [max(file_list, key=lambda f: Path(f).stat().st_mtime) if len(file_list) > 1 else file_list[0] for _, file_list in grouped_files.items()]
-        dedup_removed = before - len(candidate_files)
         filter_progress_container.text(f"📋 After deduplication: {len(candidate_files)} files")
     
     # Final summary
@@ -454,24 +440,11 @@ def scan_for_files(selected_dirs: List[str]):
     st.session_state.files_to_review = sorted(candidate_files)
     st.session_state.file_selections = {fp: True for fp in st.session_state.files_to_review}
     st.session_state.review_page = 0
-
-    # Persist stats for troubleshooting on the next screen
-    st.session_state.last_scan_stats = {
-        "selected_dirs": selected_dirs,
-        "total_scanned": len(all_files),
-        "candidate_after_unsupported": len(all_files) - excluded_unsupported,
-        "excluded_unsupported": excluded_unsupported,
-        "excluded_common": excluded_common,
-        "excluded_patterns": excluded_patterns,
-        "preferred_docx_removed": preferred_docx_removed,
-        "dedup_removed": dedup_removed,
-        "final_candidates": len(candidate_files)
-    }
     
     # Handle resume mode - create batch state with proper filtering
     if st.session_state.get("resume_mode_enabled"):
-        wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-        batch_manager = BatchState(wsl_db_path)
+        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+        batch_manager = BatchState(container_db_path)
         
         # Create batch with resume logic, passing the scan configuration
         scan_config = st.session_state.get("current_scan_config", {})
@@ -507,8 +480,8 @@ def scan_for_files(selected_dirs: List[str]):
 
 def log_failed_documents(failed_docs, db_path):
     """Log documents that failed during batch processing to a separate failure log."""
-    wsl_db_path = convert_to_docker_mount_path(db_path)
-    chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
+    container_db_path = convert_to_docker_mount_path(db_path)
+    chroma_db_dir = Path(container_db_path) / "knowledge_hub_db"
     chroma_db_dir.mkdir(parents=True, exist_ok=True)
     
     failure_log_path = chroma_db_dir / "ingest_failures.log"
@@ -549,8 +522,8 @@ def render_batch_processing_ui():
     files_to_process = st.session_state.get("files_to_review", [])
     
     # Check for existing batch state
-    wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-    batch_manager = BatchState(wsl_db_path)
+    container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+    batch_manager = BatchState(container_db_path)
     batch_status = batch_manager.get_status()
     
     # If resuming from main screen, use batch remaining files
@@ -583,7 +556,7 @@ def render_batch_processing_ui():
                 # Show session-based metrics for auto-pause batches with document-level progress
                 col1, col2, col3, col4, col5, col6 = st.columns(6)
                 with col1:
-                    st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status['total_files']}")
+                    st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
                 with col2:
                     st.metric("Current Chunk", f"{batch_status['current_chunk']}/{batch_status['total_chunks']}")
                 with col3:
@@ -601,7 +574,7 @@ def render_batch_processing_ui():
                 # Regular chunked display with document progress
                 col1, col2, col3, col4, col5, col6 = st.columns(6)
                 with col1:
-                    st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status['total_files']}")
+                    st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
                 with col2:
                     st.metric("Current Chunk", f"{batch_status['current_chunk']}/{batch_status['total_chunks']}")
                 with col3:
@@ -617,7 +590,7 @@ def render_batch_processing_ui():
         else:
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Progress", f"{batch_status['completed']}/{batch_status['total_files']}")
+                st.metric("Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
             with col2:
                 st.metric("Completed", f"{batch_status['progress_percent']}%")
             with col3:
@@ -630,7 +603,7 @@ def render_batch_processing_ui():
             # Show dual progress: overall and current chunk
             st.markdown("**Overall Progress**")
             overall_progress = batch_status['progress_percent'] / 100.0
-            st.progress(overall_progress, text=f"Total: {batch_status['completed']}/{batch_status['total_files']} files ({batch_status['progress_percent']}%)")
+            st.progress(overall_progress, text=f"Total: {batch_status['completed']}/{batch_status.get('total_files', 0)} files ({batch_status['progress_percent']}%)")
             
             st.markdown("**Current Chunk Progress**")
             chunk_progress_percent = batch_status.get('chunk_progress_percent', 0) / 100.0
@@ -640,7 +613,7 @@ def render_batch_processing_ui():
         else:
             # Single progress bar for non-chunked processing
             progress = batch_status['progress_percent'] / 100.0
-            st.progress(progress, text=f"Processing files... {batch_status['completed']}/{batch_status['total_files']}")
+            st.progress(progress, text=f"Processing files... {batch_status['completed']}/{batch_status.get('total_files', 0)}")
         
         # Show pause/resume status
         if batch_status['paused']:
@@ -655,21 +628,6 @@ def render_batch_processing_ui():
         st.markdown("---")
     
     if not files_to_process and not batch_status["active"]:
-        # Distinguish between "nothing to do" and "actually completed"
-        last_scan = batch_manager.get_scan_config() if 'batch_manager' in locals() else {}
-        if not st.session_state.get('files_to_review') and not last_scan:
-            st.warning("No files selected for batch processing. Please go back, select directories, and run a scan.")
-            with st.expander("Troubleshooting", expanded=False):
-                st.write("- Ensure the Source path is correct and visible inside the container.")
-                st.write("- Click 'Scan Selected Directories' to populate files.")
-                st.write("- You should see a summary like 'Filtering complete! N files ready'.")
-            st.markdown("---")
-            if st.button("⬅️ Back to Configuration", key="back_config_no_selection", use_container_width=True):
-                initialize_state(force_reset=False)
-                st.session_state.ingestion_stage = "config"
-                st.rerun()
-            return
-
         st.success("✅ Batch processing complete!")
         
         # Check if there are successfully processed documents for collection creation
@@ -677,8 +635,8 @@ def render_batch_processing_ui():
             # Populate document IDs from successfully processed files
             try:
                 from cortex_engine.ingestion_recovery import IngestionRecoveryManager
-                wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-                recovery_manager = IngestionRecoveryManager(wsl_db_path)
+                container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                recovery_manager = IngestionRecoveryManager(container_db_path)
                 
                 # Get recently ingested documents
                 recent_docs = recovery_manager.get_recently_ingested_documents()
@@ -849,7 +807,7 @@ def render_batch_processing_ui():
                         
                         # Build command with resume flag and collection assignment
                         target_collection = st.session_state.get('target_collection_name', '')
-                        command = build_ingestion_command(wsl_db_path, files_to_process, target_collection, resume=True)
+                        command = build_ingestion_command(container_db_path, files_to_process, target_collection, resume=True)
                         
                         # Debug logging
                         logger.info(f"Starting batch processing with {len(files_to_process)} files")
@@ -882,7 +840,7 @@ def render_batch_processing_ui():
                     
                     # Build command with collection assignment
                     target_collection = st.session_state.get('target_collection_name', '')
-                    command = build_ingestion_command(wsl_db_path, files_to_process, target_collection)
+                    command = build_ingestion_command(container_db_path, files_to_process, target_collection)
                     
                     # Debug logging
                     logger.info(f"Starting batch processing with {len(files_to_process)} files")
@@ -944,7 +902,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
             # Show session-based metrics for auto-pause batches with document-level progress
             col1, col2, col3, col4, col5, col6 = st.columns(6)
             with col1:
-                st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status['total_files']}")
+                st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
             with col2:
                 st.metric("Current Chunk", f"{batch_status['current_chunk']}/{batch_status['total_chunks']}")
             with col3:
@@ -962,7 +920,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
             # Regular chunked display with document progress
             col1, col2, col3, col4, col5, col6 = st.columns(6)
             with col1:
-                st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status['total_files']}")
+                st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
             with col2:
                 st.metric("Current Chunk", f"{batch_status['current_chunk']}/{batch_status['total_chunks']}")
             with col3:
@@ -978,7 +936,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
     else:
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Progress", f"{batch_status['completed']}/{batch_status['total_files']}")
+            st.metric("Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
         with col2:
             st.metric("Completed", f"{batch_status['progress_percent']}%")
         with col3:
@@ -991,7 +949,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
         # Show dual progress: overall and current chunk
         st.markdown("**Overall Progress**")
         overall_progress = batch_status['progress_percent'] / 100.0
-        st.progress(overall_progress, text=f"Total: {batch_status['completed']}/{batch_status['total_files']} files ({batch_status['progress_percent']}%)")
+        st.progress(overall_progress, text=f"Total: {batch_status['completed']}/{batch_status.get('total_files', 0)} files ({batch_status['progress_percent']}%)")
         
         st.markdown("**Current Chunk Progress**")
         chunk_progress_percent = batch_status.get('chunk_progress_percent', 0) / 100.0
@@ -1001,7 +959,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
     else:
         # Single progress bar for non-chunked processing
         progress = batch_status['progress_percent'] / 100.0
-        st.progress(progress, text=f"Processing files... {batch_status['completed']}/{batch_status['total_files']}")
+        st.progress(progress, text=f"Processing files... {batch_status['completed']}/{batch_status.get('total_files', 0)}")
     
     # Show pause/resume status
     if batch_status['paused']:
@@ -1017,7 +975,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
     if batch_status.get('error_count', 0) > 0:
         error_count = batch_status['error_count']
         completed = batch_status['completed']
-        total = batch_status['total_files']
+        total = batch_status.get('total_files', 0)
         success_rate = round((completed / total) * 100, 1) if total > 0 else 0
         
         # Use warning instead of error for normal processing issues
@@ -1039,8 +997,8 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
         if not st.session_state.get('last_ingested_doc_ids'):
             try:
                 from cortex_engine.ingestion_recovery import IngestionRecoveryManager
-                wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-                recovery_manager = IngestionRecoveryManager(wsl_db_path)
+                container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                recovery_manager = IngestionRecoveryManager(container_db_path)
                 
                 # Get recently ingested documents
                 recent_docs = recovery_manager.get_recently_ingested_documents()
@@ -1270,7 +1228,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                 )
             
             with col2:
-                new_estimated_chunks = (batch_status['total_files'] + new_chunk_size - 1) // new_chunk_size
+                new_estimated_chunks = (batch_status.get('total_files', 0) + new_chunk_size - 1) // new_chunk_size
                 st.metric("New Total Chunks", new_estimated_chunks)
                 
             with col3:
@@ -1285,7 +1243,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
             # Show timing estimates
             if new_auto_pause != "No auto-pause":
                 files_per_session = new_chunk_size * new_auto_pause
-                sessions_needed = (batch_status['total_files'] + files_per_session - 1) // files_per_session
+                sessions_needed = (batch_status.get('total_files', 0) + files_per_session - 1) // files_per_session
                 st.info(f"💡 **New Processing Plan**: {files_per_session} files per session, ~{sessions_needed} sessions needed")
             
             if st.button("🔄 Apply New Settings", type="secondary", use_container_width=True):
@@ -1307,8 +1265,8 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                         st.rerun()
     else:
         # Not chunked yet - show conversion options
-        if batch_status['total_files'] > 500:
-            st.warning(f"⚠️ **Large Batch**: {batch_status['total_files']} files may cause memory issues")
+        if batch_status.get('total_files', 0) > 500:
+            st.warning(f"⚠️ **Large Batch**: {batch_status.get('total_files', 0)} files may cause memory issues")
             
             with st.expander("🔧 **Convert to Chunked Processing** (Recommended)", expanded=True):
                 st.info("Convert this large batch to chunked processing for better memory management and session control.")
@@ -1324,7 +1282,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                     )
                 
                 with col2:
-                    estimated_chunks = (batch_status['total_files'] + chunk_size_main - 1) // chunk_size_main
+                    estimated_chunks = (batch_status.get('total_files', 0) + chunk_size_main - 1) // chunk_size_main
                     st.metric("Estimated Chunks", estimated_chunks)
                     
                 with col3:
@@ -1339,7 +1297,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                 # Show timing estimates
                 if auto_pause_chunks != "No auto-pause":
                     files_per_session = chunk_size_main * auto_pause_chunks
-                    sessions_needed = (batch_status['total_files'] + files_per_session - 1) // files_per_session
+                    sessions_needed = (batch_status.get('total_files', 0) + files_per_session - 1) // files_per_session
                     st.info(f"💡 **Processing Plan**: {files_per_session} files per session, ~{sessions_needed} sessions needed")
                 
                 if st.button("🔄 Convert to Chunked Processing", type="secondary", use_container_width=True):
@@ -1394,7 +1352,8 @@ def auto_resume_from_batch_config(batch_manager: BatchState) -> bool:
 def try_resume_from_staging_file(batch_manager: BatchState) -> bool:
     """Try to resume processing using existing staging file"""
     try:
-        staging_file = Path(__file__).parent.parent / "staging_ingestion.json"
+        # Look for staging file in the database directory, not project root
+        staging_file = batch_manager.db_path / "staging_ingestion.json"
         if not staging_file.exists():
             st.error("❌ No staging file found to resume from")
             st.info("🔄 **No recovery options available.** Please start a new scan with your original paths.")
@@ -1440,8 +1399,8 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
         files_to_process = st.session_state.get("files_to_review", [])
         if files_to_process:
             # Start the actual ingestion process
-            wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-            batch_manager_instance = BatchState(wsl_db_path)
+            container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+            batch_manager_instance = BatchState(container_db_path)
             
             # For chunked processing, get current chunk files
             if batch_manager_instance.is_chunked_processing():
@@ -1456,7 +1415,7 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
             
             # Build and start the ingestion command
             target_collection = st.session_state.get('target_collection_name', '')
-            command = build_ingestion_command(wsl_db_path, files_to_process, target_collection, resume=True)
+            command = build_ingestion_command(container_db_path, files_to_process, target_collection, resume=True)
             
             try:
                 st.session_state.ingestion_process = subprocess.Popen(
@@ -1497,87 +1456,17 @@ def render_config_and_scan_ui():
     st.text_input("2. Database Storage Path (Destination)", key="db_path",
                   help="💾 Path where your knowledge base will be stored. This directory will contain the processed documents, embeddings, and knowledge graph. Needs sufficient space for your document collection.")
     st.markdown("---")
-    # Diagnostics expander
-    with st.expander("🛠️ Diagnostics", expanded=False):
-        try:
-            src = st.session_state.get('knowledge_source_path', '')
-            dbp = st.session_state.get('db_path', '')
-            src_resolved = convert_to_docker_mount_path(src)
-            db_resolved = convert_to_docker_mount_path(dbp)
-            st.caption(f"Resolved Source (container): {src_resolved}")
-            st.caption(f"Resolved DB (container): {db_resolved}")
-            # Existence checks
-            st.write(f"Source exists: {Path(src_resolved).exists()}")
-            st.write(f"DB parent exists: {Path(db_resolved).parent.exists() if db_resolved else False}")
-            st.write(f"DB parent writable: {os.access(Path(db_resolved).parent, os.W_OK) if db_resolved else False}")
-            # List sample subdirs
-            if Path(src_resolved).exists():
-                subdirs = [d.name for d in os.scandir(src_resolved) if d.is_dir()]
-                st.write(f"Subdirectories ({min(len(subdirs), 10)} shown): {subdirs[:10]}")
-            # Show queued count
-            queued = len(st.session_state.get('files_to_review', []))
-            st.write(f"Queued files: {queued}")
-            # Quick path test
-            if st.button("Run Quick Path Test"):
-                try:
-                    # Prefer selected directories; otherwise test the root source
-                    selections = [p for p, sel in st.session_state.get('dir_selections', {}).items() if sel]
-                    test_paths = selections if selections else ([src] if src else [])
-                    if not test_paths:
-                        st.warning("No source path set. Enter a Source path first.")
-                    else:
-                        total_files = 0
-                        total_candidates = 0
-                        sample = []
-                        for raw in test_paths[:3]:  # Limit to first 3 selections for speed
-                            test_resolved = convert_to_docker_mount_path(raw)
-                            p = Path(test_resolved)
-                            if not p.exists():
-                                st.warning(f"Path not found: {raw} -> {test_resolved}")
-                                continue
-                            count = 0
-                            cand = 0
-                            local_sample = []
-                            for fp in p.rglob('*'):
-                                if fp.is_file():
-                                    count += 1
-                                    if fp.suffix.lower() not in UNSUPPORTED_EXTENSIONS:
-                                        cand += 1
-                                        if len(local_sample) < 10:
-                                            local_sample.append(fp.as_posix())
-                            total_files += count
-                            total_candidates += cand
-                            st.info(f"{raw} -> {test_resolved}: {count} files, {cand} candidate(s) after filtering")
-                            if local_sample:
-                                st.caption("Sample:")
-                                for s in local_sample:
-                                    st.write(f"• {s}")
-                        st.success(f"Quick test complete. Total files: {total_files}, candidates after filtering: {total_candidates}")
-                except Exception as e:
-                    st.error(f"Quick path test failed: {e}")
-            # Tail ingestion log
-            if st.button("Tail Ingestion Log (200 lines)"):
-                log_path = Path(__file__).parent.parent / 'logs' / 'ingestion.log'
-                try:
-                    with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        lines = f.readlines()[-200:]
-                    st.code(''.join(lines), language='log')
-                except Exception as e:
-                    st.warning(f"Could not read log: {e}")
-        except Exception as e:
-            st.warning(f"Diagnostics unavailable: {e}")
-
     st.markdown("**3. Select Directories to Scan**")
 
     root_display_path = st.session_state.knowledge_source_path
-    root_wsl_path = convert_to_docker_mount_path(root_display_path)
+    root_wsl_path = convert_windows_to_wsl_path(root_display_path)
     # Use Docker-aware path validation that checks both normal and Docker mount paths
     is_knowledge_path_valid = validate_path_exists(root_display_path, must_be_dir=True)
 
     if is_knowledge_path_valid:
         current_display_path = st.session_state.directory_scan_path
         st.text_input("Current Directory:", current_display_path, disabled=True)
-        current_scan_path_wsl = Path(convert_to_docker_mount_path(current_display_path))
+        current_scan_path_wsl = Path(convert_windows_to_wsl_path(current_display_path))
         try:
             subdirs = sorted([d.name for d in os.scandir(current_scan_path_wsl) if d.is_dir()], key=str.lower)
             c1, c2, c3 = st.columns(3)
@@ -1614,22 +1503,10 @@ def render_config_and_scan_ui():
                             )
             else:
                 st.write("No subdirectories found in the current directory.")
-            # Quick action: select the current directory itself (always available)
-            with st.container():
-                cur_selected = st.session_state.dir_selections.get(current_display_path, False)
-                if st.checkbox("Include current directory", value=cur_selected, key="include_current_dir"):
-                    st.session_state.dir_selections[current_display_path] = True
-                else:
-                    if current_display_path in st.session_state.dir_selections:
-                        st.session_state.dir_selections[current_display_path] = False
         except Exception as e:
             st.warning(f"Could not read directory: {e}")
     else:
         st.warning("Please provide a valid root source path to enable navigation.")
-        # Show diagnostic hint about how the container resolved the path
-        if root_display_path:
-            st.caption(f"Container attempted path: `{root_wsl_path}`")
-            st.caption("If this path does not exist in the container, ensure the drive is shared in Docker Desktop or enter the container's mounted path (e.g., `/data/kb`).")
 
     st.markdown("---")
     st.markdown("**4. Processing Mode**")
@@ -1731,9 +1608,7 @@ def render_config_and_scan_ui():
             if st.session_state.enable_pattern_exclusion: st.text_area("File Patterns (one per line)", key="exclude_patterns_input", height=150)
 
     st.markdown("---")
-    db_resolved_for_check = convert_to_docker_mount_path(st.session_state.db_path)
-    db_parent = os.path.dirname(db_resolved_for_check) if db_resolved_for_check else ""
-    is_db_path_valid = os.path.isdir(db_parent) and os.access(db_parent, os.W_OK)
+    is_db_path_valid = os.path.isdir(os.path.dirname(convert_to_docker_mount_path(st.session_state.db_path)))
     selected_to_scan = [path for path, selected in st.session_state.dir_selections.items() if selected]
 
     if st.button(f"🔎 Scan {len(selected_to_scan)} Selected Director(y/ies) for New Files", type="primary", use_container_width=True, disabled=not selected_to_scan):
@@ -1796,11 +1671,8 @@ def render_config_and_scan_ui():
             scan_for_files(selected_to_scan)
             st.rerun()
         else:
-            if not is_knowledge_path_valid:
-                st.error(f"Root Source Path is not valid.")
-            if not is_db_path_valid:
-                st.error(f"DB Path is not writable by the container. Resolved: `{db_resolved_for_check}`")
-                st.info("Tip: Use a container-mounted path like `/data/ai_databases` and bind it to your Windows folder with `-v C:\\\\ai_databases:/data/ai_databases`. Alternatively, enable Docker Desktop drive sharing and set DOCKER_HOST_MOUNT_ROOT so writes go to a writable host mount.")
+            if not is_knowledge_path_valid: st.error(f"Root Source Path is not valid.")
+            if not is_db_path_valid: st.error(f"DB Path's parent is not valid.")
 
     with st.expander("⚙️ Database Maintenance"):
         st.info("Database maintenance functions have been moved to the dedicated **Maintenance** page for better organization and security.")
@@ -1818,50 +1690,8 @@ def render_pre_analysis_ui():
     files_to_review = st.session_state.get("files_to_review", [])
     total_files = len(files_to_review)
 
-    # Auto-recover if the scan results were lost between reruns (occasionally seen in Docker)
     if not files_to_review:
-        try:
-            scan_cfg = st.session_state.get("current_scan_config") or {}
-            selected_dirs = scan_cfg.get("selected_directories") or []
-            # Prevent infinite retries
-            auto_retries = st.session_state.get("_pre_analysis_autoscan_retries", 0)
-            if selected_dirs and auto_retries < 1:
-                st.info("🔄 Restoring scan results from last configuration...")
-                st.session_state._pre_analysis_autoscan_retries = auto_retries + 1
-                # Re-run the scan using the same filters and directory selections
-                scan_for_files(selected_dirs)
-                st.rerun()
-        except Exception as _auto_err:
-            # Fall through to the normal empty state UI if recovery fails
-            pass
-
-    if not st.session_state.get("files_to_review", []):
-        stats = st.session_state.get("last_scan_stats", {})
         st.success("Scan complete. No new documents found based on your criteria.")
-        if stats:
-            with st.expander("🔎 Last Scan Details", expanded=True):
-                st.caption(f"Selected directories: {len(stats.get('selected_dirs', []))}")
-                if stats.get('selected_dirs'):
-                    for d in stats['selected_dirs'][:6]:
-                        st.write(f"• {d}")
-                    if len(stats['selected_dirs']) > 6:
-                        st.write(f"… and {len(stats['selected_dirs'])-6} more")
-                st.write(f"Total files scanned: {stats.get('total_scanned', 0)}")
-                st.write(f"Excluded (unsupported): {stats.get('excluded_unsupported', 0)}")
-                st.write(f"Excluded (common folders): {stats.get('excluded_common', 0)}")
-                st.write(f"Excluded (patterns): {stats.get('excluded_patterns', 0)}")
-                st.write(f"Removed (prefer DOCX): {stats.get('preferred_docx_removed', 0)}")
-                st.write(f"Removed (deduplication): {stats.get('dedup_removed', 0)}")
-                st.write(f"Final candidates: {stats.get('final_candidates', 0)}")
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🔄 Force Re‑scan Now", key="force_rescan_preanalysis", use_container_width=True):
-                    sel = (st.session_state.get("current_scan_config") or {}).get("selected_directories") or []
-                    if sel:
-                        scan_for_files(sel)
-                        st.rerun()
-                    else:
-                        st.warning("No selected directories were saved with the last scan.")
         if st.button("⬅️ Back to Configuration", key="back_config_no_new_docs"): initialize_state(force_reset=True); st.rerun()
         return
 
@@ -1914,9 +1744,9 @@ def render_pre_analysis_ui():
     proc_c1, proc_c2 = st.columns(2)
     if proc_c1.button("⬅️ Back to Configuration", use_container_width=True): initialize_state(force_reset=True); st.rerun()
     if proc_c2.button(f"Process {len(globally_selected)} files & Ignore {len(globally_ignored)}", type="primary", use_container_width=True, disabled=not globally_selected):
-        wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
         if globally_ignored:
-            chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
+            chroma_db_dir = Path(container_db_path) / "knowledge_hub_db"
             chroma_db_dir.mkdir(parents=True, exist_ok=True)
             ingested_log_path = chroma_db_dir / INGESTED_FILES_LOG
             ingested_log = {}
@@ -1928,7 +1758,7 @@ def render_pre_analysis_ui():
             with open(ingested_log_path, 'w') as f: json.dump(ingested_log, f, indent=4)
         st.session_state.log_messages = []; st.session_state.ingestion_stage = "analysis_running"
         target_collection = st.session_state.get('target_collection_name', '')
-        command = build_ingestion_command(wsl_db_path, globally_selected, target_collection)
+        command = build_ingestion_command(container_db_path, globally_selected, target_collection)
         st.session_state.ingestion_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
         st.rerun()
 
@@ -1941,8 +1771,8 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
     with col1:
         if st.button("⏸️ Pause", key="pause_processing", use_container_width=True):
             # Get batch manager and pause the batch
-            wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-            batch_manager = BatchState(wsl_db_path)
+            container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+            batch_manager = BatchState(container_db_path)
             batch_manager.pause_batch()
             st.success("Pause requested")
             
@@ -2024,6 +1854,13 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
 
 def render_completion_screen():
     st.success("✅ Finalization complete! Your knowledge base is up to date.")
+    # Success toast with collection and count info
+    try:
+        target_collection = st.session_state.get('target_collection_name', '') or 'default'
+        ingested_ids = st.session_state.get('last_ingested_doc_ids', []) or []
+        st.info(f"📚 Collection: {target_collection} • 📄 Documents added: {len(ingested_ids)}")
+    except Exception:
+        pass
     
     # Check if documents should be automatically assigned to a target collection
     target_collection = st.session_state.get('target_collection_name', '')
@@ -2080,12 +1917,37 @@ def render_completion_screen():
                 else:
                     st.warning("Please provide a name for the collection.")
     st.markdown("---")
+    # Collections file quick access and preview
+    try:
+        mgr = WorkingCollectionManager()
+        collections_path = mgr.collections_file
+        st.caption("Collections file location (for troubleshooting):")
+        st.code(collections_path, language="text")
+        with st.expander("🔎 Preview collections JSON", expanded=False):
+            import json
+            if os.path.exists(collections_path):
+                with open(collections_path, 'r') as f:
+                    data = json.load(f)
+                st.json(data)
+            else:
+                st.warning("Collections file not found at this path.")
+    except Exception:
+        pass
     if st.button("⬅️ Start a New Ingestion"):
         initialize_state(force_reset=True)
         st.rerun()
 
 def render_metadata_review_ui():
     st.header("Review AI-Generated Metadata")
+
+    # If staging exists, offer a manual retry trigger for finalization
+    try:
+        if should_auto_finalize() and st.session_state.get('ingestion_stage') != 'finalizing':
+            if st.button("🔁 Retry Finalization", key="retry_finalization", help="Run finalization again from staged results"):
+                start_automatic_finalization()
+                st.rerun()
+    except Exception:
+        pass
 
     if 'edited_staged_files' not in st.session_state or not st.session_state.edited_staged_files:
         initial_files = st.session_state.get('staged_files', [])
@@ -2113,10 +1975,10 @@ def render_metadata_review_ui():
     edited_files = st.session_state.edited_staged_files
     if not edited_files:
         st.success("Analysis complete, but no documents were staged for review.")
-        # EXTRA DIAGNOSTICS: Show staging file path and parsed count
+        # EXTRA DIAGNOSTICS (host): show staging path and parsed count
         try:
             from cortex_engine.ingest_cortex import get_staging_file_path
-            wsl_db_path = convert_to_docker_mount_path(st.session_state.get('db_path', ''))
+            wsl_db_path = convert_windows_to_wsl_path(st.session_state.get('db_path_input', st.session_state.get('db_path', '')))
             staging_path = Path(get_staging_file_path(wsl_db_path)) if wsl_db_path else None
             if staging_path:
                 st.caption(f"Staging file: `{staging_path}` (exists={staging_path.exists()})")
@@ -2129,10 +1991,9 @@ def render_metadata_review_ui():
                         else:
                             staged_count = len(data)
                         st.caption(f"Parsed staged documents: {staged_count}")
-                        # If staging contains docs but UI set is empty, offer a retry finalize
                         if staged_count > 0:
                             st.info("Staging file contains documents. You can retry automatic finalization.")
-                            if st.button("🚀 Retry Finalization", type="primary", key="retry_finalize_btn"):
+                            if st.button("🚀 Retry Finalization", type="primary", key="retry_finalize_host"):
                                 start_automatic_finalization()
                                 st.stop()
                         with st.expander("Show staging JSON (first 2KB)", expanded=False):
@@ -2140,8 +2001,8 @@ def render_metadata_review_ui():
                             st.text_area("staging_ingestion.json", value=preview[:2048], height=200)
                     except Exception as pe:
                         st.warning(f"Could not read staging file: {pe}")
-        except Exception as e:
-            logger.warning(f"Diagnostics error: {e}")
+        except Exception:
+            pass
         st.info("Check `logs/ingestion.log` for details.")
         if st.button("⬅️ Back to Configuration", key="back_config_no_staged_docs"): initialize_state(force_reset=True); st.rerun()
         return
@@ -2164,21 +2025,22 @@ def render_metadata_review_ui():
             if valid_files:
                 # Auto-proceed to finalization
                 st.session_state.last_ingested_doc_ids = [doc['doc_id'] for doc in valid_files if not doc.get('exclude_from_final')]
-                # Persist staging next to the configured DB path
-                from cortex_engine.ingest_cortex import get_staging_file_path
-                wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-                staging_file = get_staging_file_path(wsl_db_path)
-                with open(staging_file, 'w') as f:
+                # Write staging file to database directory, not project root
+                container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                staging_file_path = Path(container_db_path) / "staging_ingestion.json"
+                with open(staging_file_path, 'w') as f: 
                     json.dump(st.session_state.edited_staged_files, f, indent=2)
-                if not wsl_db_path or not Path(wsl_db_path).exists():
-                    st.error(f"Database path is invalid or does not exist: {wsl_db_path}")
+                if not container_db_path or not Path(container_db_path).exists():
+                    st.error(f"Database path is invalid or does not exist: {container_db_path}")
                     st.stop()
 
                 st.session_state.log_messages = ["Finalizing batch ingestion..."]
                 st.session_state.ingestion_stage = "finalizing"
                 st.session_state.batch_auto_processed = True  # Mark as processed
                 
-                command = [sys.executable, "-m", "cortex_engine.ingest_cortex", "--finalize-from-staging", "--db-path", wsl_db_path]
+                # Use direct script path to avoid module resolution confusion
+                script_path = project_root / "cortex_engine" / "ingest_cortex.py"
+                command = [sys.executable, str(script_path), "--finalize-from-staging", "--db-path", container_db_path]
                 
                 # Add skip image processing flag if enabled
                 if st.session_state.get("skip_image_processing", False):
@@ -2211,19 +2073,20 @@ def render_metadata_review_ui():
             final_files_to_process = st.session_state.edited_staged_files
             doc_ids_to_ingest = [doc['doc_id'] for doc in final_files_to_process if not doc.get('exclude_from_final')]
             st.session_state.last_ingested_doc_ids = doc_ids_to_ingest
-            # Persist staging next to the configured DB path
-            from cortex_engine.ingest_cortex import get_staging_file_path
-            wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-            staging_file = get_staging_file_path(wsl_db_path)
-            with open(staging_file, 'w') as f:
+            # Write staging file to database directory, not project root
+            container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+            staging_file_path = Path(container_db_path) / "staging_ingestion.json"
+            with open(staging_file_path, 'w') as f: 
                 json.dump(final_files_to_process, f, indent=2)
-            if not wsl_db_path or not Path(wsl_db_path).exists():
-                st.error(f"Database path is invalid or does not exist: {wsl_db_path}")
+
+            container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+            if not container_db_path or not Path(container_db_path).exists():
+                st.error(f"Database path is invalid or does not exist: {container_db_path}")
                 st.stop()
 
             st.session_state.log_messages = ["Finalizing ingestion..."]
             st.session_state.ingestion_stage = "finalizing"
-            command = [sys.executable, "-m", "cortex_engine.ingest_cortex", "--finalize-from-staging", "--db-path", wsl_db_path]
+            command = [sys.executable, "-m", "cortex_engine.ingest_cortex", "--finalize-from-staging", "--db-path", container_db_path]
             
             if st.session_state.get("skip_image_processing", False):
                 command.append("--skip-image-processing")
@@ -2313,19 +2176,16 @@ def render_metadata_review_ui():
         final_files_to_process = st.session_state.edited_staged_files
         doc_ids_to_ingest = [doc['doc_id'] for doc in final_files_to_process if not doc.get('exclude_from_final')]
         st.session_state.last_ingested_doc_ids = doc_ids_to_ingest
-        # Persist staging next to the configured DB path
-        from cortex_engine.ingest_cortex import get_staging_file_path
-        staging_file = get_staging_file_path(wsl_db_path)
-        with open(staging_file, 'w') as f:
-            json.dump(final_files_to_process, f, indent=2)
-
-        wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-        if not wsl_db_path or not Path(wsl_db_path).exists():
-             st.error(f"Database path is invalid or does not exist: {wsl_db_path}"); st.stop()
+        # Write staging file to database directory, not project root
+        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+        staging_file_path = Path(container_db_path) / "staging_ingestion.json"
+        with open(staging_file_path, 'w') as f: json.dump(final_files_to_process, f, indent=2)
+        if not container_db_path or not Path(container_db_path).exists():
+             st.error(f"Database path is invalid or does not exist: {container_db_path}"); st.stop()
 
         st.session_state.log_messages = ["Finalizing ingestion..."]
         st.session_state.ingestion_stage = "finalizing"
-        command = [sys.executable, "-m", "cortex_engine.ingest_cortex", "--finalize-from-staging", "--db-path", wsl_db_path]
+        command = [sys.executable, "-m", "cortex_engine.ingest_cortex", "--finalize-from-staging", "--db-path", container_db_path]
         
         # Add skip image processing flag if enabled
         if st.session_state.get("skip_image_processing", False):
@@ -2614,7 +2474,7 @@ def check_recovery_needed():
         if st.session_state.get(dismiss_key, False):
             return False, []
         
-        recovery_manager = IngestionRecoveryManager(convert_to_docker_mount_path(db_path))
+        recovery_manager = IngestionRecoveryManager(db_path)
         analysis = recovery_manager.analyze_ingestion_state()
         
         issues = []
@@ -2719,18 +2579,16 @@ help_system.show_help_menu()
 
 # Check and display Ollama status prominently
 try:
-    from cortex_engine.utils.ollama_utils import check_ollama_service, get_ollama_instructions
-    chk = check_ollama_service()
-    is_running = chk[0]
-    error_msg = chk[1] if len(chk) > 1 else None
-    resolved_url = chk[2] if len(chk) > 2 else None
+    from cortex_engine.utils.ollama_utils import check_ollama_service, get_ollama_status_message, get_ollama_instructions
+    
+    is_running, error_msg = check_ollama_service()
     if not is_running:
-        st.warning(f"⚠️ Ollama not running or unreachable: {error_msg}")
+        st.warning(f"⚠️ {get_ollama_status_message(is_running, error_msg)}")
         with st.expander("ℹ️ **Important: Limited AI Functionality**", expanded=False):
             st.info("**Impact:** Documents will be processed with basic metadata only. AI-enhanced analysis, summaries, and tagging will be unavailable.")
             st.markdown(get_ollama_instructions())
     else:
-        st.success(f"✅ Ollama service is running at {resolved_url or 'configured endpoint'}")
+        st.success("✅ Ollama service is running - Full AI capabilities available")
 except Exception as e:
     st.warning(f"Unable to check Ollama status: {e}")
 
@@ -2750,9 +2608,9 @@ with col1:
             db_path = config.get("ai_database_path", "")
             
             if db_path:
-                from cortex_engine.utils import convert_windows_to_wsl_path
-                wsl_db_path = convert_to_docker_mount_path(db_path)
-                chroma_db_path = os.path.join(convert_to_docker_mount_path(wsl_db_path), "knowledge_hub_db")
+                from cortex_engine.utils import convert_to_docker_mount_path
+                container_db_path = convert_to_docker_mount_path(db_path)
+                chroma_db_path = os.path.join(container_db_path, "knowledge_hub_db")
                 ingested_log_path = os.path.join(chroma_db_path, "ingested_files.log")
                 
                 if os.path.exists(ingested_log_path):
@@ -2794,8 +2652,8 @@ with col2:
             
             if db_path:
                 from cortex_engine.utils import convert_windows_to_wsl_path
-                wsl_db_path = convert_to_docker_mount_path(db_path)
-                chroma_db_path = os.path.join(convert_to_docker_mount_path(wsl_db_path), "knowledge_hub_db")
+                container_db_path = convert_to_docker_mount_path(db_path)
+                chroma_db_path = os.path.join(container_db_path, "knowledge_hub_db")
                 ingested_log_path = os.path.join(chroma_db_path, "ingested_files.log")
                 
                 if os.path.exists(ingested_log_path):
@@ -2839,9 +2697,9 @@ except Exception as e:
                 db_path = config.get("ai_database_path", "")
                 
                 if db_path:
-                    from cortex_engine.utils import convert_windows_to_wsl_path
-                    wsl_db_path = convert_to_docker_mount_path(db_path)
-                    chroma_db_path = os.path.join(convert_to_docker_mount_path(wsl_db_path), "knowledge_hub_db")
+                    from cortex_engine.utils import convert_to_docker_mount_path
+                    container_db_path = convert_to_docker_mount_path(db_path)
+                    chroma_db_path = os.path.join(container_db_path, "knowledge_hub_db")
                     ingested_log_path = os.path.join(chroma_db_path, "ingested_files.log")
                     
                     if os.path.exists(ingested_log_path):
@@ -2881,8 +2739,8 @@ if st.session_state.get("show_help_modal", False):
 help_system.show_contextual_help("ingest")
 
 # Check for existing batch state and show resume option
-wsl_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-batch_manager = BatchState(wsl_db_path)
+container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+batch_manager = BatchState(container_db_path)
 batch_status = batch_manager.get_status()
 
 if batch_status["active"]:
@@ -2973,49 +2831,15 @@ if st.session_state.get("show_maintenance", False):
     render_document_type_management()
 else:
     # Normal ingestion workflow
-    # Safety guard: if we somehow landed in a running/completed stage without any files or active batch,
-    # reset to configuration to avoid a confusing "complete" message with no work done.
-    try:
-        wsl_db_path = convert_to_docker_mount_path(st.session_state.get('db_path', ''))
-        # Avoid creating batch manager if DB location is not writable to prevent read-only FS errors
-        bm = None
-        if wsl_db_path:
-            kb_parent = Path(wsl_db_path).parent
-            if kb_parent.exists() and os.access(kb_parent, os.W_OK):
-                try:
-                    bm = BatchState(wsl_db_path)
-                except Exception as e:
-                    logger.warning(f"Batch manager unavailable: {e}")
-        status = bm.get_status() if bm else {"active": False}
-    except Exception:
-        status = {"active": False}
-
-    if st.session_state.get('ingestion_stage') in {"batch_processing", "analysis_running", "metadata_review", "finalizing", "config_done"} \
-       and not status.get('active') \
-       and not st.session_state.get('files_to_review') \
-       and not st.session_state.get('staged_files'):
-        st.session_state.ingestion_stage = "config"
-
+    # Health check: prompt to migrate collections if needed
+    show_collection_migration_healthcheck()
     stage = st.session_state.get("ingestion_stage", "config")
-    if stage == "config":
-        # Small visibility metrics
-        queued = len(st.session_state.get('files_to_review', []))
-        st.caption(f"Queued files: {queued}")
-        render_config_and_scan_ui()
+    if stage == "config": render_config_and_scan_ui()
     elif stage == "pre_analysis": render_pre_analysis_ui()
-    elif stage == "batch_processing":
-        queued = len(st.session_state.get('files_to_review', []))
-        st.caption(f"Queued files: {queued}")
-        render_batch_processing_ui()
-    elif stage == "analysis_running":
-        queued = len(st.session_state.get('files_to_review', []))
-        st.caption(f"Queued files: {queued}")
-        render_log_and_review_ui("Live Analysis Log", "metadata_review")
+    elif stage == "batch_processing": render_batch_processing_ui()
+    elif stage == "analysis_running": render_log_and_review_ui("Live Analysis Log", "metadata_review")
     elif stage == "metadata_review": render_metadata_review_ui()
-    elif stage == "finalizing":
-        queued = len(st.session_state.get('files_to_review', []))
-        st.caption(f"Queued files: {queued}")
-        render_log_and_review_ui("Live Finalization Log", "config_done")
+    elif stage == "finalizing": render_log_and_review_ui("Live Finalization Log", "config_done")
     elif stage == "config_done": render_completion_screen()
 
 # Consistent version footer

@@ -135,11 +135,27 @@ class IngestionMigrationManager:
             logger.warning("⚠️ Enhanced processor not available, falling back to legacy")
             return self._process_legacy_only(file_paths, skip_image_processing)
         
+        # Expand directories to get actual files
+        expanded_file_paths = []
+        for file_path in file_paths:
+            path = Path(file_path)
+            if path.is_dir():
+                # Recursively find all files in directory
+                for file in path.rglob('*'):
+                    if file.is_file():
+                        expanded_file_paths.append(str(file))
+            elif path.is_file():
+                expanded_file_paths.append(str(path))
+            else:
+                logger.warning(f"Path does not exist or is not a file/directory: {file_path}")
+        
+        logger.info(f"📈 Expanded {len(file_paths)} paths to {len(expanded_file_paths)} files")
+        
         # Categorize files for gradual migration
         docling_files = []
         legacy_files = []
         
-        for file_path in file_paths:
+        for file_path in expanded_file_paths:
             path = Path(file_path)
             extension = path.suffix.lower()
             

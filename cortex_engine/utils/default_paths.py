@@ -38,11 +38,9 @@ def get_default_ai_database_path() -> str:
         home / "ai_databases",
         home / "Documents" / "ai_databases", 
         
-        # WSL/Linux specific (if we're in WSL)
-        Path("/mnt/f/ai_databases") if Path("/mnt/f").exists() else None,
-        Path("/mnt/e/ai_databases") if Path("/mnt/e").exists() else None,
-        Path("/mnt/d/ai_databases") if Path("/mnt/d").exists() else None,
+        # WSL/Linux specific (if we're in WSL) - prioritize C drive since F drive doesn't exist
         Path("/mnt/c/ai_databases") if Path("/mnt/c").exists() else None,
+        Path("/mnt/d/ai_databases") if Path("/mnt/d").exists() else None,
         
         # Fallback to project directory
         Path(__file__).parent.parent.parent / "data" / "ai_databases"

@@ -141,7 +141,7 @@ def initialize_script():
     logging.info("--- Script Initialized: Configuring models... ---")
     
     # Check if Ollama is available before configuring
-from cortex_engine.utils.ollama_utils import check_ollama_service, format_ollama_error_for_user
+    from cortex_engine.utils.ollama_utils import check_ollama_service, format_ollama_error_for_user
     
     chk = check_ollama_service()
     # Backward compatible unpack
@@ -399,7 +399,23 @@ def _legacy_manual_load_documents(file_paths: List[str], args=None) -> List[Docu
     import fitz
     fitz.TOOLS.mupdf_display_errors(False)
     
+    # Expand directories to get actual files
+    expanded_file_paths = []
     for file_path in file_paths:
+        path = Path(file_path)
+        if path.is_dir():
+            # Recursively find all files in directory
+            for file in path.rglob('*'):
+                if file.is_file():
+                    expanded_file_paths.append(str(file))
+        elif path.is_file():
+            expanded_file_paths.append(str(path))
+        else:
+            logging.warning(f"Path does not exist or is not a file/directory: {file_path}")
+    
+    logging.info(f"Expanded {len(file_paths)} paths to {len(expanded_file_paths)} files")
+    
+    for file_path in expanded_file_paths:
         try:
             path = Path(file_path)
             extension = path.suffix.lower()

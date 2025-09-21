@@ -1,5 +1,5 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v4.7.0
+# Version: v4.8.0
 # Date: 2025-08-30
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
 #          - GRAPHRAG INTEGRATION (v4.2.1): Re-enabled GraphRAG search modes with radio button
@@ -53,7 +53,7 @@ from cortex_engine.embedding_service import embed_query
 logger = get_logger(__name__)
 
 # Page configuration
-PAGE_VERSION = "v4.7.0"
+PAGE_VERSION = "v4.8.0"
 
 st.set_page_config(page_title="Knowledge Search", layout="wide")
 
@@ -101,12 +101,26 @@ def validate_database(db_path, silent=False):
         return None
         
     try:
+        # Clear any cached ChromaDB connections
+        import gc
+        gc.collect()
+        
         # Simple ChromaDB validation without LlamaIndex
         db_settings = ChromaSettings(
             anonymized_telemetry=False
         )
         client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
-        collection = client.get_collection(COLLECTION_NAME)
+        
+        # Try to get existing collection or create if it doesn't exist
+        try:
+            collection = client.get_collection(COLLECTION_NAME)
+        except Exception as get_e:
+            if "does not exist" in str(get_e):
+                if not silent:
+                    st.warning(f"⚠️ Knowledge base collection '{COLLECTION_NAME}' does not exist. Please run Knowledge Ingest to populate the database.")
+                return None
+            else:
+                raise get_e
         
         # Log collection info
         collection_count = collection.count()
@@ -118,7 +132,7 @@ def validate_database(db_path, silent=False):
             return {"path": chroma_db_path, "count": collection_count, "collection": collection}
         else:
             if not silent:
-                st.warning("⚠️ Database directory exists but no documents found.")
+                st.warning("⚠️ Database collection exists but no documents found. Please run Knowledge Ingest to add documents.")
             return None
             
     except Exception as e:
@@ -205,9 +219,10 @@ def render_sidebar():
         current_config = config_manager.get_config()
         current_path = current_config.get("ai_database_path", "")
     except Exception as e:
-        logger.warning(f"Config manager not available (Docker environment?): {e}")
-        # In Docker, default to standard path
-        current_path = "/app/data/ai_databases"
+        logger.warning(f"Config manager not available: {e}")
+        # Use proper default path detection
+        from cortex_engine.utils.default_paths import get_default_ai_database_path
+        current_path = get_default_ai_database_path()
     
     st.sidebar.subheader("📁 Database Storage Path")
     
@@ -254,8 +269,9 @@ def render_sidebar():
                 from cortex_engine.utils.default_paths import get_default_ai_database_path
                 default_path = get_default_ai_database_path()
             except Exception:
-                # Docker fallback
-                default_path = "/app/data/ai_databases"
+                # Use proper default path detection
+                from cortex_engine.utils.default_paths import get_default_database_path
+                default_path = get_default_database_path()
             
             st.session_state.db_path_input = default_path
             try:
@@ -404,9 +420,10 @@ def perform_search(base_index, query, filters, search_mode="Traditional Vector S
             current_config = config_manager.get_config()
             db_path = current_config.get("ai_database_path", "")
         except Exception as e:
-            logger.warning(f"Config not available (Docker environment?): {e}")
+            logger.warning(f"Config not available: {e}")
             # Try session state as fallback
-            db_path = st.session_state.get('db_path_input', '/app/data/ai_databases')
+            from cortex_engine.utils.default_paths import get_default_ai_database_path
+            db_path = st.session_state.get('db_path_input', get_default_ai_database_path())
         
         if not db_path:
             st.error("❌ Database path not configured")
@@ -948,7 +965,8 @@ def show_graphrag_entity_feedback(results, filters):
             current_config = config_manager.get_config()
             db_path = current_config.get("ai_database_path", "")
         except Exception:
-            db_path = st.session_state.get('db_path_input', '/app/data/ai_databases')
+            from cortex_engine.utils.default_paths import get_default_ai_database_path
+            db_path = st.session_state.get('db_path_input', get_default_ai_database_path())
         
         if not db_path:
             return

@@ -1,5 +1,5 @@
 # ## File: pages/7_Maintenance.py
-# Version: v4.6.0
+# Version: v4.7.0
 # Date: 2025-08-31
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -26,13 +26,13 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.6.1"
+PAGE_VERSION = "v4.7.0"
 
 # Import Cortex modules
 try:
     from cortex_engine.config import INGESTED_FILES_LOG
     from cortex_engine.config_manager import ConfigManager
-    from cortex_engine.utils import get_logger, convert_to_docker_mount_path, ensure_directory, convert_windows_to_wsl_path
+    from cortex_engine.utils import get_logger, convert_windows_to_wsl_path, ensure_directory
     from cortex_engine.utils.command_executor import display_command_executor_widget, SafeCommandExecutor
     from cortex_engine.ingestion_recovery import IngestionRecoveryManager
     from cortex_engine.collection_manager import WorkingCollectionManager
@@ -61,7 +61,7 @@ if 'maintenance_config' not in st.session_state:
 
 def delete_ingested_document_database(db_path: str):
     """Delete the ingested document database with proper error handling and logging."""
-    wsl_db_path = convert_to_docker_mount_path(db_path)
+    wsl_db_path = convert_windows_to_wsl_path(db_path)
     chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
     graph_file = Path(wsl_db_path) / "knowledge_cortex.gpickle"
     collections_file = Path(wsl_db_path) / "working_collections.json"
@@ -171,7 +171,7 @@ def perform_clean_start(db_path: str):
         debug_log_lines.append("Path Conversion: None (Docker handles volume mapping)")
     else:
         # Non-Docker environment, use WSL path conversion for Windows paths
-        final_db_path = convert_to_docker_mount_path(db_path)
+        final_db_path = convert_windows_to_wsl_path(db_path)
         msg = f"💻 **Host Mode:** Converted `{db_path}` to `{final_db_path}`"
         st.info(msg)
         debug_log_lines.append("ENVIRONMENT: Host/WSL")
@@ -181,7 +181,7 @@ def perform_clean_start(db_path: str):
     debug_log_lines.append("")
     debug_log_lines.append("OPERATIONS LOG:")
     debug_log_lines.append("-" * 40)
-    
+
     try:
         deleted_items = []
         
@@ -200,7 +200,8 @@ def perform_clean_start(db_path: str):
         # Show debug information with clear path mapping and current file status
         with st.container(border=True):
             st.markdown("#### 🔍 Pre‑Operation Debug Information")
-            st.write(f"Container path: `{final_db_path}`")
+            st.write(f"Windows path: `{db_path}`")
+            st.write(f"Resolved path: `{final_db_path}`")
             # Current state check
             st.markdown("**Current State Check**")
             items = [
@@ -214,6 +215,7 @@ def perform_clean_start(db_path: str):
                 exists = p.exists()
                 icon = "✅" if exists else "⚪"
                 st.write(f"{icon} {label}: `{p}` (exists={exists})")
+            # Append to debug buffer as well
             debug_display = "\n".join(debug_log_lines)
             st.text_area("Debug Log", value=debug_display, height=140, help="Copy this info if you need to report issues")
         
@@ -231,8 +233,9 @@ def perform_clean_start(db_path: str):
         st.success(f"🔍 Directory exists: `{chroma_db_dir.exists()}`")
         debug_log_lines.append(f"RESULT: Directory exists = {chroma_db_dir.exists()}")
         
-        # Show current step results
+        # Show current step results (non-expander)
         with st.container(border=True):
+            st.markdown("#### 📋 Step 1 Results")
             step1_results = f"""Path being checked: {chroma_db_dir}
 Directory exists: {chroma_db_dir.exists()}
 """
@@ -251,8 +254,9 @@ Directory exists: {chroma_db_dir.exists()}
                 debug_log_lines.append(f"FILES FOUND: {file_names}")
                 debug_log_lines.append(f"SUBDIRECTORIES FOUND: {dir_names}")
                 
-                # Show directory analysis results
-                with st.expander("📋 Step 2 Results - Directory Analysis", expanded=True):
+                # Show directory analysis results (non-expander)
+                with st.container(border=True):
+                    st.markdown("#### 📋 Step 2 Results - Directory Analysis")
                     step2_results = f"""Directory contents:
 Files found: {file_names}
 Subdirectories found: {dir_names}
@@ -271,8 +275,9 @@ Total items: {len(files_in_dir)}
             debug_log_lines.append(f"INGESTED_LOG_PATH: {ingested_files_log}")
             debug_log_lines.append(f"INGESTED_LOG_EXISTS: {ingested_files_log.exists()}")
             
-            # Show ingested log check results  
-            with st.expander("📋 Step 3 Results - Ingested Log Check", expanded=True):
+            # Show ingested log check results (non-expander)
+            with st.container(border=True):
+                st.markdown("#### 📋 Step 3 Results - Ingested Log Check")
                 step3_results = f"""Ingested files log path: {ingested_files_log}
 Log file exists: {ingested_files_log.exists()}
 """
@@ -321,8 +326,9 @@ Log file exists: {ingested_files_log.exists()}
             st.info("ℹ️ ChromaDB directory does not exist - nothing to delete")
             debug_log_lines.append("SKIP: ChromaDB directory does not exist or is not a directory")
         
-        # Show critical step results
-        with st.expander("📋 Critical Step Results - ChromaDB Directory Deletion", expanded=True):
+        # Show critical step results (non-expander)
+        with st.container(border=True):
+            st.markdown("#### 📋 Critical Step Results - ChromaDB Directory Deletion")
             critical_results = f"""Target directory: {chroma_db_dir}
 Directory existed before deletion: {chroma_exists_for_deletion}
 Directory exists after deletion attempt: {chroma_db_dir.exists() if hasattr(chroma_db_dir, 'exists') else 'Unknown'}
@@ -381,8 +387,8 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
                         deleted_items.append(f"Staging/batch file (project): {staging_file}")
                         logger.info(f"Clean Start: Cleared staging file from project: {staging_file}")
             
-            # Clear from database path (current location)  
-            db_path_obj = Path(wsl_db_path)
+            # Clear from database path (current location)
+            db_path_obj = Path(final_db_path)
             for pattern in staging_patterns:
                 for staging_file in db_path_obj.glob(pattern):
                     if staging_file.is_file():
@@ -461,6 +467,21 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
         st.markdown("### 🗑️ Cleaned Items:")
         for item in deleted_items:
             st.write(f"- {item}")
+
+        # Final verification
+        with st.container(border=True):
+            st.markdown("#### ✅ Final Verification")
+            items = [
+                ("ChromaDB directory", Path(final_db_path) / "knowledge_hub_db"),
+                ("Collections file", Path(final_db_path) / "working_collections.json"),
+                ("Staging file", Path(final_db_path) / "staging_ingestion.json"),
+                ("Batch state", Path(final_db_path) / "batch_state.json"),
+                ("Knowledge graph", Path(final_db_path) / "knowledge_cortex.gpickle"),
+            ]
+            for label, p in items:
+                exists = p.exists()
+                icon = "❌" if exists else "✅"
+                st.write(f"{icon} {label}: `{p}` (exists={exists})")
         
         # Show final comprehensive debug log on screen
         st.subheader("📋 Complete Debug Log")
@@ -508,11 +529,11 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
         logger.error(f"Clean Start error: {e}")
         st.error(f"❌ {error_msg}")
         
-        # Show error debug log on screen
+        # Show error debug log on screen (avoid nested expanders)
         st.subheader("📋 Error Debug Log")
         st.error("**An error occurred during Clean Start. This shows what was attempted before the error:**")
-        
-        with st.expander("📋 Error Debug Log - All Operations Before Error", expanded=True):
+        with st.container(border=True):
+            st.markdown("#### 📋 Error Debug Log - All Operations Before Error")
             st.text_area("Error Debug Log", value=error_debug_log, height=400, help="Copy this error log for troubleshooting")
         
         st.error("🚨 **CLEAN START FAILED - PLEASE READ THE ERROR DEBUG INFORMATION ABOVE**")
@@ -539,7 +560,7 @@ def init_chroma_client(db_path):
     if not db_path:
         return None
         
-    wsl_db_path = convert_to_docker_mount_path(db_path)
+    wsl_db_path = convert_windows_to_wsl_path(db_path)
     chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
     
     if not os.path.isdir(chroma_db_path):
@@ -559,8 +580,9 @@ def load_maintenance_config():
             config_manager = ConfigManager()
             config = config_manager.get_config()
             
-            # Map ConfigManager keys to expected keys - use Docker-aware fallback
-            default_db_path = '/data' if os.path.exists('/.dockerenv') else '/tmp/cortex_db'
+            # Map ConfigManager keys to expected keys - use proper default path detection
+            from cortex_engine.utils.default_paths import get_default_ai_database_path
+            default_db_path = get_default_ai_database_path()
             maintenance_config = {
                 'db_path': config.get('ai_database_path', default_db_path),
                 'knowledge_source_path': config.get('knowledge_source_path', ''),
@@ -580,8 +602,9 @@ def clear_ingestion_log_file():
         if not config:
             return
         
-        db_path = config.get('db_path', '/tmp/cortex_db')
-        wsl_db_path = convert_to_docker_mount_path(db_path)
+        from cortex_engine.utils.default_paths import get_default_ai_database_path
+        db_path = config.get('db_path', get_default_ai_database_path())
+        wsl_db_path = convert_windows_to_wsl_path(db_path)
         log_path = Path(wsl_db_path) / "knowledge_hub_db" / INGESTED_FILES_LOG
         
         if log_path.exists():
@@ -699,14 +722,80 @@ def display_database_maintenance():
         st.error("Cannot load configuration for database operations")
         return
     
-    # Use Docker-aware fallback
-    default_db_path = '/data' if os.path.exists('/.dockerenv') else '/tmp/cortex_db' 
-    db_path = config.get('db_path', default_db_path)
-    
-    # Show debug information about path resolution
-    st.info(f"🐳 **Docker Mode:** {'Yes' if os.path.exists('/.dockerenv') else 'No'}")
-    st.info(f"📁 **Database Path:** `{db_path}`")
-    st.info(f"🔧 **Configuration:** {config}")
+    # Use proper default path detection
+    from cortex_engine.utils.default_paths import get_default_ai_database_path
+    default_db_path = get_default_ai_database_path()
+    db_path = config.get('ai_database_path', config.get('db_path', default_db_path))
+
+    # Database Path Configuration block
+    with st.container(border=True):
+        st.subheader("📁 Database Path Configuration")
+        docker_mode = os.path.exists('/.dockerenv')
+        st.caption(f"Environment: {'🐳 Docker' if docker_mode else '💻 Host'}")
+
+        # Current value and normalized preview
+        current_input = st.text_input(
+            "AI Database Path",
+            value=db_path,
+            help="Enter the folder that contains your knowledge base (e.g., C:/ai_databases)."
+        )
+        # Keep the most recent user input in session state for downstream actions
+        st.session_state["maintenance_current_db_input"] = current_input
+        try:
+            preview = convert_windows_to_wsl_path(current_input)
+            st.code(f"Resolved path: {preview}")
+        except Exception:
+            pass
+
+        # Quick scan for likely locations
+        def scan_candidates():
+            cands = []
+            drives = list("CDEFGHIJKLMNOPQRSTUVWXYZ")
+            for d in drives:
+                base = f"{d}:/ai_databases"
+                wsl = convert_windows_to_wsl_path(base)
+                kb = os.path.join(wsl, "knowledge_hub_db")
+                if os.path.isdir(wsl) or os.path.isdir(kb):
+                    cands.append(base)
+            # Add Docker defaults
+            if docker_mode:
+                for p in ["/app/data/ai_databases", "/data", "/workspace/data/ai_databases"]:
+                    if os.path.isdir(p) or os.path.isdir(os.path.join(p, "knowledge_hub_db")):
+                        cands.append(p)
+            return sorted(set(cands))
+
+        cols = st.columns([1,1,1])
+        with cols[0]:
+            if st.button("🔎 Scan Common Locations", use_container_width=True, key="scan_db_locations"):
+                st.session_state.discovered_db_paths = scan_candidates()
+                st.rerun()
+        with cols[1]:
+            if st.button("💾 Save Path", use_container_width=True, key="save_db_path"):
+                try:
+                    ConfigManager().update_config({"ai_database_path": current_input})
+                    if 'maintenance_config' in st.session_state and st.session_state.maintenance_config:
+                        st.session_state.maintenance_config['db_path'] = current_input
+                    st.success("✅ Database path saved")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to save path: {e}")
+
+        # Show discovered candidates, if any
+        if st.session_state.get('discovered_db_paths'):
+            choice = st.selectbox(
+                "Discovered database locations",
+                st.session_state.discovered_db_paths,
+                help="Select a discovered location to populate the field above."
+            )
+            if st.button("Use Selected Location", key="use_selected_db_loc"):
+                try:
+                    ConfigManager().update_config({"ai_database_path": choice})
+                    if 'maintenance_config' in st.session_state and st.session_state.maintenance_config:
+                        st.session_state.maintenance_config['db_path'] = choice
+                    st.success(f"✅ Path set to {choice}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to set path: {e}")
     
     st.markdown("## 🚀 Clean Start - Complete System Reset")
     st.markdown("### 🧹 Clean Start Function")
@@ -1001,7 +1090,9 @@ def display_database_maintenance():
                 
                 c1, c2 = st.columns(2)
                 if c1.button("✅ YES, CLEAN START", use_container_width=True, type="primary"):
-                    perform_clean_start(db_path)
+                    # Use freshest input from the configuration block if available
+                    fresh_path = st.session_state.get('maintenance_current_db_input', db_path)
+                    perform_clean_start(fresh_path)
                     st.session_state.show_confirm_clean_start = False
                     st.rerun()
                 if c2.button("❌ Cancel", use_container_width=True):
@@ -1186,15 +1277,16 @@ def display_backup_management():
         return
     
     try:
-        db_path = config.get('db_path', '/tmp/cortex_db')
-        # Resolve DB path to a container-visible, writable path
-        wsl_db_path = convert_to_docker_mount_path(db_path)
+        from cortex_engine.utils.default_paths import get_default_ai_database_path
+        db_path = config.get('db_path', get_default_ai_database_path())
+        # Convert to proper WSL path format for backup manager
+        wsl_db_path = convert_windows_to_wsl_path(db_path)
         
         # Ensure the backups directory exists using centralized utility
         backups_dir = ensure_directory(Path(wsl_db_path) / "backups")
         
         backup_manager = BackupManager(wsl_db_path)
-
+        
         with st.expander("📦 Create New Backup", expanded=False):
             backup_name = st.text_input("Backup name (optional):", placeholder="my_backup_2025_08_27")
             
@@ -1208,42 +1300,30 @@ def display_backup_management():
                         except Exception as e:
                             st.error(f"❌ Backup failed: {e}")
 
-        with st.expander("📤 Export Backup To External Location (Host)", expanded=False):
-            st.caption("Copies your entire knowledge base (Chroma, graph, collections, logs) from the container to a host folder.")
+        # Export to external location (Host/Filesystem) — non-Docker parity
+        with st.expander("📤 Export Backup To External Location", expanded=False):
+            st.caption("Copies your entire knowledge base (Chroma, graph, collections, logs) to a folder you choose.")
 
-            def _resolve_external_path(p: str) -> Path:
+            def _resolve_destination(p: str) -> Path:
+                # Convert Windows or POSIX input to a usable local path (handles WSL too)
                 p = (p or '').strip()
                 if not p:
                     return Path('')
-                # Container-absolute path
-                if p.startswith('/'):
-                    # Map /mnt/<drive>/... to Docker Desktop host mount to avoid read-only mounts
-                    import re, os
-                    m = re.match(r'^/mnt/([a-zA-Z])/(.*)$', p)
-                    if m:
-                        drive, rest = m.groups()
-                        return Path(f"/host_mnt/{drive.lower()}/{rest}")
-                    return Path(p)
-                # Windows-style path like C:\folder or C:/folder
-                if len(p) > 2 and p[1] == ':' and (p[2] == '\\' or p[2] == '/'):
-                    drive = p[0].lower()
-                    rest = p[3:].replace('\\', '/')
-                    return Path(f"/host_mnt/{drive}/{rest}")
-                # Best-effort fallback
-                return Path(p)
+                resolved = convert_windows_to_wsl_path(p)
+                return Path(resolved)
 
-            host_target = st.text_input(
-                "External destination folder (Windows path like C:\\Backups or container path like /host_mnt/c/Backups)",
-                placeholder="C:/CortexBackups or /host_mnt/c/CortexBackups",
-                key="kb_external_backup_dest"
+            dest_root_input = st.text_input(
+                "Destination folder (e.g., C:/CortexBackups or /home/user/CortexBackups)",
+                placeholder="C:/CortexBackups or /home/you/CortexBackups",
+                key="kb_external_backup_dest_host"
             )
 
             backup_name_hint = datetime.now().strftime("cortex_kb_backup_%Y%m%d_%H%M%S")
-            backup_name = st.text_input("Backup folder name", value=backup_name_hint, key="kb_external_backup_name")
+            dest_backup_name = st.text_input("Backup folder name", value=backup_name_hint, key="kb_external_backup_name_host")
 
-            if st.button("📤 Export Now", use_container_width=True, key="btn_export_external_backup"):
+            if st.button("📤 Export Now", use_container_width=True, key="btn_export_external_backup_host"):
                 try:
-                    dest_root = _resolve_external_path(host_target)
+                    dest_root = _resolve_destination(dest_root_input)
                     if not dest_root or str(dest_root) == ".":
                         st.error("Please provide a valid destination path.")
                         st.stop()
@@ -1252,7 +1332,7 @@ def display_backup_management():
                     dest_root.mkdir(parents=True, exist_ok=True)
 
                     # Source paths
-                    src_base = Path(wsl_db_path)
+                    src_base = Path(convert_windows_to_wsl_path(db_path))
                     chroma_src = src_base / "knowledge_hub_db"
                     files_to_copy = [
                         (src_base / "working_collections.json", "working_collections.json"),
@@ -1262,7 +1342,7 @@ def display_backup_management():
                     ]
 
                     # Prevent exporting into the same KB folder
-                    dest_dir = dest_root / backup_name
+                    dest_dir = dest_root / dest_backup_name
                     if str(dest_dir.resolve()) == str(src_base.resolve()) or str(dest_root.resolve()) == str(src_base.resolve()):
                         st.error("Destination cannot be the same as the knowledge base path.")
                         st.stop()
@@ -1287,7 +1367,7 @@ def display_backup_management():
                 except PermissionError as pe:
                     st.error(f"Permission denied writing to destination: {pe}")
                 except FileNotFoundError as fe:
-                    st.error(f"Destination not found or not mounted: {fe}")
+                    st.error(f"Destination not found: {fe}")
                 except Exception as e:
                     st.error(f"Export failed: {e}")
         

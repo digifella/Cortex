@@ -1,5 +1,5 @@
-# ## File: pages/2_Knowledge_Ingest.py
-# Version: v4.7.0
+# ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
+# Version: v4.8.0
 # Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
@@ -115,8 +115,10 @@ PROPOSAL_OUTCOME_OPTIONS = RichMetadata.model_fields['proposal_outcome'].annotat
 
 def build_ingestion_command(container_db_path, files_to_process, target_collection=None, resume=False):
     """Build ingestion command with collection assignment support"""
+    # Use direct script path to avoid module resolution confusion
+    script_path = project_root / "cortex_engine" / "ingest_cortex.py"
     command = [
-        sys.executable, "-m", "cortex_engine.ingest_cortex", 
+        sys.executable, str(script_path), 
         "--analyze-only", "--db-path", container_db_path, 
         "--include", *files_to_process
     ]
@@ -326,12 +328,15 @@ def get_full_file_content(file_path_str: str) -> str:
 
 def load_staged_files():
     st.session_state.staged_files = []
-    staging_path = Path(STAGING_INGESTION_FILE)
-    if staging_path.exists():
-        try:
-            with open(staging_path, 'r') as f: st.session_state.staged_files = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            st.error(f"Error reading staging file: {e}"); st.session_state.staged_files = []
+    # Use database-specific staging path instead of hardcoded project path
+    if st.session_state.get('db_path'):
+        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+        staging_path = Path(container_db_path) / "staging_ingestion.json"
+        if staging_path.exists():
+            try:
+                with open(staging_path, 'r') as f: st.session_state.staged_files = json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                st.error(f"Error reading staging file: {e}"); st.session_state.staged_files = []
 
 def scan_for_files(selected_dirs: List[str]):
     container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
@@ -551,7 +556,7 @@ def render_batch_processing_ui():
                 # Show session-based metrics for auto-pause batches with document-level progress
                 col1, col2, col3, col4, col5, col6 = st.columns(6)
                 with col1:
-                    st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status['total_files']}")
+                    st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
                 with col2:
                     st.metric("Current Chunk", f"{batch_status['current_chunk']}/{batch_status['total_chunks']}")
                 with col3:
@@ -569,7 +574,7 @@ def render_batch_processing_ui():
                 # Regular chunked display with document progress
                 col1, col2, col3, col4, col5, col6 = st.columns(6)
                 with col1:
-                    st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status['total_files']}")
+                    st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
                 with col2:
                     st.metric("Current Chunk", f"{batch_status['current_chunk']}/{batch_status['total_chunks']}")
                 with col3:
@@ -585,7 +590,7 @@ def render_batch_processing_ui():
         else:
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Progress", f"{batch_status['completed']}/{batch_status['total_files']}")
+                st.metric("Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
             with col2:
                 st.metric("Completed", f"{batch_status['progress_percent']}%")
             with col3:
@@ -598,7 +603,7 @@ def render_batch_processing_ui():
             # Show dual progress: overall and current chunk
             st.markdown("**Overall Progress**")
             overall_progress = batch_status['progress_percent'] / 100.0
-            st.progress(overall_progress, text=f"Total: {batch_status['completed']}/{batch_status['total_files']} files ({batch_status['progress_percent']}%)")
+            st.progress(overall_progress, text=f"Total: {batch_status['completed']}/{batch_status.get('total_files', 0)} files ({batch_status['progress_percent']}%)")
             
             st.markdown("**Current Chunk Progress**")
             chunk_progress_percent = batch_status.get('chunk_progress_percent', 0) / 100.0
@@ -608,7 +613,7 @@ def render_batch_processing_ui():
         else:
             # Single progress bar for non-chunked processing
             progress = batch_status['progress_percent'] / 100.0
-            st.progress(progress, text=f"Processing files... {batch_status['completed']}/{batch_status['total_files']}")
+            st.progress(progress, text=f"Processing files... {batch_status['completed']}/{batch_status.get('total_files', 0)}")
         
         # Show pause/resume status
         if batch_status['paused']:
@@ -897,7 +902,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
             # Show session-based metrics for auto-pause batches with document-level progress
             col1, col2, col3, col4, col5, col6 = st.columns(6)
             with col1:
-                st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status['total_files']}")
+                st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
             with col2:
                 st.metric("Current Chunk", f"{batch_status['current_chunk']}/{batch_status['total_chunks']}")
             with col3:
@@ -915,7 +920,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
             # Regular chunked display with document progress
             col1, col2, col3, col4, col5, col6 = st.columns(6)
             with col1:
-                st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status['total_files']}")
+                st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
             with col2:
                 st.metric("Current Chunk", f"{batch_status['current_chunk']}/{batch_status['total_chunks']}")
             with col3:
@@ -931,7 +936,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
     else:
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Progress", f"{batch_status['completed']}/{batch_status['total_files']}")
+            st.metric("Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
         with col2:
             st.metric("Completed", f"{batch_status['progress_percent']}%")
         with col3:
@@ -944,7 +949,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
         # Show dual progress: overall and current chunk
         st.markdown("**Overall Progress**")
         overall_progress = batch_status['progress_percent'] / 100.0
-        st.progress(overall_progress, text=f"Total: {batch_status['completed']}/{batch_status['total_files']} files ({batch_status['progress_percent']}%)")
+        st.progress(overall_progress, text=f"Total: {batch_status['completed']}/{batch_status.get('total_files', 0)} files ({batch_status['progress_percent']}%)")
         
         st.markdown("**Current Chunk Progress**")
         chunk_progress_percent = batch_status.get('chunk_progress_percent', 0) / 100.0
@@ -954,7 +959,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
     else:
         # Single progress bar for non-chunked processing
         progress = batch_status['progress_percent'] / 100.0
-        st.progress(progress, text=f"Processing files... {batch_status['completed']}/{batch_status['total_files']}")
+        st.progress(progress, text=f"Processing files... {batch_status['completed']}/{batch_status.get('total_files', 0)}")
     
     # Show pause/resume status
     if batch_status['paused']:
@@ -970,7 +975,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
     if batch_status.get('error_count', 0) > 0:
         error_count = batch_status['error_count']
         completed = batch_status['completed']
-        total = batch_status['total_files']
+        total = batch_status.get('total_files', 0)
         success_rate = round((completed / total) * 100, 1) if total > 0 else 0
         
         # Use warning instead of error for normal processing issues
@@ -1223,7 +1228,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                 )
             
             with col2:
-                new_estimated_chunks = (batch_status['total_files'] + new_chunk_size - 1) // new_chunk_size
+                new_estimated_chunks = (batch_status.get('total_files', 0) + new_chunk_size - 1) // new_chunk_size
                 st.metric("New Total Chunks", new_estimated_chunks)
                 
             with col3:
@@ -1238,7 +1243,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
             # Show timing estimates
             if new_auto_pause != "No auto-pause":
                 files_per_session = new_chunk_size * new_auto_pause
-                sessions_needed = (batch_status['total_files'] + files_per_session - 1) // files_per_session
+                sessions_needed = (batch_status.get('total_files', 0) + files_per_session - 1) // files_per_session
                 st.info(f"💡 **New Processing Plan**: {files_per_session} files per session, ~{sessions_needed} sessions needed")
             
             if st.button("🔄 Apply New Settings", type="secondary", use_container_width=True):
@@ -1260,8 +1265,8 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                         st.rerun()
     else:
         # Not chunked yet - show conversion options
-        if batch_status['total_files'] > 500:
-            st.warning(f"⚠️ **Large Batch**: {batch_status['total_files']} files may cause memory issues")
+        if batch_status.get('total_files', 0) > 500:
+            st.warning(f"⚠️ **Large Batch**: {batch_status.get('total_files', 0)} files may cause memory issues")
             
             with st.expander("🔧 **Convert to Chunked Processing** (Recommended)", expanded=True):
                 st.info("Convert this large batch to chunked processing for better memory management and session control.")
@@ -1277,7 +1282,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                     )
                 
                 with col2:
-                    estimated_chunks = (batch_status['total_files'] + chunk_size_main - 1) // chunk_size_main
+                    estimated_chunks = (batch_status.get('total_files', 0) + chunk_size_main - 1) // chunk_size_main
                     st.metric("Estimated Chunks", estimated_chunks)
                     
                 with col3:
@@ -1292,7 +1297,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                 # Show timing estimates
                 if auto_pause_chunks != "No auto-pause":
                     files_per_session = chunk_size_main * auto_pause_chunks
-                    sessions_needed = (batch_status['total_files'] + files_per_session - 1) // files_per_session
+                    sessions_needed = (batch_status.get('total_files', 0) + files_per_session - 1) // files_per_session
                     st.info(f"💡 **Processing Plan**: {files_per_session} files per session, ~{sessions_needed} sessions needed")
                 
                 if st.button("🔄 Convert to Chunked Processing", type="secondary", use_container_width=True):
@@ -1347,7 +1352,8 @@ def auto_resume_from_batch_config(batch_manager: BatchState) -> bool:
 def try_resume_from_staging_file(batch_manager: BatchState) -> bool:
     """Try to resume processing using existing staging file"""
     try:
-        staging_file = Path(__file__).parent.parent / "staging_ingestion.json"
+        # Look for staging file in the database directory, not project root
+        staging_file = batch_manager.db_path / "staging_ingestion.json"
         if not staging_file.exists():
             st.error("❌ No staging file found to resume from")
             st.info("🔄 **No recovery options available.** Please start a new scan with your original paths.")
@@ -2019,10 +2025,11 @@ def render_metadata_review_ui():
             if valid_files:
                 # Auto-proceed to finalization
                 st.session_state.last_ingested_doc_ids = [doc['doc_id'] for doc in valid_files if not doc.get('exclude_from_final')]
-                with open(STAGING_INGESTION_FILE, 'w') as f: 
-                    json.dump(st.session_state.edited_staged_files, f, indent=2)
-
+                # Write staging file to database directory, not project root
                 container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                staging_file_path = Path(container_db_path) / "staging_ingestion.json"
+                with open(staging_file_path, 'w') as f: 
+                    json.dump(st.session_state.edited_staged_files, f, indent=2)
                 if not container_db_path or not Path(container_db_path).exists():
                     st.error(f"Database path is invalid or does not exist: {container_db_path}")
                     st.stop()
@@ -2031,7 +2038,9 @@ def render_metadata_review_ui():
                 st.session_state.ingestion_stage = "finalizing"
                 st.session_state.batch_auto_processed = True  # Mark as processed
                 
-                command = [sys.executable, "-m", "cortex_engine.ingest_cortex", "--finalize-from-staging", "--db-path", container_db_path]
+                # Use direct script path to avoid module resolution confusion
+                script_path = project_root / "cortex_engine" / "ingest_cortex.py"
+                command = [sys.executable, str(script_path), "--finalize-from-staging", "--db-path", container_db_path]
                 
                 # Add skip image processing flag if enabled
                 if st.session_state.get("skip_image_processing", False):
@@ -2064,7 +2073,10 @@ def render_metadata_review_ui():
             final_files_to_process = st.session_state.edited_staged_files
             doc_ids_to_ingest = [doc['doc_id'] for doc in final_files_to_process if not doc.get('exclude_from_final')]
             st.session_state.last_ingested_doc_ids = doc_ids_to_ingest
-            with open(STAGING_INGESTION_FILE, 'w') as f: 
+            # Write staging file to database directory, not project root
+            container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+            staging_file_path = Path(container_db_path) / "staging_ingestion.json"
+            with open(staging_file_path, 'w') as f: 
                 json.dump(final_files_to_process, f, indent=2)
 
             container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
@@ -2164,9 +2176,10 @@ def render_metadata_review_ui():
         final_files_to_process = st.session_state.edited_staged_files
         doc_ids_to_ingest = [doc['doc_id'] for doc in final_files_to_process if not doc.get('exclude_from_final')]
         st.session_state.last_ingested_doc_ids = doc_ids_to_ingest
-        with open(STAGING_INGESTION_FILE, 'w') as f: json.dump(final_files_to_process, f, indent=2)
-
+        # Write staging file to database directory, not project root
         container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+        staging_file_path = Path(container_db_path) / "staging_ingestion.json"
+        with open(staging_file_path, 'w') as f: json.dump(final_files_to_process, f, indent=2)
         if not container_db_path or not Path(container_db_path).exists():
              st.error(f"Database path is invalid or does not exist: {container_db_path}"); st.stop()
 
