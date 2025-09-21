@@ -34,3 +34,7 @@ data/
 datasets/
 models/
 checkpoints/
+
+# Ad hoc screenshots (avoid accidental commits)
+Screenshot*.png
+docker/Screenshot*.png
