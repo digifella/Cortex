@@ -1,5 +1,5 @@
 # ## File: pages/5_Proposal_Step_1.py
-# Version: v4.6.0
+# Version: v4.7.0
 # Date: 2025-07-15
 # Purpose: An interactive UI to tag document placeholders.
 #          - CRITICAL FIX (v27.0.0): The parsing logic has been entirely rewritten
@@ -272,3 +272,10 @@ if st.session_state.template_elements:
 else:
     st.markdown("---")
     st.warning("Upload a document to begin.")
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass

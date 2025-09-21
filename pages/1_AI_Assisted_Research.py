@@ -1,5 +1,5 @@
 # AI-Assisted Research Page
-# Version: v4.6.0
+# Version: v4.7.0
 # Multi-agent research and synthesis engine UI
 
 import streamlit as st
@@ -26,7 +26,7 @@ from cortex_engine.synthesise import (
 st.set_page_config(page_title="Cortex AI Research Assistant", layout="wide")
 
 # Page configuration
-PAGE_VERSION = "v4.6.0"
+PAGE_VERSION = "v4.7.0"
 
 # --- Initialize Session State ---
 def initialize_session_state():
@@ -405,3 +405,10 @@ if current_step != "start":
     st.divider()
     if st.button("↩️ Start New Research Topic"):
         reset_research_state()
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass

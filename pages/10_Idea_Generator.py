@@ -33,6 +33,7 @@ from cortex_engine.session_state import initialize_app_session_state
 from llama_index.core import Settings, StorageContext, load_index_from_storage
 from llama_index.llms.ollama import Ollama
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from cortex_engine.embedding_adapters import EmbeddingServiceAdapter
 from llama_index.vector_stores.chroma import ChromaVectorStore
 import chromadb
 from chromadb.config import Settings as ChromaSettings
@@ -71,7 +72,10 @@ def load_vector_index(db_path):
         
         # Configure models
         Settings.llm = Ollama(model="mistral", request_timeout=120.0)
-        Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+        try:
+            Settings.embed_model = EmbeddingServiceAdapter(model_name=EMBED_MODEL)
+        except Exception:
+            Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
         
         logger.info("Loading ChromaDB...")
         # Load database
@@ -987,3 +991,10 @@ Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 # Run the main application
 if __name__ == "__main__":
     main()
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass

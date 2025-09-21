@@ -91,3 +91,10 @@ if st.button("✨ Synthesize New Ideas", type="primary", disabled=synthesis_disa
 if "synthesis_output" in st.session_state:
     st.subheader("Synthesis Results")
     st.markdown(st.session_state.synthesis_output)
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass

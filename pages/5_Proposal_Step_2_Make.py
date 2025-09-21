@@ -1,5 +1,5 @@
 # ## File: pages/5_Proposal_Step_2_Make.py
-# Version: v4.6.0
+# Version: v4.7.0
 # Date: 2025-08-31
 # Purpose: A central hub for creating, loading, and managing proposals.
 #          - FEATURE (v2.2.0): Added a confirmation step before deleting a
@@ -137,3 +137,10 @@ else:
                     if st.button("Cancel", key=f"cancel_del_{p['id']}", use_container_width=True):
                         st.session_state.confirming_delete_proposal_id = None
                         st.rerun()
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass

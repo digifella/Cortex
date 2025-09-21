@@ -6,6 +6,32 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## v4.7.0 - 2025-09-02
+
+### Search Stability & Batch Finalization
+
+Stabilized search embeddings, improved Hybrid results, fixed batch finalization collections, Docker parity, and UX helpers.
+
+### ✨ New Features
+- Centralized embedding service powering search and async ingest
+- Hybrid search now unions vector + graph results without underflow
+- Retry Finalization button when staging is present
+- Collections migration health check from project root to external DB
+
+### 🚀 Improvements
+- Direct Chroma queries use explicit `query_embeddings` for reliability
+- GraphRAG adapter no longer imports LlamaIndex in search path
+- Batch finalization writes collections to external DB via manager
+- Docker ingest uses same collection manager for parity
+- Finalization success toast with collection and counts
+- Collections file quick preview and path display
+
+### 🐞 Bug Fixes
+- Fixed post-ingest search failures due to embedding mismatches
+- Resolved batch finalization not creating collections in external path
+- Clarified Chroma tenant/DB validation errors with guidance
+- Prevented Hybrid search from returning fewer results than Traditional
+
 
 
 
@@ -465,3 +491,35 @@ Brief description of the release
 - All version information should reference cortex_engine/version_config.py
 - Breaking changes must be clearly documented
 - Include migration guides for major version changes
+## v4.7.0 - 2025-09-02
+
+### Search Stability & Docker Parity (Patch Addendum)
+
+This patch delivers end-to-end Docker parity for the Streamlit UI and fixes external-path issues for Chroma and collections when running inside containers. It also restores Proposal Copilot and auxiliary pages in Docker-only distributions via targeted shims.
+
+### ✨ New (Docker-only) Shims
+- Added minimal modules under `docker/cortex_engine/` so docker distributions can run without the full engine:
+  - `session_state`, `batch_manager`, `document_type_manager`
+  - `instruction_parser` (iter_block_items, CortexInstruction, parse_template_for_instructions)
+  - `task_engine` (refine, generate/retrieve from KB, assemble document)
+  - `proposal_manager` (persist proposals under AI_DATABASE_PATH)
+  - `graph_manager` (EnhancedGraphManager), `entity_extractor`
+  - `document_summarizer`, `knowledge_synthesizer`, `synthesise`
+  - `visual_search`, `help_system`, `setup_manager`, `backup_manager`, `sync_backup_manager`
+  - `utils` additions: `process_drag_drop_path`, `process_multiple_drag_drop_paths`
+
+### 🚀 Improvements
+- Docker-aware path resolution: consistently maps Windows paths to container mounts, preferring `AI_DATABASE_PATH`.
+- Collections and staging stored next to the external DB path (not the repo) in both host and Docker.
+- Knowledge Ingest, Collection Management, and Knowledge Search updated to resolve container-visible paths.
+- Batch state persisted under `knowledge_hub_db/batch_state.json` in Docker shim.
+- Proposal Copilot restored in Docker with instruction parsing, basic generation/refinement, and doc assembly.
+- Visual Analysis page now resolves drag/drop paths via centralized utils.
+
+### 🐛 Fixes
+- Resolved Chroma/collections not writing to external DB path when running inside Docker.
+- Eliminated ModuleNotFoundError across Docker pages by adding targeted shims.
+- Fixed local NameError in Knowledge Search (path conversion import).
+
+### 🧩 Installer
+- Updated `docker/run-cortex.*` batch installers to show `v4.7.0` and current release name.

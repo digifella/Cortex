@@ -32,7 +32,7 @@ PAGE_VERSION = "v4.6.1"
 try:
     from cortex_engine.config import INGESTED_FILES_LOG
     from cortex_engine.config_manager import ConfigManager
-    from cortex_engine.utils import get_logger, convert_to_docker_mount_path, ensure_directory
+    from cortex_engine.utils import get_logger, convert_to_docker_mount_path, ensure_directory, convert_windows_to_wsl_path
     from cortex_engine.utils.command_executor import display_command_executor_widget, SafeCommandExecutor
     from cortex_engine.ingestion_recovery import IngestionRecoveryManager
     from cortex_engine.collection_manager import WorkingCollectionManager
@@ -197,10 +197,25 @@ def perform_clean_start(db_path: str):
             st.info(f"📁 **Knowledge Base Location:** `{chroma_db_dir}`\n\nDirectory does not exist - will clean up other logs and configurations only.")
             debug_log_lines.append("STATUS: No knowledge base directory found - cleanup only")
         
-        # Show debug information clearly on screen
-        with st.expander("🔍 Pre-Operation Debug Information", expanded=True):
+        # Show debug information with clear path mapping and current file status
+        with st.container(border=True):
+            st.markdown("#### 🔍 Pre‑Operation Debug Information")
+            st.write(f"Container path: `{final_db_path}`")
+            # Current state check
+            st.markdown("**Current State Check**")
+            items = [
+                ("ChromaDB directory", Path(final_db_path) / "knowledge_hub_db"),
+                ("Collections file", Path(final_db_path) / "working_collections.json"),
+                ("Staging file", Path(final_db_path) / "staging_ingestion.json"),
+                ("Batch state", Path(final_db_path) / "batch_state.json"),
+                ("Knowledge graph", Path(final_db_path) / "knowledge_cortex.gpickle"),
+            ]
+            for label, p in items:
+                exists = p.exists()
+                icon = "✅" if exists else "⚪"
+                st.write(f"{icon} {label}: `{p}` (exists={exists})")
             debug_display = "\n".join(debug_log_lines)
-            st.text_area("Debug Log", value=debug_display, height=200, help="Copy this information if you need to report issues")
+            st.text_area("Debug Log", value=debug_display, height=140, help="Copy this info if you need to report issues")
         
         st.divider()
         st.header("🧹 Clean Start Operations")
@@ -217,7 +232,7 @@ def perform_clean_start(db_path: str):
         debug_log_lines.append(f"RESULT: Directory exists = {chroma_db_dir.exists()}")
         
         # Show current step results
-        with st.expander("📋 Step 1 Results", expanded=True):
+        with st.container(border=True):
             step1_results = f"""Path being checked: {chroma_db_dir}
 Directory exists: {chroma_db_dir.exists()}
 """
@@ -451,7 +466,8 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
         st.subheader("📋 Complete Debug Log")
         st.info("**This shows everything that happened during the Clean Start operation. You can copy this information if needed.**")
         
-        with st.expander("📋 Complete Debug Log - All Operations", expanded=True):
+        with st.container(border=True):
+            st.markdown("#### 📋 Complete Debug Log - All Operations")
             st.text_area("Complete Debug Log", value=final_debug_log, height=400, help="Copy this entire log if you need to share it for troubleshooting")
         
         st.success("🎉 **CLEAN START IS COMPLETE - PLEASE READ THE DEBUG INFORMATION ABOVE**")
@@ -1171,14 +1187,14 @@ def display_backup_management():
     
     try:
         db_path = config.get('db_path', '/tmp/cortex_db')
-        # Convert to proper WSL path format for backup manager
-        wsl_db_path = convert_windows_to_wsl_path(db_path)
+        # Resolve DB path to a container-visible, writable path
+        wsl_db_path = convert_to_docker_mount_path(db_path)
         
         # Ensure the backups directory exists using centralized utility
         backups_dir = ensure_directory(Path(wsl_db_path) / "backups")
         
         backup_manager = BackupManager(wsl_db_path)
-        
+
         with st.expander("📦 Create New Backup", expanded=False):
             backup_name = st.text_input("Backup name (optional):", placeholder="my_backup_2025_08_27")
             
@@ -1191,6 +1207,89 @@ def display_backup_management():
                             st.success(f"✅ Backup created successfully: {backup_id}")
                         except Exception as e:
                             st.error(f"❌ Backup failed: {e}")
+
+        with st.expander("📤 Export Backup To External Location (Host)", expanded=False):
+            st.caption("Copies your entire knowledge base (Chroma, graph, collections, logs) from the container to a host folder.")
+
+            def _resolve_external_path(p: str) -> Path:
+                p = (p or '').strip()
+                if not p:
+                    return Path('')
+                # Container-absolute path
+                if p.startswith('/'):
+                    # Map /mnt/<drive>/... to Docker Desktop host mount to avoid read-only mounts
+                    import re, os
+                    m = re.match(r'^/mnt/([a-zA-Z])/(.*)$', p)
+                    if m:
+                        drive, rest = m.groups()
+                        return Path(f"/host_mnt/{drive.lower()}/{rest}")
+                    return Path(p)
+                # Windows-style path like C:\folder or C:/folder
+                if len(p) > 2 and p[1] == ':' and (p[2] == '\\' or p[2] == '/'):
+                    drive = p[0].lower()
+                    rest = p[3:].replace('\\', '/')
+                    return Path(f"/host_mnt/{drive}/{rest}")
+                # Best-effort fallback
+                return Path(p)
+
+            host_target = st.text_input(
+                "External destination folder (Windows path like C:\\Backups or container path like /host_mnt/c/Backups)",
+                placeholder="C:/CortexBackups or /host_mnt/c/CortexBackups",
+                key="kb_external_backup_dest"
+            )
+
+            backup_name_hint = datetime.now().strftime("cortex_kb_backup_%Y%m%d_%H%M%S")
+            backup_name = st.text_input("Backup folder name", value=backup_name_hint, key="kb_external_backup_name")
+
+            if st.button("📤 Export Now", use_container_width=True, key="btn_export_external_backup"):
+                try:
+                    dest_root = _resolve_external_path(host_target)
+                    if not dest_root or str(dest_root) == ".":
+                        st.error("Please provide a valid destination path.")
+                        st.stop()
+
+                    # Ensure destination base exists
+                    dest_root.mkdir(parents=True, exist_ok=True)
+
+                    # Source paths
+                    src_base = Path(wsl_db_path)
+                    chroma_src = src_base / "knowledge_hub_db"
+                    files_to_copy = [
+                        (src_base / "working_collections.json", "working_collections.json"),
+                        (src_base / "knowledge_cortex.gpickle", "knowledge_cortex.gpickle"),
+                        (src_base / "batch_state.json", "batch_state.json"),
+                        (src_base / "staging_ingestion.json", "staging_ingestion.json"),
+                    ]
+
+                    # Prevent exporting into the same KB folder
+                    dest_dir = dest_root / backup_name
+                    if str(dest_dir.resolve()) == str(src_base.resolve()) or str(dest_root.resolve()) == str(src_base.resolve()):
+                        st.error("Destination cannot be the same as the knowledge base path.")
+                        st.stop()
+
+                    # Create destination
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Copy ChromaDB directory if exists
+                    if chroma_src.exists():
+                        st.info("Copying ChromaDB directory (this may take a while)...")
+                        shutil.copytree(chroma_src, dest_dir / "knowledge_hub_db", dirs_exist_ok=True)
+
+                    # Copy other files
+                    copied_files = 0
+                    for src_path, name in files_to_copy:
+                        if src_path.exists():
+                            shutil.copy2(src_path, dest_dir / name)
+                            copied_files += 1
+
+                    st.success(f"✅ Export complete to: {dest_dir}")
+                    st.caption(f"Copied extra files: {copied_files}")
+                except PermissionError as pe:
+                    st.error(f"Permission denied writing to destination: {pe}")
+                except FileNotFoundError as fe:
+                    st.error(f"Destination not found or not mounted: {fe}")
+                except Exception as e:
+                    st.error(f"Export failed: {e}")
         
         with st.expander("📋 Manage Existing Backups", expanded=False):
             try:
@@ -1430,3 +1529,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass

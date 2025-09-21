@@ -1,5 +1,5 @@
 # ## File: pages/4_Collection_Management.py
-# Version: v4.6.0
+# Version: v4.7.0
 # Date: 2025-08-28
 # Purpose: A UI for managing Working Collections only.
 #          Knowledge base maintenance functions moved to Maintenance page (page 13).
@@ -85,6 +85,52 @@ if not chroma_client: st.stop()
 
 try:
     vector_collection = chroma_client.get_collection(name=COLLECTION_NAME)
+    # Quick diagnostics to help verify DB connectivity
+    with st.container(border=True):
+        st.markdown("### 🔎 Knowledge Base Diagnostics")
+        try:
+            doc_count = vector_collection.count()
+        except Exception as _diag_e:
+            doc_count = 0
+        st.write(f"📊 Vector store documents: {doc_count}")
+        
+        # Show available Chroma collections and their counts (helps detect name mismatches)
+        try:
+            available = chroma_client.list_collections()
+            if available:
+                cols_info = []
+                for c in available:
+                    try:
+                        c_obj = chroma_client.get_collection(c.name)
+                        cols_info.append((c.name, c_obj.count()))
+                    except Exception:
+                        cols_info.append((c.name, "?"))
+                pretty = ", ".join([f"{n} (count={cnt})" for n, cnt in cols_info])
+                st.caption(f"Available Chroma collections: {pretty}")
+        except Exception:
+            pass
+        
+        # Offer a rescue sync: populate 'default' collection from vector store IDs
+        st.caption("If collections appear empty but the vector store has documents, you can sync the 'default' collection from the vector store IDs.")
+        if st.button("🔄 Sync 'default' collection from vector store", help="Populate 'default' with all vector store document IDs"):
+            try:
+                # Chroma 'get' does not accept 'ids' in include; ids are always returned.
+                # Request metadatas (cheap) so we can pull ids reliably.
+                all_ids = vector_collection.get(include=["metadatas"]).get("ids", [])
+                if isinstance(all_ids, list) and all_ids and isinstance(all_ids[0], list):
+                    # Flatten if nested
+                    flat_ids = [i for sub in all_ids for i in sub]
+                else:
+                    flat_ids = all_ids if isinstance(all_ids, list) else []
+                if not flat_ids:
+                    st.warning("No IDs returned from vector store.")
+                else:
+                    mgr = WorkingCollectionManager()
+                    mgr.add_docs_by_id_to_collection("default", flat_ids)
+                    st.success(f"✅ Added {len(flat_ids)} IDs to 'default' collection.")
+                    st.rerun()
+            except Exception as se:
+                st.error(f"Sync failed: {se}")
 except Exception as e:
     error_msg = str(e)
     
@@ -812,3 +858,11 @@ for collection in page_collections:
                     if st.button("DELETE PERMANENTLY", type="primary", key=f"delete_btn_{name}"):
                         collection_mgr.delete_collection(name)
                         st.success(f"Successfully deleted collection '{name}'."); st.rerun()
+
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass

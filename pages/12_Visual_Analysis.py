@@ -24,7 +24,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.6.0"
+PAGE_VERSION = "v4.7.0"
 
 # Import Cortex modules
 try:
@@ -568,3 +568,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass

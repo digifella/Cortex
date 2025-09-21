@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py
-# Version: v4.6.2
+# Version: v4.7.0
 # Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
@@ -404,8 +404,9 @@ def scan_for_files(selected_dirs: List[str]):
         exclude_keywords = [
             "working", "temp", "archive", "ignore", "backup", "node_modules",
             ".git", "exclude", "draft", "invoice", "timesheet", "contract", "receipt",
-            "data", "prezi.app"
+            "prezi.app"
         ]
+        # Remove "data" from exclusions as it conflicts with Docker mount paths like /data/
         candidate_files = [f for f in candidate_files if not any(k in part.lower() for k in exclude_keywords for part in Path(f).parts)]
         filter_progress_container.text(f"📋 After excluding common folders: {len(candidate_files)} files")
 
@@ -1968,6 +1969,34 @@ def render_metadata_review_ui():
     edited_files = st.session_state.edited_staged_files
     if not edited_files:
         st.success("Analysis complete, but no documents were staged for review.")
+        # EXTRA DIAGNOSTICS (host): show staging path and parsed count
+        try:
+            from cortex_engine.ingest_cortex import get_staging_file_path
+            wsl_db_path = convert_windows_to_wsl_path(st.session_state.get('db_path_input', st.session_state.get('db_path', '')))
+            staging_path = Path(get_staging_file_path(wsl_db_path)) if wsl_db_path else None
+            if staging_path:
+                st.caption(f"Staging file: `{staging_path}` (exists={staging_path.exists()})")
+                if staging_path.exists():
+                    try:
+                        with open(staging_path, 'r') as f:
+                            data = json.load(f)
+                        if isinstance(data, dict):
+                            staged_count = len(data.get('documents', []))
+                        else:
+                            staged_count = len(data)
+                        st.caption(f"Parsed staged documents: {staged_count}")
+                        if staged_count > 0:
+                            st.info("Staging file contains documents. You can retry automatic finalization.")
+                            if st.button("🚀 Retry Finalization", type="primary", key="retry_finalize_host"):
+                                start_automatic_finalization()
+                                st.stop()
+                        with st.expander("Show staging JSON (first 2KB)", expanded=False):
+                            preview = json.dumps(data, indent=2)
+                            st.text_area("staging_ingestion.json", value=preview[:2048], height=200)
+                    except Exception as pe:
+                        st.warning(f"Could not read staging file: {pe}")
+        except Exception:
+            pass
         st.info("Check `logs/ingestion.log` for details.")
         if st.button("⬅️ Back to Configuration", key="back_config_no_staged_docs"): initialize_state(force_reset=True); st.rerun()
         return
@@ -2799,3 +2828,10 @@ else:
     elif stage == "metadata_review": render_metadata_review_ui()
     elif stage == "finalizing": render_log_and_review_ui("Live Finalization Log", "config_done")
     elif stage == "config_done": render_completion_screen()
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass

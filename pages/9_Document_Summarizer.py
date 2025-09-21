@@ -1,5 +1,5 @@
 # ## File: pages/14_Document_Summarizer.py
-# Version: v4.6.0
+# Version: v4.7.0
 # Date: 2025-08-28
 # Purpose: Advanced Document Summarizer with multiple detail levels.
 #          Leverages Docling, LLM infrastructure, and intelligent chunking.
@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 st.set_page_config(page_title="Document Summarizer", layout="wide", page_icon="📄")
 
 # Page metadata
-PAGE_VERSION = "v4.6.0"
+PAGE_VERSION = "v4.7.0"
 
 def main():
     """Main Document Summarizer application."""
@@ -398,3 +398,10 @@ def display_summary_results(result: SummaryResult):
 
 if __name__ == "__main__":
     main()
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass

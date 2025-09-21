@@ -343,9 +343,12 @@ class SystemStatusChecker:
         # This is a simplified check - in a real implementation you'd monitor
         # the Ollama logs or use a more sophisticated progress tracking
         try:
-            # Try to get model info - this will trigger download if not present
-            response = requests.get(f"{self.ollama_url}/api/show", 
-                                  json={"name": model_name}, timeout=2)
+            # Try to get model info. Ollama expects POST for /api/show.
+            response = requests.post(
+                f"{self.ollama_url}/api/show",
+                json={"name": model_name},
+                timeout=3,
+            )
             if response.status_code == 404:
                 return ModelStatus.MISSING, None
             elif response.status_code == 200:

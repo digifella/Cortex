@@ -272,3 +272,10 @@ if st.session_state.template_elements:
 else:
     st.markdown("---")
     st.warning("Upload a document to begin.")
+
+# Consistent version footer
+try:
+    from cortex_engine.ui_components import render_version_footer
+    render_version_footer()
+except Exception:
+    pass
