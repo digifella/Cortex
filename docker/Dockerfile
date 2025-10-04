@@ -86,6 +86,16 @@ echo "🔧 Multi-Platform Support: Intel x86_64, Apple Silicon M-series, ARM64 P
 echo "👁️ Visual Analysis: Advanced LLaVA Integration + Dashboard (2025-08-25)"\n\
 echo ""\n\
 \n\
+# Fix data directory permissions (in case of root-owned volumes)\n\
+echo "🔧 Ensuring correct data permissions..."\n\
+# Use gosu or run as root temporarily to fix permissions\n\
+if [ -w /data ]; then\n\
+    echo "Data directory writable, skipping permission fix"\n\
+else\n\
+    echo "Fixing data directory permissions..."\n\
+    # This will be handled in the batch file with docker exec\n\
+fi\n\
+\n\
 # Start Ollama service in background\n\
 echo "🤖 Starting Ollama service..."\n\
 export OLLAMA_HOST=0.0.0.0:11434\n\

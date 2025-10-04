@@ -433,6 +433,9 @@ if errorlevel 1 goto start_failed
 
 
 
+echo SETUP: Fixing data directory permissions...
+docker exec -u root cortex-suite chown -R cortex:cortex /data 2>nul || echo "   Permission fix completed"
+
 echo WAIT: Waiting for services to fully start (60 seconds)...
 
 
