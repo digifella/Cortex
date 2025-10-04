@@ -23,12 +23,12 @@ def check_ollama_service(host: str = None, port: int = 11434) -> Tuple[bool, Opt
     # Docker environment detection and host resolution
     if host is None:
         if os.path.exists('/.dockerenv'):
-            # In Docker container, try multiple host options
+            # In Docker container, try container-local Ollama first, then host options
             hosts_to_try = [
-                "host.docker.internal",  # Docker Desktop
+                "localhost",             # Container's internal Ollama (PRIORITY)
+                "host.docker.internal",  # Docker Desktop (fallback to host)
                 "172.17.0.1",           # Default Docker bridge
-                "gateway.docker.internal", # Some Docker setups
-                "localhost"              # Fallback
+                "gateway.docker.internal" # Some Docker setups
             ]
         else:
             hosts_to_try = ["localhost"]

@@ -16,12 +16,15 @@ logger = logging.getLogger(__name__)
 MODEL_MEMORY_REQUIREMENTS = {
     # Efficient models (recommended for most systems)
     "mistral:latest": 4.4,
+    "qwen3:8b": 5.0,
+    "gemma3:4b": 3.0,
+    "deepseek-r1:8b": 5.5,
     "llava:7b": 4.7,
-    
+
     # Memory-intensive models (require 32GB+ systems)
     "mistral-small3.2": 15.0,  # Actually uses ~26GB when loaded
     "codellama": 8.0,
-    
+
     # Embedding models (lightweight)
     "nomic-embed-text": 0.7,
 }
@@ -29,7 +32,7 @@ MODEL_MEMORY_REQUIREMENTS = {
 # Model capability tiers
 MODEL_TIERS = {
     "efficient": {
-        "text_model": "mistral:latest",
+        "text_model": "qwen3:8b",  # Changed to available model
         "vision_model": "llava:7b",
         "memory_requirement": 6.0,  # Total for both models
         "description": "Efficient models suitable for systems with 16-32GB RAM"
