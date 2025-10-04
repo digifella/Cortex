@@ -160,7 +160,7 @@ def get_llm(status_callback=print):
         status_callback(f"✅ OpenAI LLM (gpt-4o-mini) is ready.")
     elif provider == "ollama":
         # Use the research-specific local model
-        model_name = os.getenv("OLLAMA_RESEARCH_MODEL", "mistral:7b-instruct-v0.3-q4_K_M")
+        model_name = os.getenv("OLLAMA_RESEARCH_MODEL", "mistral:latest")
         llm = LlamaOllama(model=model_name, request_timeout=120.0)
         try:
             llm._provider = "ollama"

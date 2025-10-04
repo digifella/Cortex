@@ -5,32 +5,58 @@ Provides centralized Ollama connection checking and error handling
 
 import requests
 import logging
+import os
 from typing import Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
-def check_ollama_service(host: str = "localhost", port: int = 11434) -> Tuple[bool, Optional[str]]:
+def check_ollama_service(host: str = None, port: int = 11434) -> Tuple[bool, Optional[str], Optional[str]]:
     """
     Check if Ollama service is running and accessible.
     
     Returns:
-        Tuple of (is_running, error_message)
+        Tuple of (is_running, error_message, resolved_url)
         - is_running: True if Ollama is accessible
         - error_message: Description of the issue if not running
+        - resolved_url: The actual URL that worked (for Docker host detection)
     """
-    try:
-        url = f"http://{host}:{port}/api/version"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            return True, None
+    # Docker environment detection and host resolution
+    if host is None:
+        if os.path.exists('/.dockerenv'):
+            # In Docker container, try multiple host options
+            hosts_to_try = [
+                "host.docker.internal",  # Docker Desktop
+                "172.17.0.1",           # Default Docker bridge
+                "gateway.docker.internal", # Some Docker setups
+                "localhost"              # Fallback
+            ]
         else:
-            return False, f"Ollama service responded with status {response.status_code}"
-    except requests.exceptions.ConnectionError:
-        return False, "Ollama service is not running or not accessible"
-    except requests.exceptions.Timeout:
-        return False, "Ollama service is not responding (timeout)"
-    except Exception as e:
-        return False, f"Error checking Ollama service: {str(e)}"
+            hosts_to_try = ["localhost"]
+    else:
+        hosts_to_try = [host]
+    
+    for test_host in hosts_to_try:
+        try:
+            url = f"http://{test_host}:{port}/api/version"
+            logger.debug(f"Trying Ollama connection: {url}")
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                logger.info(f"Successfully connected to Ollama at {url}")
+                return True, None, url
+            else:
+                logger.debug(f"Ollama at {url} responded with status {response.status_code}")
+        except requests.exceptions.ConnectionError:
+            logger.debug(f"Connection failed to {url}")
+            continue
+        except requests.exceptions.Timeout:
+            logger.debug(f"Timeout connecting to {url}")
+            continue
+        except Exception as e:
+            logger.debug(f"Error connecting to {url}: {e}")
+            continue
+    
+    # If we get here, all hosts failed
+    return False, f"Ollama service is not running or not accessible. Tried hosts: {', '.join(hosts_to_try)}", None
 
 def get_ollama_status_message(is_running: bool, error_msg: Optional[str] = None) -> str:
     """

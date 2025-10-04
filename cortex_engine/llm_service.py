@@ -44,7 +44,7 @@ class LLMServiceManager:
             from cortex_engine.utils.smart_model_selector import get_recommended_text_model
             return get_recommended_text_model()
         except Exception:
-            return "mistral:7b-instruct-v0.3-q4_K_M"  # Safe fallback
+            return "mistral:latest"  # Safe fallback to available model
     
     @classmethod
     def get_task_models(cls):
@@ -53,7 +53,7 @@ class LLMServiceManager:
         return {
             TaskType.PROPOSALS: smart_model,
             TaskType.KNOWLEDGE_OPS: smart_model, 
-            TaskType.RESEARCH: "mistral:7b-instruct-v0.3-q4_K_M",  # Always efficient for research
+            TaskType.RESEARCH: "mistral:latest",  # Always efficient for research
             TaskType.IDEATION: smart_model
         }
     
@@ -188,7 +188,11 @@ class LLMServiceManager:
         
         if provider == LLMProvider.LOCAL_OLLAMA:
             from .utils.smart_ollama_llm import create_smart_ollama_llm
-            return create_smart_ollama_llm(model=model, request_timeout=120.0)
+            from .exceptions import ModelError
+            llm_instance = create_smart_ollama_llm(model=model, request_timeout=120.0)
+            if llm_instance is None:
+                raise ModelError("Failed to initialize Ollama LLM - service may not be available or model not found")
+            return llm_instance
             
         elif provider == LLMProvider.CLOUD_GEMINI:
             api_key = os.getenv("GEMINI_API_KEY")

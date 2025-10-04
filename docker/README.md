@@ -1,6 +1,6 @@
 # **`README.md`**
 
-**Version:** v4.4.1 (Database Management & Clean Start System)
+**Version:** v4.8.0 (Module Harmonization & Path Standardization)
 **Date:** 2025-08-31
 
 **Prelim:**

@@ -152,6 +152,7 @@ echo RESTART: Starting existing Cortex Suite...
 
 docker start cortex-suite
 
+if errorlevel 1 goto container_start_failed
 
 echo WAIT: Waiting for services to start (30 seconds)...
 
@@ -416,8 +417,8 @@ if exist "F:\" (
     set DOCKER_CMD=!DOCKER_CMD! -v "F:\:/mnt/f:ro"
 )
 
-REM Complete the docker command
-set DOCKER_CMD=!DOCKER_CMD! --env-file .env --restart unless-stopped cortex-suite
+REM Complete the docker command with host networking for Ollama access
+set DOCKER_CMD=!DOCKER_CMD! --add-host=host.docker.internal:host-gateway --env-file .env --restart unless-stopped cortex-suite
 
 REM Execute the dynamically built command
 !DOCKER_CMD!
@@ -608,6 +609,17 @@ pause
 
 exit /b 1
 
+
+
+
+
+:container_start_failed
+
+
+echo WARNING: Failed to start existing container, trying rebuild...
+
+
+goto first_time_setup
 
 
 

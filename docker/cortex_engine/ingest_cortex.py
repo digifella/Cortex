@@ -153,7 +153,7 @@ def initialize_script():
         logging.warning("AI-enhanced metadata extraction will be disabled. Documents will be processed with basic metadata only.")
         Settings.llm = None  # Will be handled in analysis function
     else:
-        Settings.llm = create_smart_ollama_llm(model="mistral:7b-instruct-v0.3-q4_K_M", request_timeout=600.0, base_url=resolved_url)
+        Settings.llm = create_smart_ollama_llm(model="mistral:latest", request_timeout=600.0, base_url=resolved_url)
         logging.info(f"Ollama connected successfully at {resolved_url}")
     
     # Unify embeddings with search/async via adapter around embedding_service (Docker)

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Model resource requirements (in GB)
 MODEL_MEMORY_REQUIREMENTS = {
     # Efficient models (recommended for most systems)
-    "mistral:7b-instruct-v0.3-q4_K_M": 4.4,
+    "mistral:latest": 4.4,
     "llava:7b": 4.7,
     
     # Memory-intensive models (require 32GB+ systems)
@@ -29,7 +29,7 @@ MODEL_MEMORY_REQUIREMENTS = {
 # Model capability tiers
 MODEL_TIERS = {
     "efficient": {
-        "text_model": "mistral:7b-instruct-v0.3-q4_K_M",
+        "text_model": "mistral:latest",
         "vision_model": "llava:7b",
         "memory_requirement": 6.0,  # Total for both models
         "description": "Efficient models suitable for systems with 16-32GB RAM"

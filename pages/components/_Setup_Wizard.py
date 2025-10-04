@@ -370,11 +370,11 @@ def display_step_model_installation(step_result):
         
         expected_models = []
         if install_choice == "Recommended":
-            expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b"]
+            expected_models = ["mistral:latest", "mistral-small3.2", "llava:7b"]
         elif install_choice == "Complete":
-            expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b", "codellama"]
+            expected_models = ["mistral:latest", "mistral-small3.2", "llava:7b", "codellama"]
         elif install_choice == "Essential Only":
-            expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2"]
+            expected_models = ["mistral:latest", "mistral-small3.2"]
         
         # If we have some models, show current status and option to continue
         if available_models and not st.session_state.model_installation_active:
@@ -450,11 +450,11 @@ def display_step_model_installation(step_result):
                 st.markdown("**🔍 Expected Models:**")
                 expected_models = []
                 if install_choice == "Recommended":
-                    expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b"]
+                    expected_models = ["mistral:latest", "mistral-small3.2", "llava:7b"]
                 elif install_choice == "Complete":
-                    expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b", "codellama"]
+                    expected_models = ["mistral:latest", "mistral-small3.2", "llava:7b", "codellama"]
                 elif install_choice == "Essential Only":
-                    expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2"]
+                    expected_models = ["mistral:latest", "mistral-small3.2"]
                 
                 for model in expected_models:
                     if any(model in available for available in available_models):

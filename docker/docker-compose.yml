@@ -129,7 +129,7 @@ services:
     command: |
       sh -c "
         echo 'Pulling Ollama models...'
-        curl -X POST http://ollama:11434/api/pull -d '{\"name\":\"mistral:7b-instruct-v0.3-q4_K_M\"}'
+        curl -X POST http://ollama:11434/api/pull -d '{\"name\":\"mistral:latest\"}'
         curl -X POST http://ollama:11434/api/pull -d '{\"name\":\"mistral-small3.2\"}'
         echo 'Models pulled successfully'
       "
@@ -164,6 +164,8 @@ volumes:
   cortex_logs:
     driver: local
   backup_data:
+    driver: local
+  pip_cache:
     driver: local
 
 networks:

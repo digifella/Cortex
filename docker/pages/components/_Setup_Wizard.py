@@ -52,10 +52,11 @@ def display_step_welcome():
     
     ### What We'll Set Up:
     1. ✅ **System Environment Check** - Verify Docker, Python, and resources
-    2. 🎯 **AI Model Strategy** - Choose between Docker Model Runner and Ollama
-    3. 🔑 **API Configuration** - Set up cloud AI providers (optional)
-    4. 📦 **Model Installation** - Download required AI models
-    5. ✨ **System Validation** - Test everything is working
+    2. 📦 **Storage Location** - Choose Docker volume or host folder
+    3. 🎯 **AI Model Strategy** - Choose between Docker Model Runner and Ollama
+    4. 🔑 **API Configuration** - Set up cloud AI providers (optional)
+    5. 📦 **Model Installation** - Download required AI models
+    6. ✨ **System Validation** - Test everything is working
     
     ### Local vs Cloud AI:
     - **🏠 Local AI**: Complete privacy, no API costs, works offline
@@ -95,7 +96,7 @@ def display_step_environment_check(step_result):
     col1, col2, col3 = st.columns([1, 1, 1])
     
     with col2:
-        if st.button("Continue to Model Strategy", type="primary", use_container_width=True):
+        if st.button("Continue to Storage", type="primary", use_container_width=True):
             return run_setup_step(SetupStep.ENVIRONMENT_CHECK)
     
     return None
@@ -146,6 +147,40 @@ def display_step_model_strategy(step_result):
         if st.button("Continue", type="primary", use_container_width=True):
             return run_setup_step(SetupStep.MODEL_STRATEGY, {"strategy": choice})
     
+    return None
+
+def display_step_storage_configuration(step_result):
+    """Display storage configuration step."""
+    st.markdown("## 📦 Storage Location")
+
+    st.markdown("""
+    Choose where to store your knowledge base (ChromaDB + metadata):
+    - **Docker Volume (Default):** Persists across restarts. Easiest.
+    - **Host Folder (Bind Mount):** Recommended if you want files on your OS for backups or sharing.
+    """)
+
+    choice = st.radio(
+        "Select storage mode:",
+        options=["volume", "host_bind"],
+        format_func=lambda x: "Docker Volume (Default)" if x == "volume" else "Bind to Host Folder"
+    )
+
+    ai_db_path = ""
+    source_path = ""
+    if choice == "host_bind":
+        st.info("Provide host paths. On Windows use paths like C:/ai_databases. On macOS/Linux use /Users/... or /home/...")
+        ai_db_path = st.text_input("Host folder for AI database", placeholder="C:/ai_databases or /Users/you/ai_databases")
+        source_path = st.text_input("(Optional) Host folder for Knowledge Source", placeholder="C:/Knowledge or /Users/you/Knowledge")
+
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("Continue", type="primary", use_container_width=True):
+            return run_setup_step(SetupStep.STORAGE_CONFIGURATION, {
+                "storage_mode": choice,
+                "host_ai_database_path": ai_db_path,
+                "host_source_path": source_path,
+            })
+
     return None
 
 def display_step_api_configuration(step_result):
@@ -335,11 +370,11 @@ def display_step_model_installation(step_result):
         
         expected_models = []
         if install_choice == "Recommended":
-            expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b"]
+            expected_models = ["mistral:latest", "mistral-small3.2", "llava:7b"]
         elif install_choice == "Complete":
-            expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b", "codellama"]
+            expected_models = ["mistral:latest", "mistral-small3.2", "llava:7b", "codellama"]
         elif install_choice == "Essential Only":
-            expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2"]
+            expected_models = ["mistral:latest", "mistral-small3.2"]
         
         # If we have some models, show current status and option to continue
         if available_models and not st.session_state.model_installation_active:
@@ -415,11 +450,11 @@ def display_step_model_installation(step_result):
                 st.markdown("**🔍 Expected Models:**")
                 expected_models = []
                 if install_choice == "Recommended":
-                    expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b"]
+                    expected_models = ["mistral:latest", "mistral-small3.2", "llava:7b"]
                 elif install_choice == "Complete":
-                    expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2", "llava:7b", "codellama"]
+                    expected_models = ["mistral:latest", "mistral-small3.2", "llava:7b", "codellama"]
                 elif install_choice == "Essential Only":
-                    expected_models = ["mistral:7b-instruct-v0.3-q4_K_M", "mistral-small3.2"]
+                    expected_models = ["mistral:latest", "mistral-small3.2"]
                 
                 for model in expected_models:
                     if any(model in available for available in available_models):
@@ -905,6 +940,8 @@ def main():
         step_result = display_step_welcome()
     elif current_step == SetupStep.ENVIRONMENT_CHECK:
         step_result = display_step_environment_check(current_result)
+    elif current_step == SetupStep.STORAGE_CONFIGURATION:
+        step_result = display_step_storage_configuration(current_result)
     elif current_step == SetupStep.MODEL_STRATEGY:
         step_result = display_step_model_strategy(current_result)
     elif current_step == SetupStep.API_CONFIGURATION:

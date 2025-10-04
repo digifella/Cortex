@@ -32,8 +32,9 @@ WORKDIR /home/cortex/app
 # Copy requirements first for better caching
 COPY --chown=cortex:cortex requirements.txt .
 
-# Install Python dependencies (architecture-neutral)
-RUN pip install --no-cache-dir --retries 3 --timeout 60 -r requirements.txt
+# Install Python dependencies with cache for faster rebuilds
+RUN --mount=type=cache,target=/home/cortex/.cache/pip \
+    pip install --retries 3 --timeout 60 -r requirements.txt
 
 # PyTorch installation is now handled in requirements.txt with CPU-only wheels
 # This provides universal compatibility across x86_64, ARM64, and Snapdragon architectures
@@ -66,7 +67,7 @@ ENV AI_DATABASE_PATH=/home/cortex/data/ai_databases
 ENV KNOWLEDGE_SOURCE_PATH=/home/cortex/data/knowledge_base
 ENV GRAPHVIZ_DOT_EXECUTABLE=/usr/bin/dot
 ENV LLM_PROVIDER=ollama
-ENV OLLAMA_MODEL=mistral:7b-instruct-v0.3-q4_K_M
+ENV OLLAMA_MODEL=mistral:latest
 ENV OLLAMA_HOST=0.0.0.0:11434
 ENV OLLAMA_ORIGINS=*
 
@@ -132,9 +133,9 @@ echo ""\n\
 # Download models in background (non-blocking)\n\
 {\n\
     echo "📦 Starting AI model downloads..."\n\
-    if ! ollama list 2>/dev/null | grep -q "mistral:7b-instruct-v0.3-q4_K_M"; then\n\
+    if ! ollama list 2>/dev/null | grep -q "mistral:latest"; then\n\
         echo "⬇️ Downloading Mistral model (4.4GB)..."\n\
-        ollama pull mistral:7b-instruct-v0.3-q4_K_M\n\
+        ollama pull mistral:latest\n\
         echo "✅ Mistral model ready!"\n\
     fi\n\
     \n\

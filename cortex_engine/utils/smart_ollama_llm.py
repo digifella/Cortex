@@ -13,7 +13,7 @@ from .ollama_utils import check_ollama_service
 logger = get_logger(__name__)
 
 
-def create_smart_ollama_llm(model: str = "mistral:7b-instruct-v0.3-q4_K_M", request_timeout: float = 120.0):
+def create_smart_ollama_llm(model: str = "mistral:latest", request_timeout: float = 120.0):
     """
     Create an Ollama LLM instance that works in both Docker and non-Docker environments.
     

@@ -63,7 +63,7 @@ try:
     from cortex_engine.utils.smart_model_selector import get_recommended_text_model
     SMART_MODEL_SELECTION = get_recommended_text_model()
 except Exception:
-    SMART_MODEL_SELECTION = "mistral:7b-instruct-v0.3-q4_K_M"  # Fallback to efficient model
+    SMART_MODEL_SELECTION = "mistral:latest"  # Fallback to efficient model
 
 # Proposal Generation: MUST be local, optimized for instruction following
 PROPOSAL_LLM_MODEL = SMART_MODEL_SELECTION  # Intelligent selection based on system resources
@@ -72,7 +72,7 @@ PROPOSAL_LLM_MODEL = SMART_MODEL_SELECTION  # Intelligent selection based on sys
 KB_LLM_MODEL = SMART_MODEL_SELECTION  # Same as proposals for consistency
 
 # Research Assistant Models: Flexible (user choice in UI)
-RESEARCH_LOCAL_MODEL = "mistral:7b-instruct-v0.3-q4_K_M"  # Fast local option
+RESEARCH_LOCAL_MODEL = "mistral:latest"  # Fast local option
 RESEARCH_CLOUD_MODEL = "gemini-1.5-flash"  # Powerful cloud option
 
 # Model Registry Configuration
