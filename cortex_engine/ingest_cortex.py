@@ -86,7 +86,7 @@ from cortex_engine.utils.smart_ollama_llm import create_smart_ollama_llm
 try:
     from cortex_engine.migration_to_docling import create_migration_manager
 except Exception:
-    def create_migration_manager():  # graceful fallback if module missing
+    def create_migration_manager():
         class _Noop:
             def migrate(self, *args, **kwargs):
                 return None
@@ -101,6 +101,7 @@ from cortex_engine.batch_manager import BatchState
 
 LOG_FILE = INGESTION_LOG_PATH
 # STAGING_FILE will be set dynamically based on runtime db_path
+COLLECTIONS_FILE = str(project_root / "working_collections.json")
 
 def get_staging_file_path(db_path: str) -> str:
     """Get the staging file path for the given database path"""
@@ -142,16 +143,20 @@ def initialize_script():
     # Check if Ollama is available before configuring
     from cortex_engine.utils.ollama_utils import check_ollama_service, format_ollama_error_for_user
     
-    is_running, error_msg = check_ollama_service()
+    chk = check_ollama_service()
+    # Backward compatible unpack
+    is_running = chk[0]
+    error_msg = chk[1] if len(chk) > 1 else None
+    resolved_url = chk[2] if len(chk) > 2 else None
     if not is_running:
         logging.warning(f"Ollama service not available: {error_msg}")
         logging.warning("AI-enhanced metadata extraction will be disabled. Documents will be processed with basic metadata only.")
         Settings.llm = None  # Will be handled in analysis function
     else:
-        Settings.llm = create_smart_ollama_llm(model="mistral:7b-instruct-v0.3-q4_K_M", request_timeout=600.0)
-        logging.info("Ollama connected successfully with modern API")
+        Settings.llm = create_smart_ollama_llm(model="mistral:latest", request_timeout=600.0)
+        logging.info(f"Ollama connected successfully at {resolved_url}")
     
-    # Unify embeddings with search/async via adapter around embedding_service
+    # Unify embeddings with search/async via adapter around embedding_service (Docker)
     try:
         Settings.embed_model = EmbeddingServiceAdapter(model_name=EMBED_MODEL)
         logging.info(f"Models configured via EmbeddingServiceAdapter (Embed: {EMBED_MODEL}).")
@@ -557,6 +562,7 @@ def extract_entities_and_relationships(doc_text: str, metadata: Dict, entity_ext
 
 def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, target_collection: str = None):
     logging.info(f"--- Starting Stage 2: Document Analysis with Graph Extraction (Cortex v13.0.0) ---")
+    print("CORTEX_STAGE::ANALYSIS_START", flush=True)
     
     # Initialize batch manager if db_path is available
     batch_manager = None
@@ -760,9 +766,11 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
     
     collection_info = f" -> '{target_collection}'" if target_collection else " -> 'default'"
     logging.info(f"--- Analysis complete. {len(staged_docs)} documents staged{collection_info} at {staging_file} ---")
+    print(f"CORTEX_STAGE::ANALYSIS_DONE::{len(staged_docs)}::{staging_file}", flush=True)
 
 def finalize_ingestion(db_path: str, args=None):
     logging.info(f"--- Starting Stage 3: Finalize from Staging with Graph Building (Cortex v13.0.0) ---")
+    print("CORTEX_STAGE::FINALIZE_START", flush=True)
     staging_file = get_staging_file_path(db_path)
     if not os.path.exists(staging_file): 
         logging.error(f"Staging file not found at: {staging_file}")
@@ -914,15 +922,15 @@ def finalize_ingestion(db_path: str, args=None):
         collection_name = target_collection or "default"
         logging.info(f"Adding {len(doc_ids_to_add_to_default)} new documents to the '{collection_name}' collection.")
         try:
-            # Use centralized collection manager so file is stored next to external DB
             from cortex_engine.collection_manager import WorkingCollectionManager
             collection_mgr = WorkingCollectionManager()
             collection_mgr.add_docs_by_id_to_collection(collection_name, doc_ids_to_add_to_default)
-            logging.info(f"Collections updated via WorkingCollectionManager at external DB path")
+            logging.info("Collections updated via WorkingCollectionManager (Docker)")
         except Exception as e:
             logging.error(f"Could not automatically add documents to '{collection_name}' collection: {e}")
     
     logging.info("--- Finalization complete. Knowledge base and graph are up to date. ---")
+    print("CORTEX_STAGE::FINALIZE_DONE", flush=True)
 
 def main():
     parser = argparse.ArgumentParser(description="Cortex Ingestion Engine with GraphRAG")
