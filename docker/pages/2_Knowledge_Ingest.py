@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py [DOCKER VERSION]
-# Version: v4.7.0
+# Version: v4.8.0
 # Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
@@ -2581,7 +2581,7 @@ help_system.show_help_menu()
 try:
     from cortex_engine.utils.ollama_utils import check_ollama_service, get_ollama_status_message, get_ollama_instructions
     
-    is_running, error_msg = check_ollama_service()
+    is_running, error_msg, _ = check_ollama_service()
     if not is_running:
         st.warning(f"⚠️ {get_ollama_status_message(is_running, error_msg)}")
         with st.expander("ℹ️ **Important: Limited AI Functionality**", expanded=False):

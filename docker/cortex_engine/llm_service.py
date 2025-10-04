@@ -131,7 +131,7 @@ class LLMServiceManager:
         if len(available_providers) == 1:
             provider = available_providers[0]
             if provider == LLMProvider.LOCAL_OLLAMA:
-                is_running, error_msg = check_ollama_service()
+                is_running, error_msg, _ = check_ollama_service()
                 if not is_running:
                     return None, f"Required local LLM service not available: {error_msg}"
             return provider, None
@@ -145,7 +145,7 @@ class LLMServiceManager:
             
         # Validate provider availability
         if provider == LLMProvider.LOCAL_OLLAMA:
-            is_running, error_msg = check_ollama_service()
+            is_running, error_msg, _ = check_ollama_service()
             if not is_running:
                 # Try fallback to cloud if available
                 cloud_providers = [p for p in available_providers if p != LLMProvider.LOCAL_OLLAMA]

@@ -88,7 +88,7 @@ def setup_models():
         # Check if Ollama is available first
         from cortex_engine.utils.ollama_utils import check_ollama_service
         
-        is_running, error_msg = check_ollama_service()
+        is_running, error_msg, _ = check_ollama_service()
         if not is_running:
             logger.warning(f"⚠️ Ollama service not available: {error_msg}")
             logger.warning("   Knowledge Base will operate in limited mode (vector search only)")
