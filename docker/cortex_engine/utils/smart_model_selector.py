@@ -32,7 +32,7 @@ MODEL_MEMORY_REQUIREMENTS = {
 # Model capability tiers
 MODEL_TIERS = {
     "efficient": {
-        "text_model": "qwen3:8b",  # Changed to available model
+        "text_model": "mistral:latest",
         "vision_model": "llava:7b",
         "memory_requirement": 6.0,  # Total for both models
         "description": "Efficient models suitable for systems with 16-32GB RAM"
