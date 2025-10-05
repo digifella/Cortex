@@ -1,5 +1,6 @@
 from pathlib import Path
 import networkx as nx
+import pickle
 from typing import Any
 from .utils.logging_utils import get_logger
 
@@ -12,7 +13,8 @@ class EnhancedGraphManager:
         self.graph = nx.Graph()
         try:
             if self.graph_path.exists():
-                self.graph = nx.read_gpickle(self.graph_path)
+                with open(self.graph_path, 'rb') as f:
+                    self.graph = pickle.load(f)
         except Exception as e:
             logger.warning(f"Failed to load graph: {e}; starting with empty graph")
 
@@ -29,7 +31,8 @@ class EnhancedGraphManager:
     def save_graph(self) -> None:
         try:
             self.graph_path.parent.mkdir(parents=True, exist_ok=True)
-            nx.write_gpickle(self.graph, self.graph_path)
+            with open(self.graph_path, 'wb') as f:
+                pickle.dump(self.graph, f)
         except Exception as e:
             logger.error(f"Failed to save graph: {e}")
 
