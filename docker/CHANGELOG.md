@@ -29,13 +29,13 @@ Complete module synchronization between main and docker, standardized path handl
 
 ### 🚧 Known Issues (Docker)
 - In some container runs, the ingest UI may briefly report “Analysis complete, but no documents were staged for review” while the staging file does contain documents. A new diagnostics block now shows the exact staging path, parsed count, and a Retry Finalization button to complete the flow.
-- Knowledge Search now has a Docker‑local fallback implementation when the project root page is not present in the image; functionality is minimal (direct Chroma search) until the full page is bundled.
+- ✅ RESOLVED: Knowledge Search now works fully in Docker - removed fallback implementation as full functionality is available.
 - Some .docx readers in Docker can log `DocxReader.load_data() got an unexpected keyword argument 'file_path'`. Analysis still completes; normalization of reader calls is planned.
 
 ### ✨ New (Unreleased)
 - Host and Docker ingest pages: staging diagnostics (path, exists, parsed count) and JSON preview when no staged docs are found.
 - “Retry Finalization” button appears when the staging file contains documents but the UI did not auto‑finalize.
-- Docker Knowledge Search loader now falls back to a local implementation if the project page is unavailable in the image.
+- ✅ RESOLVED: Docker Knowledge Search now uses full implementation - removed local fallback.
 
 ### 🚀 Improvements (Unreleased)
 - Maintenance (host and Docker): clearer Clean Start UI with Windows vs resolved/container paths and pre/post verification of key files (DB folder, collections, staging, graph).
