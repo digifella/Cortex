@@ -93,7 +93,7 @@ except Exception:
         return _Noop()
 
 logger = get_logger(__name__)
-from cortex_engine.query_cortex import describe_image_with_vlm_for_ingestion
+from cortex_engine.query_cortex import describe_image_with_vlm_for_ingestion, describe_image_with_vlm_async
 from cortex_engine.embedding_adapters import EmbeddingServiceAdapter
 from cortex_engine.entity_extractor import EntityExtractor, ExtractedEntity, ExtractedRelationship
 from cortex_engine.graph_manager import EnhancedGraphManager
@@ -370,6 +370,91 @@ def manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
         return _legacy_manual_load_documents(file_paths, args)
 
 
+def _process_images_batch(
+    image_files: List[str],
+    skip_image_processing: bool = False
+) -> List[Document]:
+    """
+    Process multiple images in parallel with VLM.
+
+    This function significantly improves image processing performance by:
+    1. Processing up to 3 images concurrently
+    2. Using 30s timeout per image (vs 120s previously)
+    3. Graceful fallback on timeout/error
+
+    Args:
+        image_files: List of image file paths to process
+        skip_image_processing: Skip VLM processing if True (fast mode)
+
+    Returns:
+        List of Document objects with image descriptions or placeholders
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from pathlib import Path
+
+    documents = []
+
+    if skip_image_processing:
+        logging.info(f"⚡ Skipping VLM processing for {len(image_files)} images (fast mode)")
+        for file_path in image_files:
+            path = Path(file_path)
+            doc = Document(text=f"Image file: {path.name} (processing skipped)")
+            doc.metadata['file_path'] = str(path.as_posix())
+            doc.metadata['file_name'] = path.name
+            doc.metadata['source_type'] = 'image_skipped'
+            documents.append(doc)
+        return documents
+
+    logging.info(f"🖼️ Processing {len(image_files)} images with VLM (parallel, 30s timeout each)")
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        # Submit all image processing tasks
+        future_to_path = {
+            executor.submit(describe_image_with_vlm_async, img_path, 30): img_path
+            for img_path in image_files
+        }
+
+        # Process results as they complete
+        for idx, future in enumerate(as_completed(future_to_path), 1):
+            img_path = future_to_path[future]
+            path = Path(img_path)
+
+            logging.info(f"📄 Processing image {idx}/{len(image_files)}: {path.name}")
+
+            try:
+                description = future.result()
+
+                if description:
+                    doc = Document(text=description)
+                    doc.metadata['file_path'] = str(path.as_posix())
+                    doc.metadata['file_name'] = path.name
+                    doc.metadata['source_type'] = 'image'
+                    documents.append(doc)
+                    logging.info(f"✅ Successfully processed image: {path.name}")
+                else:
+                    # Timeout or error - create placeholder
+                    doc = Document(text=f"Image file: {path.name} (VLM timeout/error)")
+                    doc.metadata['file_path'] = str(path.as_posix())
+                    doc.metadata['file_name'] = path.name
+                    doc.metadata['source_type'] = 'image_fallback'
+                    documents.append(doc)
+                    logging.warning(f"⚠️ Image processing failed, using fallback: {path.name}")
+
+            except Exception as e:
+                logging.error(f"❌ Unexpected error processing {path.name}: {e}")
+                # Create error placeholder
+                doc = Document(text=f"Image file: {path.name} (processing error)")
+                doc.metadata['file_path'] = str(path.as_posix())
+                doc.metadata['file_name'] = path.name
+                doc.metadata['source_type'] = 'image_error'
+                documents.append(doc)
+
+    successful = len([d for d in documents if d.metadata.get('source_type') == 'image'])
+    logging.info(f"🎯 Image processing complete: {successful}/{len(image_files)} successful")
+
+    return documents
+
+
 def _legacy_manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
     """
     Legacy document loading function (original implementation).
@@ -412,50 +497,38 @@ def _legacy_manual_load_documents(file_paths: List[str], args=None) -> List[Docu
             expanded_file_paths.append(str(path))
         else:
             logging.warning(f"Path does not exist or is not a file/directory: {file_path}")
-    
+
     logging.info(f"Expanded {len(file_paths)} paths to {len(expanded_file_paths)} files")
 
-    total_files = len(expanded_file_paths)
-    for idx, file_path in enumerate(expanded_file_paths, 1):
+    # Separate images from other documents for batch processing
+    skip_images = getattr(args, 'skip_image_processing', False) if hasattr(args, 'skip_image_processing') else False
+    image_files = []
+    other_files = []
+
+    for file_path in expanded_file_paths:
+        path = Path(file_path)
+        extension = path.suffix.lower()
+        if extension in IMAGE_EXTENSIONS:
+            image_files.append(file_path)
+        else:
+            other_files.append(file_path)
+
+    logging.info(f"📊 File breakdown: {len(image_files)} images, {len(other_files)} documents")
+
+    # Process images in batch (parallel with timeout)
+    if image_files:
+        image_docs = _process_images_batch(image_files, skip_images)
+        documents.extend(image_docs)
+
+    # Process other documents normally
+    total_files = len(other_files)
+    for idx, file_path in enumerate(other_files, 1):
         try:
             path = Path(file_path)
             extension = path.suffix.lower()
             logging.info(f"📄 Processing file {idx}/{total_files}: {path.name}")
-            
-            # Handle image files using the VLM (if enabled)
-            if extension in IMAGE_EXTENSIONS:
-                # Check if image processing should be skipped
-                skip_images = getattr(args, 'skip_image_processing', False) if hasattr(args, 'skip_image_processing') else False
-                
-                if skip_images:
-                    logging.info(f"Skipping image processing for '{file_path}' (skip_image_processing enabled)")
-                    # Create a basic document with filename info only
-                    doc = Document(text=f"Image file: {path.name} (processing skipped)")
-                    doc.metadata['file_path'] = str(path.as_posix())
-                    doc.metadata['file_name'] = path.name
-                    doc.metadata['source_type'] = 'image_skipped'
-                    documents.append(doc)
-                    continue
-                else:
-                    logging.info(f"Loading '{file_path}' with VLM Image Processor")
-                    try:
-                        description = describe_image_with_vlm_for_ingestion(file_path)
-                        doc = Document(text=description)
-                        doc.metadata['file_path'] = str(path.as_posix())
-                        doc.metadata['file_name'] = path.name
-                        doc.metadata['source_type'] = 'image'
-                        documents.append(doc)
-                        continue
-                    except Exception as e:
-                        logging.error(f"VLM processing failed for '{file_path}': {e}")
-                        # Fall back to skipping with error note
-                        doc = Document(text=f"Image file: {path.name} (VLM processing failed: {str(e)})")
-                        doc.metadata['file_path'] = str(path.as_posix())
-                        doc.metadata['file_name'] = path.name
-                        doc.metadata['source_type'] = 'image_error'
-                        documents.append(doc)
-                        continue
 
+            # Images are already processed in batch above, this loop only handles documents
             # Original text-based document handling
             reader = reader_map.get(extension, default_reader)
             logging.info(f"Loading '{file_path}' with reader: {reader.__class__.__name__}")
@@ -887,6 +960,14 @@ def finalize_ingestion(db_path: str, args=None):
     # Save the graph
     graph_manager.save_graph()
     logging.info(f"Knowledge graph saved to {graph_file_path}")
+
+    # Clear query cache since new data was added
+    try:
+        from cortex_engine.graph_query import clear_query_cache
+        clear_query_cache()
+        logging.info("🔄 Query cache cleared due to new ingestion")
+    except Exception as e:
+        logging.warning(f"Failed to clear query cache: {e}")
 
     # Continue with regular vector indexing
     documents_for_indexing = manual_load_documents(docs_to_index_paths, args)

@@ -20,12 +20,31 @@ from .embedding_adapters import EmbeddingServiceAdapter
 import torch
 import ollama
 import base64
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+import threading
+from typing import Optional
 
 from .config import KB_LLM_MODEL, EMBED_MODEL, VLM_MODEL
 from .utils import get_logger
 
 # Set up logging
 logger = get_logger(__name__)
+
+# Module-level executor for async image processing (shared across calls)
+_image_executor = None
+_executor_lock = threading.Lock()
+
+def _get_image_executor():
+    """Get or create the shared image processing executor."""
+    global _image_executor
+    if _image_executor is None:
+        with _executor_lock:
+            if _image_executor is None:
+                _image_executor = ThreadPoolExecutor(
+                    max_workers=3,
+                    thread_name_prefix="vlm_image"
+                )
+    return _image_executor
 
 # --- Prompt Templates ---
 
@@ -88,7 +107,7 @@ def setup_models():
         # Check if Ollama is available first
         from cortex_engine.utils.ollama_utils import check_ollama_service
         
-        is_running, error_msg, _ = check_ollama_service()
+        is_running, error_msg = check_ollama_service()
         if not is_running:
             logger.warning(f"⚠️ Ollama service not available: {error_msg}")
             logger.warning("   Knowledge Base will operate in limited mode (vector search only)")
@@ -249,8 +268,8 @@ def describe_image_with_vlm_for_ingestion(image_path: str) -> str:
         with open(image_path, "rb") as image_file:
             encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
 
-        # This uses the official ollama client with timeout protection
-        client = ollama.Client(timeout=120)  # 2 minute timeout
+        # This uses the official ollama client with reduced timeout (30s)
+        client = ollama.Client(timeout=30)  # 30 second timeout for faster processing
         response = client.chat(
             model=VLM_MODEL,
             messages=[
@@ -289,6 +308,58 @@ Be specific and detailed. Include any data, numbers, or technical specifications
         else:
             error_msg = f"VLM Error: An unexpected error occurred while processing {image_path}. Is Ollama running and the '{VLM_MODEL}' model pulled? Error: {e}"
             logger.error(f"VLM processing failed for {image_path}: {error_msg}")
-        
+
         print(f"  -> {error_msg}")
         return error_msg
+
+
+def describe_image_with_vlm_async(
+    image_path: str,
+    timeout: int = 30
+) -> Optional[str]:
+    """
+    Async wrapper for VLM image description with timeout.
+    Processes image in background thread with configurable timeout.
+
+    This function enables parallel image processing during ingestion,
+    significantly improving performance when processing multiple images.
+
+    Args:
+        image_path: Path to image file
+        timeout: Timeout in seconds (default 30)
+
+    Returns:
+        Image description string, or None if timeout/error occurs
+
+    Example:
+        >>> description = describe_image_with_vlm_async("photo.jpg", timeout=30)
+        >>> if description:
+        >>>     print(f"Success: {description}")
+        >>> else:
+        >>>     print("Timeout or error occurred")
+    """
+    executor = _get_image_executor()
+
+    try:
+        # Submit task to thread pool
+        future = executor.submit(
+            describe_image_with_vlm_for_ingestion,
+            image_path
+        )
+
+        # Wait for result with timeout
+        result = future.result(timeout=timeout)
+
+        # Check if result is an error message
+        if result and result.startswith("VLM Error:"):
+            logger.warning(f"❌ VLM processing error for {image_path}")
+            return None
+
+        return result
+
+    except FuturesTimeoutError:
+        logger.warning(f"⏱️ VLM timeout after {timeout}s for {image_path}")
+        return None
+    except Exception as e:
+        logger.error(f"❌ Async VLM error for {image_path}: {e}")
+        return None

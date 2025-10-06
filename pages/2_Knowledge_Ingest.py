@@ -1599,8 +1599,9 @@ def render_config_and_scan_ui():
                        help="📄 When both PDF and DOCX versions of the same document exist, only ingest the DOCX version (usually has better text extraction).")
             st.checkbox("Deduplicate by latest version", key="filter_deduplicate", 
                        help="🔄 Automatically detects files with version numbers or dates (e.g., 'report_v2.pdf', 'proposal_final.docx') and only ingests the latest version.")
-            st.checkbox("⚡ Skip image processing (faster ingestion)", key="skip_image_processing", 
-                       help="🖼️ Skip AI vision analysis of JPG/PNG files. Use this if you don't need image descriptions or if vision processing is slow/unavailable.")
+            st.checkbox("⚡ Skip image processing (faster, but loses visual content)", key="skip_image_processing",
+                       value=False,
+                       help="🖼️ Skip AI vision analysis of JPG/PNG files. Image processing is now optimized with parallel execution (30s timeout). Only skip if you don't need OCR, charts, or diagram analysis.")
         with col2:
             st.write("**Pattern-Based Exclusion**")
             st.checkbox("Enable pattern-based exclusion", key="enable_pattern_exclusion", 
