@@ -7,6 +7,26 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+
+## v4.8.1 - 2025-10-06
+
+### Docker Path Configuration & GPU Acceleration
+
+Enhanced Docker installer with dual-path prompts, GPU auto-detection for embeddings, and improved progress visibility
+
+### ✨ New Features
+- Dual-path configuration prompts in Docker installer (AI database + Knowledge source)
+- GPU auto-detection for embedding model (CUDA, MPS, CPU fallback)
+- Per-file progress logging during knowledge ingestion
+- Automatic directory creation with validation
+
+### 🚀 Improvements
+- Clear separation between database storage and source documents in Docker setup
+- Embedding model now uses available GPU (5-10x speedup for NVIDIA/Apple Silicon)
+- Better error messages with delayed expansion in batch files
+- Drive detection without spurious error messages
+- Enhanced visual feedback during Docker initialization
+
 ## v4.8.0 - 2025-09-21
 
 ### Module Harmonization & Path Standardization
@@ -29,13 +49,13 @@ Complete module synchronization between main and docker, standardized path handl
 
 ### 🚧 Known Issues (Docker)
 - In some container runs, the ingest UI may briefly report “Analysis complete, but no documents were staged for review” while the staging file does contain documents. A new diagnostics block now shows the exact staging path, parsed count, and a Retry Finalization button to complete the flow.
-- ✅ RESOLVED: Knowledge Search now works fully in Docker - removed fallback implementation as full functionality is available.
+- Knowledge Search now has a Docker‑local fallback implementation when the project root page is not present in the image; functionality is minimal (direct Chroma search) until the full page is bundled.
 - Some .docx readers in Docker can log `DocxReader.load_data() got an unexpected keyword argument 'file_path'`. Analysis still completes; normalization of reader calls is planned.
 
 ### ✨ New (Unreleased)
 - Host and Docker ingest pages: staging diagnostics (path, exists, parsed count) and JSON preview when no staged docs are found.
 - “Retry Finalization” button appears when the staging file contains documents but the UI did not auto‑finalize.
-- ✅ RESOLVED: Docker Knowledge Search now uses full implementation - removed local fallback.
+- Docker Knowledge Search loader now falls back to a local implementation if the project page is unavailable in the image.
 
 ### 🚀 Improvements (Unreleased)
 - Maintenance (host and Docker): clearer Clean Start UI with Windows vs resolved/container paths and pre/post verification of key files (DB folder, collections, staging, graph).

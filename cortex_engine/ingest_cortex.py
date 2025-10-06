@@ -414,11 +414,13 @@ def _legacy_manual_load_documents(file_paths: List[str], args=None) -> List[Docu
             logging.warning(f"Path does not exist or is not a file/directory: {file_path}")
     
     logging.info(f"Expanded {len(file_paths)} paths to {len(expanded_file_paths)} files")
-    
-    for file_path in expanded_file_paths:
+
+    total_files = len(expanded_file_paths)
+    for idx, file_path in enumerate(expanded_file_paths, 1):
         try:
             path = Path(file_path)
             extension = path.suffix.lower()
+            logging.info(f"📄 Processing file {idx}/{total_files}: {path.name}")
             
             # Handle image files using the VLM (if enabled)
             if extension in IMAGE_EXTENSIONS:

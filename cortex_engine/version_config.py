@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.8.0"
+CORTEX_VERSION = "4.8.1"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
     "minor": 8,
-    "patch": 0,
+    "patch": 1,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,31 +24,29 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-09-21",
-    "release_name": "Module Harmonization & Path Standardization",
-    "description": "Complete module synchronization between main and docker, standardized path handling, and GraphRAG integration fixes",
+    "release_date": "2025-10-06",
+    "release_name": "Docker Path Configuration & GPU Acceleration",
+    "description": "Enhanced Docker installer with dual-path prompts, GPU auto-detection for embeddings, and improved progress visibility",
     "breaking_changes": [],
     "new_features": [
-        "Docker version now has complete module parity with main project",
-        "Full EntityExtractor implementation in docker for GraphRAG functionality", 
-        "Enhanced directory processing with recursive file discovery",
-        "Comprehensive module synchronization including missing utilities"
+        "Dual-path configuration prompts in Docker installer (AI database + Knowledge source)",
+        "GPU auto-detection for embedding model (CUDA, MPS, CPU fallback)",
+        "Per-file progress logging during knowledge ingestion",
+        "Automatic directory creation with validation"
     ],
     "improvements": [
-        "Replaced all hardcoded paths with centralized get_default_ai_database_path() calls",
-        "Direct script execution in subprocess to avoid module resolution confusion",
-        "Synchronized API signatures between main and docker versions",
-        "Added safety checks for batch status to prevent KeyError crashes",
-        "Consistent Ollama service checking across all environments",
-        "Complete docker distribution with all missing core modules"
+        "Clear separation between database storage and source documents in Docker setup",
+        "Embedding model now uses available GPU (5-10x speedup for NVIDIA/Apple Silicon)",
+        "Better error messages with delayed expansion in batch files",
+        "Drive detection without spurious error messages",
+        "Enhanced visual feedback during Docker initialization"
     ],
     "bug_fixes": [
-        "Fixed GraphRAG empty knowledge graph due to stub EntityExtractor in docker",
-        "Resolved BatchState missing is_paused() method causing AttributeError",
-        "Fixed Ollama status unpacking error from mismatched return values",
-        "Corrected KeyError 'total_files' in batch status display",
-        "Fixed import errors for missing utility modules in docker version",
-        "Resolved module resolution confusion between main and docker paths"
+        "Fixed batch file parsing error with colon characters in Windows paths",
+        "Fixed embedding service hardcoded to CPU (now auto-detects GPU)",
+        "Fixed 'unexpected at this time' error in Docker batch file",
+        "Fixed missing progress indicators during ingestion",
+        "Fixed double CRLF line ending issues in Windows batch files"
     ]
 }
 

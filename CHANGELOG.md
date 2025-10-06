@@ -7,6 +7,26 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+
+## v4.8.1 - 2025-10-06
+
+### Docker Path Configuration & GPU Acceleration
+
+Enhanced Docker installer with dual-path prompts, GPU auto-detection for embeddings, and improved progress visibility
+
+### ✨ New Features
+- Dual-path configuration prompts in Docker installer (AI database + Knowledge source)
+- GPU auto-detection for embedding model (CUDA, MPS, CPU fallback)
+- Per-file progress logging during knowledge ingestion
+- Automatic directory creation with validation
+
+### 🚀 Improvements
+- Clear separation between database storage and source documents in Docker setup
+- Embedding model now uses available GPU (5-10x speedup for NVIDIA/Apple Silicon)
+- Better error messages with delayed expansion in batch files
+- Drive detection without spurious error messages
+- Enhanced visual feedback during Docker initialization
+
 ## v4.8.0 - 2025-09-21
 
 ### Module Harmonization & Path Standardization

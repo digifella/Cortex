@@ -29,10 +29,22 @@ def _load_model() -> SentenceTransformer:
         return _model
     with _model_lock:
         if _model is None:
-            logger.info(f"Loading embedding model: {EMBED_MODEL}")
+            # Auto-detect best available device (CUDA GPU > MPS > CPU)
+            import torch
+            if torch.cuda.is_available():
+                device = "cuda"
+                logger.info(f"🚀 Using NVIDIA GPU for embeddings (CUDA available)")
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                device = "mps"
+                logger.info(f"🚀 Using Apple Silicon GPU for embeddings (MPS available)")
+            else:
+                device = "cpu"
+                logger.info(f"💻 Using CPU for embeddings (no GPU detected)")
+
+            logger.info(f"Loading embedding model: {EMBED_MODEL} on {device}")
             # Normalize embeddings improves Chroma recall for BGE models
-            _model = SentenceTransformer(EMBED_MODEL, device="cpu")
-            logger.info("Embedding model loaded")
+            _model = SentenceTransformer(EMBED_MODEL, device=device)
+            logger.info(f"✅ Embedding model loaded on {device}")
     return _model
 
 

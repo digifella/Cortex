@@ -9,7 +9,7 @@ setlocal enabledelayedexpansion
 
 echo.
 echo ===============================================
-echo    CORTEX SUITE v4.8.0 (Search Stability & Docker Parity)
+echo    CORTEX SUITE v4.8.1 (Search Stability & Docker Parity)
 echo    Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64
 echo    GPU acceleration, timeout fixes, and improved reliability (2025-09-02)
 echo    Date: %date% %time%
@@ -333,40 +333,80 @@ for /f "tokens=1* delims==" %%A in ('findstr /B "WINDOWS_KNOWLEDGE_SOURCE_PATH="
 REM Offer interactive storage mapping if AI DB path not set (linear flow, no parens)
 if defined ENV_AI_DB_PATH goto SKIP_AI_DB_PROMPT
 echo.
-echo STORAGE: Configure host folder mapping [optional]
+echo ===================================================================
+echo STORAGE CONFIGURATION: AI Database Path
+echo ===================================================================
+echo This is where Cortex will store the knowledge graph and vector DB.
+echo.
 set "USE_HOST_AI_DB=N"
-set /p USE_HOST_AI_DB=Use host folder for AI database? (y/N): 
+set /p USE_HOST_AI_DB=Use host folder for AI database storage? (y/N):
 if /I "%USE_HOST_AI_DB%" NEQ "Y" goto SKIP_AI_DB_PROMPT
 set "HOST_AI_DB="
-set /p HOST_AI_DB=Enter host path for AI database (e.g., C:\ai_databases): 
+set /p HOST_AI_DB=Enter host path for AI database (e.g., D:\ai_databases):
 if not defined HOST_AI_DB goto SKIP_AI_DB_PROMPT
 set "HOST_AI_DB=%HOST_AI_DB:"=%"
->>.env echo WINDOWS_AI_DATABASE_PATH=%HOST_AI_DB%
-set "ENV_AI_DB_PATH=%HOST_AI_DB%"
+REM Create directory if it doesn't exist
+if not exist "%HOST_AI_DB%" (
+    echo INFO: Creating AI database directory
+    echo Path: !HOST_AI_DB!
+    mkdir "!HOST_AI_DB!" 2>nul
+    if errorlevel 1 (
+        echo ERROR: Failed to create directory
+        echo Please create it manually and ensure you have write permissions
+        pause
+        goto SKIP_AI_DB_PROMPT
+    )
+)
+>>.env echo WINDOWS_AI_DATABASE_PATH=!HOST_AI_DB!
+set "ENV_AI_DB_PATH=!HOST_AI_DB!"
+echo OK: AI database will be stored at: !HOST_AI_DB!
 :SKIP_AI_DB_PROMPT
 
 REM Offer knowledge source mapping if not set (linear flow)
 if defined ENV_SOURCE_PATH goto SKIP_SRC_PROMPT
+echo.
+echo ===================================================================
+echo STORAGE CONFIGURATION: Knowledge Source Path
+echo ===================================================================
+echo This is where your source documents are stored for ingestion.
+echo (PDF, Word, text files, etc.)
+echo.
 set "USE_HOST_SRC=N"
-set /p USE_HOST_SRC=Bind a host folder for Knowledge Source (documents to ingest)? (y/N): 
+set /p USE_HOST_SRC=Use host folder for Knowledge Source documents? (y/N):
 if /I "%USE_HOST_SRC%" NEQ "Y" goto SKIP_SRC_PROMPT
 set "HOST_SRC="
-set /p HOST_SRC=Enter host path for Knowledge Source (e.g., C:\Knowledge): 
+set /p HOST_SRC=Enter host path for Knowledge Source (e.g., D:\Documents\KB_Source):
 if not defined HOST_SRC goto SKIP_SRC_PROMPT
-set "HOST_SRC=%HOST_SRC:"=%" 
->>.env echo WINDOWS_KNOWLEDGE_SOURCE_PATH=%HOST_SRC%
-set "ENV_SOURCE_PATH=%HOST_SRC%"
+set "HOST_SRC=%HOST_SRC:"=%"
+REM Verify source directory exists
+if not exist "%HOST_SRC%" (
+    echo WARNING: Source directory does not exist
+    echo Path: !HOST_SRC!
+    echo The directory will be created if you continue.
+    set "CREATE_SRC=N"
+    set /p "CREATE_SRC=Create this directory? (y/N): "
+    if /I "!CREATE_SRC!" NEQ "Y" goto SKIP_SRC_PROMPT
+    mkdir "!HOST_SRC!" 2>nul
+    if errorlevel 1 (
+        echo ERROR: Failed to create directory
+        pause
+        goto SKIP_SRC_PROMPT
+    )
+)
+>>.env echo WINDOWS_KNOWLEDGE_SOURCE_PATH=!HOST_SRC!
+set "ENV_SOURCE_PATH=!HOST_SRC!"
+echo OK: Knowledge Source documents at: !HOST_SRC!
 :SKIP_SRC_PROMPT
 
 
 REM Ultra-simple approach: Just use the most common case that includes E drive
 echo DETECT: Checking for user directories to mount...
 
-REM Check which drives exist  
-if exist "C:\" echo   MOUNT: C:\ drive will be available as /mnt/c
-if exist "D:\" echo   MOUNT: D:\ drive will be available as /mnt/d  
-if exist "E:\" echo   MOUNT: E:\ drive will be available as /mnt/e
-if exist "F:\" echo   MOUNT: F:\ drive will be available as /mnt/f
+REM Check which drives exist (suppress errors)
+if exist "C:\" (echo   MOUNT: C:\ drive will be available as /mnt/c) else (echo   SKIP: C:\ drive not found)
+if exist "D:\" (echo   MOUNT: D:\ drive will be available as /mnt/d) else (echo   SKIP: D:\ drive not found)
+if exist "E:\" (echo   MOUNT: E:\ drive will be available as /mnt/e) else (echo   SKIP: E:\ drive not found)
+if exist "F:\" (echo   MOUNT: F:\ drive will be available as /mnt/f) else (echo   SKIP: F:\ drive not found)
 
 echo   OK: Starting Cortex Suite with all detected drives...
 
@@ -391,12 +431,12 @@ if not errorlevel 1 (
 
 REM Add host bind mounts for AI database and Knowledge Source if configured (no paren blocks)
 if not defined ENV_AI_DB_PATH goto SKIP_AI_DB_MOUNT
-echo   MOUNT: Mapping AI database to host: %ENV_AI_DB_PATH% ^-> /data/ai_databases
-set DOCKER_CMD=!DOCKER_CMD! -v "%ENV_AI_DB_PATH%":/data/ai_databases
+echo   MOUNT: Mapping AI database to host: !ENV_AI_DB_PATH! -^> /data/ai_databases
+set DOCKER_CMD=!DOCKER_CMD! -v "!ENV_AI_DB_PATH!":/data/ai_databases
 :SKIP_AI_DB_MOUNT
 if not defined ENV_SOURCE_PATH goto SKIP_SRC_MOUNT
-echo   MOUNT: Mapping Knowledge Source to host (read-only): %ENV_SOURCE_PATH% ^-> /data/knowledge_base
-set DOCKER_CMD=!DOCKER_CMD! -v "%ENV_SOURCE_PATH%":/data/knowledge_base:ro
+echo   MOUNT: Mapping Knowledge Source to host (read-only): !ENV_SOURCE_PATH! -^> /data/knowledge_base
+set DOCKER_CMD=!DOCKER_CMD! -v "!ENV_SOURCE_PATH!":/data/knowledge_base:ro
 :SKIP_SRC_MOUNT
 
 REM Always mount entire C:\ drive if it exists (should always exist on Windows)
