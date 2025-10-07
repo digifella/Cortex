@@ -1827,6 +1827,14 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
                             progress_bar.progress(current / total, text=progress_text_detail)
                         except (ValueError, IndexError):
                             st.session_state.log_messages.append(line)
+                    elif line.startswith("CORTEX_STAGE::FINALIZE_DONE"):
+                        # Finalization completed successfully
+                        st.session_state.log_messages.append("✅ Finalization completed successfully!")
+                        progress_bar.progress(1.0, text="✅ Finalization Complete!")
+                    elif line.startswith("CORTEX_STAGE::ANALYSIS_DONE"):
+                        # Analysis completed successfully
+                        st.session_state.log_messages.append("✅ Analysis completed successfully!")
+                        progress_bar.progress(1.0, text="✅ Analysis Complete!")
                     else:
                         st.session_state.log_messages.append(line)
                     log_placeholder.code("\n".join(st.session_state.log_messages), language="log")
@@ -1834,8 +1842,14 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
             # Wait for process completion and clean up
             st.session_state.ingestion_process.wait()
             st.session_state.ingestion_process = None
-            progress_bar.progress(1.0, text="Analysis Complete!")
-            st.success("Process finished.")
+
+            # Show appropriate completion message based on stage
+            if on_complete_stage == "config_done":
+                progress_bar.progress(1.0, text="✅ Finalization Complete!")
+                st.success("✅ Process finished! Your knowledge base has been updated.")
+            else:
+                progress_bar.progress(1.0, text="✅ Analysis Complete!")
+                st.success("✅ Process finished.")
         else:
             # Process was stopped or already completed
             progress_bar.progress(1.0, text="Process stopped")

@@ -1,5 +1,5 @@
-# ## File: pages/2_Knowledge_Ingest.py [DOCKER VERSION]
-# Version: v4.8.0
+# ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
+# Version: v4.8.1
 # Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
@@ -1599,8 +1599,9 @@ def render_config_and_scan_ui():
                        help="📄 When both PDF and DOCX versions of the same document exist, only ingest the DOCX version (usually has better text extraction).")
             st.checkbox("Deduplicate by latest version", key="filter_deduplicate", 
                        help="🔄 Automatically detects files with version numbers or dates (e.g., 'report_v2.pdf', 'proposal_final.docx') and only ingests the latest version.")
-            st.checkbox("⚡ Skip image processing (faster ingestion)", key="skip_image_processing", 
-                       help="🖼️ Skip AI vision analysis of JPG/PNG files. Use this if you don't need image descriptions or if vision processing is slow/unavailable.")
+            st.checkbox("⚡ Skip image processing (faster, but loses visual content)", key="skip_image_processing",
+                       value=False,
+                       help="🖼️ Skip AI vision analysis of JPG/PNG files. Image processing is now optimized with parallel execution (30s timeout). Only skip if you don't need OCR, charts, or diagram analysis.")
         with col2:
             st.write("**Pattern-Based Exclusion**")
             st.checkbox("Enable pattern-based exclusion", key="enable_pattern_exclusion", 
@@ -1826,6 +1827,14 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
                             progress_bar.progress(current / total, text=progress_text_detail)
                         except (ValueError, IndexError):
                             st.session_state.log_messages.append(line)
+                    elif line.startswith("CORTEX_STAGE::FINALIZE_DONE"):
+                        # Finalization completed successfully
+                        st.session_state.log_messages.append("✅ Finalization completed successfully!")
+                        progress_bar.progress(1.0, text="✅ Finalization Complete!")
+                    elif line.startswith("CORTEX_STAGE::ANALYSIS_DONE"):
+                        # Analysis completed successfully
+                        st.session_state.log_messages.append("✅ Analysis completed successfully!")
+                        progress_bar.progress(1.0, text="✅ Analysis Complete!")
                     else:
                         st.session_state.log_messages.append(line)
                     log_placeholder.code("\n".join(st.session_state.log_messages), language="log")
@@ -1833,8 +1842,14 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
             # Wait for process completion and clean up
             st.session_state.ingestion_process.wait()
             st.session_state.ingestion_process = None
-            progress_bar.progress(1.0, text="Analysis Complete!")
-            st.success("Process finished.")
+
+            # Show appropriate completion message based on stage
+            if on_complete_stage == "config_done":
+                progress_bar.progress(1.0, text="✅ Finalization Complete!")
+                st.success("✅ Process finished! Your knowledge base has been updated.")
+            else:
+                progress_bar.progress(1.0, text="✅ Analysis Complete!")
+                st.success("✅ Process finished.")
         else:
             # Process was stopped or already completed
             progress_bar.progress(1.0, text="Process stopped")
@@ -2580,8 +2595,8 @@ help_system.show_help_menu()
 # Check and display Ollama status prominently
 try:
     from cortex_engine.utils.ollama_utils import check_ollama_service, get_ollama_status_message, get_ollama_instructions
-    
-    is_running, error_msg, _ = check_ollama_service()
+
+    is_running, error_msg, resolved_url = check_ollama_service()
     if not is_running:
         st.warning(f"⚠️ {get_ollama_status_message(is_running, error_msg)}")
         with st.expander("ℹ️ **Important: Limited AI Functionality**", expanded=False):
