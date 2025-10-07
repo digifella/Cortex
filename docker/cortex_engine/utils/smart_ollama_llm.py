@@ -13,7 +13,7 @@ from .ollama_utils import check_ollama_service
 logger = get_logger(__name__)
 
 
-def create_smart_ollama_llm(model: str = "mistral:7b-instruct-v0.3-q4_K_M", request_timeout: float = 120.0):
+def create_smart_ollama_llm(model: str = "mistral:latest", request_timeout: float = 120.0):
     """
     Create an Ollama LLM instance that works in both Docker and non-Docker environments.
     
@@ -29,25 +29,18 @@ def create_smart_ollama_llm(model: str = "mistral:7b-instruct-v0.3-q4_K_M", requ
         LLM instance that works in current environment
     """
     
-    # Check if Ollama service is available with Docker host detection
+    # Check if Ollama service is available
     is_running, error_msg, resolved_url = check_ollama_service()
     if not is_running:
         logger.error(f"Ollama service not available: {error_msg}")
         return None
-    
-    # Extract base URL from resolved URL for LLM initialization
-    if resolved_url:
-        base_url = resolved_url.replace('/api/version', '')
-        logger.info(f"Using Ollama base URL: {base_url}")
-    else:
-        base_url = "http://localhost:11434"
     
     # First, try the original LlamaIndex Ollama (works in most cases)
     try:
         from llama_index.llms.ollama import Ollama
         
         logger.info(f"Attempting to create original LlamaIndex Ollama for model: {model}")
-        llm = Ollama(model=model, request_timeout=request_timeout, base_url=base_url)
+        llm = Ollama(model=model, request_timeout=request_timeout)
         
         # Test it with a simple completion
         test_response = llm.complete("Hello")
@@ -63,7 +56,7 @@ def create_smart_ollama_llm(model: str = "mistral:7b-instruct-v0.3-q4_K_M", requ
         from .modern_ollama_llm import create_modern_ollama_llm
         
         logger.info(f"Falling back to ModernOllama wrapper for model: {model}")
-        llm = create_modern_ollama_llm(model=model, base_url=base_url, request_timeout=request_timeout)
+        llm = create_modern_ollama_llm(model=model, request_timeout=request_timeout)
         
         # Test it with a simple completion
         test_response = llm.complete("Hello")

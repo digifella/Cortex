@@ -110,8 +110,8 @@ class TaskExecutionEngine:
         try:
             # Check if Ollama is available first
             from cortex_engine.utils.ollama_utils import check_ollama_service
-            
-            is_running, error_msg = check_ollama_service()
+
+            is_running, error_msg, resolved_url = check_ollama_service()
             if not is_running:
                 logger.error(f"❌ CRITICAL: Ollama service not available for proposal generation: {error_msg}")
                 logger.error("❌ Proposal generation requires Ollama to be running locally for privacy and control.")

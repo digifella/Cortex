@@ -30,7 +30,7 @@ def create_smart_ollama_llm(model: str = "mistral:latest", request_timeout: floa
     """
     
     # Check if Ollama service is available
-    is_running, error_msg = check_ollama_service()
+    is_running, error_msg, resolved_url = check_ollama_service()
     if not is_running:
         logger.error(f"Ollama service not available: {error_msg}")
         return None

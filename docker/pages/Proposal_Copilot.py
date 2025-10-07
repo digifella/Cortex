@@ -1,5 +1,5 @@
 # ## File: Proposal_Copilot.py
-# Version: v4.5.0
+# Version: v4.8.1
 # Date: 2025-07-23
 # Purpose: Core UI for drafting proposals.
 #          - REFACTOR (v28.0.0): Updated to use centralized utilities for path handling,
@@ -75,14 +75,15 @@ def load_system(_db_path):
         try:
             # Check if Ollama is available for proposal copilot
             from cortex_engine.utils.ollama_utils import check_ollama_service, format_ollama_error_for_user
-            
-            is_running, error_msg, _ = check_ollama_service()
+
+            is_running, error_msg, resolved_url = check_ollama_service()
             if not is_running:
                 st.error("🚫 **Proposal Copilot Unavailable**")
                 st.markdown(format_ollama_error_for_user("Proposal Copilot", error_msg))
                 st.stop()
             
             Settings.llm = Ollama(model=LLM_MODEL, request_timeout=300.0)
+            # Use centralized embeddings via adapter for consistency with ingest/search
             try:
                 Settings.embed_model = EmbeddingServiceAdapter(model_name=EMBED_MODEL)
             except Exception:

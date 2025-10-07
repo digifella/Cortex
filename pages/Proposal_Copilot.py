@@ -75,8 +75,8 @@ def load_system(_db_path):
         try:
             # Check if Ollama is available for proposal copilot
             from cortex_engine.utils.ollama_utils import check_ollama_service, format_ollama_error_for_user
-            
-            is_running, error_msg = check_ollama_service()
+
+            is_running, error_msg, resolved_url = check_ollama_service()
             if not is_running:
                 st.error("🚫 **Proposal Copilot Unavailable**")
                 st.markdown(format_ollama_error_for_user("Proposal Copilot", error_msg))

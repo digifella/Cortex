@@ -64,8 +64,8 @@ def load_vector_index(db_path):
         
         # Check if Ollama is available for idea generation
         from cortex_engine.utils.ollama_utils import check_ollama_service, format_ollama_error_for_user
-        
-        is_running, error_msg, _ = check_ollama_service()
+
+        is_running, error_msg, resolved_url = check_ollama_service()
         if not is_running:
             st.error("🚫 **Idea Generator Unavailable**")
             st.markdown(format_ollama_error_for_user("Idea Generation", error_msg))
