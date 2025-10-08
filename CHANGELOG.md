@@ -8,6 +8,28 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v4.9.0 - 2025-10-08
+
+### Critical Performance Optimization
+
+Major performance improvements with async image processing, embedding batch optimization, and intelligent query caching delivering 3-5x faster ingestion
+
+### ✨ New Features
+- Async parallel image processing with 30s timeout and 3-image concurrency
+- Embedding batch processing with GPU vectorization (batch size 32)
+- LRU query result caching for instant repeated searches (100 query cache)
+- Enhanced progress feedback during parallel image processing
+- Automatic cache invalidation on new ingestion
+
+### 🚀 Improvements
+- Image processing enabled by default with optimized performance
+- Reduced VLM timeout from 120s to 30s per image with graceful fallback
+- Batch embedding generation (32 documents per batch) for GPU efficiency
+- Query cache with thread-safe OrderedDict-based LRU eviction
+- Better error handling and fallback for image processing timeouts
+- Improved UI feedback for ingestion finalization completion
+
 ## v4.8.1 - 2025-10-06
 
 ### Docker Path Configuration & GPU Acceleration

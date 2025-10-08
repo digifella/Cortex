@@ -1,5 +1,5 @@
 # ## File: pages/5_Proposal_Step_1.py
-# Version: v4.8.1
+# Version: v4.9.0
 # Date: 2025-07-15
 # Purpose: An interactive UI to tag document placeholders.
 #          - CRITICAL FIX (v27.0.0): The parsing logic has been entirely rewritten

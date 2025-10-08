@@ -1,5 +1,5 @@
 # ## File: pages/4_Collection_Management.py
-# Version: v4.5.0
+# Version: v4.9.0
 # Date: 2025-08-28
 # Purpose: A UI for managing Working Collections only.
 #          Knowledge base maintenance functions moved to Maintenance page (page 13).
@@ -19,7 +19,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 # Import centralized utilities
-from cortex_engine.utils import convert_to_docker_mount_path, get_logger
+from cortex_engine.utils import convert_windows_to_wsl_path, get_logger
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.session_state import initialize_app_session_state
 from cortex_engine.config import COLLECTION_NAME
@@ -35,8 +35,8 @@ def init_chroma_client(db_path):
         st.error("Database path not configured. Please configure it in Knowledge Ingest.")
         return None
         
-    safe_db_path = convert_to_docker_mount_path(db_path)
-    chroma_db_path = os.path.join(safe_db_path, "knowledge_hub_db")
+    wsl_db_path = convert_windows_to_wsl_path(db_path)
+    chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
     
     
     if not os.path.isdir(chroma_db_path):
@@ -85,6 +85,52 @@ if not chroma_client: st.stop()
 
 try:
     vector_collection = chroma_client.get_collection(name=COLLECTION_NAME)
+    # Quick diagnostics to help verify DB connectivity
+    with st.container(border=True):
+        st.markdown("### 🔎 Knowledge Base Diagnostics")
+        try:
+            doc_count = vector_collection.count()
+        except Exception as _diag_e:
+            doc_count = 0
+        st.write(f"📊 Vector store documents: {doc_count}")
+        
+        # Show available Chroma collections and their counts (helps detect name mismatches)
+        try:
+            available = chroma_client.list_collections()
+            if available:
+                cols_info = []
+                for c in available:
+                    try:
+                        c_obj = chroma_client.get_collection(c.name)
+                        cols_info.append((c.name, c_obj.count()))
+                    except Exception:
+                        cols_info.append((c.name, "?"))
+                pretty = ", ".join([f"{n} (count={cnt})" for n, cnt in cols_info])
+                st.caption(f"Available Chroma collections: {pretty}")
+        except Exception:
+            pass
+        
+        # Offer a rescue sync: populate 'default' collection from vector store IDs
+        st.caption("If collections appear empty but the vector store has documents, you can sync the 'default' collection from the vector store IDs.")
+        if st.button("🔄 Sync 'default' collection from vector store", help="Populate 'default' with all vector store document IDs"):
+            try:
+                # Chroma 'get' does not accept 'ids' in include; ids are always returned.
+                # Request metadatas (cheap) so we can pull ids reliably.
+                all_ids = vector_collection.get(include=["metadatas"]).get("ids", [])
+                if isinstance(all_ids, list) and all_ids and isinstance(all_ids[0], list):
+                    # Flatten if nested
+                    flat_ids = [i for sub in all_ids for i in sub]
+                else:
+                    flat_ids = all_ids if isinstance(all_ids, list) else []
+                if not flat_ids:
+                    st.warning("No IDs returned from vector store.")
+                else:
+                    mgr = WorkingCollectionManager()
+                    mgr.add_docs_by_id_to_collection("default", flat_ids)
+                    st.success(f"✅ Added {len(flat_ids)} IDs to 'default' collection.")
+                    st.rerun()
+            except Exception as se:
+                st.error(f"Sync failed: {se}")
 except Exception as e:
     error_msg = str(e)
     
@@ -528,6 +574,82 @@ with summary_col4:
     avg_docs = total_documents / max(non_empty_collections, 1)
     st.metric("📊 Avg Docs/Collection", f"{avg_docs:.1f}")
 
+# Collection Management Actions
+if total_collections > 1 or (total_collections == 1 and total_documents > 0):
+    with st.expander("🧹 Collection Management Tools", expanded=False):
+        st.markdown("**Bulk Collection Operations**")
+        
+        # Get empty collections count
+        empty_collections = [c for c in collections_list if len(c.get('doc_ids', [])) == 0]
+        empty_count = len(empty_collections)
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**Clear Empty Collections**")
+            st.caption(f"Remove {empty_count} collections with no documents")
+            if empty_count > 0:
+                if st.button("🗑️ Remove Empty Collections", key="clear_empty"):
+                    try:
+                        cleared = collection_mgr.clear_empty_collections()
+                        if cleared:
+                            st.success(f"✅ Removed {len(cleared)} empty collections: {', '.join(cleared.keys())}")
+                            st.rerun()
+                        else:
+                            st.info("No empty collections found to remove.")
+                    except Exception as e:
+                        st.error(f"Error removing empty collections: {e}")
+            else:
+                st.info("No empty collections to remove.")
+        
+        with col2:
+            st.markdown("**Clear All Documents**")
+            st.caption(f"Remove all documents from all {total_collections} collections")
+            if total_documents > 0:
+                if st.checkbox("⚠️ I understand this will remove all document references", key="confirm_clear_docs"):
+                    if st.button("📝 Clear All Documents", key="clear_all_docs", type="primary"):
+                        try:
+                            # Clear documents from all collections but keep collections
+                            for collection in collections_list:
+                                collection_name = collection['name']
+                                doc_ids = collection.get('doc_ids', [])
+                                if doc_ids:
+                                    collection_mgr.collections[collection_name]['doc_ids'] = []
+                                    collection_mgr.collections[collection_name]['modified_at'] = datetime.now().isoformat()
+                            
+                            collection_mgr._save()
+                            st.success(f"✅ Cleared documents from all collections ({total_documents} document references removed)")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error clearing documents: {e}")
+            else:
+                st.info("No documents to clear.")
+        
+        with col3:
+            st.markdown("**Reset All Collections**")
+            st.caption("Remove all collections except 'default'")
+            if total_collections > 1:
+                if st.checkbox("⚠️ I understand this will delete all custom collections", key="confirm_clear_all"):
+                    if st.button("🚨 Reset Collections", key="clear_all_collections", type="primary"):
+                        try:
+                            cleared = collection_mgr.clear_all_collections()
+                            if cleared:
+                                cleared_names = [name for name in cleared.keys() if name != "default"]
+                                default_cleared = cleared.get("default", 0)
+                                message = f"✅ Reset complete!"
+                                if cleared_names:
+                                    message += f" Removed {len(cleared_names)} collections: {', '.join(cleared_names)}."
+                                if default_cleared > 0:
+                                    message += f" Cleared {default_cleared} documents from default collection."
+                                st.success(message)
+                                st.rerun()
+                            else:
+                                st.info("No collections to clear.")
+                        except Exception as e:
+                            st.error(f"Error clearing collections: {e}")
+            else:
+                st.info("Only default collection exists.")
+
 st.divider()
 
 # Collection filtering
@@ -736,6 +858,7 @@ for collection in page_collections:
                     if st.button("DELETE PERMANENTLY", type="primary", key=f"delete_btn_{name}"):
                         collection_mgr.delete_collection(name)
                         st.success(f"Successfully deleted collection '{name}'."); st.rerun()
+
 
 # Consistent version footer
 try:

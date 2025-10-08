@@ -1,5 +1,5 @@
 # ## File: pages/8_Document_Anonymizer.py
-# Version: v4.5.0
+# Version: v4.9.0
 # Date: 2025-08-30
 # Purpose: Streamlined document anonymization interface with clean file browsing.
 #          Replaces identifying information with generic placeholders using modern UI patterns.
@@ -19,7 +19,7 @@ sys.path.insert(0, str(project_root))
 
 # Import core modules
 from cortex_engine.anonymizer import DocumentAnonymizer, AnonymizationMapping
-from cortex_engine.utils import get_logger, convert_to_docker_mount_path
+from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 from cortex_engine.config_manager import ConfigManager
 
 # Set up logging
@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 st.set_page_config(page_title="Document Anonymizer", layout="wide", page_icon="🎭")
 
 # Page metadata
-PAGE_VERSION = "v4.5.0"
+PAGE_VERSION = "v4.9.0"
 
 def main():
     """Main Document Anonymizer application."""
@@ -125,7 +125,7 @@ def main():
             # Look for documents in knowledge base locations
             possible_dirs = []
             if config.get('db_path'):
-                base_path = Path(convert_to_docker_mount_path(config['db_path']))
+                base_path = Path(convert_windows_to_wsl_path(config['db_path']))
                 possible_dirs.extend([
                     base_path / "documents",
                     base_path / "source_documents",
