@@ -123,7 +123,20 @@ fi
 # Build the image
 echo "🔨 Building Cortex Suite (this may take a while)..."
 echo "    This includes downloading Python packages and system dependencies..."
-if ! docker build -t cortex-suite -f Dockerfile .; then
+
+# Detect GPU and build appropriate image
+echo "🔍 Checking for NVIDIA GPU..."
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+    echo "✅ NVIDIA GPU detected - Building GPU-accelerated image"
+    echo "🔨 Using Dockerfile.gpu for CUDA support"
+    DOCKERFILE="Dockerfile.gpu"
+else
+    echo "ℹ️ No NVIDIA GPU detected - Building CPU-only image"
+    echo "🔨 Using standard Dockerfile"
+    DOCKERFILE="Dockerfile"
+fi
+
+if ! docker build -t cortex-suite -f $DOCKERFILE .; then
     echo "❌ Build failed! This could be due to:"
     echo "   • Network connectivity issues"
     echo "   • Insufficient disk space (need ~10GB)"
