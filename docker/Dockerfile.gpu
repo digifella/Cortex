@@ -39,8 +39,7 @@ RUN curl -fsSL https://ollama.ai/install.sh | sh && \
 USER cortex
 WORKDIR /home/cortex/app
 
-# Copy GPU requirements
-COPY --chown=cortex:cortex docker/requirements-gpu.txt ./requirements-gpu.txt
+# Copy requirements
 COPY --chown=cortex:cortex requirements.txt ./requirements.txt
 
 # Install base requirements WITHOUT torch (will be installed from GPU requirements)

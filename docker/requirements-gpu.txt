@@ -2,7 +2,7 @@
 # This file includes CUDA-enabled PyTorch for NVIDIA GPU support
 
 # Base requirements (reference main requirements.txt)
--r ../requirements.txt
+-r requirements.txt
 
 # Override CPU-only PyTorch with CUDA-enabled version
 # Uninstall CPU version first, then install CUDA version
