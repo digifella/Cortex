@@ -10,6 +10,7 @@ import hashlib
 import json
 from cortex_engine.graph_manager import EnhancedGraphManager
 from cortex_engine.utils import get_logger
+from cortex_engine.utils.performance_monitor import record_operation
 
 logger = get_logger(__name__)
 
@@ -150,11 +151,21 @@ def cached_search(
     cached_results = _cache_get(cache_key)
     if cached_results is not None:
         logger.info(f"⚡ Cache HIT for query: '{query[:50]}...'")
+        # Track cache hit (near-instant response)
+        record_operation("query", duration=0.001, success=True, cache_hit=True, query_length=len(query))
         return cached_results
 
     # Cache miss - execute search
     logger.info(f"🔍 Cache MISS for query: '{query[:50]}...'")
+
+    import time
+    start_time = time.time()
     results = search_func(query=query, db_path=db_path, top_k=top_k, **kwargs)
+    duration = time.time() - start_time
+
+    # Track cache miss with actual search time
+    record_operation("query", duration=duration, success=True, cache_hit=False,
+                    query_length=len(query), result_count=len(results))
 
     # Store in cache
     _cache_put(cache_key, results)

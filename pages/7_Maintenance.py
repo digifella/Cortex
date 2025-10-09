@@ -1,5 +1,5 @@
 # ## File: pages/7_Maintenance.py
-# Version: v4.9.0
+# Version: v4.10.0
 # Date: 2025-08-31
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.9.0"
+PAGE_VERSION = "v4.10.0"
 
 # Import Cortex modules
 try:
@@ -34,6 +34,8 @@ try:
     from cortex_engine.config_manager import ConfigManager
     from cortex_engine.utils import get_logger, convert_windows_to_wsl_path, ensure_directory
     from cortex_engine.utils.command_executor import display_command_executor_widget, SafeCommandExecutor
+    from cortex_engine.utils.performance_monitor import get_performance_monitor, get_all_stats, get_session_summary
+    from cortex_engine.utils.gpu_monitor import get_gpu_memory_info, get_device_recommendations
     from cortex_engine.ingestion_recovery import IngestionRecoveryManager
     from cortex_engine.collection_manager import WorkingCollectionManager
     from cortex_engine.setup_manager import SetupManager
@@ -1437,6 +1439,192 @@ def display_backup_management():
     except Exception as e:
         st.error(f"Failed to initialize backup manager: {e}")
 
+def display_performance_dashboard():
+    """Display performance monitoring dashboard with metrics and analytics"""
+    st.markdown("## 📊 Performance Monitoring Dashboard")
+    st.markdown("Real-time performance metrics for critical operations (v4.9.0+)")
+
+    # Get performance monitor
+    monitor = get_performance_monitor()
+
+    # Create columns for high-level metrics
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        session_summary = get_session_summary()
+        st.metric(
+            "Total Operations",
+            session_summary.get("total_operations", 0),
+            help="Total number of monitored operations this session"
+        )
+
+    with col2:
+        cache_stats = monitor.get_cache_stats()
+        hit_rate = cache_stats.get("hit_rate", 0.0) * 100
+        st.metric(
+            "Cache Hit Rate",
+            f"{hit_rate:.1f}%",
+            help="Percentage of queries served from cache"
+        )
+
+    with col3:
+        gpu_info = get_gpu_memory_info()
+        device_name = gpu_info.device_name
+        if len(device_name) > 20:
+            device_name = device_name[:17] + "..."
+        st.metric(
+            "Device",
+            device_name,
+            help=f"Full name: {gpu_info.device_name}"
+        )
+
+    with col4:
+        session_duration = session_summary.get("session_duration_formatted", "N/A")
+        st.metric(
+            "Session Duration",
+            session_duration,
+            help="Performance monitoring session duration"
+        )
+
+    st.markdown("---")
+
+    # GPU/Device Information
+    with st.expander("🖥️ Device & GPU Information", expanded=True):
+        gpu_info = get_gpu_memory_info()
+        device_recs = get_device_recommendations()
+
+        col_a, col_b = st.columns(2)
+
+        with col_a:
+            st.markdown("### Device Information")
+            st.markdown(f"**Device:** {gpu_info.device_name}")
+            st.markdown(f"**Type:** {'CUDA GPU' if gpu_info.is_cuda else ('Apple Silicon (MPS)' if gpu_info.is_mps else 'CPU')}")
+
+            if gpu_info.is_cuda:
+                st.markdown(f"**Total Memory:** {gpu_info.total_memory_gb:.2f} GB")
+                st.markdown(f"**Free Memory:** {gpu_info.free_memory_gb:.2f} GB")
+                st.markdown(f"**Utilization:** {gpu_info.utilization_percent:.1f}%")
+
+                # Progress bar for memory utilization
+                st.progress(min(gpu_info.utilization_percent / 100.0, 1.0))
+
+        with col_b:
+            st.markdown("### Batch Size Recommendations")
+            batch_recs = device_recs.get("batch_recommendations", {})
+            perf_tier = device_recs.get("performance_tier", "Unknown")
+
+            st.markdown(f"**Recommended Batch Size:** {batch_recs.get('recommended', 32)}")
+            st.markdown(f"**Conservative:** {batch_recs.get('conservative', 32)}")
+            st.markdown(f"**Aggressive:** {batch_recs.get('aggressive', 32)}")
+            st.markdown(f"**Performance Tier:** {perf_tier}")
+
+    # Operation Statistics
+    with st.expander("⏱️ Operation Performance Statistics", expanded=True):
+        all_stats = get_all_stats()
+
+        if not all_stats:
+            st.info("No performance data collected yet. Run some operations (ingestion, search, etc.) to see metrics.")
+        else:
+            # Create tabs for different operation types
+            op_types = list(all_stats.keys())
+            if op_types:
+                tabs = st.tabs([f"{'📸' if op == 'image_processing' else '🔢' if op == 'embedding_batch' else '🔍' if op == 'query' else '⚡'} {op.replace('_', ' ').title()}" for op in op_types])
+
+                for tab, op_type in zip(tabs, op_types):
+                    with tab:
+                        stats = all_stats[op_type]
+
+                        # Metrics row
+                        m1, m2, m3, m4 = st.columns(4)
+                        with m1:
+                            st.metric("Total Ops", stats.total_operations)
+                        with m2:
+                            st.metric("Successful", stats.successful_operations)
+                        with m3:
+                            st.metric("Failed", stats.failed_operations)
+                        with m4:
+                            success_rate = (stats.successful_operations / stats.total_operations * 100) if stats.total_operations > 0 else 0
+                            st.metric("Success Rate", f"{success_rate:.1f}%")
+
+                        # Timing statistics
+                        st.markdown("### ⏱️ Timing Statistics")
+
+                        t1, t2, t3 = st.columns(3)
+                        with t1:
+                            st.markdown(f"**Average Duration:** {stats.avg_duration:.3f}s")
+                            st.markdown(f"**Min Duration:** {stats.min_duration:.3f}s")
+                            st.markdown(f"**Max Duration:** {stats.max_duration:.3f}s")
+
+                        with t2:
+                            st.markdown(f"**Median (P50):** {stats.p50_duration:.3f}s")
+                            st.markdown(f"**95th Percentile:** {stats.p95_duration:.3f}s")
+                            st.markdown(f"**99th Percentile:** {stats.p99_duration:.3f}s")
+
+                        with t3:
+                            st.markdown(f"**Total Time:** {stats.total_duration:.2f}s")
+                            st.markdown(f"**First Seen:** {stats.first_seen.split('T')[1][:8]}")
+                            st.markdown(f"**Last Seen:** {stats.last_seen.split('T')[1][:8]}")
+
+                        # Recent operations
+                        recent = monitor.get_recent_metrics(op_type, limit=5)
+                        if recent:
+                            st.markdown("### 📋 Recent Operations (Last 5)")
+                            for i, metric in enumerate(recent[-5:], 1):
+                                status = "✅" if metric.success else "❌"
+                                metadata_str = ", ".join(f"{k}={v}" for k, v in metric.metadata.items())
+                                st.markdown(f"{i}. {status} **{metric.duration:.3f}s** - {metadata_str}")
+
+    # Cache Statistics
+    with st.expander("💾 Query Cache Statistics", expanded=False):
+        cache_stats = monitor.get_cache_stats()
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("Total Queries", cache_stats.get("total_queries", 0))
+        with c2:
+            st.metric("Cache Hits", cache_stats.get("cache_hits", 0))
+        with c3:
+            st.metric("Cache Misses", cache_stats.get("cache_misses", 0))
+        with c4:
+            hit_rate = cache_stats.get("hit_rate", 0.0) * 100
+            st.metric("Hit Rate", f"{hit_rate:.1f}%")
+
+        if cache_stats.get("total_queries", 0) > 0:
+            st.markdown(f"**Cache Efficiency:** {cache_stats.get('cache_hits', 0)} instant responses out of {cache_stats.get('total_queries', 0)} queries")
+
+            # Calculate time saved
+            query_stats = all_stats.get("query")
+            if query_stats and cache_stats.get("cache_hits", 0) > 0:
+                avg_search_time = query_stats.avg_duration
+                time_saved = cache_stats.get("cache_hits", 0) * avg_search_time
+                st.success(f"⚡ Estimated time saved by caching: **{time_saved:.2f} seconds**")
+
+    # Actions
+    with st.expander("⚙️ Performance Monitoring Actions", expanded=False):
+        col_x, col_y = st.columns(2)
+
+        with col_x:
+            if st.button("💾 Save Metrics to File", help="Export current metrics to JSON file"):
+                try:
+                    file_path = monitor.save_to_file()
+                    st.success(f"✅ Metrics saved to: `{file_path}`")
+                except Exception as e:
+                    st.error(f"❌ Failed to save metrics: {e}")
+
+            if st.button("🔄 Refresh Display", help="Reload performance data"):
+                st.rerun()
+
+        with col_y:
+            if st.button("🧹 Clear Metrics", help="Reset all performance metrics (new session)", type="primary"):
+                monitor.clear()
+                st.success("✅ Performance metrics cleared - new session started")
+                time.sleep(1)
+                st.rerun()
+
+    st.markdown("---")
+    st.info("💡 **Tip:** Performance metrics are collected automatically during ingestion, search, and other operations. The data resets when you clear metrics or restart the application.")
+
+
 def display_changelog_viewer():
     """Display the project changelog viewer"""
     st.markdown("## 📋 Project Changelog")
@@ -1549,31 +1737,35 @@ def main():
     display_header()
     
     # Create tabs for different maintenance categories
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "🗄️ Database", 
-        "💻 Terminal", 
-        "⚙️ Setup", 
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "🗄️ Database",
+        "💻 Terminal",
+        "⚙️ Setup",
         "💾 Backups",
+        "📊 Performance",
         "📋 Changelog",
         "ℹ️ Info"
     ])
-    
+
     with tab1:
         display_database_maintenance()
-    
+
     with tab2:
         display_system_terminal()
-    
+
     with tab3:
         display_setup_maintenance()
-    
+
     with tab4:
         display_backup_management()
-    
+
     with tab5:
-        display_changelog_viewer()
-    
+        display_performance_dashboard()
+
     with tab6:
+        display_changelog_viewer()
+
+    with tab7:
         st.markdown("""
         ## 📋 Maintenance Information
         

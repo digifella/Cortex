@@ -9,6 +9,29 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v4.10.0 - 2025-10-09
+
+### Performance Analytics & Adaptive Optimization
+
+Comprehensive performance monitoring system with real-time analytics dashboard and GPU-adaptive batch sizing for optimal throughput
+
+### ✨ New Features
+- Performance monitoring system tracking all critical operations (image, embedding, query)
+- Real-time performance dashboard in Maintenance page with GPU metrics
+- GPU memory monitoring with adaptive batch size optimization (4-128)
+- Automatic batch size tuning based on available GPU memory
+- Cache hit/miss analytics with time savings calculations
+- Performance metrics export to JSON for analysis
+
+### 🚀 Improvements
+- Embedding batch sizes now adapt to GPU memory (24GB GPU: 128, 16GB: 64, 8GB: 32, CPU: 4)
+- Performance data collection with percentile statistics (P50, P95, P99)
+- Query cache now tracks hit/miss rates with detailed analytics
+- Image processing timing instrumentation for bottleneck identification
+- Ingestion finalization UI now properly transitions without persistent messages
+- GPU utilization monitoring for CUDA, MPS, and CPU devices
+
 ## v4.9.0 - 2025-10-08
 
 ### Critical Performance Optimization

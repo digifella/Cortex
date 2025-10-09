@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v4.9.0
+# Version: v4.10.0
 # Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
@@ -1831,10 +1831,12 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
                         # Finalization completed successfully
                         st.session_state.log_messages.append("✅ Finalization completed successfully!")
                         progress_bar.progress(1.0, text="✅ Finalization Complete!")
+                        st.session_state.finalize_done_detected = True  # Set flag to indicate finalization is complete
                     elif line.startswith("CORTEX_STAGE::ANALYSIS_DONE"):
                         # Analysis completed successfully
                         st.session_state.log_messages.append("✅ Analysis completed successfully!")
                         progress_bar.progress(1.0, text="✅ Analysis Complete!")
+                        st.session_state.analysis_done_detected = True  # Set flag to indicate analysis is complete
                     else:
                         st.session_state.log_messages.append(line)
                     log_placeholder.code("\n".join(st.session_state.log_messages), language="log")
@@ -1842,6 +1844,14 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
             # Wait for process completion and clean up
             st.session_state.ingestion_process.wait()
             st.session_state.ingestion_process = None
+
+            # Check if finalization completed - if so, go straight to completion screen
+            if st.session_state.get('finalize_done_detected', False):
+                st.session_state.finalize_done_detected = False  # Reset flag
+                st.session_state.ingestion_stage = "config_done"
+                st.success("✅ Finalization complete! Your knowledge base has been updated.")
+                st.rerun()
+                return
 
             # Show appropriate completion message based on stage
             if on_complete_stage == "config_done":
@@ -1857,13 +1867,17 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
 
         if on_complete_stage == "metadata_review":
             load_staged_files()
-            
+
             # Check if we should automatically proceed to finalization
-            if should_auto_finalize():
-                st.info("🚀 Analysis completed successfully! Starting automatic finalization...")
+            # But only if analysis just completed (not if finalization already happened)
+            if should_auto_finalize() and not st.session_state.get('finalize_done_detected', False):
+                # Don't show info message - it persists after rerun
+                # Just silently transition to finalization
+                logger.info("Analysis completed successfully - starting automatic finalization")
                 start_automatic_finalization()
+                st.rerun()  # Immediate rerun to show finalization stage
                 return  # Exit early to avoid setting stage to metadata_review
-            
+
         st.session_state.ingestion_stage = on_complete_stage
         st.rerun()
 

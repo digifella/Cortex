@@ -26,6 +26,7 @@ from typing import Optional
 
 from .config import KB_LLM_MODEL, EMBED_MODEL, VLM_MODEL
 from .utils import get_logger
+from .utils.performance_monitor import measure
 
 # Set up logging
 logger = get_logger(__name__)
@@ -340,26 +341,28 @@ def describe_image_with_vlm_async(
     """
     executor = _get_image_executor()
 
-    try:
-        # Submit task to thread pool
-        future = executor.submit(
-            describe_image_with_vlm_for_ingestion,
-            image_path
-        )
+    # Track performance metrics
+    with measure("image_processing", timeout=timeout, image_path=image_path):
+        try:
+            # Submit task to thread pool
+            future = executor.submit(
+                describe_image_with_vlm_for_ingestion,
+                image_path
+            )
 
-        # Wait for result with timeout
-        result = future.result(timeout=timeout)
+            # Wait for result with timeout
+            result = future.result(timeout=timeout)
 
-        # Check if result is an error message
-        if result and result.startswith("VLM Error:"):
-            logger.warning(f"❌ VLM processing error for {image_path}")
+            # Check if result is an error message
+            if result and result.startswith("VLM Error:"):
+                logger.warning(f"❌ VLM processing error for {image_path}")
+                return None
+
+            return result
+
+        except FuturesTimeoutError:
+            logger.warning(f"⏱️ VLM timeout after {timeout}s for {image_path}")
             return None
-
-        return result
-
-    except FuturesTimeoutError:
-        logger.warning(f"⏱️ VLM timeout after {timeout}s for {image_path}")
-        return None
-    except Exception as e:
-        logger.error(f"❌ Async VLM error for {image_path}: {e}")
-        return None
+        except Exception as e:
+            logger.error(f"❌ Async VLM error for {image_path}: {e}")
+            return None

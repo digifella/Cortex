@@ -15,16 +15,19 @@ from sentence_transformers import SentenceTransformer
 
 from .config import EMBED_MODEL
 from .utils.logging_utils import get_logger
+from .utils.performance_monitor import measure
+from .utils.gpu_monitor import get_optimal_batch_size, log_gpu_status
 
 logger = get_logger(__name__)
 
 
 _model_lock = threading.Lock()
 _model: Optional[SentenceTransformer] = None
+_optimal_batch_size: Optional[int] = None  # Cached optimal batch size
 
 
 def _load_model() -> SentenceTransformer:
-    global _model
+    global _model, _optimal_batch_size
     if _model is not None:
         return _model
     with _model_lock:
@@ -45,7 +48,30 @@ def _load_model() -> SentenceTransformer:
             # Normalize embeddings improves Chroma recall for BGE models
             _model = SentenceTransformer(EMBED_MODEL, device=device)
             logger.info(f"✅ Embedding model loaded on {device}")
+
+            # Calculate optimal batch size for this device
+            _optimal_batch_size = get_optimal_batch_size(model_name=EMBED_MODEL, conservative=True)
+            log_gpu_status()
+
     return _model
+
+
+def get_recommended_batch_size() -> int:
+    """
+    Get the recommended batch size for the current device.
+
+    This is calculated once when the model is loaded and cached.
+
+    Returns:
+        Optimal batch size (4-128 depending on GPU memory)
+    """
+    global _optimal_batch_size
+
+    # Ensure model is loaded (which calculates batch size)
+    if _optimal_batch_size is None:
+        _load_model()
+
+    return _optimal_batch_size or 32  # Fallback to default
 
 
 def embed_query(text: str) -> List[float]:
@@ -98,43 +124,57 @@ def embed_texts_batch(texts: List[str], batch_size: int = 32) -> List[List[float
     if not texts:
         return []
 
-    model = _load_model()
-    all_embeddings = []
-    total_batches = (len(texts) + batch_size - 1) // batch_size
-
-    if len(texts) > batch_size:
-        logger.info(f"🔢 Generating embeddings for {len(texts)} texts in {total_batches} batches (size: {batch_size})")
-
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i+batch_size]
-        batch_num = (i // batch_size) + 1
+    # Track performance metrics for the entire batch operation
+    with measure("embedding_batch", batch_size=batch_size, doc_count=len(texts)):
+        model = _load_model()
+        all_embeddings = []
+        total_batches = (len(texts) + batch_size - 1) // batch_size
 
         if len(texts) > batch_size:
-            logger.debug(f"📦 Processing batch {batch_num}/{total_batches} ({len(batch)} texts)")
+            logger.info(f"🔢 Generating embeddings for {len(texts)} texts in {total_batches} batches (size: {batch_size})")
 
-        # Use batch encoding for efficiency
-        vecs = model.encode(
-            batch,
-            normalize_embeddings=True,
-            batch_size=batch_size,
-            show_progress_bar=False
-        )
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i+batch_size]
+            batch_num = (i // batch_size) + 1
 
-        if hasattr(vecs, 'tolist'):
-            all_embeddings.extend(vecs.tolist())
-        else:
-            all_embeddings.extend([list(v) for v in vecs])
+            if len(texts) > batch_size:
+                logger.debug(f"📦 Processing batch {batch_num}/{total_batches} ({len(batch)} texts)")
 
-    if len(texts) > batch_size:
-        logger.info(f"✅ Embedding generation complete: {len(all_embeddings)} vectors")
+            # Use batch encoding for efficiency
+            vecs = model.encode(
+                batch,
+                normalize_embeddings=True,
+                batch_size=batch_size,
+                show_progress_bar=False
+            )
 
-    return all_embeddings
+            if hasattr(vecs, 'tolist'):
+                all_embeddings.extend(vecs.tolist())
+            else:
+                all_embeddings.extend([list(v) for v in vecs])
+
+        if len(texts) > batch_size:
+            logger.info(f"✅ Embedding generation complete: {len(all_embeddings)} vectors")
+
+        return all_embeddings
 
 
 def embed_documents_efficient(documents: List[str]) -> List[List[float]]:
     """
     Optimized embedding generation specifically for document ingestion.
-    Uses larger batch size (32) for better throughput during ingestion.
+    Uses adaptive batch size based on available GPU memory for optimal throughput.
+
+    The batch size is automatically determined based on:
+    - GPU memory availability (CUDA)
+    - Device type (CUDA/MPS/CPU)
+    - Conservative safety margins to avoid OOM errors
+
+    Typical batch sizes:
+    - 24GB+ GPU: 128
+    - 16GB GPU: 64
+    - 8-12GB GPU: 32
+    - 4-8GB GPU: 16
+    - CPU/MPS: 4-16
 
     Args:
         documents: List of document texts
@@ -146,5 +186,7 @@ def embed_documents_efficient(documents: List[str]) -> List[List[float]]:
         >>> docs = ["Document 1 text", "Document 2 text", ...]
         >>> embeddings = embed_documents_efficient(docs)
     """
-    return embed_texts_batch(documents, batch_size=32)
+    # Use adaptive batch sizing
+    optimal_batch = get_recommended_batch_size()
+    return embed_texts_batch(documents, batch_size=optimal_batch)
 

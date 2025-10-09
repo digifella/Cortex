@@ -6,7 +6,7 @@ set -e
 
 echo ""
 echo "==============================================="
-echo "   CORTEX SUITE v4.9.0 (Search Stability & Docker Parity)"
+echo "   CORTEX SUITE v4.10.0 (Search Stability & Docker Parity)"
 echo "   Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64"
 echo "   GPU acceleration, timeout fixes, and improved reliability (2025-09-02)"
 echo "   Date: $(date)"
