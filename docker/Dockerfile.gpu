@@ -42,11 +42,11 @@ WORKDIR /home/cortex/app
 # Copy requirements
 COPY --chown=cortex:cortex requirements.txt ./requirements.txt
 
-# Install base requirements WITHOUT torch and spacy model (installed separately)
+# Install base requirements WITHOUT torch, spacy model, and torch-dependent packages (installed separately)
 # Increased timeout to 300 seconds for slow/unstable network connections
-# Strip hashes from requirements (hashes can differ across platforms/wheels)
+# Exclude torch, outlines (depends on torch), and en-core-web-sm (downloaded separately)
 RUN --mount=type=cache,target=/home/cortex/.cache/pip \
-    grep -v "^torch" requirements.txt | grep -v "^en-core-web-sm" | sed 's/ --hash=sha256:[a-f0-9]*//g' > requirements-base.txt && \
+    grep -v "^torch" requirements.txt | grep -v "^en-core-web-sm" | grep -v "^outlines" > requirements-base.txt && \
     pip install --retries 5 --timeout 300 -r requirements-base.txt
 
 # Install CUDA-enabled PyTorch
@@ -57,6 +57,12 @@ RUN --mount=type=cache,target=/home/cortex/.cache/pip \
 
 # Verify GPU installation
 RUN python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda if torch.cuda.is_available() else \"N/A\"}')"
+
+# Install torch-dependent packages AFTER PyTorch is installed
+# This includes outlines and outlines_core which require torch
+RUN --mount=type=cache,target=/home/cortex/.cache/pip \
+    grep "^outlines" requirements.txt > requirements-torch-deps.txt && \
+    pip install --retries 5 --timeout 300 -r requirements-torch-deps.txt
 
 # Add user's local bin to PATH
 ENV PATH="/home/cortex/.local/bin:$PATH"
