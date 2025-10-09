@@ -1,6 +1,6 @@
 # **`README.md`**
 
-**Version:** v4.8.0 (Module Harmonization & Path Standardization)
+**Version:** v4.10.1 (GPU Acceleration & Docker Parity)
 **Date:** 2025-08-31
 
 **Prelim:**

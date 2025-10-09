@@ -1,5 +1,5 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v4.10.0
+# Version: v4.10.1
 # Date: 2025-08-30
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
 #          - GRAPHRAG INTEGRATION (v4.2.1): Re-enabled GraphRAG search modes with radio button
@@ -53,7 +53,7 @@ from cortex_engine.embedding_service import embed_query
 logger = get_logger(__name__)
 
 # Page configuration
-PAGE_VERSION = "v4.10.0"
+PAGE_VERSION = "v4.10.1"
 
 st.set_page_config(page_title="Knowledge Search", layout="wide")
 

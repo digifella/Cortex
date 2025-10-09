@@ -1,5 +1,5 @@
 # ## File: pages/8_Document_Anonymizer.py
-# Version: v4.10.0
+# Version: v4.10.1
 # Date: 2025-08-30
 # Purpose: Streamlined document anonymization interface with clean file browsing.
 #          Replaces identifying information with generic placeholders using modern UI patterns.
@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 st.set_page_config(page_title="Document Anonymizer", layout="wide", page_icon="🎭")
 
 # Page metadata
-PAGE_VERSION = "v4.10.0"
+PAGE_VERSION = "v4.10.1"
 
 def main():
     """Main Document Anonymizer application."""

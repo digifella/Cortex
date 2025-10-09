@@ -10,6 +10,26 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v4.10.1 - 2025-10-09
+
+### GPU Acceleration & Docker Parity
+
+GPU acceleration support for Docker with automatic detection and build optimization, plus UI completion bug fixes
+
+### ✨ New Features
+- GPU-enabled Docker build with CUDA 12.1 support (Dockerfile.gpu)
+- Automatic GPU detection in run-cortex.bat - builds GPU or CPU image appropriately
+- CUDA-enabled PyTorch wheels for NVIDIA GPU acceleration (torch==2.3.1+cu121)
+- Comprehensive GPU setup documentation (GPU_SETUP.md)
+- Performance benchmarks: 3-5x speedup with GPU acceleration
+
+### 🚀 Improvements
+- Docker build now automatically detects NVIDIA GPU via nvidia-smi
+- Builds Dockerfile.gpu for NVIDIA systems, standard Dockerfile for CPU-only
+- GPU setup guide includes Windows/Linux installation, verification, troubleshooting
+- Requirements-gpu.txt for CUDA dependencies separate from base requirements
+
 ## v4.10.0 - 2025-10-09
 
 ### Performance Analytics & Adaptive Optimization
