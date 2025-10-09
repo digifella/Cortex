@@ -9,7 +9,7 @@ setlocal enabledelayedexpansion
 
 echo.
 echo ===============================================
-echo    CORTEX SUITE v4.10.1 (Search Stability & Docker Parity)
+echo    CORTEX SUITE v4.10.1 (GPU Acceleration ^& Docker Parity)
 echo    Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64
 echo    GPU acceleration, timeout fixes, and improved reliability (2025-09-02)
 echo    Date: %date% %time%

@@ -78,12 +78,12 @@ EXPOSE 8501 8000
 RUN echo '#!/bin/bash\n\
 set -e\n\
 \n\
-echo "🚀 Starting Cortex Suite v3.0.0 (Enhanced Visual Processing)"\n\
+echo "🚀 Starting Cortex Suite (CPU-Optimized)"\n\
+python -c "from cortex_engine.version_config import VERSION_DISPLAY; print(f\\\"📦 Version: {VERSION_DISPLAY}\\\")"\n\
 echo "📅 $(date)"\n\
 echo "💻 Platform: $(uname -m) ($(uname -s))"\n\
 echo "🐳 Docker Environment: $([ -f /.dockerenv ] && echo "Yes" || echo "No")"\n\
 echo "🔧 Multi-Platform Support: Intel x86_64, Apple Silicon M-series, ARM64 PCs"\n\
-echo "👁️ Visual Analysis: Advanced LLaVA Integration + Dashboard (2025-08-25)"\n\
 echo ""\n\
 \n\
 # Fix data directory permissions (in case of root-owned volumes)\n\
