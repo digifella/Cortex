@@ -634,7 +634,7 @@ exit /b 0
 echo ERROR: Build failed! This could be due to:
 
 
-echo    - Network connectivity issues
+echo    - Network connectivity issues (download interrupted)
 
 
 echo    - Insufficient disk space (need approx 10GB)
@@ -643,16 +643,34 @@ echo    - Insufficient disk space (need approx 10GB)
 echo    - Docker permission issues
 
 
+echo    - Corrupted Docker build cache
+
+
 echo    - Windows system folder access (RECYCLE.BIN issue)
 
 
 echo.
 
 
-echo Try running: docker system prune -f
+echo RECOMMENDED FIX - Run these commands then retry:
 
 
-echo Then try again.
+echo    docker system prune -a -f
+
+
+echo    docker builder prune -a -f
+
+
+echo.
+
+
+echo If error mentions "short read" or "unexpected EOF":
+
+
+echo    This is a network/download issue - just retry the build
+
+
+echo    The download was interrupted and needs to restart
 
 
 pause
