@@ -33,8 +33,10 @@ WORKDIR /home/cortex/app
 COPY --chown=cortex:cortex requirements.txt .
 
 # Install Python dependencies with cache for faster rebuilds
+# Exclude spacy model (installed separately below for reliability)
 RUN --mount=type=cache,target=/home/cortex/.cache/pip \
-    pip install --retries 3 --timeout 60 -r requirements.txt
+    grep -v "^en-core-web-sm" requirements.txt > requirements-base.txt && \
+    pip install --retries 3 --timeout 60 -r requirements-base.txt
 
 # PyTorch installation is now handled in requirements.txt with CPU-only wheels
 # This provides universal compatibility across x86_64, ARM64, and Snapdragon architectures

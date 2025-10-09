@@ -42,9 +42,9 @@ WORKDIR /home/cortex/app
 # Copy requirements
 COPY --chown=cortex:cortex requirements.txt ./requirements.txt
 
-# Install base requirements WITHOUT torch (will be installed from GPU requirements)
+# Install base requirements WITHOUT torch and spacy model (installed separately)
 RUN --mount=type=cache,target=/home/cortex/.cache/pip \
-    grep -v "^torch" requirements.txt > requirements-base.txt && \
+    grep -v "^torch" requirements.txt | grep -v "^en-core-web-sm" > requirements-base.txt && \
     pip install --retries 3 --timeout 60 -r requirements-base.txt
 
 # Install CUDA-enabled PyTorch
