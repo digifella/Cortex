@@ -1,0 +1,16 @@
+# GPU-Enabled Requirements for Docker
+# This file includes CUDA-enabled PyTorch for NVIDIA GPU support
+
+# Base requirements (reference main requirements.txt)
+-r ../requirements.txt
+
+# Override CPU-only PyTorch with CUDA-enabled version
+# Uninstall CPU version first, then install CUDA version
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# CUDA 12.1 compatible PyTorch (for NVIDIA GPUs)
+torch==2.3.1+cu121
+torchvision==0.18.1+cu121
+
+# Note: sentence-transformers will automatically use CUDA if available
+# No changes needed - it detects GPU via torch.cuda.is_available()

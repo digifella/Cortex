@@ -307,10 +307,18 @@ echo BUILD: Building Cortex Suite (this may take a while)...
 echo     This includes downloading Python packages and system dependencies...
 
 
-echo DEBUG: Building from current directory with all files in root...
-
-
-docker build -t cortex-suite -f Dockerfile .
+REM Detect GPU and build appropriate image
+echo DEBUG: Checking for NVIDIA GPU...
+nvidia-smi >nul 2>&1
+if not errorlevel 1 (
+    echo OK: NVIDIA GPU detected - Building GPU-accelerated image
+    echo BUILD: Using Dockerfile.gpu for CUDA support
+    docker build -t cortex-suite -f Dockerfile.gpu .
+) else (
+    echo INFO: No NVIDIA GPU detected - Building CPU-only image
+    echo BUILD: Using standard Dockerfile
+    docker build -t cortex-suite -f Dockerfile .
+)
 
 
 
