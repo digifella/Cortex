@@ -43,13 +43,15 @@ WORKDIR /home/cortex/app
 COPY --chown=cortex:cortex requirements.txt ./requirements.txt
 
 # Install base requirements WITHOUT torch and spacy model (installed separately)
+# Increased timeout to 300 seconds for slow/unstable network connections
 RUN --mount=type=cache,target=/home/cortex/.cache/pip \
     grep -v "^torch" requirements.txt | grep -v "^en-core-web-sm" > requirements-base.txt && \
-    pip install --retries 3 --timeout 60 -r requirements-base.txt
+    pip install --retries 5 --timeout 300 -r requirements-base.txt
 
 # Install CUDA-enabled PyTorch
+# PyTorch CUDA wheels are large (~2GB), need extended timeout
 RUN --mount=type=cache,target=/home/cortex/.cache/pip \
-    pip install torch==2.3.1+cu121 torchvision==0.18.1+cu121 \
+    pip install --retries 5 --timeout 300 torch==2.3.1+cu121 torchvision==0.18.1+cu121 \
     --extra-index-url https://download.pytorch.org/whl/cu121
 
 # Verify GPU installation
