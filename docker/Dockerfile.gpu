@@ -54,8 +54,9 @@ RUN --mount=type=cache,target=/home/cortex/.cache/pip \
 
 # Install CUDA-enabled PyTorch
 # PyTorch CUDA wheels are large (~2GB), need extended timeout
-RUN --mount=type=cache,target=/home/cortex/.cache/pip \
-    pip install --retries 5 --timeout 300 torch==2.3.1+cu121 torchvision==0.18.1+cu121 \
+# Don't use cache for PyTorch to avoid hash mismatch errors from stale cached wheels
+RUN pip install --no-cache-dir --retries 5 --timeout 300 \
+    torch==2.3.1+cu121 torchvision==0.18.1+cu121 \
     --extra-index-url https://download.pytorch.org/whl/cu121
 
 # Verify GPU installation
