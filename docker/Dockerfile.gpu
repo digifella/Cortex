@@ -45,8 +45,11 @@ COPY --chown=cortex:cortex requirements.txt ./requirements.txt
 # Install base requirements WITHOUT torch, spacy model, and torch-dependent packages (installed separately)
 # Increased timeout to 300 seconds for slow/unstable network connections
 # Exclude torch, outlines (depends on torch), and en-core-web-sm (downloaded separately)
+# Extract package names and versions only (no URLs, no hashes) for cross-platform compatibility
 RUN --mount=type=cache,target=/home/cortex/.cache/pip \
-    grep -v "^torch" requirements.txt | grep -v "^en-core-web-sm" | grep -v "^outlines" > requirements-base.txt && \
+    grep -v "^torch" requirements.txt | grep -v "^en-core-web-sm" | grep -v "^outlines" | \
+    grep -v "^#" | grep -v "^$" | \
+    sed 's/ @.*//' | sed 's/#.*//' > requirements-base.txt && \
     pip install --retries 5 --timeout 300 -r requirements-base.txt
 
 # Install CUDA-enabled PyTorch
