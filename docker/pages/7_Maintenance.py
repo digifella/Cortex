@@ -1,5 +1,5 @@
 # ## File: pages/7_Maintenance.py
-# Version: v4.10.0
+# Version: v4.10.1
 # Date: 2025-08-31
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.10.0"
+PAGE_VERSION = "v4.10.1"
 
 # Import Cortex modules
 try:
@@ -1488,6 +1488,56 @@ def display_performance_dashboard():
 
     st.markdown("---")
 
+    # Overview Charts
+    all_stats = get_all_stats()
+    if all_stats:
+        st.markdown("### 📊 Performance Overview")
+
+        # Create two columns for overview charts
+        chart_col1, chart_col2 = st.columns(2)
+
+        with chart_col1:
+            # Operation distribution pie chart
+            import pandas as pd
+            import plotly.express as px
+
+            op_data = []
+            for op_type, stats in all_stats.items():
+                op_data.append({
+                    'Operation': op_type.replace('_', ' ').title(),
+                    'Count': stats.total_operations,
+                    'Time (s)': stats.total_duration
+                })
+
+            if op_data:
+                df_ops = pd.DataFrame(op_data)
+
+                fig_pie = px.pie(
+                    df_ops,
+                    values='Count',
+                    names='Operation',
+                    title='Operation Distribution',
+                    hole=0.4  # Donut chart
+                )
+                fig_pie.update_layout(height=350)
+                st.plotly_chart(fig_pie, use_container_width=True)
+
+        with chart_col2:
+            # Total time by operation (bar chart)
+            if op_data:
+                fig_bar = px.bar(
+                    df_ops,
+                    x='Operation',
+                    y='Time (s)',
+                    title='Total Time by Operation Type',
+                    color='Time (s)',
+                    color_continuous_scale='Blues'
+                )
+                fig_bar.update_layout(height=350, showlegend=False)
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+        st.markdown("---")
+
     # GPU/Device Information
     with st.expander("🖥️ Device & GPU Information", expanded=True):
         gpu_info = get_gpu_memory_info()
@@ -1565,11 +1615,59 @@ def display_performance_dashboard():
                             st.markdown(f"**First Seen:** {stats.first_seen.split('T')[1][:8]}")
                             st.markdown(f"**Last Seen:** {stats.last_seen.split('T')[1][:8]}")
 
-                        # Recent operations
-                        recent = monitor.get_recent_metrics(op_type, limit=5)
-                        if recent:
+                        # Performance Charts
+                        recent = monitor.get_recent_metrics(op_type, limit=50)
+                        if recent and len(recent) >= 2:
+                            import pandas as pd
+                            import plotly.express as px
+                            import plotly.graph_objects as go
+
+                            st.markdown("### 📈 Performance Charts")
+
+                            # Create DataFrame for plotting
+                            df = pd.DataFrame([
+                                {
+                                    'timestamp': metric.timestamp,
+                                    'duration': metric.duration,
+                                    'success': metric.success,
+                                    'operation': op_type
+                                }
+                                for metric in recent
+                            ])
+
+                            # Chart 1: Duration over time (line chart)
+                            fig1 = px.line(
+                                df,
+                                x='timestamp',
+                                y='duration',
+                                title=f'{op_type.replace("_", " ").title()} - Duration Over Time',
+                                labels={'duration': 'Duration (seconds)', 'timestamp': 'Time'},
+                                markers=True
+                            )
+                            fig1.add_hline(y=stats.avg_duration, line_dash="dash", line_color="red",
+                                          annotation_text=f"Avg: {stats.avg_duration:.3f}s")
+                            fig1.update_layout(height=400)
+                            st.plotly_chart(fig1, use_container_width=True)
+
+                            # Chart 2: Duration distribution (histogram)
+                            fig2 = px.histogram(
+                                df,
+                                x='duration',
+                                title=f'{op_type.replace("_", " ").title()} - Duration Distribution',
+                                labels={'duration': 'Duration (seconds)', 'count': 'Frequency'},
+                                nbins=20
+                            )
+                            fig2.add_vline(x=stats.p50_duration, line_dash="dash", line_color="green",
+                                          annotation_text=f"P50: {stats.p50_duration:.3f}s")
+                            fig2.add_vline(x=stats.p95_duration, line_dash="dash", line_color="orange",
+                                          annotation_text=f"P95: {stats.p95_duration:.3f}s")
+                            fig2.update_layout(height=350)
+                            st.plotly_chart(fig2, use_container_width=True)
+
+                        # Recent operations (text summary)
+                        if recent and len(recent) >= 1:
                             st.markdown("### 📋 Recent Operations (Last 5)")
-                            for i, metric in enumerate(recent[-5:], 1):
+                            for i, metric in enumerate(list(recent)[-5:], 1):
                                 status = "✅" if metric.success else "❌"
                                 metadata_str = ", ".join(f"{k}={v}" for k, v in metric.metadata.items())
                                 st.markdown(f"{i}. {status} **{metric.duration:.3f}s** - {metadata_str}")
