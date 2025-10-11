@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v4.10.0
+# Version: v4.10.1
 # Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
@@ -632,28 +632,9 @@ def render_batch_processing_ui():
         
         # Check if there are successfully processed documents for collection creation
         if not st.session_state.get('last_ingested_doc_ids'):
-            # Populate document IDs from successfully processed files
-            try:
-                from cortex_engine.ingestion_recovery import IngestionRecoveryManager
-                container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-                recovery_manager = IngestionRecoveryManager(container_db_path)
-                
-                # Get recently ingested documents
-                recent_docs = recovery_manager.get_recently_ingested_documents()
-                if recent_docs:
-                    # Extract document IDs from recent ingestion
-                    doc_ids = []
-                    for doc_info in recent_docs[:50]:  # Limit to most recent 50
-                        if isinstance(doc_info, dict) and 'doc_id' in doc_info:
-                            doc_ids.append(doc_info['doc_id'])
-                        elif isinstance(doc_info, str):
-                            doc_ids.append(doc_info)
-                    
-                    if doc_ids:
-                        st.session_state.last_ingested_doc_ids = doc_ids
-                        logger.info(f"Populated {len(doc_ids)} document IDs for collection creation")
-            except Exception as e:
-                logger.error(f"Failed to populate document IDs for collection: {e}")
+            # Note: Document IDs are now tracked directly during ingestion
+            # The completion screen queries ChromaDB for accurate counts
+            pass
         
         # Show collection creation option if we have successfully processed documents
         if st.session_state.get('last_ingested_doc_ids'):
@@ -994,27 +975,10 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
         st.success("🎉 **Batch Processing Complete!** All files have been processed.")
         
         # Populate document IDs if not already done
+        # Note: Document IDs are now tracked directly during ingestion
+        # The completion screen queries ChromaDB for accurate counts
         if not st.session_state.get('last_ingested_doc_ids'):
-            try:
-                from cortex_engine.ingestion_recovery import IngestionRecoveryManager
-                container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-                recovery_manager = IngestionRecoveryManager(container_db_path)
-                
-                # Get recently ingested documents
-                recent_docs = recovery_manager.get_recently_ingested_documents()
-                if recent_docs:
-                    doc_ids = []
-                    for doc_info in recent_docs[:50]:  # Limit to most recent 50
-                        if isinstance(doc_info, dict) and 'doc_id' in doc_info:
-                            doc_ids.append(doc_info['doc_id'])
-                        elif isinstance(doc_info, str):
-                            doc_ids.append(doc_info)
-                    
-                    if doc_ids:
-                        st.session_state.last_ingested_doc_ids = doc_ids
-                        logger.info(f"Populated {len(doc_ids)} document IDs for collection creation")
-            except Exception as e:
-                logger.error(f"Failed to populate document IDs for collection: {e}")
+            pass
         
         # Show collection creation option
         if st.session_state.get('last_ingested_doc_ids'):
@@ -1883,12 +1847,32 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
 
 def render_completion_screen():
     st.success("✅ Finalization complete! Your knowledge base is up to date.")
+
     # Success toast with collection and count info
+    # Get actual document count from database instead of relying on session state
     try:
-        target_collection = st.session_state.get('target_collection_name', '') or 'default'
-        ingested_ids = st.session_state.get('last_ingested_doc_ids', []) or []
-        st.info(f"📚 Collection: {target_collection} • 📄 Documents added: {len(ingested_ids)}")
-    except Exception:
+        from cortex_engine.utils.path_utils import get_database_path
+        import chromadb
+
+        db_path = get_database_path()
+        chroma_path = Path(db_path) / "knowledge_hub_db"
+
+        if chroma_path.exists():
+            client = chromadb.PersistentClient(path=str(chroma_path))
+            collection = client.get_or_create_collection(name="knowledge_base")
+            total_docs = collection.count()
+
+            target_collection = st.session_state.get('target_collection_name', '') or 'default'
+
+            # Try to get ingested IDs from session state, but fallback to showing total
+            ingested_ids = st.session_state.get('last_ingested_doc_ids', []) or []
+
+            if ingested_ids:
+                st.info(f"📚 Collection: {target_collection} • 📄 Documents added this session: {len(ingested_ids)} • Total documents: {total_docs}")
+            else:
+                st.info(f"📚 Total documents in knowledge base: {total_docs}")
+    except Exception as e:
+        logger.warning(f"Could not retrieve document count: {e}")
         pass
     
     # Check if documents should be automatically assigned to a target collection

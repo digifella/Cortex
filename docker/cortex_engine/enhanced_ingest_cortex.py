@@ -206,19 +206,19 @@ class EnhancedDocumentProcessor:
             # Suppress PyMuPDF warnings
             import fitz
             fitz.TOOLS.mupdf_display_errors(False)
-            
+
             try:
-                documents = reader.load_data(file_path=file_path)
+                documents = reader.load_data(file_path)
             except Exception as pdf_error:
                 if "cannot find loader for this" in str(pdf_error):
                     logger.warning(f"PDF image extraction issue in {file_path.name}: {pdf_error}")
-                    documents = reader.load_data(file_path=file_path)
+                    documents = reader.load_data(file_path)
                 else:
                     raise
-        
+
         elif isinstance(reader, UnstructuredReader):
             try:
-                documents = reader.load_data(file_path=file_path)
+                documents = reader.load_data(file_path)
             except Exception as unstructured_error:
                 if "cannot find loader for this WMF file" in str(unstructured_error):
                     logger.warning(f"WMF image error in {file_path.name}, skipping problematic elements")
@@ -227,10 +227,10 @@ class EnhancedDocumentProcessor:
                     documents = [Document(text=text)]
                 else:
                     raise
-        
+
         else:
-            # Standard reader processing
-            documents = reader.load_data(file_path=file_path)
+            # Standard reader processing (DocxReader, PptxReader, etc.)
+            documents = reader.load_data(file_path)
         
         self.stats['legacy_processed'] += 1
         

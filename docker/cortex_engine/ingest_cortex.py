@@ -258,14 +258,14 @@ def get_document_content(file_path: str, skip_image_processing: bool = False) ->
         # Handle different reader types with error handling
         if isinstance(reader, PyMuPDFReader):
             try:
-                docs_from_file = reader.load_data(file_path=path)
+                docs_from_file = reader.load_data(path)
             except Exception as pdf_error:
                 if "cmsOpenProfileFromMem" not in str(pdf_error):
                     logger.warning(f"PDF processing warning for {path.name}: {pdf_error}")
-                docs_from_file = reader.load_data(file_path=path)
+                docs_from_file = reader.load_data(path)
         elif isinstance(reader, UnstructuredReader):
             try:
-                docs_from_file = reader.load_data(file_path=path)
+                docs_from_file = reader.load_data(path)
             except Exception as unstructured_error:
                 error_str = str(unstructured_error).lower()
                 if not any(x in error_str for x in ['warning', 'deprecation', 'future']):
@@ -536,16 +536,16 @@ def _legacy_manual_load_documents(file_paths: List[str], args=None) -> List[Docu
             # For PDFs, add extra error handling
             if isinstance(reader, PyMuPDFReader):
                 try:
-                    docs_from_file = reader.load_data(file_path=path)
+                    docs_from_file = reader.load_data(path)
                 except Exception as pdf_error:
                     # If PDF fails completely, log it but continue
                     if "cmsOpenProfileFromMem" not in str(pdf_error):
                         logging.warning(f"PDF processing warning for {path.name}: {pdf_error}")
-                    docs_from_file = reader.load_data(file_path=path)
+                    docs_from_file = reader.load_data(path)
             elif isinstance(reader, UnstructuredReader):
-                # UnstructuredReader needs file_path parameter like PyMuPDFReader
+                # UnstructuredReader also uses positional path parameter
                 try:
-                    docs_from_file = reader.load_data(file_path=path)
+                    docs_from_file = reader.load_data(path)
                 except Exception as unstructured_error:
                     # Many UnstructuredReader warnings are harmless parsing issues - only log real errors
                     error_str = str(unstructured_error).lower()

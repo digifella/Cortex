@@ -632,28 +632,9 @@ def render_batch_processing_ui():
         
         # Check if there are successfully processed documents for collection creation
         if not st.session_state.get('last_ingested_doc_ids'):
-            # Populate document IDs from successfully processed files
-            try:
-                from cortex_engine.ingestion_recovery import IngestionRecoveryManager
-                container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-                recovery_manager = IngestionRecoveryManager(container_db_path)
-                
-                # Get recently ingested documents
-                recent_docs = recovery_manager.get_recently_ingested_documents()
-                if recent_docs:
-                    # Extract document IDs from recent ingestion
-                    doc_ids = []
-                    for doc_info in recent_docs[:50]:  # Limit to most recent 50
-                        if isinstance(doc_info, dict) and 'doc_id' in doc_info:
-                            doc_ids.append(doc_info['doc_id'])
-                        elif isinstance(doc_info, str):
-                            doc_ids.append(doc_info)
-                    
-                    if doc_ids:
-                        st.session_state.last_ingested_doc_ids = doc_ids
-                        logger.info(f"Populated {len(doc_ids)} document IDs for collection creation")
-            except Exception as e:
-                logger.error(f"Failed to populate document IDs for collection: {e}")
+            # Note: Document IDs are now tracked directly during ingestion
+            # The completion screen queries ChromaDB for accurate counts
+            pass
         
         # Show collection creation option if we have successfully processed documents
         if st.session_state.get('last_ingested_doc_ids'):
@@ -994,27 +975,10 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
         st.success("🎉 **Batch Processing Complete!** All files have been processed.")
         
         # Populate document IDs if not already done
+        # Note: Document IDs are now tracked directly during ingestion
+        # The completion screen queries ChromaDB for accurate counts
         if not st.session_state.get('last_ingested_doc_ids'):
-            try:
-                from cortex_engine.ingestion_recovery import IngestionRecoveryManager
-                container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-                recovery_manager = IngestionRecoveryManager(container_db_path)
-                
-                # Get recently ingested documents
-                recent_docs = recovery_manager.get_recently_ingested_documents()
-                if recent_docs:
-                    doc_ids = []
-                    for doc_info in recent_docs[:50]:  # Limit to most recent 50
-                        if isinstance(doc_info, dict) and 'doc_id' in doc_info:
-                            doc_ids.append(doc_info['doc_id'])
-                        elif isinstance(doc_info, str):
-                            doc_ids.append(doc_info)
-                    
-                    if doc_ids:
-                        st.session_state.last_ingested_doc_ids = doc_ids
-                        logger.info(f"Populated {len(doc_ids)} document IDs for collection creation")
-            except Exception as e:
-                logger.error(f"Failed to populate document IDs for collection: {e}")
+            pass
         
         # Show collection creation option
         if st.session_state.get('last_ingested_doc_ids'):

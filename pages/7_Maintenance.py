@@ -1375,7 +1375,8 @@ def display_backup_management():
         
         with st.expander("📋 Manage Existing Backups", expanded=False):
             try:
-                backups = backup_manager.list_backups()
+                import asyncio
+                backups = asyncio.run(backup_manager.list_backups())
                 
                 if not backups:
                     st.info("No backups found.")
