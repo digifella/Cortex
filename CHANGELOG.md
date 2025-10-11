@@ -6,6 +6,36 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## v4.10.2 - 2025-10-11
+
+### Bug Fixes & UX Improvements
+
+Critical bug fixes for ingestion errors, improved search result deduplication, and better user feedback during processing.
+
+### 🔧 Bug Fixes
+- Fixed LlamaIndex DocxReader API errors (changed `file_path=` keyword to positional argument)
+- Removed calls to non-existent `get_recently_ingested_documents()` method
+- Fixed BackupManager async coroutine warning (added asyncio.run wrapper)
+- Removed auto-submit behavior in Knowledge Search (now requires explicit button press)
+- Improved LLM timeout handling (reduced 600s → 180s with better error messages)
+
+### ✨ New Features
+- Search results now deduplicate by document (shows unique docs instead of all chunks)
+- Display "X results (Y unique documents)" for better clarity
+- Shows "Showing Y unique documents (from X chunks)" when deduplication occurs
+
+### 🚀 Improvements
+- Consistent UI behavior across all pages - Tab accepts input, button press initiates action
+- Better progress feedback during long-running LLM metadata extraction
+- Logs elapsed time for LLM calls taking >60 seconds
+- Explicit TimeoutError handling with clear error messages
+- Ingestion completion screen now queries ChromaDB for accurate document counts
+
+### 📋 Technical Details
+- Fixed 12+ DocxReader.load_data() calls across enhanced_ingest_cortex.py and ingest_cortex.py
+- All fixes synchronized to Docker distribution
+- Improved error handling prevents confusing timeout messages
+
 
 
 
