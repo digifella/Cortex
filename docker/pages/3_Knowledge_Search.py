@@ -1401,7 +1401,7 @@ def main():
     if search_disabled:
         st.info("💡 **Search Tips:** Try queries like 'artificial intelligence', 'project management', 'strategy and transformation', or use the sidebar filters for specific document types.")
     
-    if st.button("🔍 Search Knowledge Base", type="primary", disabled=search_disabled) or (query and query != st.session_state.get('last_search_query', '')):
+    if st.button("🔍 Search Knowledge Base", type="primary", disabled=search_disabled):
         if query.strip():
             # Update last query
             st.session_state.last_search_query = query
