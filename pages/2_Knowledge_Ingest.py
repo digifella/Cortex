@@ -1883,12 +1883,32 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
 
 def render_completion_screen():
     st.success("✅ Finalization complete! Your knowledge base is up to date.")
+
     # Success toast with collection and count info
+    # Get actual document count from database instead of relying on session state
     try:
-        target_collection = st.session_state.get('target_collection_name', '') or 'default'
-        ingested_ids = st.session_state.get('last_ingested_doc_ids', []) or []
-        st.info(f"📚 Collection: {target_collection} • 📄 Documents added: {len(ingested_ids)}")
-    except Exception:
+        from cortex_engine.utils.path_utils import get_database_path
+        import chromadb
+
+        db_path = get_database_path()
+        chroma_path = Path(db_path) / "knowledge_hub_db"
+
+        if chroma_path.exists():
+            client = chromadb.PersistentClient(path=str(chroma_path))
+            collection = client.get_or_create_collection(name="knowledge_base")
+            total_docs = collection.count()
+
+            target_collection = st.session_state.get('target_collection_name', '') or 'default'
+
+            # Try to get ingested IDs from session state, but fallback to showing total
+            ingested_ids = st.session_state.get('last_ingested_doc_ids', []) or []
+
+            if ingested_ids:
+                st.info(f"📚 Collection: {target_collection} • 📄 Documents added this session: {len(ingested_ids)} • Total documents: {total_docs}")
+            else:
+                st.info(f"📚 Total documents in knowledge base: {total_docs}")
+    except Exception as e:
+        logger.warning(f"Could not retrieve document count: {e}")
         pass
     
     # Check if documents should be automatically assigned to a target collection
