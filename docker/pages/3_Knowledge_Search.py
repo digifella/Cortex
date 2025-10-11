@@ -1,5 +1,5 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v4.9.0
+# Version: v4.10.1
 # Date: 2025-08-30
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
 #          - GRAPHRAG INTEGRATION (v4.2.1): Re-enabled GraphRAG search modes with radio button
@@ -53,7 +53,7 @@ from cortex_engine.embedding_service import embed_query
 logger = get_logger(__name__)
 
 # Page configuration
-PAGE_VERSION = "v4.9.0"
+PAGE_VERSION = "v4.10.1"
 
 st.set_page_config(page_title="Knowledge Search", layout="wide")
 
@@ -1040,8 +1040,13 @@ def render_search_results(results, filters):
         if len(active_filters) > 1:
             filter_text += f" ({filters.get('filter_operator', 'AND')} logic)"
         st.info(f"🔍 Active filters: {filter_text}")
-    
-    st.success(f"✅ Found {len(results)} results")
+
+    # Count unique documents
+    unique_docs = len(set(r.get('file_name', 'Unknown') for r in results))
+    if unique_docs < len(results):
+        st.success(f"✅ Found {len(results)} results ({unique_docs} unique documents)")
+    else:
+        st.success(f"✅ Found {len(results)} results")
     
     # Bulk collection actions
     if len(results) > 1:
@@ -1139,8 +1144,21 @@ def render_search_results(results, filters):
     
     # Individual results display
     st.subheader("📊 Search Results")
-    
-    for i, result in enumerate(results[:10]):  # Show top 10 results
+
+    # Deduplicate by file_name - keep highest scoring chunk per document
+    unique_results = {}
+    for result in results:
+        file_name = result.get('file_name', 'Unknown')
+        if file_name not in unique_results or result['score'] > unique_results[file_name]['score']:
+            unique_results[file_name] = result
+
+    deduplicated_results = sorted(unique_results.values(), key=lambda x: x['score'], reverse=True)
+
+    # Show deduplication info
+    if len(results) > len(deduplicated_results):
+        st.info(f"📄 Showing {len(deduplicated_results)} unique documents (from {len(results)} chunks)")
+
+    for i, result in enumerate(deduplicated_results[:10]):  # Show top 10 unique documents
         with st.expander(f"**{result['rank']}.** {result['file_name']} (Score: {result['score']:.3f})"):
             # Action buttons for individual results
             action_col1, action_col2, action_col3 = st.columns([1, 1, 4])
