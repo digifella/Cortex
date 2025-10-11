@@ -153,7 +153,9 @@ def initialize_script():
         logging.warning("AI-enhanced metadata extraction will be disabled. Documents will be processed with basic metadata only.")
         Settings.llm = None  # Will be handled in analysis function
     else:
-        Settings.llm = create_smart_ollama_llm(model="mistral:latest", request_timeout=600.0)
+        # Set reasonable timeout for metadata extraction (3 minutes)
+        # Very long documents may timeout and use fallback metadata
+        Settings.llm = create_smart_ollama_llm(model="mistral:latest", request_timeout=180.0)
         logging.info(f"Ollama connected successfully at {resolved_url}")
     
     # Unify embeddings with search/async via adapter around embedding_service (Docker)
@@ -732,7 +734,22 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
                 try:
                     prompt = metadata_prompt_template.format(schema=schema_json_str, text=doc.get_content()[:8000], file_path=file_path_str, source_type=source_type)
                     logging.info("Sending prompt to LLM for metadata extraction...")
-                    response_str = str(Settings.llm.complete(prompt))
+
+                    # Add timeout handling with progress feedback
+                    import time
+                    start_time = time.time()
+                    try:
+                        response_str = str(Settings.llm.complete(prompt))
+                        elapsed = time.time() - start_time
+                        if elapsed > 60:
+                            logging.info(f"LLM call took {elapsed:.1f}s (longer document)")
+                    except TimeoutError as te:
+                        logging.warning(f"LLM timeout after {time.time() - start_time:.1f}s for {file_name}, using fallback metadata")
+                        raise ValueError(f"LLM timeout: {te}")
+                    except Exception as llm_ex:
+                        logging.warning(f"LLM error after {time.time() - start_time:.1f}s for {file_name}: {llm_ex}")
+                        raise
+
                     logging.info("Received raw response from LLM. Cleaning and parsing JSON...")
                     
                     # Check if response is empty (indicates LLM error)
