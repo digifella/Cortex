@@ -111,12 +111,20 @@ if [ -z "$ENV_SOURCE_PATH" ]; then
 fi
 
 # Translate any configured host paths into -v mounts
+# Note: Paths are stored in arrays to handle spaces correctly
+AI_DB_MOUNT_ARGS=()
+SOURCE_MOUNT_ARGS=()
+
 if [ -n "$ENV_AI_DB_PATH" ]; then
-    ADD_AI_DB_MOUNT="-v \"$ENV_AI_DB_PATH\":/data/ai_databases"
+    # Create directory if it doesn't exist
+    mkdir -p "$ENV_AI_DB_PATH" 2>/dev/null || true
+    AI_DB_MOUNT_ARGS=(-v "$ENV_AI_DB_PATH:/data/ai_databases")
     echo "  📁 Mapping AI database to host: $ENV_AI_DB_PATH -> /data/ai_databases"
 fi
 if [ -n "$ENV_SOURCE_PATH" ]; then
-    ADD_SOURCE_MOUNT="-v \"$ENV_SOURCE_PATH\":/data/knowledge_base:ro"
+    # Create directory if it doesn't exist
+    mkdir -p "$ENV_SOURCE_PATH" 2>/dev/null || true
+    SOURCE_MOUNT_ARGS=(-v "$ENV_SOURCE_PATH:/data/knowledge_base:ro")
     echo "  📁 Mapping Knowledge Source to host (read-only): $ENV_SOURCE_PATH -> /data/knowledge_base"
 fi
 
@@ -215,7 +223,7 @@ if [ -f .env ]; then
     if grep -q "HOST_DOCUMENTS_PATH=" .env; then
         DOC_PATH=$(grep "HOST_DOCUMENTS_PATH=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
         if [ -n "$DOC_PATH" ] && [ -d "$DOC_PATH" ]; then
-            USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v \"$DOC_PATH\":/host_documents:ro"
+            USER_VOLUME_MOUNTS="$USER_VOLUME_MOUNTS -v $DOC_PATH:/host_documents:ro"
             echo "  📁 Mounting custom documents path: $DOC_PATH"
         fi
     fi
@@ -247,20 +255,42 @@ fi
 
 # Run the container with intelligent GPU detection
 echo "🚀 Starting Cortex Suite..."
-docker run -d \
-    --name cortex-suite \
-    $GPU_FLAG \
-    -p 8501:8501 \
-    -p 8000:8000 \
-    -v cortex_data:/data \
-    $ADD_AI_DB_MOUNT \
-    $ADD_SOURCE_MOUNT \
-    -v cortex_logs:/home/cortex/app/logs \
-    -v cortex_ollama:/home/cortex/.ollama \
-    $USER_VOLUME_MOUNTS \
-    --env-file .env \
-    --restart unless-stopped \
-    cortex-suite
+
+# Build docker run command with proper quoting for paths with spaces
+DOCKER_RUN_CMD=(docker run -d --name cortex-suite)
+
+# Add GPU flag if available
+if [ -n "$GPU_FLAG" ]; then
+    DOCKER_RUN_CMD+=($GPU_FLAG)
+fi
+
+# Add port mappings
+DOCKER_RUN_CMD+=(-p 8501:8501 -p 8000:8000)
+
+# Add base volumes
+DOCKER_RUN_CMD+=(-v cortex_data:/data)
+
+# Add custom mounts (arrays preserve spaces in paths)
+if [ ${#AI_DB_MOUNT_ARGS[@]} -gt 0 ]; then
+    DOCKER_RUN_CMD+=("${AI_DB_MOUNT_ARGS[@]}")
+fi
+if [ ${#SOURCE_MOUNT_ARGS[@]} -gt 0 ]; then
+    DOCKER_RUN_CMD+=("${SOURCE_MOUNT_ARGS[@]}")
+fi
+
+# Add remaining volumes
+DOCKER_RUN_CMD+=(-v cortex_logs:/home/cortex/app/logs -v cortex_ollama:/home/cortex/.ollama)
+
+# Add user volume mounts
+if [ -n "$USER_VOLUME_MOUNTS" ]; then
+    DOCKER_RUN_CMD+=($USER_VOLUME_MOUNTS)
+fi
+
+# Add env file and restart policy
+DOCKER_RUN_CMD+=(--env-file .env --restart unless-stopped cortex-suite)
+
+# Execute the command
+"${DOCKER_RUN_CMD[@]}"
 
 if [ $? -ne 0 ]; then
     echo "❌ Failed to start Cortex Suite!"

@@ -33,7 +33,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 # Import centralized utilities
-from cortex_engine.utils import convert_windows_to_wsl_path, get_logger, validate_path_exists, convert_to_docker_mount_path
+from cortex_engine.utils import convert_windows_to_wsl_path, get_logger, validate_path_exists, convert_to_docker_mount_path, convert_source_path_to_docker_mount
 from cortex_engine.utils.model_checker import model_checker
 from cortex_engine.config import STAGING_INGESTION_FILE, INGESTED_FILES_LOG, DEFAULT_EXCLUSION_PATTERNS_STR
 from cortex_engine.config_manager import ConfigManager
@@ -118,17 +118,25 @@ def build_ingestion_command(container_db_path, files_to_process, target_collecti
     # Use direct script path to avoid module resolution confusion
     script_path = project_root / "cortex_engine" / "ingest_cortex.py"
     command = [
-        sys.executable, str(script_path), 
-        "--analyze-only", "--db-path", container_db_path, 
+        sys.executable, "-u", str(script_path),  # -u flag for unbuffered stdout
+        "--analyze-only", "--db-path", container_db_path,
         "--include", *files_to_process
     ]
-    
+
     if resume:
         command.append("--resume")
-    
+
     if target_collection:
         command.extend(["--target-collection", target_collection])
-    
+
+    # Add skip image processing flag if enabled
+    if st.session_state.get("skip_image_processing", False):
+        command.append("--skip-image-processing")
+
+    # Add throttle delay - always pass the parameter (default 0.5s for system responsiveness)
+    throttle_delay = st.session_state.get("throttle_delay", 0.5)
+    command.extend(["--throttle-delay", str(throttle_delay)])
+
     return command
 
 def should_auto_finalize():
@@ -255,6 +263,7 @@ def initialize_state(force_reset: bool = False):
         "files_to_review": [], "staged_files": [], "file_selections": {},
         "edited_staged_files": [], "review_page": 0, "ingestion_process": None,
         "skip_image_processing": False,  # Option to skip VLM image processing
+        "throttle_delay": 0.5,  # Delay between document processing (seconds) - 0.5s default keeps system usable during ingestion
         "batch_ingest_mode": False,  # Option to bypass preview check for large ingests
         "batch_mode_active": False,  # Persistent flag set when batch processing starts
         "batch_auto_processed": False,  # Flag to prevent re-processing in batch mode
@@ -262,7 +271,12 @@ def initialize_state(force_reset: bool = False):
         "filter_deduplicate": True, "enable_pattern_exclusion": False,
         "exclude_patterns_input": "", "show_confirm_clear_log": False,
         "show_confirm_delete_kb": False, "last_ingested_doc_ids": [],
-        "target_collection_name": "", "collection_assignment_mode": "default"
+        "target_collection_name": "", "collection_assignment_mode": "default",
+        # Throttle status tracking
+        "current_throttle_delay": 0.0,
+        "current_gpu_util": None,
+        "current_cpu_util": None,
+        "throttle_active": False
     }
     for key, val in defaults.items():
         if key not in st.session_state: st.session_state[key] = val
@@ -718,35 +732,49 @@ def render_batch_processing_ui():
     else:
         st.info(f"🚀 **Batch Mode Enabled:** Processing all {total_files} files automatically. Files with errors will be logged separately for later review.")
     
-    # Add chunked processing options for large batches
+    # Automatic chunked processing for large batches
     if total_files > 500:
-        st.warning(f"⚠️ **Large Batch Detected**: {total_files} files may cause memory issues")
-        
-        with st.expander("🔧 **Chunked Processing Options** (Recommended for large batches)", expanded=True):
-            st.info("Break your large batch into smaller chunks to prevent memory issues and allow for better progress tracking.")
-            
+        # Automatically enable chunked processing for large batches
+        # Determine optimal chunk size based on batch size
+        if total_files > 2000:
+            auto_chunk_size = 250  # Smaller chunks for very large batches
+        elif total_files > 1000:
+            auto_chunk_size = 500  # Medium chunks for large batches
+        else:
+            auto_chunk_size = 500  # Standard chunk size
+
+        estimated_chunks = (total_files + auto_chunk_size - 1) // auto_chunk_size
+
+        # Auto-enable chunked processing
+        st.session_state.use_chunked_processing = True
+        st.session_state.chunk_size = auto_chunk_size
+
+        # Show informational message about automatic chunking
+        st.info(f"🔧 **Automatic Chunked Processing Enabled**: {total_files} files detected. "
+                f"Processing in {estimated_chunks} chunks of {auto_chunk_size} files each for optimal performance.")
+
+        # Allow user to customize if desired
+        with st.expander("⚙️ **Customize Chunked Processing** (Optional)", expanded=False):
+            st.markdown("Chunked processing is automatically enabled for large batches. You can adjust the settings below if needed.")
+
             col1, col2 = st.columns(2)
             with col1:
-                chunk_size = st.selectbox(
+                custom_chunk_size = st.selectbox(
                     "Chunk Size:",
                     options=[100, 250, 500, 1000],
-                    index=1,  # Default to 250
+                    index=[100, 250, 500, 1000].index(auto_chunk_size) if auto_chunk_size in [100, 250, 500, 1000] else 1,
+                    key="custom_chunk_size",
                     help="Number of files to process in each chunk"
                 )
-            
+
             with col2:
-                estimated_chunks = (total_files + chunk_size - 1) // chunk_size
-                st.metric("Estimated Chunks", estimated_chunks)
-            
-            st.session_state.use_chunked_processing = st.checkbox(
-                f"✅ Enable Chunked Processing ({chunk_size} files per chunk)",
-                value=True,
-                help="Recommended for better memory management and progress tracking"
-            )
-            
-            if st.session_state.get("use_chunked_processing", False):
-                st.session_state.chunk_size = chunk_size
-                st.success(f"✅ Chunked processing enabled: {estimated_chunks} chunks of {chunk_size} files each")
+                custom_estimated_chunks = (total_files + custom_chunk_size - 1) // custom_chunk_size
+                st.metric("Estimated Chunks", custom_estimated_chunks)
+
+            if st.button("✅ Apply Custom Chunk Size", key="apply_custom_chunk"):
+                st.session_state.chunk_size = custom_chunk_size
+                st.success(f"✅ Custom chunk size applied: {custom_estimated_chunks} chunks of {custom_chunk_size} files each")
+                st.rerun()
     
     # Show a summary of what will be processed
     with st.expander("📋 Files to Process", expanded=False):
@@ -941,7 +969,31 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
         # Single progress bar for non-chunked processing
         progress = batch_status['progress_percent'] / 100.0
         st.progress(progress, text=f"Processing files... {batch_status['completed']}/{batch_status.get('total_files', 0)}")
-    
+
+    # Performance Tuning Display - Always show when batch is active
+    st.markdown("---")
+    st.markdown("**⚡ Performance Tuning**")
+    throttle_col1, throttle_col2, throttle_col3 = st.columns([1, 1, 1])
+    with throttle_col1:
+        delay_val = st.session_state.get('current_throttle_delay', 1.0)
+        st.metric("⏱️ Throttle Delay", f"{delay_val:.1f}s", help="Current delay between documents (1.0s baseline for responsiveness, auto-adjusts if system load increases)")
+    with throttle_col2:
+        gpu_val = st.session_state.get('current_gpu_util', None)
+        if gpu_val is not None:
+            gpu_delta = f"+{gpu_val - 80:.0f}%" if gpu_val > 80 else None
+            st.metric("🎮 GPU Load", f"{gpu_val:.0f}%", delta=gpu_delta, delta_color="inverse", help="GPU utilization (auto-throttles at >80%)")
+        else:
+            st.metric("🎮 GPU Load", "N/A", help="GPU monitoring unavailable (nvidia-smi not found)")
+    with throttle_col3:
+        cpu_val = st.session_state.get('current_cpu_util', None)
+        if cpu_val is not None:
+            cpu_delta = f"+{cpu_val - 85:.0f}%" if cpu_val > 85 else None
+            st.metric("💻 CPU Load", f"{cpu_val:.0f}%", delta=cpu_delta, delta_color="inverse", help="CPU utilization (auto-throttles at >85%)")
+        else:
+            st.metric("💻 CPU Load", "N/A", help="CPU monitoring unavailable (psutil not found)")
+
+    st.markdown("---")
+
     # Show pause/resume status
     if batch_status['paused']:
         if batch_status.get('auto_pause_after_chunks') and batch_status.get('chunks_processed_in_session', 0) >= batch_status.get('auto_pause_after_chunks', 0):
@@ -1071,28 +1123,46 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
 
     # Consolidated action buttons
     col1, col2, col3, col4 = st.columns(4)
-    
+
     with col1:
-        # Dynamic resume button
-        if batch_status.get('auto_pause_after_chunks') and batch_status.get('paused', False):
-            if batch_status.get('chunks_processed_in_session', 0) >= batch_status.get('auto_pause_after_chunks', 0):
-                button_text = "🔄 Start Next Session"
+        # Check if batch is actively processing (use batch state, not subprocess state)
+        # A batch is "processing" if it's active, not paused, and has remaining files
+        batch_is_processing = (
+            batch_status.get('active', False) and
+            not batch_status.get('paused', False) and
+            batch_status.get('remaining', 0) > 0
+        )
+
+        is_paused = batch_status.get('paused', False)
+
+        # Dynamic button based on batch state (not subprocess state)
+        if batch_is_processing:
+            # Batch is actively processing - show Pause button
+            if st.button("⏸️ Pause Processing", type="secondary", use_container_width=True, key="pause_processing_main"):
+                batch_manager.pause_batch()
+                st.success("⏸️ Processing paused")
+                st.rerun()
+        else:
+            # Batch is paused or stopped - show Resume/Start button
+            if batch_status.get('auto_pause_after_chunks') and is_paused:
+                if batch_status.get('chunks_processed_in_session', 0) >= batch_status.get('auto_pause_after_chunks', 0):
+                    button_text = "🔄 Start Next Session"
+                else:
+                    button_text = "▶️ Resume Processing"
             else:
                 button_text = "▶️ Resume Processing"
-        else:
-            button_text = "▶️ Resume Processing"
-            
-        if st.button(button_text, type="primary", use_container_width=True, key="resume_processing_main"):
-            # If starting a new session, reset the session counter
-            if batch_status.get('auto_pause_after_chunks') and batch_status.get('paused', False):
-                if batch_status.get('chunks_processed_in_session', 0) >= batch_status.get('auto_pause_after_chunks', 0):
-                    batch_manager.start_new_session()
-            
-            # Resume processing
-            if auto_resume_from_batch_config(batch_manager):
-                st.rerun()
-            else:
-                st.error("❌ Failed to resume batch automatically. Please check the logs.")
+
+            if st.button(button_text, type="primary", use_container_width=True, key="resume_processing_main"):
+                # If starting a new session, reset the session counter
+                if batch_status.get('auto_pause_after_chunks') and is_paused:
+                    if batch_status.get('chunks_processed_in_session', 0) >= batch_status.get('auto_pause_after_chunks', 0):
+                        batch_manager.start_new_session()
+
+                # Resume processing
+                if auto_resume_from_batch_config(batch_manager):
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to resume batch automatically. Please check the logs.")
     
     with col2:
         if st.button("🗑️ Clear This Batch", key="clear_active_batch", use_container_width=True):
@@ -1166,123 +1236,131 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
         else:
             st.warning("Ingestion log file not found.")
     
-    # Show processing configuration options for all active batches
-    st.markdown("---")
-    st.subheader("⚙️ Processing Configuration")
-    
-    if batch_status.get('is_chunked', False):
-        # Already chunked - show current settings and allow modification
-        current_chunk_size = batch_status.get('chunk_size', 250)
-        current_auto_pause = batch_status.get('auto_pause_after_chunks')
-        
-        st.info(f"**Current Settings**: {current_chunk_size} files per chunk" + 
-                (f", auto-pause after {current_auto_pause} chunks" if current_auto_pause else ", no auto-pause"))
-        
-        with st.expander("🔧 **Modify Processing Settings**", expanded=False):
-            st.info("Adjust chunk size and session length for your processing needs.")
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                new_chunk_size = st.selectbox(
-                    "New Chunk Size:",
-                    options=[100, 250, 500, 1000],
-                    index=[100, 250, 500, 1000].index(current_chunk_size) if current_chunk_size in [100, 250, 500, 1000] else 1,
-                    key="modify_chunk_size",
-                    help="Number of files to process in each chunk"
-                )
-            
-            with col2:
-                new_estimated_chunks = (batch_status.get('total_files', 0) + new_chunk_size - 1) // new_chunk_size
-                st.metric("New Total Chunks", new_estimated_chunks)
-                
-            with col3:
-                new_auto_pause = st.selectbox(
-                    "Auto-pause after:",
-                    options=[1, 2, 3, 5, 10, "No auto-pause"],
-                    index=([1, 2, 3, 5, 10].index(current_auto_pause) if current_auto_pause and current_auto_pause in [1, 2, 3, 5, 10] else 5) if current_auto_pause else 2,
-                    key="modify_auto_pause",
-                    help="Automatically pause after processing this many chunks"
-                )
-            
-            # Show timing estimates
-            if new_auto_pause != "No auto-pause":
-                files_per_session = new_chunk_size * new_auto_pause
-                sessions_needed = (batch_status.get('total_files', 0) + files_per_session - 1) // files_per_session
-                st.info(f"💡 **New Processing Plan**: {files_per_session} files per session, ~{sessions_needed} sessions needed")
-            
-            if st.button("🔄 Apply New Settings", type="secondary", use_container_width=True):
-                # Modify existing batch with new settings
-                batch_state = batch_manager.load_state()
-                if batch_state:
-                    remaining_files = batch_state.get('files_remaining', [])
-                    if remaining_files:
-                        # Update batch with new settings
-                        batch_manager.clear_batch()
-                        scan_config = batch_state.get('scan_config', {})
-                        batch_manager.create_batch(remaining_files, scan_config, new_chunk_size, new_auto_pause if new_auto_pause != "No auto-pause" else None)
-                        
-                        if new_auto_pause != "No auto-pause":
-                            st.success(f"✅ Settings updated! New session mode: {new_auto_pause} chunks ({new_auto_pause * new_chunk_size} files) then auto-pause")
-                        else:
-                            st.success(f"✅ Settings updated! New chunk size: {new_chunk_size} files per chunk, continuous processing")
-                        
-                        st.rerun()
-    else:
-        # Not chunked yet - show conversion options
-        if batch_status.get('total_files', 0) > 500:
-            st.warning(f"⚠️ **Large Batch**: {batch_status.get('total_files', 0)} files may cause memory issues")
-            
-            with st.expander("🔧 **Convert to Chunked Processing** (Recommended)", expanded=True):
-                st.info("Convert this large batch to chunked processing for better memory management and session control.")
-                
+    # Show processing configuration options - only when NOT actively processing
+    # Use batch state to determine if actively processing (not subprocess state)
+    batch_is_processing = (
+        batch_status.get('active', False) and
+        not batch_status.get('paused', False) and
+        batch_status.get('remaining', 0) > 0
+    )
+
+    if not batch_is_processing:
+        st.markdown("---")
+        st.subheader("⚙️ Processing Configuration")
+
+        if batch_status.get('is_chunked', False):
+            # Already chunked - show current settings and allow modification when paused
+            current_chunk_size = batch_status.get('chunk_size', 250)
+            current_auto_pause = batch_status.get('auto_pause_after_chunks')
+
+            st.info(f"✅ **Chunked Processing Active**: {current_chunk_size} files per chunk" +
+                    (f", auto-pause after {current_auto_pause} chunks" if current_auto_pause else ", no auto-pause"))
+
+            with st.expander("🔧 **Modify Processing Settings**", expanded=False):
+                st.info("Adjust chunk size and session length for your processing needs. Changes will apply after current pause.")
+
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    chunk_size_main = st.selectbox(
-                        "Chunk Size:",
+                    new_chunk_size = st.selectbox(
+                        "New Chunk Size:",
                         options=[100, 250, 500, 1000],
-                        index=1,  # Default to 250
-                        key="convert_chunk_size",
+                        index=[100, 250, 500, 1000].index(current_chunk_size) if current_chunk_size in [100, 250, 500, 1000] else 1,
+                        key="modify_chunk_size",
                         help="Number of files to process in each chunk"
                     )
-                
+
                 with col2:
-                    estimated_chunks = (batch_status.get('total_files', 0) + chunk_size_main - 1) // chunk_size_main
-                    st.metric("Estimated Chunks", estimated_chunks)
-                    
+                    new_estimated_chunks = (batch_status.get('total_files', 0) + new_chunk_size - 1) // new_chunk_size
+                    st.metric("New Total Chunks", new_estimated_chunks)
+
                 with col3:
-                    auto_pause_chunks = st.selectbox(
+                    new_auto_pause = st.selectbox(
                         "Auto-pause after:",
                         options=[1, 2, 3, 5, 10, "No auto-pause"],
-                        index=2,  # Default to 3 chunks
-                        key="convert_auto_pause",
+                        index=([1, 2, 3, 5, 10].index(current_auto_pause) if current_auto_pause and current_auto_pause in [1, 2, 3, 5, 10] else 5) if current_auto_pause else 2,
+                        key="modify_auto_pause",
                         help="Automatically pause after processing this many chunks"
                     )
-                
+
                 # Show timing estimates
-                if auto_pause_chunks != "No auto-pause":
-                    files_per_session = chunk_size_main * auto_pause_chunks
+                if new_auto_pause != "No auto-pause":
+                    files_per_session = new_chunk_size * new_auto_pause
                     sessions_needed = (batch_status.get('total_files', 0) + files_per_session - 1) // files_per_session
-                    st.info(f"💡 **Processing Plan**: {files_per_session} files per session, ~{sessions_needed} sessions needed")
-                
-                if st.button("🔄 Convert to Chunked Processing", type="secondary", use_container_width=True):
-                    # Convert existing batch to chunked
+                    st.info(f"💡 **New Processing Plan**: {files_per_session} files per session, ~{sessions_needed} sessions needed")
+
+                if st.button("🔄 Apply New Settings", type="secondary", use_container_width=True):
+                    # Modify existing batch with new settings
                     batch_state = batch_manager.load_state()
                     if batch_state:
                         remaining_files = batch_state.get('files_remaining', [])
                         if remaining_files:
-                            # Clear old batch and create new chunked one
+                            # Update batch with new settings
                             batch_manager.clear_batch()
                             scan_config = batch_state.get('scan_config', {})
-                            batch_manager.create_batch(remaining_files, scan_config, chunk_size_main, auto_pause_chunks if auto_pause_chunks != "No auto-pause" else None)
-                            
-                            if auto_pause_chunks != "No auto-pause":
-                                st.success(f"✅ Session mode enabled! Will process {auto_pause_chunks} chunks then auto-pause")
+                            batch_manager.create_batch(remaining_files, scan_config, new_chunk_size, new_auto_pause if new_auto_pause != "No auto-pause" else None)
+
+                            if new_auto_pause != "No auto-pause":
+                                st.success(f"✅ Settings updated! New session mode: {new_auto_pause} chunks ({new_auto_pause * new_chunk_size} files) then auto-pause")
                             else:
-                                st.success(f"✅ Chunked processing enabled! {estimated_chunks} chunks of {chunk_size_main} files each")
-                            
+                                st.success(f"✅ Settings updated! New chunk size: {new_chunk_size} files per chunk, continuous processing")
+
                             st.rerun()
         else:
-            st.info("💡 **Small Batch**: No chunking needed for this batch size.")
+            # Not chunked yet - show conversion options only if large batch and paused
+            if batch_status.get('total_files', 0) > 500:
+                st.warning(f"⚠️ **Large Batch**: {batch_status.get('total_files', 0)} files may cause memory issues")
+
+                with st.expander("🔧 **Convert to Chunked Processing** (Recommended)", expanded=True):
+                    st.info("Convert this large batch to chunked processing for better memory management and session control.")
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        chunk_size_main = st.selectbox(
+                            "Chunk Size:",
+                            options=[100, 250, 500, 1000],
+                            index=1,  # Default to 250
+                            key="convert_chunk_size",
+                            help="Number of files to process in each chunk"
+                        )
+
+                    with col2:
+                        estimated_chunks = (batch_status.get('total_files', 0) + chunk_size_main - 1) // chunk_size_main
+                        st.metric("Estimated Chunks", estimated_chunks)
+
+                    with col3:
+                        auto_pause_chunks = st.selectbox(
+                            "Auto-pause after:",
+                            options=[1, 2, 3, 5, 10, "No auto-pause"],
+                            index=2,  # Default to 3 chunks
+                            key="convert_auto_pause",
+                            help="Automatically pause after processing this many chunks"
+                        )
+
+                    # Show timing estimates
+                    if auto_pause_chunks != "No auto-pause":
+                        files_per_session = chunk_size_main * auto_pause_chunks
+                        sessions_needed = (batch_status.get('total_files', 0) + files_per_session - 1) // files_per_session
+                        st.info(f"💡 **Processing Plan**: {files_per_session} files per session, ~{sessions_needed} sessions needed")
+
+                    if st.button("🔄 Convert to Chunked Processing", type="secondary", use_container_width=True):
+                        # Convert existing batch to chunked
+                        batch_state = batch_manager.load_state()
+                        if batch_state:
+                            remaining_files = batch_state.get('files_remaining', [])
+                            if remaining_files:
+                                # Clear old batch and create new chunked one
+                                batch_manager.clear_batch()
+                                scan_config = batch_state.get('scan_config', {})
+                                batch_manager.create_batch(remaining_files, scan_config, chunk_size_main, auto_pause_chunks if auto_pause_chunks != "No auto-pause" else None)
+
+                                if auto_pause_chunks != "No auto-pause":
+                                    st.success(f"✅ Session mode enabled! Will process {auto_pause_chunks} chunks then auto-pause")
+                                else:
+                                    st.success(f"✅ Chunked processing enabled! {estimated_chunks} chunks of {chunk_size_main} files each")
+
+                                st.rerun()
+            else:
+                st.info("💡 **Small Batch**: No chunking needed for this batch size.")
 
 def auto_resume_from_batch_config(batch_manager: BatchState) -> bool:
     """Automatically restore scan configuration and resume batch processing"""
@@ -1423,14 +1501,17 @@ def render_config_and_scan_ui():
     st.markdown("**3. Select Directories to Scan**")
 
     root_display_path = st.session_state.knowledge_source_path
-    root_wsl_path = convert_windows_to_wsl_path(root_display_path)
+    # Use the appropriate path converter that handles Docker/WSL environments
+    root_wsl_path = convert_source_path_to_docker_mount(root_display_path)
     # Use Docker-aware path validation that checks both normal and Docker mount paths
     is_knowledge_path_valid = validate_path_exists(root_display_path, must_be_dir=True)
 
     if is_knowledge_path_valid:
         current_display_path = st.session_state.directory_scan_path
         st.text_input("Current Directory:", current_display_path, disabled=True)
-        current_scan_path_wsl = Path(convert_windows_to_wsl_path(current_display_path))
+        # Use the appropriate path converter that handles Docker/WSL environments
+        current_scan_path_converted = convert_source_path_to_docker_mount(current_display_path)
+        current_scan_path_wsl = Path(current_scan_path_converted)
         try:
             subdirs = sorted([d.name for d in os.scandir(current_scan_path_wsl) if d.is_dir()], key=str.lower)
             c1, c2, c3 = st.columns(3)
@@ -1566,6 +1647,13 @@ def render_config_and_scan_ui():
             st.checkbox("⚡ Skip image processing (faster, but loses visual content)", key="skip_image_processing",
                        value=False,
                        help="🖼️ Skip AI vision analysis of JPG/PNG files. Image processing is now optimized with parallel execution (30s timeout). Only skip if you don't need OCR, charts, or diagram analysis.")
+            st.number_input("⏱️ Throttle delay (seconds between documents)",
+                           key="throttle_delay",
+                           min_value=0.0,
+                           max_value=10.0,
+                           value=0.5,
+                           step=0.5,
+                           help="🎛️ Smart adaptive throttling with GPU/CPU monitoring. Set baseline delay (0-10s) - system automatically increases delay when GPU>80% or CPU>85% to prevent freezing. 0.5s default keeps system usable during ingestion, auto-adjusts higher when load increases. 0 = no baseline (auto-throttle only when >threshold), 1-2 = higher baseline + auto. System adapts in real-time to your hardware load.")
         with col2:
             st.write("**Pattern-Based Exclusion**")
             st.checkbox("Enable pattern-based exclusion", key="enable_pattern_exclusion", 
@@ -1721,6 +1809,23 @@ def render_pre_analysis_ui():
                 except json.JSONDecodeError: pass
             for fp in globally_ignored: ingested_log[fp] = "user_excluded"
             with open(ingested_log_path, 'w') as f: json.dump(ingested_log, f, indent=4)
+
+        # Save scan configuration for batch resume capability
+        scan_config = {
+            "root_path": st.session_state.get("directory_scan_path", ""),
+            "db_path": st.session_state.get("db_path", ""),
+            "selected_dirs": st.session_state.get("selected_dirs", []),
+            "filter_exclude_common": st.session_state.get("filter_exclude_common", True),
+            "filter_prefer_docx": st.session_state.get("filter_prefer_docx", True),
+            "filter_deduplicate": st.session_state.get("filter_deduplicate", True),
+            "enable_pattern_exclusion": st.session_state.get("enable_pattern_exclusion", False),
+            "exclude_patterns_input": st.session_state.get("exclude_patterns_input", ""),
+            "target_collection_name": st.session_state.get("target_collection_name", "")
+        }
+        scan_config_path = Path(container_db_path) / "scan_config.json"
+        with open(scan_config_path, 'w') as f:
+            json.dump(scan_config, f, indent=2)
+
         st.session_state.log_messages = []; st.session_state.ingestion_stage = "analysis_running"
         target_collection = st.session_state.get('target_collection_name', '')
         command = build_ingestion_command(container_db_path, globally_selected, target_collection)
@@ -1768,79 +1873,150 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
         progress_bar = st.progress(progress_percent, text=progress_text)
     else:
         progress_bar = st.progress(0, text="Starting process...")
-    
-    # Expandable log section
-    with st.expander("📋 Processing Log (click to expand/collapse)", expanded=False):
-        log_container = st.container(height=400, border=True)
 
-        if st.session_state.ingestion_process:
-            with log_container:
-                log_placeholder = st.empty()
-                log_placeholder.code("\n".join(st.session_state.log_messages), language="log")
+    # Throttle status indicator (prominent)
+    if st.session_state.get('throttle_active', False):
+        throttle_col1, throttle_col2, throttle_col3 = st.columns([1, 1, 1])
+        with throttle_col1:
+            delay_val = st.session_state.get('current_throttle_delay', 0.0)
+            st.metric("⏱️ Throttle Delay", f"{delay_val:.1f}s", help="Current delay between documents to reduce system load")
+        with throttle_col2:
+            gpu_val = st.session_state.get('current_gpu_util', None)
+            if gpu_val is not None:
+                gpu_delta = f"+{gpu_val - 80:.0f}%" if gpu_val > 80 else None
+                st.metric("🎮 GPU Load", f"{gpu_val:.0f}%", delta=gpu_delta, delta_color="inverse", help="GPU utilization (throttles at >80%)")
+            else:
+                st.metric("🎮 GPU Load", "N/A", help="GPU monitoring unavailable (nvidia-smi not found)")
+        with throttle_col3:
+            cpu_val = st.session_state.get('current_cpu_util', None)
+            if cpu_val is not None:
+                cpu_delta = f"+{cpu_val - 85:.0f}%" if cpu_val > 85 else None
+                st.metric("💻 CPU Load", f"{cpu_val:.0f}%", delta=cpu_delta, delta_color="inverse", help="CPU utilization (throttles at >85%)")
+            else:
+                st.metric("💻 CPU Load", "N/A", help="CPU monitoring unavailable")
 
-                for line in iter(st.session_state.ingestion_process.stdout.readline, ''):
-                    line = line.strip()
-                    if line.startswith("CORTEX_PROGRESS::"):
-                        try:
-                            _, progress_part, filename_part = line.split("::", 2)
-                            current, total = map(int, progress_part.split('/'))
-                            # Update session state for counter display
-                            st.session_state.current_doc_number = current
-                            st.session_state.total_docs_in_batch = total
-                            progress_text_detail = f"📄 Processing document {current} of {total}: {filename_part}"
-                            progress_bar.progress(current / total, text=progress_text_detail)
-                        except (ValueError, IndexError):
-                            st.session_state.log_messages.append(line)
-                    elif line.startswith("CORTEX_STAGE::FINALIZE_DONE"):
-                        # Finalization completed successfully
-                        st.session_state.log_messages.append("✅ Finalization completed successfully!")
-                        progress_bar.progress(1.0, text="✅ Finalization Complete!")
-                        st.session_state.finalize_done_detected = True  # Set flag to indicate finalization is complete
-                    elif line.startswith("CORTEX_STAGE::ANALYSIS_DONE"):
-                        # Analysis completed successfully
-                        st.session_state.log_messages.append("✅ Analysis completed successfully!")
-                        progress_bar.progress(1.0, text="✅ Analysis Complete!")
-                        st.session_state.analysis_done_detected = True  # Set flag to indicate analysis is complete
-                    else:
+        # Visual indicator when throttling is active
+        if (gpu_val and gpu_val > 80) or (cpu_val and cpu_val > 85):
+            st.warning("🎛️ **Adaptive throttling active** - System load detected, automatically slowing down to prevent freezing.")
+
+    # Check if process is still running BEFORE the expander (so rerun logic works)
+    process_still_running = False
+    if st.session_state.ingestion_process:
+        poll_result = st.session_state.ingestion_process.poll()
+        process_still_running = (poll_result is None)
+
+        # Read available lines without blocking
+        lines_read = 0
+        max_lines_per_render = 50  # Read up to 50 lines per refresh
+
+        while lines_read < max_lines_per_render:
+            try:
+                # Non-blocking read with timeout
+                import select
+                import sys
+
+                # Windows doesn't support select on pipes, so use alternative approach
+                if sys.platform == 'win32':
+                    # On Windows, just try to read with timeout
+                    # This may still block briefly but better than nothing
+                    line = st.session_state.ingestion_process.stdout.readline()
+                    if not line:
+                        break
+                else:
+                    # Unix/Mac: use select for true non-blocking
+                    ready, _, _ = select.select([st.session_state.ingestion_process.stdout], [], [], 0.05)
+                    if not ready:
+                        break
+
+                    line = st.session_state.ingestion_process.stdout.readline()
+                    if not line:
+                        break
+
+                line = line.strip()
+                if not line:
+                    continue
+
+                lines_read += 1
+
+                # Parse progress updates
+                if line.startswith("CORTEX_PROGRESS::"):
+                    try:
+                        _, progress_part, filename_part = line.split("::", 2)
+                        current, total = map(int, progress_part.split('/'))
+                        st.session_state.current_doc_number = current
+                        st.session_state.total_docs_in_batch = total
+                        st.session_state.log_messages.append(f"Processing {current}/{total}: {filename_part}")
+                    except (ValueError, IndexError):
                         st.session_state.log_messages.append(line)
-                    log_placeholder.code("\n".join(st.session_state.log_messages), language="log")
+                elif line.startswith("CORTEX_THROTTLE::"):
+                    try:
+                        _, delay_str, gpu_str, cpu_str = line.split("::", 3)
+                        st.session_state.current_throttle_delay = float(delay_str)
+                        st.session_state.current_gpu_util = None if gpu_str == "N/A" else float(gpu_str)
+                        st.session_state.current_cpu_util = None if cpu_str == "N/A" else float(cpu_str)
+                        st.session_state.throttle_active = True
+                    except (ValueError, IndexError):
+                        pass
+                elif line.startswith("CORTEX_STAGE::FINALIZE_DONE"):
+                    st.session_state.log_messages.append("✅ Finalization completed successfully!")
+                    st.session_state.finalize_done_detected = True
+                elif line.startswith("CORTEX_STAGE::ANALYSIS_DONE"):
+                    st.session_state.log_messages.append("✅ Analysis completed successfully!")
+                    st.session_state.analysis_done_detected = True
+                else:
+                    st.session_state.log_messages.append(line)
 
-            # Wait for process completion and clean up
-            st.session_state.ingestion_process.wait()
+            except Exception as e:
+                # Error reading, stop trying
+                break
+
+        # Clean up if process finished
+        if not process_still_running:
             st.session_state.ingestion_process = None
 
-            # Check if finalization completed - if so, go straight to completion screen
-            if st.session_state.get('finalize_done_detected', False):
-                st.session_state.finalize_done_detected = False  # Reset flag
-                st.session_state.ingestion_stage = "config_done"
-                st.success("✅ Finalization complete! Your knowledge base has been updated.")
-                st.rerun()
-                return
-
-            # Show appropriate completion message based on stage
-            if on_complete_stage == "config_done":
-                progress_bar.progress(1.0, text="✅ Finalization Complete!")
-                st.success("✅ Process finished! Your knowledge base has been updated.")
+    # Expandable log section (just for display now)
+    with st.expander("📋 Processing Log (click to expand/collapse)", expanded=False):
+        log_container = st.container(height=400, border=True)
+        with log_container:
+            if st.session_state.log_messages:
+                st.code("\n".join(st.session_state.log_messages[-100:]), language="log")
             else:
-                progress_bar.progress(1.0, text="✅ Analysis Complete!")
-                st.success("✅ Process finished.")
+                st.info("No log messages yet...")
+
+    # Handle completion or continue processing OUTSIDE the expander
+    if not process_still_running and st.session_state.ingestion_process is None:
+        # Process completed
+        if st.session_state.get('finalize_done_detected', False):
+            st.session_state.finalize_done_detected = False
+            st.session_state.ingestion_stage = "config_done"
+            progress_bar.progress(1.0, text="✅ Finalization Complete!")
+            st.success("✅ Finalization complete! Your knowledge base has been updated.")
+            st.rerun()
+            return
+        elif st.session_state.get('analysis_done_detected', False):
+            progress_bar.progress(1.0, text="✅ Analysis Complete!")
+            st.success("✅ Analysis complete!")
         else:
-            # Process was stopped or already completed
-            progress_bar.progress(1.0, text="Process stopped")
-            st.warning("Process was stopped or already completed.")
+            progress_bar.progress(1.0, text="Process completed")
+            st.info("Process completed.")
+    elif process_still_running:
+        # Process still running - schedule automatic refresh
+        time.sleep(1)  # Wait 1 second before refreshing
+        st.rerun()
 
-        if on_complete_stage == "metadata_review":
-            load_staged_files()
+    # Handle metadata review after process completes (only if not doing auto-finalize)
+    if on_complete_stage == "metadata_review" and not process_still_running:
+        load_staged_files()
 
-            # Check if we should automatically proceed to finalization
-            # But only if analysis just completed (not if finalization already happened)
-            if should_auto_finalize() and not st.session_state.get('finalize_done_detected', False):
-                # Don't show info message - it persists after rerun
-                # Just silently transition to finalization
-                logger.info("Analysis completed successfully - starting automatic finalization")
-                start_automatic_finalization()
-                st.rerun()  # Immediate rerun to show finalization stage
-                return  # Exit early to avoid setting stage to metadata_review
+        # Check if we should automatically proceed to finalization
+        # But only if analysis just completed (not if finalization already happened)
+        if should_auto_finalize() and not st.session_state.get('finalize_done_detected', False):
+            # Don't show info message - it persists after rerun
+            # Just silently transition to finalization
+            logger.info("Analysis completed successfully - starting automatic finalization")
+            start_automatic_finalization()
+            st.rerun()  # Immediate rerun to show finalization stage
+            return  # Exit early to avoid setting stage to metadata_review
 
         st.session_state.ingestion_stage = on_complete_stage
         st.rerun()
@@ -2830,30 +3006,30 @@ else:
     st.header("Ingest New Documents")
     st.markdown("Set your paths, navigate folders, and select directories to scan.")
 
-# Add maintenance access button
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    if st.button("⚙️ Document Type Management", use_container_width=True, help="Manage document categories and type mappings"):
-        st.session_state.show_maintenance = not st.session_state.get("show_maintenance", False)
-        st.rerun()
+    # Add maintenance access button
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("⚙️ Document Type Management", use_container_width=True, help="Manage document categories and type mappings"):
+            st.session_state.show_maintenance = not st.session_state.get("show_maintenance", False)
+            st.rerun()
 
-st.markdown("---")
+    st.markdown("---")
 
-# Check if maintenance mode is active
-if st.session_state.get("show_maintenance", False):
-    render_document_type_management()
-else:
-    # Normal ingestion workflow
-    # Health check: prompt to migrate collections if needed
-    show_collection_migration_healthcheck()
-    stage = st.session_state.get("ingestion_stage", "config")
-    if stage == "config": render_config_and_scan_ui()
-    elif stage == "pre_analysis": render_pre_analysis_ui()
-    elif stage == "batch_processing": render_batch_processing_ui()
-    elif stage == "analysis_running": render_log_and_review_ui("Live Analysis Log", "metadata_review")
-    elif stage == "metadata_review": render_metadata_review_ui()
-    elif stage == "finalizing": render_log_and_review_ui("Live Finalization Log", "config_done")
-    elif stage == "config_done": render_completion_screen()
+    # Check if maintenance mode is active
+    if st.session_state.get("show_maintenance", False):
+        render_document_type_management()
+    else:
+        # Normal ingestion workflow
+        # Health check: prompt to migrate collections if needed
+        show_collection_migration_healthcheck()
+        stage = st.session_state.get("ingestion_stage", "config")
+        if stage == "config": render_config_and_scan_ui()
+        elif stage == "pre_analysis": render_pre_analysis_ui()
+        elif stage == "batch_processing": render_batch_processing_ui()
+        elif stage == "analysis_running": render_log_and_review_ui("Live Analysis Log", "metadata_review")
+        elif stage == "metadata_review": render_metadata_review_ui()
+        elif stage == "finalizing": render_log_and_review_ui("Live Finalization Log", "config_done")
+        elif stage == "config_done": render_completion_screen()
 
 # Consistent version footer
 try:

@@ -69,6 +69,7 @@ def delete_ingested_document_database(db_path: str):
     collections_file = Path(wsl_db_path) / "working_collections.json"
     batch_state_file = Path(wsl_db_path) / "batch_state.json"
     staging_file = Path(wsl_db_path) / "staging_ingestion.json"
+    scan_config_file = Path(wsl_db_path) / "scan_config.json"
     
     try:
         deleted_items = []
@@ -128,7 +129,18 @@ def delete_ingested_document_database(db_path: str):
                 error_msg = f"Failed to delete staging file: {e}"
                 errors.append(error_msg)
                 logger.error(error_msg)
-        
+
+        # Delete scan configuration file
+        if scan_config_file.exists():
+            try:
+                scan_config_file.unlink()
+                deleted_items.append(f"Scan config file: {scan_config_file}")
+                logger.info(f"Successfully deleted scan config file: {scan_config_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete scan config file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+
         # Report results
         if deleted_items:
             st.success(f"✅ Successfully deleted ingested document database components:\\n" + "\\n".join(f"- {item}" for item in deleted_items))
@@ -140,13 +152,23 @@ def delete_ingested_document_database(db_path: str):
         if not deleted_items and not errors:
             st.warning("⚠️ No ingested document database components found to delete.")
             logger.warning(f"No ingested document database found at: {wsl_db_path}")
-            
+
     except Exception as e:
         error_msg = f"Failed to delete ingested document database: {e}"
         logger.error(f"Ingested document database deletion failed: {e}")
         st.error(f"❌ {error_msg}")
-    
-    # Reset the confirmation state  
+
+    # Clear ingestion-related session state to prevent stale UI state
+    ingestion_state_keys = [
+        'ingestion_stage', 'ingestion_process', 'batch_mode_active',
+        'log_messages', 'files_to_review', 'staged_files', 'resume_mode_enabled',
+        'current_scan_config', 'batch_ingest_mode', 'force_batch_mode'
+    ]
+    for key in ingestion_state_keys:
+        if key in st.session_state:
+            del st.session_state[key]
+
+    # Reset the confirmation state
     st.session_state.show_confirm_delete_kb = False
 
 def perform_clean_start(db_path: str):
@@ -373,12 +395,13 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
             # 5. Clear ALL staging and batch ingestion files (comprehensive)
             staging_patterns = [
                 "staging_ingestion.json",
-                "staging_*.json", 
+                "staging_*.json",
                 "staging_test.json",
                 "batch_progress.json",
                 "batch_state.json",
                 "ingestion_progress.json",
-                "failed_ingestion.json"
+                "failed_ingestion.json",
+                "scan_config.json"
             ]
             
             # Clear from project root (legacy location)
@@ -628,6 +651,7 @@ def delete_ingested_document_database_simple(db_path):
         graph_file = Path(wsl_db_path) / "knowledge_cortex.gpickle"
         batch_state_file = Path(wsl_db_path) / "batch_state.json"
         staging_file = Path(wsl_db_path) / "staging_ingestion.json"
+        scan_config_file = Path(wsl_db_path) / "scan_config.json"
         
         deleted_items = []
         errors = []
@@ -684,15 +708,37 @@ def delete_ingested_document_database_simple(db_path):
                 error_msg = f"Failed to delete staging file: {e}"
                 errors.append(error_msg)
                 logger.error(error_msg)
-        
+
+        # Delete scan configuration file
+        if scan_config_file.exists():
+            try:
+                scan_config_file.unlink()
+                deleted_items.append("Scan config file")
+                logger.info(f"Scan config file deleted: {scan_config_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete scan config file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+
         if deleted_items:
             st.success(f"✅ Ingested document database deleted successfully: {', '.join(deleted_items)}")
-        
+
         if errors:
             st.error(f"❌ Some items could not be deleted: {', '.join(errors)}")
-            
+
         if not deleted_items and not errors:
             st.warning("No ingested document database components found to delete.")
+
+        # Clear ingestion-related session state to prevent stale UI state
+        ingestion_state_keys = [
+            'ingestion_stage', 'ingestion_process', 'batch_mode_active',
+            'log_messages', 'files_to_review', 'staged_files', 'resume_mode_enabled',
+            'current_scan_config', 'batch_ingest_mode', 'force_batch_mode'
+        ]
+        for key in ingestion_state_keys:
+            if key in st.session_state:
+                del st.session_state[key]
+
     except Exception as e:
         st.error(f"❌ Failed to delete ingested document database: {e}")
         logger.error(f"Failed to delete ingested document database: {e}")

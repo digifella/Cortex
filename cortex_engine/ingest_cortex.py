@@ -53,6 +53,19 @@ logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 logging.getLogger("torch").setLevel(logging.WARNING)
 logging.getLogger("torchvision").setLevel(logging.ERROR)
+
+# Suppress ChromaDB telemetry errors (harmless version mismatch)
+logging.getLogger("chromadb.telemetry").setLevel(logging.CRITICAL)
+import sys
+# Redirect stderr temporarily to suppress telemetry print statements
+class SuppressTelemetryErrors:
+    def __enter__(self):
+        self._original_stderr = sys.stderr
+        sys.stderr = open(os.devnull, 'w')
+        return self
+    def __exit__(self, *args):
+        sys.stderr.close()
+        sys.stderr = self._original_stderr
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Literal, Tuple
@@ -623,15 +636,104 @@ def _legacy_manual_load_documents(file_paths: List[str], args=None) -> List[Docu
             ))
     return documents
 
+def get_gpu_utilization() -> Optional[float]:
+    """
+    Get current GPU utilization percentage using nvidia-smi.
+
+    Returns:
+        GPU utilization as float (0-100), or None if unavailable
+    """
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0:
+            # Parse first GPU utilization (handles multi-GPU, takes first)
+            gpu_util = float(result.stdout.strip().split('\n')[0])
+            return gpu_util
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError):
+        pass  # nvidia-smi not available or failed
+    return None
+
+
+def get_cpu_utilization() -> Optional[float]:
+    """
+    Get current CPU utilization percentage using psutil.
+
+    Returns:
+        CPU utilization as float (0-100), or None if unavailable
+    """
+    try:
+        import psutil
+        # Use interval=None for non-blocking call (uses cached values from background thread)
+        # This avoids adding 1 second blocking delay per document
+        return psutil.cpu_percent(interval=None)
+    except ImportError:
+        pass
+    return None
+
+
+def calculate_adaptive_throttle(
+    base_delay: float,
+    gpu_util: Optional[float],
+    cpu_util: Optional[float],
+    gpu_threshold: float = 80.0,
+    cpu_threshold: float = 85.0,
+    increment: float = 0.5,
+    max_delay: float = 5.0
+) -> Tuple[float, str]:
+    """
+    Calculate adaptive throttle delay based on system load.
+
+    Args:
+        base_delay: User-configured baseline delay (minimum)
+        gpu_util: Current GPU utilization (0-100)
+        cpu_util: Current CPU utilization (0-100)
+        gpu_threshold: GPU threshold to trigger throttling
+        cpu_threshold: CPU threshold to trigger throttling
+        increment: Amount to increase delay by
+        max_delay: Maximum allowed delay
+
+    Returns:
+        Tuple of (delay_seconds, reason_string)
+    """
+    current_delay = base_delay
+    reasons = []
+
+    # GPU has priority (more likely to cause freezing with Ollama)
+    if gpu_util is not None and gpu_util > gpu_threshold:
+        overage = (gpu_util - gpu_threshold) / 10  # Scale factor
+        additional = increment * max(1, int(overage))
+        current_delay += additional
+        reasons.append(f"GPU:{gpu_util:.0f}%")
+
+    # CPU fallback or additional throttling
+    if cpu_util is not None and cpu_util > cpu_threshold:
+        overage = (cpu_util - cpu_threshold) / 10
+        additional = increment * max(1, int(overage))
+        current_delay += additional
+        reasons.append(f"CPU:{cpu_util:.0f}%")
+
+    # Cap at max delay
+    current_delay = min(current_delay, max_delay)
+
+    reason = f"throttle={current_delay:.1f}s ({', '.join(reasons)})" if reasons else None
+    return current_delay, reason
+
+
 def extract_entities_and_relationships(doc_text: str, metadata: Dict, entity_extractor: EntityExtractor) -> Tuple[List[Dict], List[Dict]]:
     """Extract entities and relationships from document and convert to serializable format."""
     try:
         entities, relationships = entity_extractor.extract_entities_and_relationships(doc_text, metadata)
-        
+
         # Convert to dictionaries for JSON serialization
         entities_dict = [entity.model_dump() for entity in entities]
         relationships_dict = [rel.model_dump() for rel in relationships]
-        
+
         return entities_dict, relationships_dict
     except Exception as e:
         logging.error(f"Failed to extract entities: {e}")
@@ -645,20 +747,31 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
     batch_manager = None
     if hasattr(args, 'db_path') and args.db_path:
         batch_manager = BatchState(args.db_path)
-        
+
+        # Load scan configuration if available (for resume capability)
+        scan_config = {}
+        scan_config_path = Path(args.db_path) / "scan_config.json"
+        if scan_config_path.exists():
+            try:
+                with open(scan_config_path, 'r') as f:
+                    scan_config = json.load(f)
+                logging.info(f"Loaded scan configuration from {scan_config_path}")
+            except Exception as e:
+                logging.warning(f"Failed to load scan configuration: {e}")
+
         # Handle resume logic
         if not fresh_start:
-            batch_id, files_to_process, completed_count = batch_manager.resume_or_create_batch(include_paths)
+            batch_id, files_to_process, completed_count = batch_manager.resume_or_create_batch(include_paths, scan_config)
             if not files_to_process:
                 logging.info("No files to process - all files already completed")
                 return
-            
+
             logging.info(f"Batch {batch_id}: Processing {len(files_to_process)} files ({completed_count} already completed)")
             include_paths = files_to_process
         else:
             # Fresh start - clear any existing batch
             batch_manager.clear_batch()
-            batch_manager.create_batch(include_paths)
+            batch_manager.create_batch(include_paths, scan_config)
     
     # Get staging file path based on batch manager's db_path
     staging_file = get_staging_file_path(batch_manager.db_path) if batch_manager else STAGING_INGESTION_FILE
@@ -844,6 +957,44 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
         # Update batch progress for successfully processed file
         if batch_manager:
             batch_manager.update_progress(file_path_str)
+
+        # Smart adaptive throttling to reduce CPU/GPU load
+        base_throttle_delay = getattr(args, 'throttle_delay', 1.0) if args else 1.0
+
+        # Always check system load, even if base delay is 0 (enables auto-throttling)
+        if base_throttle_delay >= 0:  # -1 would disable entirely (not exposed in UI)
+            import time
+
+            # Always sample system load to provide responsive feedback
+            gpu_util = get_gpu_utilization()
+            cpu_util = get_cpu_utilization()
+
+            # Calculate adaptive delay
+            actual_delay, throttle_reason = calculate_adaptive_throttle(
+                base_throttle_delay,
+                gpu_util,
+                cpu_util,
+                gpu_threshold=80.0,
+                cpu_threshold=85.0,
+                increment=0.5,
+                max_delay=5.0
+            )
+
+            # Always print machine-readable throttle status for UI (even when not throttling)
+            gpu_str = f"{gpu_util:.0f}" if gpu_util is not None else "N/A"
+            cpu_str = f"{cpu_util:.0f}" if cpu_util is not None else "N/A"
+
+            if throttle_reason:
+                # High load - throttling active
+                logging.info(f"⏱️ {throttle_reason}")
+                print(f"CORTEX_THROTTLE::{actual_delay:.1f}::{gpu_str}::{cpu_str}", flush=True)
+            else:
+                # Normal load - baseline delay for responsiveness
+                print(f"CORTEX_THROTTLE::{actual_delay:.1f}::{gpu_str}::{cpu_str}", flush=True)
+
+            # Apply delay (ensures system stays responsive)
+            if actual_delay > 0:
+                time.sleep(actual_delay)
 
     # Create staging data structure with collection assignment
     staging_data = {
@@ -1045,6 +1196,8 @@ def main():
                        help="Resume from existing batch state (opposite of --fresh)")
     parser.add_argument("--target-collection", type=str, default=None,
                        help="Target collection for document assignment")
+    parser.add_argument("--throttle-delay", type=float, default=0.5,
+                       help="Delay in seconds between document processing (default=0.5s keeps system usable, auto-adjusts based on CPU/GPU load)")
     args = parser.parse_args()
 
     initialize_script()

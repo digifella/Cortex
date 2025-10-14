@@ -11,13 +11,28 @@ Date: 2025-08-03
 import json
 import logging
 import os
+import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Set, Tuple, Optional, Any
-import chromadb
-from chromadb.config import Settings as ChromaSettings
 
-from cortex_engine.utils import convert_to_docker_mount_path, get_logger
+# Suppress ChromaDB telemetry errors before import
+import sys
+_original_stderr = sys.stderr
+try:
+    sys.stderr = open(os.devnull, 'w')
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+finally:
+    if sys.stderr != _original_stderr:
+        sys.stderr.close()
+    sys.stderr = _original_stderr
+
+# Also suppress any telemetry warnings
+logging.getLogger("chromadb.telemetry").setLevel(logging.CRITICAL)
+warnings.filterwarnings("ignore", message=".*telemetry.*")
+
+from cortex_engine.utils import convert_windows_to_wsl_path, convert_to_docker_mount_path, get_logger
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.config import COLLECTION_NAME, INGESTED_FILES_LOG
 
@@ -31,6 +46,7 @@ class IngestionRecoveryManager:
     def __init__(self, db_path: str):
         """Initialize the recovery manager with database path."""
         self.db_path = db_path
+        # Use Docker-safe conversion so recovery inspects the correct mount path
         self.wsl_db_path = convert_to_docker_mount_path(db_path)
         self.chroma_db_path = os.path.join(self.wsl_db_path, "knowledge_hub_db")
         self.ingested_log_path = os.path.join(self.chroma_db_path, INGESTED_FILES_LOG)

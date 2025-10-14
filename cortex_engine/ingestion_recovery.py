@@ -11,11 +11,26 @@ Date: 2025-08-03
 import json
 import logging
 import os
+import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Set, Tuple, Optional, Any
-import chromadb
-from chromadb.config import Settings as ChromaSettings
+
+# Suppress ChromaDB telemetry errors before import
+import sys
+_original_stderr = sys.stderr
+try:
+    sys.stderr = open(os.devnull, 'w')
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+finally:
+    if sys.stderr != _original_stderr:
+        sys.stderr.close()
+    sys.stderr = _original_stderr
+
+# Also suppress any telemetry warnings
+logging.getLogger("chromadb.telemetry").setLevel(logging.CRITICAL)
+warnings.filterwarnings("ignore", message=".*telemetry.*")
 
 from cortex_engine.utils import convert_windows_to_wsl_path, convert_to_docker_mount_path, get_logger
 from cortex_engine.collection_manager import WorkingCollectionManager
