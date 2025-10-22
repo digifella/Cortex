@@ -107,7 +107,7 @@ RUN echo '#!/bin/bash\n\
 set -e\n\
 \n\
 echo "🚀 Starting Cortex Suite (GPU-Enabled)"\n\
-python -c "from cortex_engine.version_config import VERSION_DISPLAY; print(f\\\"📦 Version: {VERSION_DISPLAY}\\\")"\n\
+python -c "from cortex_engine.version_config import VERSION_DISPLAY; print(\"Version:\", VERSION_DISPLAY)"\n\
 echo "📅 $(date)"\n\
 echo "💻 Platform: $(uname -m) ($(uname -s))"\n\
 echo "🐳 Docker Environment: $([ -f /.dockerenv ] && echo "Yes" || echo "No")"\n\

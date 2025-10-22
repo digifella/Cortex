@@ -387,7 +387,8 @@ def manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
 
 def _process_images_batch(
     image_files: List[str],
-    skip_image_processing: bool = False
+    skip_image_processing: bool = False,
+    max_workers: int = 3
 ) -> List[Document]:
     """
     Process multiple images in parallel with VLM.
@@ -422,7 +423,9 @@ def _process_images_batch(
 
     logging.info(f"🖼️ Processing {len(image_files)} images with VLM (parallel, 30s timeout each)")
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    # Be conservative with workers to reduce heat/CPU load
+    workers = max(1, int(max_workers))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         # Submit all image processing tasks
         future_to_path = {
             executor.submit(describe_image_with_vlm_async, img_path, 30): img_path
@@ -532,7 +535,8 @@ def _legacy_manual_load_documents(file_paths: List[str], args=None) -> List[Docu
 
     # Process images in batch (parallel with timeout)
     if image_files:
-        image_docs = _process_images_batch(image_files, skip_images)
+        image_workers = getattr(args, 'image_workers', 1) if hasattr(args, 'image_workers') else 1
+        image_docs = _process_images_batch(image_files, skip_images, max_workers=image_workers)
         documents.extend(image_docs)
 
     # Process other documents normally
@@ -815,6 +819,10 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
     ]
     metadata_prompt_template = "\n".join(prompt_lines)
 
+    # Cooldown configuration (conservative defaults)
+    cooldown_every = int(getattr(args, 'cooldown_every', 25) or 0) if args else 25
+    cooldown_seconds = float(getattr(args, 'cooldown_seconds', 20.0)) if args else 20.0
+
     for i, doc in enumerate(unique_docs):
         # Check for pause request
         if batch_manager and batch_manager.is_paused():
@@ -969,15 +977,15 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
             gpu_util = get_gpu_utilization()
             cpu_util = get_cpu_utilization()
 
-            # Calculate adaptive delay
+            # Calculate adaptive delay (more conservative defaults)
             actual_delay, throttle_reason = calculate_adaptive_throttle(
                 base_throttle_delay,
                 gpu_util,
                 cpu_util,
-                gpu_threshold=80.0,
-                cpu_threshold=85.0,
+                gpu_threshold=float(getattr(args, 'gpu_threshold', 60.0)) if args else 60.0,
+                cpu_threshold=float(getattr(args, 'cpu_threshold', 70.0)) if args else 70.0,
                 increment=0.5,
-                max_delay=5.0
+                max_delay=float(getattr(args, 'max_throttle_delay', 8.0)) if args else 8.0
             )
 
             # Always print machine-readable throttle status for UI (even when not throttling)
@@ -995,6 +1003,13 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
             # Apply delay (ensures system stays responsive)
             if actual_delay > 0:
                 time.sleep(actual_delay)
+
+        # Periodic cooldown to prevent thermal throttling on laptops
+        if cooldown_every and (i + 1) % cooldown_every == 0 and cooldown_seconds > 0:
+            logging.info(f"🌡️ Cooldown: sleeping {cooldown_seconds:.1f}s after {(i + 1)} documents")
+            print(f"CORTEX_COOLDOWN::{cooldown_seconds:.1f}::{i+1}", flush=True)
+            import time as _t
+            _t.sleep(cooldown_seconds)
 
     # Create staging data structure with collection assignment
     staging_data = {
@@ -1160,9 +1175,31 @@ def finalize_ingestion(db_path: str, args=None):
     chroma_collection = chroma_client.get_or_create_collection(COLLECTION_NAME)
     vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
-    index = VectorStoreIndex.from_documents(documents_for_indexing, storage_context=storage_context, show_progress=True)
+
+    # Batch indexing with cooldown between batches
+    total_docs = len(documents_for_indexing)
+    batch_size = 25 if total_docs > 50 else max(5, total_docs // 4 or 1)
+    indexed = 0
+    logging.info(f"Indexing {total_docs} documents in batches of {batch_size}...")
+
+    # Optional cooldown between index batches
+    index_batch_cooldown = float(getattr(args, 'index_batch_cooldown', 1.0)) if args else 1.0
+
+    for start in range(0, total_docs, batch_size):
+        batch_docs = documents_for_indexing[start:start+batch_size]
+        try:
+            VectorStoreIndex.from_documents(batch_docs, storage_context=storage_context, show_progress=True)
+        except Exception as e:
+            logging.error(f"Batch indexing failed at {start}-{start+len(batch_docs)}: {e}", exc_info=True)
+        indexed += len(batch_docs)
+        last_name = batch_docs[-1].metadata.get('file_name', 'batch') if batch_docs else 'batch'
+        print(f"CORTEX_PROGRESS::{indexed}/{total_docs}::{last_name}", flush=True)
+        if index_batch_cooldown > 0:
+            import time as _t
+            _t.sleep(index_batch_cooldown)
+
     logging.info(f"Persisting index to disk at {chroma_db_path}...")
-    index.storage_context.persist(persist_dir=chroma_db_path)
+    storage_context.persist(persist_dir=chroma_db_path)
     
     for doc in documents_for_indexing: 
         write_to_processed_log(processed_log_path, doc.metadata['doc_posix_path'], doc.metadata['doc_id'])
@@ -1196,8 +1233,24 @@ def main():
                        help="Resume from existing batch state (opposite of --fresh)")
     parser.add_argument("--target-collection", type=str, default=None,
                        help="Target collection for document assignment")
-    parser.add_argument("--throttle-delay", type=float, default=0.5,
-                       help="Delay in seconds between document processing (default=0.5s keeps system usable, auto-adjusts based on CPU/GPU load)")
+    parser.add_argument("--throttle-delay", type=float, default=1.0,
+                       help="Baseline delay (s) between documents. Auto-adjusts with CPU/GPU load.")
+    parser.add_argument("--cpu-threshold", type=float, default=70.0,
+                       help="CPU utilization (%) to start increasing delay (default 70)")
+    parser.add_argument("--gpu-threshold", type=float, default=60.0,
+                       help="GPU utilization (%) to start increasing delay (default 60)")
+    parser.add_argument("--max-throttle-delay", type=float, default=8.0,
+                       help="Maximum adaptive delay (seconds) when system is under load")
+    parser.add_argument("--cooldown-every", type=int, default=25,
+                       help="After this many documents, sleep for cooldown period")
+    parser.add_argument("--cooldown-seconds", type=float, default=20.0,
+                       help="Cooldown duration (seconds) to prevent thermal throttling")
+    parser.add_argument("--image-workers", type=int, default=1,
+                       help="Max concurrent image VLM workers (default 1 for low heat)")
+    parser.add_argument("--index-batch-cooldown", type=float, default=1.0,
+                       help="Sleep (s) between indexing batches to reduce sustained load")
+    parser.add_argument("--llm-timeout", type=float, default=120.0,
+                       help="Hard timeout (seconds) per LLM metadata call; on timeout, fallback metadata is used")
     args = parser.parse_args()
 
     initialize_script()
