@@ -8,20 +8,34 @@ import urllib.parse
 def convert_windows_to_wsl_path(path_str: Union[str, Path, None]) -> str:
     if not path_str:
         return ""
+
     path_str = str(path_str).strip()
+
     if path_str.startswith('/mnt/'):
         return path_str
+
     if path_str.startswith('/') and not path_str.startswith('/mnt/'):
         return path_str
+
     normalized_path = path_str.replace('\\', '/')
+
     m = re.match(r'^([a-zA-Z]):/(.*)', normalized_path)
     if m:
         drive, rest = m.groups()
-        return f"/mnt/{drive.lower()}/{rest}"
+        drive_mount = f"/mnt/{drive.lower()}"
+        wsl_path = f"{drive_mount}/{rest}" if rest else drive_mount
+        if os.path.exists(drive_mount):
+            return wsl_path
+        return f"{drive.upper()}:/{rest}" if rest else f"{drive.upper()}:/"
+
     m = re.match(r'^([a-zA-Z]):$', normalized_path)
     if m:
         drive = m.group(1)
-        return f"/mnt/{drive.lower()}"
+        drive_mount = f"/mnt/{drive.lower()}"
+        if os.path.exists(drive_mount):
+            return drive_mount
+        return f"{drive.upper()}:/"
+
     return normalized_path
 
 
@@ -74,7 +88,7 @@ def convert_source_path_to_docker_mount(path_str: Union[str, Path, None]) -> str
         if in_docker:
             # For source directories, resolve to an existing host mount path inside the container
             return _resolve_docker_host_path(drive, rest)
-        return f"/mnt/{drive.lower()}/{rest}"
+        return convert_windows_to_wsl_path(normalized_path)
 
     # Bare drive letter (e.g., 'D:')
     m = re.match(r'^([a-zA-Z]):$', normalized_path)
@@ -82,7 +96,7 @@ def convert_source_path_to_docker_mount(path_str: Union[str, Path, None]) -> str
         drive = m.group(1)
         if in_docker:
             return _resolve_docker_host_path(drive, '')
-        return f"/mnt/{drive.lower()}"
+        return convert_windows_to_wsl_path(normalized_path)
 
     # Fallback to general conversion
     return convert_windows_to_wsl_path(raw)
@@ -124,7 +138,7 @@ def convert_to_docker_mount_path(path_str: Union[str, Path, None]) -> str:
         if in_docker:
             # Resolve to an existing host mount path inside the container
             return _resolve_docker_host_path(drive, rest)
-        return f"/mnt/{drive.lower()}/{rest}"
+        return convert_windows_to_wsl_path(normalized_path)
 
     # Bare drive letter (e.g., 'D:')
     m = re.match(r'^([a-zA-Z]):$', normalized_path)
@@ -132,7 +146,7 @@ def convert_to_docker_mount_path(path_str: Union[str, Path, None]) -> str:
         drive = m.group(1)
         if in_docker:
             return _resolve_docker_host_path(drive, '')
-        return f"/mnt/{drive.lower()}"
+        return convert_windows_to_wsl_path(normalized_path)
 
     # Fallback to general conversion
     return convert_windows_to_wsl_path(raw)

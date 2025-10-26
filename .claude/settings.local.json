@@ -59,7 +59,9 @@
       "Read(/mnt/c/Users/paul/**)",
       "Read(/mnt/c/Users/paul/**)",
       "Bash(git checkout:*)",
-      "Read(//mnt/c/ai_databases/**)"
+      "Read(//mnt/c/ai_databases/**)",
+      "Bash(python3:*)",
+      "Read(//mnt/c/Users/paul/OneDrive - VentraIP Australia/Knowledge_Base/**)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",

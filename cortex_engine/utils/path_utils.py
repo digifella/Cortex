@@ -47,13 +47,22 @@ def convert_windows_to_wsl_path(path_str: Union[str, Path, None]) -> str:
     match = re.match(r'^([a-zA-Z]):/(.*)', normalized_path)
     if match:
         drive_letter, rest = match.groups()
-        return f"/mnt/{drive_letter.lower()}/{rest}"
+        drive_mount = f"/mnt/{drive_letter.lower()}"
+        wsl_path = f"{drive_mount}/{rest}" if rest else drive_mount
+        # Prefer WSL mounts when available (WSL / Docker Desktop)
+        if os.path.exists(drive_mount):
+            return wsl_path
+        # Fallback to normalized Windows path for native Windows environments
+        return f"{drive_letter.upper()}:/{rest}" if rest else f"{drive_letter.upper()}:/"
     
     # Handle bare drive patterns like C:, D:, E:
     match = re.match(r'^([a-zA-Z]):$', normalized_path)
     if match:
         drive_letter = match.group(1)
-        return f"/mnt/{drive_letter.lower()}"
+        drive_mount = f"/mnt/{drive_letter.lower()}"
+        if os.path.exists(drive_mount):
+            return drive_mount
+        return f"{drive_letter.upper()}:/"
     
     return normalized_path
 
@@ -107,7 +116,7 @@ def convert_source_path_to_docker_mount(path_str: Union[str, Path, None]) -> str
         if in_docker:
             # For source directories, resolve to an existing host mount path inside the container
             return _resolve_docker_host_path(drive, rest)
-        return f"/mnt/{drive.lower()}/{rest}"
+        return convert_windows_to_wsl_path(normalized_path)
 
     # Bare drive letter (e.g., 'D:')
     m = re.match(r'^([a-zA-Z]):$', normalized_path)
@@ -115,7 +124,7 @@ def convert_source_path_to_docker_mount(path_str: Union[str, Path, None]) -> str
         drive = m.group(1)
         if in_docker:
             return _resolve_docker_host_path(drive, '')
-        return f"/mnt/{drive.lower()}"
+        return convert_windows_to_wsl_path(normalized_path)
 
     # Fallback to general conversion
     return convert_windows_to_wsl_path(raw)
@@ -157,8 +166,7 @@ def convert_to_docker_mount_path(path_str: Union[str, Path, None]) -> str:
             if ai_db_env and ai_db_env.strip():
                 return ai_db_env.rstrip('/')
             return f"/host_mnt/{drive.lower()}/{rest}"
-        else:
-            return f"/mnt/{drive.lower()}/{rest}"
+        return convert_windows_to_wsl_path(normalized_path)
 
     # Bare drive letter (e.g., 'D:')
     m = re.match(r'^([a-zA-Z]):$', normalized_path)
@@ -169,8 +177,7 @@ def convert_to_docker_mount_path(path_str: Union[str, Path, None]) -> str:
             if ai_db_env and ai_db_env.strip():
                 return ai_db_env.rstrip('/')
             return f"/host_mnt/{drive.lower()}"
-        else:
-            return f"/mnt/{drive.lower()}"
+        return convert_windows_to_wsl_path(normalized_path)
 
     # No special handling needed
     return convert_windows_to_wsl_path(raw)

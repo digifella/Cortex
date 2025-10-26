@@ -19,7 +19,7 @@ from pathlib import Path
 from fnmatch import fnmatch
 from collections import defaultdict
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 import time
 
 import fitz
@@ -261,7 +261,7 @@ def initialize_state(force_reset: bool = False):
     defaults = {
         "ingestion_stage": "config", "dir_selections": {},
         "files_to_review": [], "staged_files": [], "file_selections": {},
-        "edited_staged_files": [], "review_page": 0, "ingestion_process": None,
+        "edited_staged_files": [], "staged_metadata": {}, "review_page": 0, "ingestion_process": None,
         "skip_image_processing": False,  # Option to skip VLM image processing
         "throttle_delay": 0.5,  # Delay between document processing (seconds) - 0.5s default keeps system usable during ingestion
         "batch_ingest_mode": False,  # Option to bypass preview check for large ingests
@@ -342,15 +342,40 @@ def get_full_file_content(file_path_str: str) -> str:
 
 def load_staged_files():
     st.session_state.staged_files = []
+    st.session_state.staged_metadata = {}
     # Use database-specific staging path instead of hardcoded project path
     if st.session_state.get('db_path'):
         container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
         staging_path = Path(container_db_path) / "staging_ingestion.json"
         if staging_path.exists():
             try:
-                with open(staging_path, 'r') as f: st.session_state.staged_files = json.load(f)
+                with open(staging_path, 'r') as f:
+                    raw_data = json.load(f)
+                if isinstance(raw_data, dict):
+                    st.session_state.staged_metadata = raw_data
+                    st.session_state.staged_files = raw_data.get('documents', [])
+                    target = raw_data.get('target_collection')
+                    if target and not st.session_state.get('target_collection_name'):
+                        st.session_state.target_collection_name = target
+                else:
+                    st.session_state.staged_metadata = {
+                        "documents": raw_data,
+                        "target_collection": st.session_state.get('target_collection_name', ''),
+                    }
+                    st.session_state.staged_files = raw_data
             except (json.JSONDecodeError, IOError) as e:
                 st.error(f"Error reading staging file: {e}"); st.session_state.staged_files = []
+
+def serialize_staging_payload(documents: List[dict], target_collection: Optional[str] = None) -> dict:
+    """Build staging payload preserving metadata when user edits documents."""
+    base_metadata = st.session_state.get('staged_metadata')
+    payload = dict(base_metadata) if isinstance(base_metadata, dict) else {}
+    payload['documents'] = documents
+    collection = target_collection or payload.get('target_collection') or st.session_state.get('target_collection_name', '')
+    payload['target_collection'] = collection or ""
+    payload.setdefault('version', '2.0')
+    payload.setdefault('created_at', datetime.now().isoformat())
+    return payload
 
 def scan_for_files(selected_dirs: List[str]):
     container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
@@ -2217,8 +2242,10 @@ def render_metadata_review_ui():
                 # Write staging file to database directory, not project root
                 container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
                 staging_file_path = Path(container_db_path) / "staging_ingestion.json"
-                with open(staging_file_path, 'w') as f: 
-                    json.dump(st.session_state.edited_staged_files, f, indent=2)
+                payload = serialize_staging_payload(st.session_state.edited_staged_files, st.session_state.get('target_collection_name'))
+                with open(staging_file_path, 'w') as f:
+                    json.dump(payload, f, indent=2)
+                st.session_state.staged_metadata = payload
                 if not container_db_path or not Path(container_db_path).exists():
                     st.error(f"Database path is invalid or does not exist: {container_db_path}")
                     st.stop()
@@ -2265,8 +2292,10 @@ def render_metadata_review_ui():
             # Write staging file to database directory, not project root
             container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
             staging_file_path = Path(container_db_path) / "staging_ingestion.json"
-            with open(staging_file_path, 'w') as f: 
-                json.dump(final_files_to_process, f, indent=2)
+            payload = serialize_staging_payload(final_files_to_process, st.session_state.get('target_collection_name'))
+            with open(staging_file_path, 'w') as f:
+                json.dump(payload, f, indent=2)
+            st.session_state.staged_metadata = payload
 
             container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
             if not container_db_path or not Path(container_db_path).exists():
@@ -2368,7 +2397,10 @@ def render_metadata_review_ui():
         # Write staging file to database directory, not project root
         container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
         staging_file_path = Path(container_db_path) / "staging_ingestion.json"
-        with open(staging_file_path, 'w') as f: json.dump(final_files_to_process, f, indent=2)
+        payload = serialize_staging_payload(final_files_to_process, st.session_state.get('target_collection_name'))
+        with open(staging_file_path, 'w') as f:
+            json.dump(payload, f, indent=2)
+        st.session_state.staged_metadata = payload
         if not container_db_path or not Path(container_db_path).exists():
              st.error(f"Database path is invalid or does not exist: {container_db_path}"); st.stop()
 

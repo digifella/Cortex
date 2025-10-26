@@ -113,7 +113,7 @@ class ModernOllama(LLM):
                 options = {
                     "temperature": 0.3,    # Lower temperature for consistent outputs
                     "top_p": 0.8,         # Reduce randomness 
-                    "num_predict": 2048   # Reasonable output length
+                    "num_predict": 512    # Sufficient for concise JSON metadata; lighter on resources
                 }
             
             payload = {

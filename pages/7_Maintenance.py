@@ -17,6 +17,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 import time
+import contextlib
 
 # Configure page
 st.set_page_config(
@@ -60,6 +61,56 @@ if 'show_confirm_clean_start' not in st.session_state:
     st.session_state.show_confirm_clean_start = False
 if 'maintenance_config' not in st.session_state:
     st.session_state.maintenance_config = None
+
+def clear_ingestion_session_state(reason: str = "maintenance") -> None:
+    """Terminate any active ingestion subprocess and clear related Streamlit state."""
+    proc = st.session_state.get("ingestion_process")
+    if proc:
+        try:
+            proc.terminate()
+            logger.info(f"{reason}: terminated active ingestion process during maintenance")
+        except Exception as e:
+            logger.warning(f"{reason}: failed to terminate ingestion process ({e})")
+        finally:
+            st.session_state.pop("ingestion_process", None)
+
+    stop_event = st.session_state.get("ingestion_reader_stop")
+    if stop_event:
+        with contextlib.suppress(Exception):
+            stop_event.set()
+    reader_thread = st.session_state.get("ingestion_reader_thread")
+    if reader_thread:
+        with contextlib.suppress(Exception):
+            reader_thread.join(timeout=0.25)
+
+    # Known ingestion-related keys that keep the UI in a running state
+    transient_keys = {
+        "files_to_review",
+        "staged_files",
+        "file_selections",
+        "edited_staged_files",
+        "review_page",
+        "batch_ingest_mode",
+        "batch_mode_active",
+        "batch_auto_processed",
+        "log_messages",
+        "resume_mode_enabled",
+        "current_scan_config",
+        "force_batch_mode",
+        "last_ingested_doc_ids",
+        "target_collection_name",
+        "current_doc_number",
+        "total_docs_in_batch",
+        "show_logs",
+        "processing_metrics",
+        "ingestion_start_time",
+        "show_confirm_clear_log",
+        "show_confirm_delete_kb",
+    }
+
+    for key in list(st.session_state.keys()):
+        if key in transient_keys or key.startswith("ingestion_"):
+            st.session_state.pop(key, None)
 
 def delete_ingested_document_database(db_path: str):
     """Delete the ingested document database with proper error handling and logging."""
@@ -159,20 +210,14 @@ def delete_ingested_document_database(db_path: str):
         st.error(f"❌ {error_msg}")
 
     # Clear ingestion-related session state to prevent stale UI state
-    ingestion_state_keys = [
-        'ingestion_stage', 'ingestion_process', 'batch_mode_active',
-        'log_messages', 'files_to_review', 'staged_files', 'resume_mode_enabled',
-        'current_scan_config', 'batch_ingest_mode', 'force_batch_mode'
-    ]
-    for key in ingestion_state_keys:
-        if key in st.session_state:
-            del st.session_state[key]
+    clear_ingestion_session_state("maintenance.delete_ingested_db")
 
     # Reset the confirmation state
     st.session_state.show_confirm_delete_kb = False
 
 def perform_clean_start(db_path: str):
     """Perform complete system reset - removes all data, collections, logs, and configurations for fresh start."""
+    clear_ingestion_session_state("maintenance.clean_start.begin")
     
     # Initialize comprehensive debug log
     debug_log_lines = []
@@ -521,6 +566,8 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
         
         # Add a prominent message that stops auto-progression
         st.warning("⏸️ **PAUSED FOR REVIEW** - Study the debug information above, then refresh the page to continue using the system.")
+
+        clear_ingestion_session_state("maintenance.clean_start.complete")
         
         st.info("""
         ### 🚀 Next Steps:

@@ -440,11 +440,11 @@ if not errorlevel 1 (
 REM Add host bind mounts for AI database and Knowledge Source if configured (no paren blocks)
 if not defined ENV_AI_DB_PATH goto SKIP_AI_DB_MOUNT
 echo   MOUNT: Mapping AI database to host: !ENV_AI_DB_PATH! -^> /data/ai_databases
-set DOCKER_CMD=!DOCKER_CMD! -v "!ENV_AI_DB_PATH!":/data/ai_databases
+set DOCKER_CMD=!DOCKER_CMD! -v "!ENV_AI_DB_PATH!:/data/ai_databases"
 :SKIP_AI_DB_MOUNT
 if not defined ENV_SOURCE_PATH goto SKIP_SRC_MOUNT
 echo   MOUNT: Mapping Knowledge Source to host (read-only): !ENV_SOURCE_PATH! -^> /data/knowledge_base
-set DOCKER_CMD=!DOCKER_CMD! -v "!ENV_SOURCE_PATH!":/data/knowledge_base:ro
+set DOCKER_CMD=!DOCKER_CMD! -v "!ENV_SOURCE_PATH!:/data/knowledge_base:ro"
 :SKIP_SRC_MOUNT
 
 REM Always mount entire C:\ drive if it exists (should always exist on Windows)

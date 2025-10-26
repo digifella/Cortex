@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import warnings
+import subprocess
 
 # Suppress common warnings that don't affect functionality
 warnings.filterwarnings("ignore", message=".*attention_mask.*")
@@ -115,6 +116,49 @@ from cortex_engine.batch_manager import BatchState
 LOG_FILE = INGESTION_LOG_PATH
 # STAGING_FILE will be set dynamically based on runtime db_path
 COLLECTIONS_FILE = str(project_root / "working_collections.json")
+
+def _ensure_directory_cross_platform(dir_path: str) -> None:
+    """Ensure directory exists, with Windows PowerShell fallback for WSL permission issues."""
+    is_wsl = False
+    if os.name == "posix":
+        if os.environ.get("WSL_DISTRO_NAME"):
+            is_wsl = True
+        else:
+            try:
+                with open("/proc/sys/kernel/osrelease") as release_file:
+                    is_wsl = "microsoft" in release_file.read().lower()
+            except OSError:
+                is_wsl = False
+
+    try:
+        os.makedirs(dir_path, exist_ok=True)
+    except PermissionError as e:
+        if is_wsl and dir_path.startswith("/mnt/"):
+            try:
+                win_path = subprocess.run(
+                    ["wslpath", "-w", dir_path],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.strip()
+                subprocess.run(
+                    [
+                        "powershell.exe",
+                        "-NoProfile",
+                        "-Command",
+                        f'New-Item -ItemType Directory -Path "{win_path}" -Force | Out-Null',
+                    ],
+                    check=True,
+                )
+                os.makedirs(dir_path, exist_ok=True)
+                logging.info(f"Created directory via PowerShell fallback: {dir_path}")
+            except Exception as fallback_error:
+                raise PermissionError(
+                    f"Permission denied creating '{dir_path}'. "
+                    f"Attempted PowerShell fallback and failed: {fallback_error}"
+                ) from e
+        else:
+            raise
 
 def get_staging_file_path(db_path: str) -> str:
     """Get the staging file path for the given database path"""
@@ -1034,8 +1078,9 @@ def finalize_ingestion(db_path: str, args=None):
         logging.error(f"Staging file not found at: {staging_file}")
         return
     
+    batch_manager = BatchState(db_path)
     chroma_db_path = os.path.join(db_path, "knowledge_hub_db")
-    os.makedirs(chroma_db_path, exist_ok=True)
+    _ensure_directory_cross_platform(chroma_db_path)
     
     # Initialize graph manager
     graph_file_path = os.path.join(db_path, "knowledge_cortex.gpickle")
@@ -1138,6 +1183,10 @@ def finalize_ingestion(db_path: str, args=None):
         logging.warning("No new, valid documents to ingest. Finalization complete.")
         if os.path.exists(staging_file): 
             os.remove(staging_file)
+        try:
+            batch_manager.clear_batch()
+        except Exception as e:
+            logging.warning(f"Failed to clear batch state after empty finalization: {e}")
         return
 
     # Save the graph
@@ -1219,6 +1268,10 @@ def finalize_ingestion(db_path: str, args=None):
     
     logging.info("--- Finalization complete. Knowledge base and graph are up to date. ---")
     print("CORTEX_STAGE::FINALIZE_DONE", flush=True)
+    try:
+        batch_manager.clear_batch()
+    except Exception as e:
+        logging.warning(f"Failed to clear batch state after finalization: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description="Cortex Ingestion Engine with GraphRAG")
