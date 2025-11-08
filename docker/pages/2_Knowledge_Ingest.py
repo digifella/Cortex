@@ -21,6 +21,8 @@ from collections import defaultdict
 from datetime import datetime
 from typing import List, Optional
 import time
+import threading
+import queue
 
 import fitz
 
@@ -113,6 +115,18 @@ def get_document_type_options():
 DOC_TYPE_OPTIONS = get_document_type_options()
 PROPOSAL_OUTCOME_OPTIONS = RichMetadata.model_fields['proposal_outcome'].annotation.__args__
 
+def _is_wsl_env() -> bool:
+    try:
+        import os, platform
+        if os.environ.get("WSL_DISTRO_NAME"):
+            return True
+        rel = platform.release().lower()
+        ver = platform.version().lower()
+        return ("microsoft" in rel) or ("microsoft" in ver)
+    except Exception:
+        return False
+
+
 def build_ingestion_command(container_db_path, files_to_process, target_collection=None, resume=False):
     """Build ingestion command with collection assignment support"""
     # Use direct script path to avoid module resolution confusion
@@ -133,11 +147,80 @@ def build_ingestion_command(container_db_path, files_to_process, target_collecti
     if st.session_state.get("skip_image_processing", False):
         command.append("--skip-image-processing")
 
-    # Add throttle delay - always pass the parameter (default 0.5s for system responsiveness)
-    throttle_delay = st.session_state.get("throttle_delay", 0.5)
+    # Add throttle delay - choose a safer default on WSL for NVIDIA 8GB class
+    default_throttle = 2.0 if _is_wsl_env() else 0.5
+    throttle_delay = st.session_state.get("throttle_delay", default_throttle)
     command.extend(["--throttle-delay", str(throttle_delay)])
 
+    # Apply conservative runtime stability defaults automatically on WSL
+    if _is_wsl_env():
+        # Cooler cadence to avoid GPU stalls and UI freezes
+        command.extend(["--cooldown-every", "20", "--cooldown-seconds", "15"])  # defaults are 25/20; tighten for WSL
+        # Lower thresholds to start throttling earlier on laptops
+        command.extend(["--gpu-threshold", "50", "--cpu-threshold", "60"]) 
+        # Slow down indexing slightly between batches to reduce I/O churn
+        command.extend(["--index-batch-cooldown", "2.0"]) 
+        # Enforce hard LLM timeout to avoid indefinite stalls
+        command.extend(["--llm-timeout", "120"])  # seconds
+
     return command
+
+# ---- Subprocess helpers for robust streaming ----
+def spawn_ingest(command: list) -> subprocess.Popen:
+    """Launch an ingestion subprocess with unbuffered stdout and merged stderr."""
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    # Ensure python runs unbuffered even when using -m mode
+    if len(command) >= 2 and command[0] == sys.executable and command[1] != "-u":
+        # Insert -u right after the interpreter if missing
+        command = [command[0], "-u", *command[1:]]
+    return subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        universal_newlines=True,
+        env=env,
+    )
+
+def _reader_to_queue(pipe, q: queue.Queue, stop_event: threading.Event):
+    try:
+        while not stop_event.is_set():
+            line = pipe.readline()
+            if not line:
+                # EOF reached
+                break
+            q.put(line)
+    except Exception:
+        pass
+
+def start_ingest_reader(proc: subprocess.Popen) -> None:
+    """Start a background thread that enqueues stdout lines for non-blocking UI reads."""
+    q = queue.Queue()
+    stop_event = threading.Event()
+    t = threading.Thread(target=_reader_to_queue, args=(proc.stdout, q, stop_event), daemon=True)
+    t.start()
+    st.session_state.ingestion_output_queue = q
+    st.session_state.ingestion_reader_stop = stop_event
+    st.session_state.ingestion_reader_thread = t
+
+def get_ingest_lines(max_lines: int = 50) -> list:
+    """Drain up to max_lines from the ingestion output queue without blocking."""
+    q = st.session_state.get("ingestion_output_queue")
+    if not q:
+        return []
+    lines = []
+    for _ in range(max_lines):
+        try:
+            line = q.get_nowait()
+        except queue.Empty:
+            break
+        if line:
+            s = line.strip()
+            if s:
+                lines.append(s)
+    return lines
 
 def should_auto_finalize():
     """Check if automatic finalization should proceed"""
@@ -190,14 +273,8 @@ def start_automatic_finalization():
         # Start finalization subprocess
         st.session_state.log_messages = ["Starting automatic finalization..."]
         st.session_state.ingestion_stage = "finalizing"
-        st.session_state.ingestion_process = subprocess.Popen(
-            command, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.STDOUT, 
-            text=True, 
-            bufsize=1, 
-            universal_newlines=True
-        )
+        st.session_state.ingestion_process = spawn_ingest(command)
+        start_ingest_reader(st.session_state.ingestion_process)
         
         logger.info(f"Started automatic finalization with command: {' '.join(command[:4])}...")
         
@@ -258,12 +335,20 @@ def initialize_state(force_reset: bool = False):
     if "db_path" not in st.session_state:
         st.session_state.db_path = config_db_path
 
+    # Pick safer defaults automatically on WSL
+    try:
+        import os, platform
+        _is_wsl_default = bool(os.environ.get("WSL_DISTRO_NAME") or "microsoft" in platform.release().lower())
+    except Exception:
+        _is_wsl_default = False
+
     defaults = {
         "ingestion_stage": "config", "dir_selections": {},
         "files_to_review": [], "staged_files": [], "file_selections": {},
         "edited_staged_files": [], "staged_metadata": {}, "review_page": 0, "ingestion_process": None,
         "skip_image_processing": False,  # Option to skip VLM image processing
-        "throttle_delay": 0.5,  # Delay between document processing (seconds) - 0.5s default keeps system usable during ingestion
+        # Delay between documents; on WSL default to 1.5s for stability
+        "throttle_delay": 1.5 if _is_wsl_default else 0.5,
         "batch_ingest_mode": False,  # Option to bypass preview check for large ingests
         "batch_mode_active": False,  # Persistent flag set when batch processing starts
         "batch_auto_processed": False,  # Flag to prevent re-processing in batch mode
@@ -351,6 +436,7 @@ def load_staged_files():
             try:
                 with open(staging_path, 'r') as f:
                     raw_data = json.load(f)
+
                 if isinstance(raw_data, dict):
                     st.session_state.staged_metadata = raw_data
                     st.session_state.staged_files = raw_data.get('documents', [])
@@ -835,6 +921,12 @@ def render_batch_processing_ui():
                             st.error("❌ No files to process. Please check your file selection or batch state.")
                             return
                         
+                        # Clear any paused flag before resuming
+                        try:
+                            batch_manager.start_new_session()
+                        except Exception:
+                            pass
+
                         st.session_state.log_messages = []
                         st.session_state.ingestion_stage = "analysis_running"
                         st.session_state.batch_mode_active = True
@@ -848,14 +940,8 @@ def render_batch_processing_ui():
                         logger.info(f"Command: {' '.join(command[:6])}... (truncated)")
                         
                         try:
-                            st.session_state.ingestion_process = subprocess.Popen(
-                                command, 
-                                stdout=subprocess.PIPE, 
-                                stderr=subprocess.STDOUT, 
-                                text=True, 
-                                bufsize=1, 
-                                universal_newlines=True
-                            )
+                            st.session_state.ingestion_process = spawn_ingest(command)
+                            start_ingest_reader(st.session_state.ingestion_process)
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Failed to start batch processing: {e}")
@@ -881,14 +967,8 @@ def render_batch_processing_ui():
                     logger.info(f"Command: {' '.join(command[:6])}... (truncated)")
                     
                     try:
-                        st.session_state.ingestion_process = subprocess.Popen(
-                            command, 
-                            stdout=subprocess.PIPE, 
-                            stderr=subprocess.STDOUT, 
-                            text=True, 
-                            bufsize=1, 
-                            universal_newlines=True
-                        )
+                        st.session_state.ingestion_process = spawn_ingest(command)
+                        start_ingest_reader(st.session_state.ingestion_process)
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Failed to start batch processing: {e}")
@@ -925,10 +1005,42 @@ def render_batch_processing_ui():
 def render_active_batch_management(batch_manager: BatchState, batch_status: dict):
     """Render the active batch management section with consolidated controls"""
     st.subheader("📊 Active Batch Management")
-    
-    # Manual refresh button for updating progress
-    if st.button("🔄 Refresh Progress", key="refresh_active_batch_progress"):
-        st.rerun()
+
+    # Manual/auto refresh controls
+    refresher_col1, refresher_col2 = st.columns([1,1])
+    with refresher_col1:
+        if st.button("🔄 Refresh Progress", key="refresh_active_batch_progress"):
+            st.rerun()
+    with refresher_col2:
+        auto_refresh = st.checkbox("Auto refresh (3s)", key="auto_refresh_active_batch")
+        if auto_refresh:
+            import time as _t
+            _t.sleep(3)
+            st.rerun()
+
+    # If batch is marked processing but no subprocess is attached, try to auto-start and attach
+    process_obj = st.session_state.get("ingestion_process")
+    if (
+        batch_status.get('active', False)
+        and not batch_status.get('paused', False)
+        and batch_status.get('remaining', 0) > 0
+        and not process_obj
+    ):
+        try:
+            st.info("🔌 Reattaching to batch and starting processing…")
+            if auto_resume_from_batch_config(batch_manager):
+                st.rerun()
+                return
+        except Exception as _auto_err:
+            logger.warning(f"Auto-start from active state failed: {_auto_err}")
+
+    # If a subprocess exists but no reader is attached (e.g., after refresh), reattach it
+    if process_obj and st.session_state.get("ingestion_output_queue") is None:
+        try:
+            start_ingest_reader(process_obj)
+            st.info("🔌 Reattached log reader to running process…")
+        except Exception as _reattach_err:
+            logger.warning(f"Failed to reattach reader in active mgmt: {_reattach_err}")
     
     # Show batch status metrics
     if batch_status.get('is_chunked', False):
@@ -994,6 +1106,33 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
         # Single progress bar for non-chunked processing
         progress = batch_status['progress_percent'] / 100.0
         st.progress(progress, text=f"Processing files... {batch_status['completed']}/{batch_status.get('total_files', 0)}")
+
+    # Drain any available process output to keep metrics/log fresh while in active batch view
+    proc = st.session_state.get('ingestion_process')
+    if proc and proc.poll() is None:
+        for line in get_ingest_lines(max_lines=50):
+            if line.startswith("CORTEX_THROTTLE::"):
+                try:
+                    _, delay_str, gpu_str, cpu_str = line.split("::", 3)
+                    st.session_state.current_throttle_delay = float(delay_str)
+                    st.session_state.current_gpu_util = None if gpu_str == "N/A" else float(gpu_str)
+                    st.session_state.current_cpu_util = None if cpu_str == "N/A" else float(cpu_str)
+                    st.session_state.last_heartbeat_ts = time.time()
+                    st.session_state.log_messages.append(
+                        f"THROTTLE delay={float(delay_str):.1f}s GPU={gpu_str}% CPU={cpu_str}%"
+                    )
+                except Exception:
+                    pass
+            elif line.startswith("CORTEX_HEARTBEAT::"):
+                try:
+                    _, gpu_str, cpu_str = line.split("::", 2)
+                    st.session_state.current_gpu_util = None if gpu_str == "N/A" else float(gpu_str)
+                    st.session_state.current_cpu_util = None if cpu_str == "N/A" else float(cpu_str)
+                    st.session_state.last_heartbeat_ts = time.time()
+                    ts = time.strftime('%H:%M:%S')
+                    st.session_state.log_messages.append(f"[{ts}] HEARTBEAT GPU={gpu_str}% CPU={cpu_str}%")
+                except Exception:
+                    pass
 
     # Performance Tuning Display - Always show when batch is active
     st.markdown("---")
@@ -1178,10 +1317,12 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                 button_text = "▶️ Resume Processing"
 
             if st.button(button_text, type="primary", use_container_width=True, key="resume_processing_main"):
-                # If starting a new session, reset the session counter
-                if batch_status.get('auto_pause_after_chunks') and is_paused:
-                    if batch_status.get('chunks_processed_in_session', 0) >= batch_status.get('auto_pause_after_chunks', 0):
+                # If paused for any reason, clear paused flag and session counters
+                try:
+                    if is_paused:
                         batch_manager.start_new_session()
+                except Exception:
+                    pass
 
                 # Resume processing
                 if auto_resume_from_batch_config(batch_manager):
@@ -1392,24 +1533,26 @@ def auto_resume_from_batch_config(batch_manager: BatchState) -> bool:
     try:
         scan_config = batch_manager.get_scan_config()
         if not scan_config:
-            # Try to recover from staging file if scan config is missing
-            st.warning("⚠️ No scan configuration found in batch state - this can happen after a system crash")
-            st.info("📝 **To resume processing:** Please re-enter your original paths below and select your directories again.")
-            
-            # Add option to clear corrupted batch state
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🗑️ Clear Corrupted Batch", type="secondary", use_container_width=True):
-                    batch_manager.clear_batch()
-                    st.success("✅ Corrupted batch state cleared. You can now start a new scan.")
-                    st.rerun()
-            with col2:
-                if st.button("📁 Go to Configuration", type="primary", use_container_width=True):
-                    st.session_state.ingestion_stage = "config"
-                    st.rerun()
-            
+            # Fallback: attempt to resume directly from files_remaining in batch state
+            state = batch_manager.load_state() or {}
+            files_remaining = state.get('files_remaining', [])
+            if files_remaining:
+                container_db_path = str(batch_manager.db_path)
+                st.session_state.log_messages = []
+                st.session_state.ingestion_stage = "analysis_running"
+                st.session_state.batch_mode_active = True
+                target_collection = st.session_state.get('target_collection_name', '')
+                command = build_ingestion_command(container_db_path, files_remaining, target_collection, resume=True)
+                try:
+                    st.session_state.ingestion_process = spawn_ingest(command)
+                    start_ingest_reader(st.session_state.ingestion_process)
+                    return True
+                except Exception as e:
+                    st.error(f"❌ Failed to start ingestion from batch state: {e}")
+                    logger.error(f"Fallback resume failed: {e}")
+            # If no remaining files or start failed, try staging file path
             return try_resume_from_staging_file(batch_manager)
-            
+        
         return resume_from_scan_config(batch_manager, scan_config)
     except Exception as e:
         st.error(f"❌ Failed to resume batch automatically: {e}")
@@ -1468,6 +1611,11 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
             # Start the actual ingestion process
             container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
             batch_manager_instance = BatchState(container_db_path)
+            # Ensure we clear any paused flag from a prior session
+            try:
+                batch_manager_instance.start_new_session()
+            except Exception:
+                pass
             
             # For chunked processing, get current chunk files
             if batch_manager_instance.is_chunked_processing():
@@ -1485,14 +1633,8 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
             command = build_ingestion_command(container_db_path, files_to_process, target_collection, resume=True)
             
             try:
-                st.session_state.ingestion_process = subprocess.Popen(
-                    command, 
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.STDOUT, 
-                    text=True, 
-                    bufsize=1, 
-                    universal_newlines=True
-                )
+                st.session_state.ingestion_process = spawn_ingest(command)
+                start_ingest_reader(st.session_state.ingestion_process)
                 st.success(f"✅ Auto-resume started! Processing {len(files_to_process)} files...")
                 return True
             except Exception as start_error:
@@ -1672,13 +1814,22 @@ def render_config_and_scan_ui():
             st.checkbox("⚡ Skip image processing (faster, but loses visual content)", key="skip_image_processing",
                        value=False,
                        help="🖼️ Skip AI vision analysis of JPG/PNG files. Image processing is now optimized with parallel execution (30s timeout). Only skip if you don't need OCR, charts, or diagram analysis.")
-            st.number_input("⏱️ Throttle delay (seconds between documents)",
-                           key="throttle_delay",
-                           min_value=0.0,
-                           max_value=10.0,
-                           value=0.5,
-                           step=0.5,
-                           help="🎛️ Smart adaptive throttling with GPU/CPU monitoring. Set baseline delay (0-10s) - system automatically increases delay when GPU>80% or CPU>85% to prevent freezing. 0.5s default keeps system usable during ingestion, auto-adjusts higher when load increases. 0 = no baseline (auto-throttle only when >threshold), 1-2 = higher baseline + auto. System adapts in real-time to your hardware load.")
+            # Use session default (which is WSL-aware) for initial value
+            st.number_input(
+                "⏱️ Throttle delay (seconds between documents)",
+                key="throttle_delay",
+                min_value=0.0,
+                max_value=10.0,
+                value=float(st.session_state.get("throttle_delay", 1.5 if _is_wsl_env() else 0.5)),
+                step=0.5,
+                help=(
+                    "🎛️ Smart adaptive throttling with GPU/CPU monitoring. Set baseline delay (0-10s) — "
+                    "system automatically increases delay when GPU/CPU load is high to prevent freezing. "
+                    "0 = no baseline (auto-throttle only), 1–2s recommended on laptops/WSL."
+                ),
+            )
+            if _is_wsl_env():
+                st.caption("WSL profile active: baseline default 1.5s; auto-applies cooldown every 20 docs for 15s and LLM timeout 120s.")
         with col2:
             st.write("**Pattern-Based Exclusion**")
             st.checkbox("Enable pattern-based exclusion", key="enable_pattern_exclusion", 
@@ -1854,11 +2005,28 @@ def render_pre_analysis_ui():
         st.session_state.log_messages = []; st.session_state.ingestion_stage = "analysis_running"
         target_collection = st.session_state.get('target_collection_name', '')
         command = build_ingestion_command(container_db_path, globally_selected, target_collection)
-        st.session_state.ingestion_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+        st.session_state.ingestion_process = spawn_ingest(command)
+        start_ingest_reader(st.session_state.ingestion_process)
         st.rerun()
 
 def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
     st.header(stage_title)
+    
+    # If the UI is in processing mode but no subprocess exists (e.g., app reload),
+    # attempt an automatic resume from stored batch configuration.
+    try:
+        if st.session_state.get('ingestion_stage') == 'analysis_running' and not st.session_state.get('ingestion_process'):
+            container_db_path = convert_to_docker_mount_path(st.session_state.get('db_path', ''))
+            if container_db_path:
+                batch_manager = BatchState(container_db_path)
+                batch_state = batch_manager.load_state()
+                if batch_state and batch_state.get('files_remaining'):
+                    if auto_resume_from_batch_config(batch_manager):
+                        st.info("🔄 Auto-resume started after reload; continuing processing…")
+                        st.rerun()
+                        return
+    except Exception as _e:
+        logger.warning(f"Auto-resume on reload skipped: {_e}")
     
     # Add control buttons for pause/stop
     col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
@@ -1876,6 +2044,10 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
             if st.session_state.ingestion_process:
                 st.session_state.ingestion_process.terminate()
                 st.session_state.ingestion_process = None
+                # Signal reader thread to stop
+                stop_ev = st.session_state.get("ingestion_reader_stop")
+                if stop_ev:
+                    stop_ev.set()
                 st.warning("Process stopped by user")
                 st.rerun()
     
@@ -1899,30 +2071,38 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
     else:
         progress_bar = st.progress(0, text="Starting process...")
 
-    # Throttle status indicator (prominent)
-    if st.session_state.get('throttle_active', False):
-        throttle_col1, throttle_col2, throttle_col3 = st.columns([1, 1, 1])
-        with throttle_col1:
-            delay_val = st.session_state.get('current_throttle_delay', 0.0)
-            st.metric("⏱️ Throttle Delay", f"{delay_val:.1f}s", help="Current delay between documents to reduce system load")
-        with throttle_col2:
-            gpu_val = st.session_state.get('current_gpu_util', None)
-            if gpu_val is not None:
-                gpu_delta = f"+{gpu_val - 80:.0f}%" if gpu_val > 80 else None
-                st.metric("🎮 GPU Load", f"{gpu_val:.0f}%", delta=gpu_delta, delta_color="inverse", help="GPU utilization (throttles at >80%)")
-            else:
-                st.metric("🎮 GPU Load", "N/A", help="GPU monitoring unavailable (nvidia-smi not found)")
-        with throttle_col3:
-            cpu_val = st.session_state.get('current_cpu_util', None)
-            if cpu_val is not None:
-                cpu_delta = f"+{cpu_val - 85:.0f}%" if cpu_val > 85 else None
-                st.metric("💻 CPU Load", f"{cpu_val:.0f}%", delta=cpu_delta, delta_color="inverse", help="CPU utilization (throttles at >85%)")
-            else:
-                st.metric("💻 CPU Load", "N/A", help="CPU monitoring unavailable")
+    # Throttle status indicator (always visible; values update as lines arrive)
+    throttle_col1, throttle_col2, throttle_col3 = st.columns([1, 1, 1])
+    with throttle_col1:
+        delay_val = st.session_state.get('current_throttle_delay', 0.0)
+        st.metric("⏱️ Throttle Delay", f"{delay_val:.1f}s", help="Current delay between documents to reduce system load")
+    with throttle_col2:
+        gpu_val = st.session_state.get('current_gpu_util', None)
+        if gpu_val is not None:
+            gpu_delta = f"+{gpu_val - 80:.0f}%" if gpu_val > 80 else None
+            st.metric("🎮 GPU Load", f"{gpu_val:.0f}%", delta=gpu_delta, delta_color="inverse", help="GPU utilization (throttle increases when high)")
+        else:
+            st.metric("🎮 GPU Load", "N/A", help="GPU monitoring unavailable or not yet sampled")
+    with throttle_col3:
+        cpu_val = st.session_state.get('current_cpu_util', None)
+        if cpu_val is not None:
+            cpu_delta = f"+{cpu_val - 85:.0f}%" if cpu_val > 85 else None
+            st.metric("💻 CPU Load", f"{cpu_val:.0f}%", delta=cpu_delta, delta_color="inverse", help="CPU utilization (throttle increases when high)")
+        else:
+            st.metric("💻 CPU Load", "N/A", help="CPU monitoring unavailable or not yet sampled")
 
-        # Visual indicator when throttling is active
-        if (gpu_val and gpu_val > 80) or (cpu_val and cpu_val > 85):
-            st.warning("🎛️ **Adaptive throttling active** - System load detected, automatically slowing down to prevent freezing.")
+    # Visual indicator when throttling is active
+    if (gpu_val and gpu_val > 80) or (cpu_val and cpu_val > 85):
+        st.warning("🎛️ **Adaptive throttling active** - System load detected, automatically slowing down to prevent freezing.")
+
+    # Heartbeat freshness indicator
+    hb_ts = st.session_state.get('last_heartbeat_ts')
+    if hb_ts:
+        try:
+            age = max(0, int(time.time() - hb_ts))
+            st.caption(f"Last update {age}s ago")
+        except Exception:
+            pass
 
     # Check if process is still running BEFORE the expander (so rerun logic works)
     process_still_running = False
@@ -1930,74 +2110,77 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
         poll_result = st.session_state.ingestion_process.poll()
         process_still_running = (poll_result is None)
 
-        # Read available lines without blocking
-        lines_read = 0
-        max_lines_per_render = 50  # Read up to 50 lines per refresh
-
-        while lines_read < max_lines_per_render:
+        # If reader lost (e.g., browser refresh/new session), reattach to running process
+        if process_still_running and not st.session_state.get("ingestion_output_queue"):
             try:
-                # Non-blocking read with timeout
-                import select
-                import sys
+                start_ingest_reader(st.session_state.ingestion_process)
+                st.info("🔌 Reattached to running process; resuming live logs…")
+            except Exception as _reattach_err:
+                logger.warning(f"Failed to reattach reader: {_reattach_err}")
 
-                # Windows doesn't support select on pipes, so use alternative approach
-                if sys.platform == 'win32':
-                    # On Windows, just try to read with timeout
-                    # This may still block briefly but better than nothing
-                    line = st.session_state.ingestion_process.stdout.readline()
-                    if not line:
-                        break
-                else:
-                    # Unix/Mac: use select for true non-blocking
-                    ready, _, _ = select.select([st.session_state.ingestion_process.stdout], [], [], 0.05)
-                    if not ready:
-                        break
-
-                    line = st.session_state.ingestion_process.stdout.readline()
-                    if not line:
-                        break
-
-                line = line.strip()
-                if not line:
-                    continue
-
-                lines_read += 1
-
-                # Parse progress updates
-                if line.startswith("CORTEX_PROGRESS::"):
-                    try:
-                        _, progress_part, filename_part = line.split("::", 2)
-                        current, total = map(int, progress_part.split('/'))
-                        st.session_state.current_doc_number = current
-                        st.session_state.total_docs_in_batch = total
-                        st.session_state.log_messages.append(f"Processing {current}/{total}: {filename_part}")
-                    except (ValueError, IndexError):
-                        st.session_state.log_messages.append(line)
-                elif line.startswith("CORTEX_THROTTLE::"):
-                    try:
-                        _, delay_str, gpu_str, cpu_str = line.split("::", 3)
-                        st.session_state.current_throttle_delay = float(delay_str)
-                        st.session_state.current_gpu_util = None if gpu_str == "N/A" else float(gpu_str)
-                        st.session_state.current_cpu_util = None if cpu_str == "N/A" else float(cpu_str)
-                        st.session_state.throttle_active = True
-                    except (ValueError, IndexError):
-                        pass
-                elif line.startswith("CORTEX_STAGE::FINALIZE_DONE"):
-                    st.session_state.log_messages.append("✅ Finalization completed successfully!")
-                    st.session_state.finalize_done_detected = True
-                elif line.startswith("CORTEX_STAGE::ANALYSIS_DONE"):
-                    st.session_state.log_messages.append("✅ Analysis completed successfully!")
-                    st.session_state.analysis_done_detected = True
-                else:
+        # Drain available lines from background reader
+        for line in get_ingest_lines(max_lines=50):
+            # Parse progress updates
+            if line.startswith("CORTEX_PROGRESS::"):
+                try:
+                    _, progress_part, filename_part = line.split("::", 2)
+                    current, total = map(int, progress_part.split('/'))
+                    st.session_state.current_doc_number = current
+                    st.session_state.total_docs_in_batch = total
+                    st.session_state.log_messages.append(f"Processing {current}/{total}: {filename_part}")
+                except (ValueError, IndexError):
                     st.session_state.log_messages.append(line)
+            elif line.startswith("CORTEX_THROTTLE::"):
+                try:
+                    _, delay_str, gpu_str, cpu_str = line.split("::", 3)
+                    st.session_state.current_throttle_delay = float(delay_str)
+                    gpu_val = None if gpu_str == "N/A" else float(gpu_str)
+                    cpu_val = None if cpu_str == "N/A" else float(cpu_str)
+                    st.session_state.current_gpu_util = gpu_val
+                    st.session_state.current_cpu_util = cpu_val
+                    st.session_state.throttle_active = bool((gpu_val is not None and gpu_val > 80) or (cpu_val is not None and cpu_val > 85))
+                    st.session_state.last_heartbeat_ts = time.time()
+                    # Also surface a compact log line so users see live updates
+                    gpu_disp = gpu_str if gpu_str != "N/A" else "N/A"
+                    cpu_disp = cpu_str if cpu_str != "N/A" else "N/A"
+                    st.session_state.log_messages.append(f"THROTTLE delay={float(delay_str):.1f}s GPU={gpu_disp}% CPU={cpu_disp}%")
+                except (ValueError, IndexError):
+                    pass
+            elif line.startswith("CORTEX_HEARTBEAT::"):
+                try:
+                    _, gpu_str, cpu_str = line.split("::", 2)
+                    gpu_val = None if gpu_str == "N/A" else float(gpu_str)
+                    cpu_val = None if cpu_str == "N/A" else float(cpu_str)
+                    st.session_state.current_gpu_util = gpu_val
+                    st.session_state.current_cpu_util = cpu_val
+                    st.session_state.last_heartbeat_ts = time.time()
+                    # Log heartbeat visibly as a compact line
+                    gpu_disp = gpu_str if gpu_str != "N/A" else "N/A"
+                    cpu_disp = cpu_str if cpu_str != "N/A" else "N/A"
+                    ts = time.strftime('%H:%M:%S')
+                    st.session_state.log_messages.append(f"[{ts}] HEARTBEAT GPU={gpu_disp}% CPU={cpu_disp}%")
+                except (ValueError, IndexError):
+                    pass
+            elif line.startswith("CORTEX_STAGE::FINALIZE_DONE"):
+                st.session_state.log_messages.append("✅ Finalization completed successfully!")
+                st.session_state.finalize_done_detected = True
+            elif line.startswith("CORTEX_STAGE::ANALYSIS_DONE"):
+                st.session_state.log_messages.append("✅ Analysis completed successfully!")
+                st.session_state.analysis_done_detected = True
+            else:
+                st.session_state.log_messages.append(line)
 
-            except Exception as e:
-                # Error reading, stop trying
-                break
+        # Trim log to avoid unbounded growth
+        if len(st.session_state.log_messages) > 1000:
+            st.session_state.log_messages = st.session_state.log_messages[-1000:]
 
         # Clean up if process finished
         if not process_still_running:
             st.session_state.ingestion_process = None
+            # Signal reader thread to stop
+            stop_ev = st.session_state.get("ingestion_reader_stop")
+            if stop_ev:
+                stop_ev.set()
 
     # Expandable log section (just for display now)
     with st.expander("📋 Processing Log (click to expand/collapse)", expanded=False):
@@ -2262,7 +2445,8 @@ def render_metadata_review_ui():
                 if st.session_state.get("skip_image_processing", False):
                     command.append("--skip-image-processing")
                 
-                st.session_state.ingestion_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+                st.session_state.ingestion_process = spawn_ingest(command)
+                start_ingest_reader(st.session_state.ingestion_process)
                 st.rerun()
             else:
                 st.warning("No valid documents to process after filtering errors.")
@@ -2309,7 +2493,8 @@ def render_metadata_review_ui():
             if st.session_state.get("skip_image_processing", False):
                 command.append("--skip-image-processing")
                 
-            st.session_state.ingestion_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+            st.session_state.ingestion_process = spawn_ingest(command)
+            start_ingest_reader(st.session_state.ingestion_process)
             st.rerun()
     
     st.markdown("---")
@@ -2411,7 +2596,8 @@ def render_metadata_review_ui():
         # Add skip image processing flag if enabled
         if st.session_state.get("skip_image_processing", False):
             command.append("--skip-image-processing")
-        st.session_state.ingestion_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+        st.session_state.ingestion_process = spawn_ingest(command)
+        start_ingest_reader(st.session_state.ingestion_process)
         st.rerun()
 
 def render_document_type_management():

@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.10.0"
+CORTEX_VERSION = "4.10.1"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
     "minor": 10,
-    "patch": 0,
+    "patch": 1,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,35 +25,33 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2025-10-09",
-    "release_name": "Performance Analytics & Adaptive Optimization",
-    "description": "Comprehensive performance monitoring system with real-time analytics dashboard and GPU-adaptive batch sizing for optimal throughput",
+    "release_name": "GPU Acceleration & Docker Parity",
+    "description": "GPU acceleration support for Docker with automatic detection and build optimization, plus UI completion bug fixes",
     "breaking_changes": [],
     "new_features": [
-        "Performance monitoring system tracking all critical operations (image, embedding, query)",
-        "Real-time performance dashboard in Maintenance page with GPU metrics",
-        "GPU memory monitoring with adaptive batch size optimization (4-128)",
-        "Automatic batch size tuning based on available GPU memory",
-        "Cache hit/miss analytics with time savings calculations",
-        "Performance metrics export to JSON for analysis"
+        "GPU-enabled Docker build with CUDA 12.1 support (Dockerfile.gpu)",
+        "Automatic GPU detection in run-cortex.bat - builds GPU or CPU image appropriately",
+        "CUDA-enabled PyTorch wheels for NVIDIA GPU acceleration (torch==2.3.1+cu121)",
+        "Comprehensive GPU setup documentation (GPU_SETUP.md)",
+        "Performance benchmarks: 3-5x speedup with GPU acceleration"
     ],
     "improvements": [
-        "Embedding batch sizes now adapt to GPU memory (24GB GPU: 128, 16GB: 64, 8GB: 32, CPU: 4)",
-        "Performance data collection with percentile statistics (P50, P95, P99)",
-        "Query cache now tracks hit/miss rates with detailed analytics",
-        "Image processing timing instrumentation for bottleneck identification",
-        "Ingestion finalization UI now properly transitions without persistent messages",
-        "GPU utilization monitoring for CUDA, MPS, and CPU devices"
+        "Docker build now automatically detects NVIDIA GPU via nvidia-smi",
+        "Builds Dockerfile.gpu for NVIDIA systems, standard Dockerfile for CPU-only",
+        "GPU setup guide includes Windows/Linux installation, verification, troubleshooting",
+        "Requirements-gpu.txt for CUDA dependencies separate from base requirements"
     ],
     "bug_fixes": [
-        "Fixed persistent 'Starting automatic finalization...' message after completion",
-        "Fixed finalization completion detection with CORTEX_STAGE::FINALIZE_DONE marker",
-        "Removed lingering UI messages that persisted across reruns"
+        "Fixed persistent 'Starting automatic finalization...' message in Knowledge Ingest",
+        "Added finalize_done_detected flag for proper completion state tracking",
+        "Removed lingering st.info() widgets that persisted across streamlit reruns",
+        "GPU now properly utilized in Docker containers (was CPU-only before)"
     ],
     "performance": [
-        "Adaptive batching: 10-30% throughput improvement on high-memory GPUs",
-        "Zero-overhead performance tracking (<1ms per operation)",
-        "Optimal batch sizes prevent OOM while maximizing GPU utilization",
-        "Real-time monitoring identifies performance bottlenecks"
+        "GPU acceleration in Docker: 3-5x faster embedding generation",
+        "Batch sizing up to 128 for high-memory GPUs (24GB+)",
+        "CUDA 12.1 compatibility with compute capability 6.0+ (Pascal+)",
+        "Automatic fallback to CPU-only build when no NVIDIA GPU detected"
     ]
 }
 

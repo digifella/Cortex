@@ -99,8 +99,8 @@ class DocumentAnonymizer:
         # Load spaCy for additional entity detection
         try:
             self.nlp = spacy.load("en_core_web_sm")
-        except:
-            logger.warning("spaCy model not available for anonymization")
+        except (OSError, ImportError) as e:
+            logger.warning(f"spaCy model not available for anonymization: {e}")
             self.nlp = None
     
     def extract_text_from_file(self, file_path: Path) -> str:

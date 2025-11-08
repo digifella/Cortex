@@ -135,7 +135,8 @@ class DocumentSummarizer:
             response.raise_for_status()
             models = response.json().get('models', [])
             return ", ".join([model['name'] for model in models])
-        except:
+        except Exception as e:
+            logger.debug(f"Failed to fetch Ollama model list: {e}")
             return "Unable to fetch model list"
     
     def _ensure_model_loaded(self):

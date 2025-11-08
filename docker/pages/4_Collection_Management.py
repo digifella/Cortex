@@ -1,5 +1,5 @@
 # ## File: pages/4_Collection_Management.py
-# Version: v4.9.0
+# Version: v4.10.1
 # Date: 2025-08-28
 # Purpose: A UI for managing Working Collections only.
 #          Knowledge base maintenance functions moved to Maintenance page (page 13).
@@ -442,7 +442,8 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
                         st.markdown(formatted_date)
                     else:
                         st.markdown('N/A')
-                except:
+                except (ValueError, AttributeError) as e:
+                    logger.debug(f"Error formatting date: {e}")
                     st.markdown('N/A')
                     
             with doc_col5:

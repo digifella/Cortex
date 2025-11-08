@@ -251,7 +251,8 @@ class DoclingDocumentReader:
         try:
             main_text = docling_data.get('main-text', [])
             return any(item.get('prov', [{}])[0].get('type') == 'table' for item in main_text)
-        except:
+        except (KeyError, IndexError, TypeError) as e:
+            logger.debug(f"Error checking for tables in document: {e}")
             return False
     
     def _contains_images(self, docling_data: dict) -> bool:
@@ -259,7 +260,8 @@ class DoclingDocumentReader:
         try:
             main_text = docling_data.get('main-text', [])
             return any(item.get('prov', [{}])[0].get('type') == 'figure' for item in main_text)
-        except:
+        except (KeyError, IndexError, TypeError) as e:
+            logger.debug(f"Error checking for images in document: {e}")
             return False
     
     def _get_page_count(self, docling_data: dict) -> int:
@@ -273,7 +275,8 @@ class DoclingDocumentReader:
                     if 'page' in prov:
                         pages.add(prov['page'])
             return len(pages)
-        except:
+        except (KeyError, TypeError) as e:
+            logger.debug(f"Error counting pages in document: {e}")
             return 0
     
     def _get_section_count(self, docling_data: dict) -> int:
@@ -286,7 +289,8 @@ class DoclingDocumentReader:
                 if text.startswith('#'):  # Markdown headers
                     sections += 1
             return sections
-        except:
+        except (KeyError, TypeError, AttributeError) as e:
+            logger.debug(f"Error counting sections in document: {e}")
             return 0
     
     def get_processing_stats(self) -> Dict[str, Any]:

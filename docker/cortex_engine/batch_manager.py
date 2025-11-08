@@ -7,6 +7,7 @@ Handles long-running ingestion processes with crash recovery
 import json
 import os
 import uuid
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -15,6 +16,17 @@ import logging
 from cortex_engine.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
+
+def _is_wsl_env() -> bool:
+    if os.name != "posix":
+        return False
+    if os.environ.get("WSL_DISTRO_NAME"):
+        return True
+    try:
+        with open("/proc/sys/kernel/osrelease") as release_file:
+            return "microsoft" in release_file.read().lower()
+    except OSError:
+        return False
 
 class BatchState:
     """Manages batch processing state with pause/resume capability"""
@@ -169,7 +181,31 @@ class BatchState:
     def clear_batch(self):
         """Clear batch state (when completed or cancelled)"""
         if self.state_file.exists():
-            self.state_file.unlink()
+            try:
+                self.state_file.unlink()
+            except PermissionError as e:
+                if _is_wsl_env() and str(self.state_file).startswith("/mnt/"):
+                    try:
+                        win_path = subprocess.run(
+                            ["wslpath", "-w", str(self.state_file)],
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                        ).stdout.strip()
+                        subprocess.run(
+                            [
+                                "powershell.exe",
+                                "-NoProfile",
+                                "-Command",
+                                f'Remove-Item -Path "{win_path}" -Force',
+                            ],
+                            check=True,
+                        )
+                    except Exception as fallback_error:
+                        logger.warning(f"Failed PowerShell cleanup for batch state: {fallback_error}")
+                        raise
+                else:
+                    raise
             logger.info("Batch state cleared")
     
     def load_state(self) -> Optional[Dict]:

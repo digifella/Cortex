@@ -442,7 +442,8 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
                         st.markdown(formatted_date)
                     else:
                         st.markdown('N/A')
-                except:
+                except (ValueError, AttributeError) as e:
+                    logger.debug(f"Error formatting date: {e}")
                     st.markdown('N/A')
                     
             with doc_col5:

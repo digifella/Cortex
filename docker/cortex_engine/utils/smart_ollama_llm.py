@@ -13,6 +13,19 @@ from .ollama_utils import check_ollama_service
 logger = get_logger(__name__)
 
 
+def _is_wsl() -> bool:
+    """Detect Windows Subsystem for Linux."""
+    try:
+        import platform, os
+        if os.environ.get("WSL_DISTRO_NAME"):
+            return True
+        release = platform.release().lower()
+        version = platform.version().lower()
+        return ("microsoft" in release) or ("microsoft" in version)
+    except Exception:
+        return False
+
+
 def create_smart_ollama_llm(model: str = "mistral:latest", request_timeout: float = 120.0):
     """
     Create an Ollama LLM instance that works in both Docker and non-Docker environments.
@@ -35,37 +48,43 @@ def create_smart_ollama_llm(model: str = "mistral:latest", request_timeout: floa
         logger.error(f"Ollama service not available: {error_msg}")
         return None
     
-    # First, try the original LlamaIndex Ollama (works in most cases)
-    try:
-        from llama_index.llms.ollama import Ollama
-        
-        logger.info(f"Attempting to create original LlamaIndex Ollama for model: {model}")
-        llm = Ollama(model=model, request_timeout=request_timeout)
-        
-        # Test it with a simple completion
-        test_response = llm.complete("Hello")
-        if test_response and test_response.text:
-            logger.info("✅ Original LlamaIndex Ollama working correctly")
-            return llm
-            
-    except Exception as e:
-        logger.warning(f"Original LlamaIndex Ollama failed: {e}")
+    # Choose order based on environment: prefer Modern wrapper on WSL for stability
+    prefer_modern_first = _is_wsl()
+
+    def _try_original():
+        try:
+            from llama_index.llms.ollama import Ollama
+            logger.info(f"Attempting original LlamaIndex Ollama for model: {model}")
+            llm = Ollama(model=model, request_timeout=request_timeout)
+            test_response = llm.complete("Hello")
+            if test_response and getattr(test_response, 'text', None):
+                logger.info("✅ Original LlamaIndex Ollama working correctly")
+                return llm
+        except Exception as e:
+            logger.warning(f"Original LlamaIndex Ollama failed: {e}")
+        return None
+
+    def _try_modern():
+        try:
+            from .modern_ollama_llm import create_modern_ollama_llm
+            logger.info(f"Using ModernOllama wrapper for model: {model}")
+            llm = create_modern_ollama_llm(model=model, request_timeout=request_timeout)
+            test_response = llm.complete("Hello")
+            if test_response and getattr(test_response, 'text', None):
+                logger.info("✅ ModernOllama wrapper working correctly")
+                return llm
+        except Exception as e:
+            logger.error(f"ModernOllama wrapper failed: {e}")
+        return None
+
+    llm = None
+    if prefer_modern_first:
+        llm = _try_modern() or _try_original()
+    else:
+        llm = _try_original() or _try_modern()
     
-    # Fallback to ModernOllama wrapper (for environments with API compatibility issues)
-    try:
-        from .modern_ollama_llm import create_modern_ollama_llm
-        
-        logger.info(f"Falling back to ModernOllama wrapper for model: {model}")
-        llm = create_modern_ollama_llm(model=model, request_timeout=request_timeout)
-        
-        # Test it with a simple completion
-        test_response = llm.complete("Hello")
-        if test_response and test_response.text:
-            logger.info("✅ ModernOllama wrapper working correctly")
-            return llm
-            
-    except Exception as e:
-        logger.error(f"ModernOllama wrapper also failed: {e}")
+    if llm:
+        return llm
     
     # Both approaches failed
     logger.error("❌ Failed to create working Ollama LLM with both original and modern approaches")

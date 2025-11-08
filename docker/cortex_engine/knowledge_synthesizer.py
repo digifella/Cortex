@@ -1,14 +1,19 @@
-from .collection_manager import WorkingCollectionManager
+"""
+This module contains the core logic for the Knowledge Synthesizer feature.
+"""
 
+def run_synthesis(collection_name: str, seed_ideas: str, llm_provider: str) -> str:
+    """
+    Placeholder for the main synthesis logic.
 
-def run_synthesis(collection_name: str, seed_ideas: str, llm_provider: str = "ollama") -> str:
-    mgr = WorkingCollectionManager()
-    doc_ids = mgr.get_doc_ids_by_name(collection_name)
-    return (
-        f"# Synthesis for '{collection_name}'\n\n"
-        f"Provider: {llm_provider}\n\n"
-        f"Seed ideas:\n{seed_ideas}\n\n"
-        f"Documents in collection: {len(doc_ids)}\n\n"
-        "Draft synthesis content..."
-    )
+    Args:
+        collection_name: The name of the collection to synthesize from.
+        seed_ideas: The user-provided seed ideas.
+        llm_provider: The selected LLM provider ('gemini' or 'ollama').
 
+    Returns:
+        A string containing the synthesis results.
+    """
+    # This is a placeholder for Sprint 1.
+    # In future sprints, this will be replaced with the actual synthesis logic.
+    return f"**Synthesis Complete!**\n\n*   **Collection:** {collection_name}\n*   **LLM Provider:** {llm_provider}\n*   **Seed Ideas:** {seed_ideas}\n\nThis is a placeholder response. The real synthesis engine is coming in the next sprint!"
