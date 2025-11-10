@@ -375,8 +375,10 @@ def initialize_state(force_reset: bool = False):
     for key, val in defaults.items():
         if key not in st.session_state: st.session_state[key] = val
 
+    # Initialize directory_scan_path to match knowledge_source_path (don't use stale values)
+    # Always sync with current knowledge_source_path to prevent showing non-existent directories
     if "directory_scan_path" not in st.session_state or not st.session_state.directory_scan_path:
-        st.session_state.directory_scan_path = config.get("knowledge_source_path", "")
+        st.session_state.directory_scan_path = st.session_state.get("knowledge_source_path", "")
 
 # Path handling now handled by centralized utilities
 
@@ -1310,6 +1312,9 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                         if result.returncode == 0:
                             st.success("✅ Documents successfully added to knowledge base!")
                             batch_manager.clear_batch()
+                            # Set flag to indicate finalization completed successfully
+                            st.session_state.manual_finalize_success = True
+                            st.session_state.ingestion_stage = "config_done"
                             time.sleep(1)
                             st.rerun()
                         else:
@@ -1941,7 +1946,33 @@ def render_config_and_scan_ui():
 
             # After scanning, determine next stage based on batch mode
             if st.session_state.get("batch_ingest_mode", False):
-                st.session_state.ingestion_stage = "batch_processing"
+                # In batch mode, skip the batch management screen and start processing immediately
+                files_to_process = st.session_state.get("files_to_review", [])
+                if files_to_process:
+                    # Initialize batch state
+                    container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                    batch_manager = BatchState(container_db_path)
+                    batch_manager.create_batch(files_to_process, scan_config)
+
+                    # Start processing immediately - go directly to analysis_running
+                    st.session_state.log_messages = []
+                    st.session_state.ingestion_stage = "analysis_running"
+                    st.session_state.batch_mode_active = True
+
+                    # Build and start ingestion command
+                    target_collection = st.session_state.get('target_collection_name', '')
+                    command = build_ingestion_command(container_db_path, files_to_process, target_collection)
+
+                    try:
+                        st.session_state.ingestion_process = spawn_ingest(command)
+                        start_ingest_reader(st.session_state.ingestion_process)
+                        logger.info(f"Batch mode: Auto-started processing {len(files_to_process)} files")
+                    except Exception as e:
+                        st.error(f"❌ Failed to start processing: {e}")
+                        logger.error(f"Auto-start failed: {e}")
+                        st.session_state.ingestion_stage = "batch_processing"  # Fallback to manual start
+                else:
+                    st.session_state.ingestion_stage = "batch_processing"  # No files, show batch screen
             else:
                 st.session_state.ingestion_stage = "pre_analysis"
 
