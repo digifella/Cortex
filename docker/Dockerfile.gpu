@@ -44,13 +44,13 @@ COPY --chown=cortex:cortex requirements.txt ./requirements.txt
 
 # Install base requirements WITHOUT torch, spacy model, and torch-dependent packages (installed separately)
 # Increased timeout to 300 seconds for slow/unstable network connections
-# Exclude torch, outlines (depends on torch), and en-core-web-sm (downloaded separately)
+# Exclude torch, sentence-transformers, outlines (all depend on torch), and en-core-web-sm (downloaded separately)
 # Extract package names and versions only (no URLs, no hashes) for cross-platform compatibility
-RUN --mount=type=cache,target=/home/cortex/.cache/pip \
-    grep -v "^torch" requirements.txt | grep -v "^en-core-web-sm" | grep -v "^outlines" | \
+# Use --no-cache-dir to avoid hash mismatch errors from corrupted cache
+RUN grep -v "^torch" requirements.txt | grep -v "^en-core-web-sm" | grep -v "^outlines" | grep -v "^sentence-transformers" | \
     grep -v "^#" | grep -v "^$" | \
     sed 's/ @.*//' | sed 's/#.*//' > requirements-base.txt && \
-    pip install --retries 5 --timeout 300 -r requirements-base.txt
+    pip install --no-cache-dir --retries 5 --timeout 300 -r requirements-base.txt
 
 # Install CUDA-enabled PyTorch
 # PyTorch CUDA wheels are VERY large (torch ~780MB, total ~2GB)
@@ -64,10 +64,9 @@ RUN pip install --no-cache-dir --retries 10 --timeout 600 \
 RUN python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda if torch.cuda.is_available() else \"N/A\"}')"
 
 # Install torch-dependent packages AFTER PyTorch is installed
-# This includes outlines and outlines_core which require torch
-RUN --mount=type=cache,target=/home/cortex/.cache/pip \
-    grep "^outlines" requirements.txt > requirements-torch-deps.txt && \
-    pip install --retries 5 --timeout 300 -r requirements-torch-deps.txt
+# This includes outlines, outlines_core, and sentence-transformers which all require torch
+RUN grep -E "^(outlines|sentence-transformers)" requirements.txt > requirements-torch-deps.txt && \
+    pip install --no-cache-dir --retries 5 --timeout 300 -r requirements-torch-deps.txt
 
 # Add user's local bin to PATH
 ENV PATH="/home/cortex/.local/bin:$PATH"
@@ -116,7 +115,7 @@ echo ""\n\
 \n\
 # Verify GPU access\n\
 echo "🔍 Checking GPU availability..."\n\
-python -c "import torch; print(f\\\"CUDA available: {torch.cuda.is_available()}\\\"); print(f\\\"GPU count: {torch.cuda.device_count() if torch.cuda.is_available() else 0}\\\")"\n\
+python -c "import torch; avail=torch.cuda.is_available(); print(\\\"CUDA available:\\\",avail); count=torch.cuda.device_count() if avail else 0; print(\\\"GPU count:\\\",count)"\n\
 echo ""\n\
 \n\
 # Start Ollama service in background\n\
