@@ -1733,6 +1733,9 @@ def render_config_and_scan_ui():
     is_knowledge_path_valid = validate_path_exists(root_display_path, must_be_dir=True)
 
     if is_knowledge_path_valid:
+        # Initialize directory_scan_path if not set or if it's from a different root
+        if 'directory_scan_path' not in st.session_state or not st.session_state.directory_scan_path:
+            st.session_state.directory_scan_path = root_display_path
         current_display_path = st.session_state.directory_scan_path
         st.text_input("Current Directory:", current_display_path, disabled=True)
         # Use the appropriate path converter that handles Docker/WSL environments
