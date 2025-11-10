@@ -229,28 +229,37 @@ def should_auto_finalize():
         from cortex_engine.utils import convert_windows_to_wsl_path
         import os
         import json
-        
+
         # Check if we have a database path
         if not st.session_state.get('db_path'):
+            logger.debug("Auto-finalize check: No db_path in session state")
             return False
-            
+
         container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
         staging_file = get_staging_file_path(container_db_path)
-        
+
+        logger.debug(f"Auto-finalize check: staging_file={staging_file}")
+
         # Check if staging file exists and has documents
         if os.path.exists(staging_file):
             with open(staging_file, 'r') as f:
                 staging_data = json.load(f)
-            
+
             # Handle both old and new staging formats
             if isinstance(staging_data, list):
-                return len(staging_data) > 0
+                doc_count = len(staging_data)
+                logger.debug(f"Auto-finalize check: Found {doc_count} documents in staging (list format)")
+                return doc_count > 0
             else:
-                return len(staging_data.get('documents', [])) > 0
-        
+                doc_count = len(staging_data.get('documents', []))
+                logger.debug(f"Auto-finalize check: Found {doc_count} documents in staging (dict format)")
+                return doc_count > 0
+        else:
+            logger.debug(f"Auto-finalize check: Staging file does not exist: {staging_file}")
+
         return False
     except Exception as e:
-        logger.error(f"Error checking auto-finalization: {e}")
+        logger.error(f"Error checking auto-finalization: {e}", exc_info=True)
         return False
 
 def start_automatic_finalization():
@@ -595,13 +604,26 @@ def scan_for_files(selected_dirs: List[str]):
         st.session_state.resume_mode_enabled = False
     
     # Check if batch ingest mode is enabled
-    if st.session_state.get("batch_ingest_mode", False) or st.session_state.get("force_batch_mode", False):
-        st.session_state.ingestion_stage = "batch_processing"
-        # Clear the force flag after using it
-        if "force_batch_mode" in st.session_state:
-            del st.session_state.force_batch_mode
+    # BUT: Don't override the stage if processing is already running or in any active processing stage
+    current_stage = st.session_state.get("ingestion_stage", "config")
+    batch_mode = st.session_state.get("batch_ingest_mode", False)
+    force_mode = st.session_state.get("force_batch_mode", False)
+
+    logger.debug(f"Stage transition check: current_stage={current_stage}, batch_ingest_mode={batch_mode}, force_batch_mode={force_mode}")
+
+    # Don't reset stage if we're already in batch processing or any later stage
+    if current_stage not in ["batch_processing", "analysis_running", "finalizing", "metadata_review"]:
+        if batch_mode or force_mode:
+            logger.info(f"Setting stage to batch_processing (from {current_stage})")
+            st.session_state.ingestion_stage = "batch_processing"
+            # Clear the force flag after using it
+            if "force_batch_mode" in st.session_state:
+                del st.session_state.force_batch_mode
+        else:
+            logger.debug(f"Setting stage to pre_analysis (from {current_stage})")
+            st.session_state.ingestion_stage = "pre_analysis"
     else:
-        st.session_state.ingestion_stage = "pre_analysis"
+        logger.debug(f"Stage {current_stage} is in protected stages - NOT overriding")
 
 def log_failed_documents(failed_docs, db_path):
     """Log documents that failed during batch processing to a separate failure log."""
@@ -930,7 +952,9 @@ def render_batch_processing_ui():
                         st.session_state.log_messages = []
                         st.session_state.ingestion_stage = "analysis_running"
                         st.session_state.batch_mode_active = True
-                        
+                        # Clear batch_ingest_mode to allow transition to analysis_running stage
+                        st.session_state.batch_ingest_mode = False
+
                         # Build command with resume flag and collection assignment
                         target_collection = st.session_state.get('target_collection_name', '')
                         command = build_ingestion_command(container_db_path, files_to_process, target_collection, resume=True)
@@ -957,7 +981,9 @@ def render_batch_processing_ui():
                     st.session_state.log_messages = []
                     st.session_state.ingestion_stage = "analysis_running"
                     st.session_state.batch_mode_active = True
-                    
+                    # Clear batch_ingest_mode to allow transition to analysis_running stage
+                    st.session_state.batch_ingest_mode = False
+
                     # Build command with collection assignment
                     target_collection = st.session_state.get('target_collection_name', '')
                     command = build_ingestion_command(container_db_path, files_to_process, target_collection)
@@ -1284,6 +1310,39 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                             batch_manager.clear_batch()
                             st.success("Batch cleared.")
                             st.rerun()
+
+    # Check if there are staged documents ready for finalization
+    if should_auto_finalize() and batch_status.get('completed', 0) > 0 and batch_status.get('remaining', 0) == 0:
+        st.markdown("---")
+        st.info("📦 **Analysis Complete!** Your documents are ready to be added to the knowledge base.")
+
+        finalize_col1, finalize_col2 = st.columns([3, 1])
+        with finalize_col1:
+            if st.button("✅ Complete Ingestion (Finalize to Database)", type="primary", use_container_width=True, key="manual_finalize_batch"):
+                with st.spinner("Finalizing documents to database..."):
+                    try:
+                        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                        command = [
+                            sys.executable, "-m", "cortex_engine.ingest_cortex",
+                            "--finalize-from-staging", "--db-path", container_db_path
+                        ]
+
+                        result = subprocess.run(command, capture_output=True, text=True, timeout=300)
+
+                        if result.returncode == 0:
+                            st.success("✅ Documents successfully added to knowledge base!")
+                            batch_manager.clear_batch()
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Finalization failed: {result.stderr}")
+                            logger.error(f"Finalization error: {result.stderr}")
+                    except Exception as e:
+                        st.error(f"❌ Failed to finalize: {e}")
+                        logger.error(f"Manual finalization error: {e}", exc_info=True)
+
+        with finalize_col2:
+            st.caption("This will add your analyzed documents to the searchable database.")
 
     # Consolidated action buttons
     col1, col2, col3, col4 = st.columns(4)
@@ -2218,13 +2277,27 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
 
         # Check if we should automatically proceed to finalization
         # But only if analysis just completed (not if finalization already happened)
-        if should_auto_finalize() and not st.session_state.get('finalize_done_detected', False):
-            # Don't show info message - it persists after rerun
-            # Just silently transition to finalization
+        should_finalize = should_auto_finalize()
+        finalize_done = st.session_state.get('finalize_done_detected', False)
+
+        logger.info(f"Auto-finalize check: should_finalize={should_finalize}, finalize_done={finalize_done}")
+        # TEMP DEBUG: Show visible message
+        st.info(f"🔍 DEBUG: Auto-finalize check - should_finalize={should_finalize}, finalize_done={finalize_done}")
+
+        if should_finalize and not finalize_done:
+            # Show info message to confirm auto-finalize is triggering
+            st.success("✅ Analysis complete! Starting automatic finalization...")
             logger.info("Analysis completed successfully - starting automatic finalization")
             start_automatic_finalization()
             st.rerun()  # Immediate rerun to show finalization stage
             return  # Exit early to avoid setting stage to metadata_review
+        else:
+            if not should_finalize:
+                logger.warning("Auto-finalize skipped: staging file empty or missing")
+                st.warning("⚠️ Auto-finalize skipped: No staged documents found")
+            if finalize_done:
+                logger.info("Auto-finalize skipped: finalization already completed")
+                st.info("ℹ️ Finalization already completed")
 
         st.session_state.ingestion_stage = on_complete_stage
         st.rerun()
@@ -3241,6 +3314,12 @@ else:
         # Health check: prompt to migrate collections if needed
         show_collection_migration_healthcheck()
         stage = st.session_state.get("ingestion_stage", "config")
+
+        # DEBUG: Show stage transition info (temporary for troubleshooting)
+        if stage in ["batch_processing", "analysis_running"]:
+            batch_mode = st.session_state.get("batch_ingest_mode", False)
+            st.info(f"🔍 **DEBUG:** Current stage: `{stage}` | Batch mode checkbox: `{batch_mode}`")
+
         if stage == "config": render_config_and_scan_ui()
         elif stage == "pre_analysis": render_pre_analysis_ui()
         elif stage == "batch_processing": render_batch_processing_ui()
