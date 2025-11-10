@@ -2236,6 +2236,10 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
         # Clean up if process finished
         if not process_still_running:
             st.session_state.ingestion_process = None
+            # Clear GPU/CPU metrics so they don't show stale values
+            st.session_state.current_gpu_util = None
+            st.session_state.current_cpu_util = None
+            st.session_state.throttle_active = False
             # Signal reader thread to stop
             stop_ev = st.session_state.get("ingestion_reader_stop")
             if stop_ev:
@@ -2273,6 +2277,10 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
 
     # Handle metadata review after process completes (only if not doing auto-finalize)
     if on_complete_stage == "metadata_review" and not process_still_running:
+        # CRITICAL: This section handles auto-finalization after analysis completes
+        st.markdown("---")
+        st.markdown("### 📊 Analysis Complete")
+
         load_staged_files()
 
         # Check if we should automatically proceed to finalization
@@ -2280,26 +2288,35 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
         should_finalize = should_auto_finalize()
         finalize_done = st.session_state.get('finalize_done_detected', False)
 
-        logger.info(f"Auto-finalize check: should_finalize={should_finalize}, finalize_done={finalize_done}")
-        # TEMP DEBUG: Show visible message
-        st.info(f"🔍 DEBUG: Auto-finalize check - should_finalize={should_finalize}, finalize_done={finalize_done}")
+        logger.info(f"🔍 Auto-finalize check: on_complete_stage={on_complete_stage}, process_still_running={process_still_running}, should_finalize={should_finalize}, finalize_done={finalize_done}")
+
+        # PROMINENT DEBUG: Show visible status at the top
+        debug_col1, debug_col2, debug_col3 = st.columns(3)
+        with debug_col1:
+            st.metric("Should Finalize", "✅ Yes" if should_finalize else "❌ No")
+        with debug_col2:
+            st.metric("Already Done", "✅ Yes" if finalize_done else "❌ No")
+        with debug_col3:
+            st.metric("Stage", on_complete_stage)
 
         if should_finalize and not finalize_done:
             # Show info message to confirm auto-finalize is triggering
-            st.success("✅ Analysis complete! Starting automatic finalization...")
+            st.success("✅ Analysis complete! Starting automatic finalization in 2 seconds...")
             logger.info("Analysis completed successfully - starting automatic finalization")
+            time.sleep(2)  # Brief delay so user sees the message
             start_automatic_finalization()
             st.rerun()  # Immediate rerun to show finalization stage
             return  # Exit early to avoid setting stage to metadata_review
         else:
             if not should_finalize:
                 logger.warning("Auto-finalize skipped: staging file empty or missing")
-                st.warning("⚠️ Auto-finalize skipped: No staged documents found")
+                st.warning("⚠️ **Auto-finalize skipped:** No staged documents found. Check logs for details.")
             if finalize_done:
                 logger.info("Auto-finalize skipped: finalization already completed")
                 st.info("ℹ️ Finalization already completed")
 
         st.session_state.ingestion_stage = on_complete_stage
+        time.sleep(1)
         st.rerun()
 
 def render_completion_screen():
