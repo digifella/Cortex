@@ -602,28 +602,6 @@ def scan_for_files(selected_dirs: List[str]):
         
         # Clear resume mode flag
         st.session_state.resume_mode_enabled = False
-    
-    # Check if batch ingest mode is enabled
-    # BUT: Don't override the stage if processing is already running or in any active processing stage
-    current_stage = st.session_state.get("ingestion_stage", "config")
-    batch_mode = st.session_state.get("batch_ingest_mode", False)
-    force_mode = st.session_state.get("force_batch_mode", False)
-
-    logger.debug(f"Stage transition check: current_stage={current_stage}, batch_ingest_mode={batch_mode}, force_batch_mode={force_mode}")
-
-    # Don't reset stage if we're already in batch processing or any later stage
-    if current_stage not in ["batch_processing", "analysis_running", "finalizing", "metadata_review"]:
-        if batch_mode or force_mode:
-            logger.info(f"Setting stage to batch_processing (from {current_stage})")
-            st.session_state.ingestion_stage = "batch_processing"
-            # Clear the force flag after using it
-            if "force_batch_mode" in st.session_state:
-                del st.session_state.force_batch_mode
-        else:
-            logger.debug(f"Setting stage to pre_analysis (from {current_stage})")
-            st.session_state.ingestion_stage = "pre_analysis"
-    else:
-        logger.debug(f"Stage {current_stage} is in protected stages - NOT overriding")
 
 def log_failed_documents(failed_docs, db_path):
     """Log documents that failed during batch processing to a separate failure log."""
@@ -1960,6 +1938,13 @@ def render_config_and_scan_ui():
             
             # Start file scanning with enhanced progress monitoring (no spinner to allow progress updates to show)
             scan_for_files(selected_to_scan)
+
+            # After scanning, determine next stage based on batch mode
+            if st.session_state.get("batch_ingest_mode", False):
+                st.session_state.ingestion_stage = "batch_processing"
+            else:
+                st.session_state.ingestion_stage = "pre_analysis"
+
             st.rerun()
         else:
             if not is_knowledge_path_valid: st.error(f"Root Source Path is not valid.")
