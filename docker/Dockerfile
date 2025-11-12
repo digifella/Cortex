@@ -94,6 +94,25 @@ echo "🔧 Multi-Platform Support: Intel x86_64, Apple Silicon M-series, ARM64 P
 echo ""
 
 echo "🔧 Ensuring correct data permissions..."
+# Prefer host-mounted volumes when present
+PREFERRED_AI_DB="/data/ai_databases"
+if [ -d "$PREFERRED_AI_DB" ]; then
+    echo "📂 Detected external AI database mount at $PREFERRED_AI_DB"
+    export AI_DATABASE_PATH="$PREFERRED_AI_DB"
+else
+    echo "📂 Using internal AI database path at $AI_DATABASE_PATH"
+    mkdir -p "$AI_DATABASE_PATH"
+fi
+
+PREFERRED_SOURCE="/data/knowledge_base"
+if [ -d "$PREFERRED_SOURCE" ]; then
+    echo "📂 Detected external knowledge source mount at $PREFERRED_SOURCE"
+    export KNOWLEDGE_SOURCE_PATH="$PREFERRED_SOURCE"
+else
+    echo "📂 Using internal knowledge source path at $KNOWLEDGE_SOURCE_PATH"
+    mkdir -p "$KNOWLEDGE_SOURCE_PATH"
+fi
+
 if [ -w /data ]; then
     echo "Data directory writable, skipping permission fix"
 else

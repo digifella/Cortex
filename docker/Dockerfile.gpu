@@ -114,6 +114,25 @@ echo "🐳 Docker Environment: $([ -f /.dockerenv ] && echo 'Yes' || echo 'No')"
 echo "🎮 GPU Support: CUDA-Enabled"
 echo ""
 
+# Prefer host-mounted volumes when present
+PREFERRED_AI_DB="/data/ai_databases"
+if [ -d "$PREFERRED_AI_DB" ]; then
+    echo "📂 Detected external AI database mount at $PREFERRED_AI_DB"
+    export AI_DATABASE_PATH="$PREFERRED_AI_DB"
+else
+    echo "📂 Using internal AI database path at $AI_DATABASE_PATH"
+    mkdir -p "$AI_DATABASE_PATH"
+fi
+
+PREFERRED_SOURCE="/data/knowledge_base"
+if [ -d "$PREFERRED_SOURCE" ]; then
+    echo "📂 Detected external knowledge source mount at $PREFERRED_SOURCE"
+    export KNOWLEDGE_SOURCE_PATH="$PREFERRED_SOURCE"
+else
+    echo "📂 Using internal knowledge source path at $KNOWLEDGE_SOURCE_PATH"
+    mkdir -p "$KNOWLEDGE_SOURCE_PATH"
+fi
+
 # Verify GPU access
 echo "🔍 Checking GPU availability..."
 python -c "import torch; avail=torch.cuda.is_available(); print('CUDA available:', avail); count=torch.cuda.device_count() if avail else 0; print('GPU count:', count)"
