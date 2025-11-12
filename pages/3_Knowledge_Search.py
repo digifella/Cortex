@@ -1,5 +1,5 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v4.10.1
+# Version: v4.10.2
 # Date: 2025-08-30
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
 #          - GRAPHRAG INTEGRATION (v4.2.1): Re-enabled GraphRAG search modes with radio button
@@ -48,14 +48,59 @@ from cortex_engine.config import EMBED_MODEL, COLLECTION_NAME, KB_LLM_MODEL
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.utils import get_logger, convert_to_docker_mount_path, convert_windows_to_wsl_path
 from cortex_engine.embedding_service import embed_query
+from cortex_engine.version_config import VERSION_STRING
 
 # Set up logging
 logger = get_logger(__name__)
 
 # Page configuration
-PAGE_VERSION = "v4.10.1"
+PAGE_VERSION = VERSION_STRING
 
 st.set_page_config(page_title="Knowledge Search", layout="wide")
+
+
+def get_candidate_db_paths(db_path: str):
+    """Build ordered list of possible knowledge base locations."""
+    candidates = []
+    seen = set()
+
+    def _add(label: str, path_value: str):
+        if not path_value:
+            return
+        normalized = path_value.rstrip('/')
+        if not normalized:
+            normalized = '/'
+        if normalized not in seen:
+            candidates.append((label, normalized))
+            seen.add(normalized)
+
+    raw_value = db_path or ""
+    # Always try the configured/container-normalized path first
+    _add("configured", convert_to_docker_mount_path(raw_value))
+
+    in_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_ENV') == 'true'
+    if in_docker:
+        # Allow direct Windows/WSL mount access when bind mount is missing
+        _add("windows_mount", convert_windows_to_wsl_path(raw_value))
+
+        # Environment-provided Docker path
+        ai_env = os.environ.get('AI_DATABASE_PATH')
+        if ai_env:
+            _add("docker_env", ai_env.strip())
+
+        # Fall back to standard Docker locations if provided path is empty/missing
+        for fallback in filter(None, [
+            os.environ.get('WINDOWS_AI_DATABASE_PATH'),
+            "/data/ai_databases",
+            "/app/data/ai_databases",
+            "/home/cortex/data/ai_databases"
+        ]):
+            _add("fallback", fallback)
+    else:
+        # Native/WSL environment just needs normalization
+        _add("normalized", convert_windows_to_wsl_path(raw_value))
+
+    return candidates
 
 
 def get_document_type_options():
@@ -92,13 +137,40 @@ def validate_database(db_path, silent=False):
             st.warning("Database path is not configured.")
         return None
         
-    safe_db_path = convert_to_docker_mount_path(db_path)
-    chroma_db_path = os.path.join(safe_db_path, "knowledge_hub_db")
+    path_candidates = get_candidate_db_paths(db_path)
+    selected_label = None
+    selected_base_path = None
+    chroma_db_path = None
+    attempted = []
+
+    for label, base_path in path_candidates:
+        candidate = os.path.join(base_path, "knowledge_hub_db")
+        if os.path.isdir(candidate):
+            selected_label = label
+            selected_base_path = base_path
+            chroma_db_path = candidate
+            break
+        attempted.append((label, candidate))
     
-    if not os.path.isdir(chroma_db_path):
+    if not chroma_db_path:
         if not silent:
-            st.warning(f"🧠 Knowledge base directory not found at '{chroma_db_path}'.")
+            attempt_lines = "\n".join(f"- {lbl}: {path}" for lbl, path in attempted if path)
+            if attempt_lines:
+                st.warning(
+                    "🧠 Knowledge base directory not found in any configured location.\n"
+                    f"Tried:\n{attempt_lines}"
+                )
+            else:
+                st.warning("🧠 Knowledge base directory not found. Please verify your database path.")
         return None
+    
+    logger.debug(f"Knowledge base resolved to {chroma_db_path} via {selected_label or 'configured'} lookup")
+    
+    if not silent and selected_label and selected_label != "configured":
+        st.info(
+            f"Detected knowledge base at `{selected_base_path}` via `{selected_label}` fallback. "
+            "Update the sidebar path to this location for full Docker compatibility."
+        )
         
     try:
         # Clear any cached ChromaDB connections

@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v4.10.1
+# Version: v4.10.2
 # Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page

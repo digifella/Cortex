@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.10.1"
+CORTEX_VERSION = "4.10.2"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
     "minor": 10,
-    "patch": 1,
+    "patch": 2,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,34 +24,29 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-10-09",
-    "release_name": "GPU Acceleration & Docker Parity",
-    "description": "GPU acceleration support for Docker with automatic detection and build optimization, plus UI completion bug fixes",
+    "release_date": "2025-11-12",
+    "release_name": "Docker Path Auto-Detection Hotfix",
+    "description": "Improves Docker path detection for Knowledge Search and batch ingestion, eliminating false setup errors and aligning UI headers with the global version.",
     "breaking_changes": [],
     "new_features": [
-        "GPU-enabled Docker build with CUDA 12.1 support (Dockerfile.gpu)",
-        "Automatic GPU detection in run-cortex.bat - builds GPU or CPU image appropriately",
-        "CUDA-enabled PyTorch wheels for NVIDIA GPU acceleration (torch==2.3.1+cu121)",
-        "Comprehensive GPU setup documentation (GPU_SETUP.md)",
-        "Performance benchmarks: 3-5x speedup with GPU acceleration"
+        "Knowledge Search now auto-detects knowledge_hub_db across configured paths, Windows mounts, and container defaults.",
+        "WorkingCollectionManager and sidebar path tooling surface actionable guidance when a fallback mount is used.",
+        "Documentation updated with Docker-specific troubleshooting for bind-mount verification."
     ],
     "improvements": [
-        "Docker build now automatically detects NVIDIA GPU via nvidia-smi",
-        "Builds Dockerfile.gpu for NVIDIA systems, standard Dockerfile for CPU-only",
-        "GPU setup guide includes Windows/Linux installation, verification, troubleshooting",
-        "Requirements-gpu.txt for CUDA dependencies separate from base requirements"
+        "Batch ingestion UI now sources its version header directly from the central version configuration.",
+        "App headers and Docker launch scripts display the same semantic version as the engine.",
+        "Clearer user messaging when the configured database path is missing but a fallback path succeeds."
     ],
     "bug_fixes": [
-        "Fixed persistent 'Starting automatic finalization...' message in Knowledge Ingest",
-        "Added finalize_done_detected flag for proper completion state tracking",
-        "Removed lingering st.info() widgets that persisted across streamlit reruns",
-        "GPU now properly utilized in Docker containers (was CPU-only before)"
+        "Resolved false 'Docker Setup Required' warnings when the knowledge base is available via /mnt/<drive> mounts.",
+        "Prevented Knowledge Search from hard-failing when the configured path is unavailable but a mounted fallback exists.",
+        "Ensured documentation and runtime messaging consistently reference the updated Docker path guidance."
     ],
     "performance": [
-        "GPU acceleration in Docker: 3-5x faster embedding generation",
-        "Batch sizing up to 128 for high-memory GPUs (24GB+)",
-        "CUDA 12.1 compatibility with compute capability 6.0+ (Pascal+)",
-        "Automatic fallback to CPU-only build when no NVIDIA GPU detected"
+        "Reduced redundant ChromaDB initialization attempts by caching the successful path selection within a validation cycle.",
+        "Faster troubleshooting thanks to explicit path audit logs in the Knowledge Search UI.",
+        "Improved ingestion status accuracy by aligning version headers across interfaces."
     ]
 }
 
