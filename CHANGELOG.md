@@ -17,6 +17,8 @@ Improved document ingestion with Docling, robust database cleanup, and safer WSL
 - Added a Clean Start flow in Maintenance with detailed debug output and step-by-step verification of what is deleted.
 - Detects orphaned ingestion artifacts (staging, batch_state, progress) during Knowledge Search validation and guides users to Clean Start.
 - Introduced shared path utilities to resolve user-provided database roots consistently across Windows, WSL, and Docker.
+- New **Metadata & Tag Management** page to browse, filter, and bulk-edit document metadata (including thematic_tags).
+- Knowledge Search supports filtering by thematic tags alongside document type and proposal outcome.
 
 ### 🚀 Improvements
 - Knowledge Ingest now centralizes database path resolution via runtime-safe helpers instead of relying on hardcoded defaults.

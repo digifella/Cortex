@@ -89,6 +89,42 @@ def get_document_type_options():
                 "Meeting Minutes", "Financial Report", "Research Paper", "Email Correspondence", "Other"]
 
 
+
+
+def get_available_thematic_tags(db_path: str) -> list:
+    """Collect unique thematic tags from the ChromaDB collection (best-effort, paged)."""
+    try:
+        resolved_root = resolve_db_root_path(db_path) if not os.path.exists('/.dockerenv') else Path(db_path)
+        if not resolved_root:
+            return []
+        chroma_db_path = os.path.join(str(resolved_root), "knowledge_hub_db")
+        if not os.path.isdir(chroma_db_path):
+            return []
+        settings = ChromaSettings(anonymized_telemetry=False)
+        client = chromadb.PersistentClient(path=chroma_db_path, settings=settings)
+        collection = client.get_collection(COLLECTION_NAME)
+        sample = collection.get(include=["metadatas"], limit=2000)
+        metadatas = sample.get("metadatas", [])
+        if metadatas and isinstance(metadatas[0], list):
+            metadatas = metadatas[0]
+        tags = set()
+        for meta in metadatas:
+            raw = meta.get("thematic_tags")
+            if not raw:
+                continue
+            if isinstance(raw, str):
+                parts = [p.strip() for p in raw.split(",") if p.strip()]
+            elif isinstance(raw, list):
+                parts = [str(p).strip() for p in raw if str(p).strip()]
+            else:
+                parts = []
+            for t in parts:
+                tags.add(t)
+        return sorted(tags)
+    except Exception as e:
+        logger.warning(f"Could not gather thematic tags: {e}")
+        return []
+
 def validate_database(db_path, silent=False):
     """Validate database exists and return ChromaDB collection info"""
     import os
@@ -219,6 +255,8 @@ def initialize_search_state():
         st.session_state.doc_type_filter = "Any"
     if 'outcome_filter' not in st.session_state:
         st.session_state.outcome_filter = "Any"
+    if 'thematic_tag_filter' not in st.session_state:
+        st.session_state.thematic_tag_filter = []
     if 'filter_operator' not in st.session_state:
         st.session_state.filter_operator = "AND"
     if 'search_scope' not in st.session_state:
@@ -373,11 +411,25 @@ def render_sidebar():
         key="outcome_filter",
         help="Filter by proposal result. Useful for finding successful patterns or analyzing losses."
     )
+
+    # Thematic tags filter
+    try:
+        tag_options = get_available_thematic_tags(current_path)
+    except Exception:
+        tag_options = []
+    st.sidebar.multiselect(
+        "🏷️ Thematic Tags:",
+        options=tag_options,
+        default=st.session_state.get("thematic_tag_filter", []),
+        key="thematic_tag_filter",
+        help="Filter by one or more metadata tags."
+    )
     
     # Boolean operator (only show if multiple filters are active)
     num_active_filters = sum([
         1 if st.session_state.doc_type_filter != "Any" else 0,
-        1 if st.session_state.outcome_filter != "Any" else 0
+        1 if st.session_state.outcome_filter != "Any" else 0,
+        1 if st.session_state.thematic_tag_filter else 0
     ])
     
     if num_active_filters >= 2:
@@ -433,6 +485,7 @@ def render_sidebar():
         'db_path': normalized_db_value,
         'doc_type_filter': st.session_state.doc_type_filter,
         'outcome_filter': st.session_state.outcome_filter,
+        'thematic_tag_filter': st.session_state.thematic_tag_filter,
         'filter_operator': st.session_state.filter_operator,
         'search_scope': st.session_state.search_scope,
         'selected_collection': st.session_state.selected_collection
@@ -547,6 +600,7 @@ def graphrag_enhanced_search(db_path, query, filters, top_k=20):
                     'file_name': metadata.get('file_name', 'Unknown'),
                     'document_type': metadata.get('document_type', 'Unknown'),
                     'proposal_outcome': metadata.get('proposal_outcome', 'N/A'),
+                    'thematic_tags': metadata.get('thematic_tags', metadata.get('tags', [])),
                     'chunk_id': metadata.get('chunk_id', f'chunk_{i}'),
                     'doc_id': metadata.get('doc_id', f'doc_{i}'),
                     'graph_context': metadata.get('graph_context', 'Enhanced with entity relationships')
@@ -630,6 +684,7 @@ def hybrid_search(db_path, query, filters, top_k=20):
                         'file_name': metadata.get('file_name', 'Unknown'),
                         'document_type': metadata.get('document_type', 'Unknown'),
                         'proposal_outcome': metadata.get('proposal_outcome', 'N/A'),
+                        'thematic_tags': metadata.get('thematic_tags', metadata.get('tags', [])),
                         'chunk_id': metadata.get('chunk_id', f'graphrag_chunk_{i}'),
                         'doc_id': metadata.get('doc_id', f'graphrag_doc_{i}'),
                         'search_source': 'GraphRAG Enhanced'
@@ -694,20 +749,35 @@ def apply_post_search_filters(result, filters):
     doc_type_filter = filters.get('doc_type_filter')
     outcome_filter = filters.get('outcome_filter')
     filter_operator = filters.get('filter_operator', 'AND')
+    tag_filter = filters.get('thematic_tag_filter', [])
     
     # Check individual filter conditions
     doc_type_match = (doc_type_filter == "Any" or 
                      result.get('document_type') == doc_type_filter)
     
     outcome_match = (outcome_filter == "Any" or 
-                    result.get('proposal_outcome') == outcome_filter)
+                   result.get('proposal_outcome') == outcome_filter)
+
+    tag_match = True
+    if tag_filter:
+        raw_tags = result.get('thematic_tags') or result.get('tags') or result.get('metadata', {}).get('thematic_tags')
+        parsed = []
+        if isinstance(raw_tags, str):
+            parsed = [p.strip() for p in raw_tags.split(",") if p.strip()]
+        elif isinstance(raw_tags, list):
+            parsed = [str(p).strip() for p in raw_tags if str(p).strip()]
+        tag_match = set(tag_filter).issubset(set(parsed))
     
     # Apply boolean logic
     if filter_operator == "AND":
-        return doc_type_match and outcome_match
+        return doc_type_match and outcome_match and tag_match
     else:  # OR operator
-        return (doc_type_match or outcome_match or 
-               (doc_type_filter == "Any" and outcome_filter == "Any"))
+        return (
+            doc_type_match
+            or outcome_match
+            or tag_match
+            or (doc_type_filter == "Any" and outcome_filter == "Any" and not tag_filter)
+        )
 
 
 # Simple ChromaDB Vector Index interface for GraphRAG compatibility
@@ -931,41 +1001,17 @@ def direct_chromadb_search(db_path, query, filters, top_k=20):
                         'file_name': metadata.get('file_name', 'Unknown'),
                         'document_type': metadata.get('document_type', 'Unknown'),
                         'proposal_outcome': metadata.get('proposal_outcome', 'N/A'),
+                        'thematic_tags': metadata.get('thematic_tags', metadata.get('tags', [])),
                         'chunk_id': metadata.get('chunk_id', f'chunk_{i}'),
                         'doc_id': metadata.get('doc_id', f'doc_{i}')
                     }
                     
-                    # Apply post-search filtering - SAFE approach without ChromaDB where clauses
-                    if filters and isinstance(filters, dict):
-                        # Collection scope filter - skip if collections not available
-                        if (collection_doc_ids is not None and 
-                            result['doc_id'] not in collection_doc_ids):
-                            continue  # Skip - not in selected collection
-                        
-                        # Document type filter
-                        doc_type_filter = filters.get('doc_type_filter')
-                        outcome_filter = filters.get('outcome_filter')
-                        filter_operator = filters.get('filter_operator', 'AND')
-                        
-                        # Check individual filter conditions
-                        doc_type_match = (doc_type_filter == "Any" or 
-                                        result['document_type'] == doc_type_filter)
-                        
-                        outcome_match = (outcome_filter == "Any" or 
-                                       metadata.get('proposal_outcome') == outcome_filter)
-                        
-                        # Apply boolean logic
-                        if filter_operator == "AND":
-                            # All conditions must be true
-                            if not (doc_type_match and outcome_match):
-                                continue  # Skip this result
-                        else:  # OR operator
-                            # At least one condition must be true (or no filters active)
-                            if not (doc_type_match or outcome_match or 
-                                  (doc_type_filter == "Any" and outcome_filter == "Any")):
-                                continue  # Skip this result
+                    # Collection scope filter
+                    if (collection_doc_ids is not None and result['doc_id'] not in collection_doc_ids):
+                        continue
                     
-                    formatted_results.append(result)
+                    if apply_post_search_filters(result, filters):
+                        formatted_results.append(result)
             else:
                 logger.warning("No documents returned from ChromaDB query")
             
@@ -1072,6 +1118,8 @@ def render_search_results(results, filters):
         active_filters.append(f"Type: {filters['doc_type_filter']}")
     if filters.get('outcome_filter', 'Any') != 'Any':
         active_filters.append(f"Outcome: {filters['outcome_filter']}")
+    if filters.get('thematic_tag_filter'):
+        active_filters.append("Tags: " + ", ".join(filters['thematic_tag_filter']))
     if filters.get('search_scope', 'Entire Knowledge Base') == 'Active Collection':
         active_filters.append(f"Collection: {filters.get('selected_collection', 'default')}")
     
