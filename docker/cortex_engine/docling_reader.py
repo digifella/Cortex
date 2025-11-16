@@ -8,8 +8,10 @@ Date: 2025-08-22
 
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Tuple
 import json
+import base64
+from io import BytesIO
 
 try:
     import docling
@@ -238,6 +240,13 @@ class DoclingDocumentReader:
             logger.warning(f"Could not extract enhanced Docling metadata: {e}")
             metadata['docling_metadata_warning'] = str(e)
         
+        figures_summary, figure_payloads = self._extract_docling_figures(docling_metadata, conv_result)
+
+        if figures_summary:
+            metadata['docling_figures'] = figures_summary
+        if figure_payloads:
+            metadata['docling_figures_payload'] = figure_payloads
+
         # Create Document with enhanced content and metadata
         document = Document(
             text=markdown_content,
@@ -288,6 +297,107 @@ class DoclingDocumentReader:
             return sections
         except:
             return 0
+
+    def _extract_docling_figures(
+        self,
+        docling_metadata: Dict[str, Any],
+        conv_result: Any
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Capture figure metadata and payloads for downstream VLM analysis."""
+        figures_summary: List[Dict[str, Any]] = []
+        figure_payloads: List[Dict[str, Any]] = []
+
+        figures_data = docling_metadata.get('figures', []) or docling_metadata.get('figures'.replace('-', '_'), [])
+        main_text = docling_metadata.get('main-text', []) or docling_metadata.get('main_text', [])
+        caption_map = self._build_caption_map(main_text)
+
+        try:
+            rendered_figures = list(conv_result.render_element_images())
+        except Exception as render_error:
+            logger.warning(f"Docling figure rendering unavailable: {render_error}")
+            rendered_figures = []
+
+        for idx, rendered in enumerate(rendered_figures):
+            try:
+                element, pil_image = rendered
+            except ValueError:
+                # Older Docling versions only return the image
+                element, pil_image = None, rendered
+
+            figure_dict = figures_data[idx] if idx < len(figures_data) else {}
+            prov = None
+            if isinstance(figure_dict, dict):
+                prov_list = figure_dict.get('prov') or figure_dict.get('provenance') or []
+                if isinstance(prov_list, list) and prov_list:
+                    prov = prov_list[0]
+
+            figure_entry = {
+                'index': idx,
+                'page': (prov or {}).get('page'),
+                'bbox': (prov or {}).get('bbox'),
+                'object_type': figure_dict.get('type') or figure_dict.get('obj_type'),
+                'caption': caption_map.get(idx) or figure_dict.get('text') or '',
+            }
+
+            try:
+                buffer = BytesIO()
+                pil_image.save(buffer, format="PNG")
+                image_bytes = buffer.getvalue()
+                payload = {
+                    'index': idx,
+                    'image_base64': base64.b64encode(image_bytes).decode('utf-8'),
+                    'image_mime_type': 'image/png',
+                    'width': getattr(pil_image, 'width', None),
+                    'height': getattr(pil_image, 'height', None)
+                }
+                figure_payloads.append(payload)
+                figure_entry['has_image_payload'] = True
+            except Exception as encode_error:
+                logger.warning(f"Unable to serialize Docling figure {idx}: {encode_error}")
+                figure_entry['has_image_payload'] = False
+
+            figures_summary.append(figure_entry)
+
+        return figures_summary, figure_payloads
+
+    def _build_caption_map(self, main_text: List[Dict[str, Any]]) -> Dict[int, str]:
+        """Attempt to align captions with figure indices using Docling main text."""
+        caption_map: Dict[int, str] = {}
+        pending_index: Optional[int] = None
+        fallback_counter = 0
+
+        for item in main_text:
+            if not isinstance(item, dict):
+                continue
+
+            ref_value = item.get('$ref') or item.get('ref')
+            if ref_value and '/figures/' in ref_value:
+                try:
+                    pending_index = int(ref_value.split('/')[-1])
+                    continue
+                except ValueError:
+                    pending_index = None
+                    continue
+
+            text_content = (item.get('text') or '').strip()
+            if not text_content:
+                continue
+
+            obj_type = (item.get('type') or item.get('obj_type') or item.get('name') or '').lower()
+            if obj_type != 'caption' and not text_content.lower().startswith('figure'):
+                continue
+
+            target_index: int
+            if pending_index is not None:
+                target_index = pending_index
+                pending_index = None
+            else:
+                target_index = fallback_counter
+                fallback_counter += 1
+
+            caption_map[target_index] = text_content
+
+        return caption_map
     
     def get_processing_stats(self) -> Dict[str, Any]:
         """Get processing statistics and capabilities."""

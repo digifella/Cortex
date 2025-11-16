@@ -98,6 +98,7 @@ from cortex_engine.config import INGESTION_LOG_PATH, STAGING_INGESTION_FILE, ING
 from cortex_engine.utils.file_utils import get_file_hash
 from cortex_engine.utils.logging_utils import get_logger
 from cortex_engine.utils.smart_ollama_llm import create_smart_ollama_llm
+from cortex_engine.utils.path_utils import ensure_directory_writable
 try:
     from cortex_engine.migration_to_docling import create_migration_manager
 except Exception:
@@ -1413,6 +1414,12 @@ def main():
     parser.add_argument("--llm-timeout", type=float, default=120.0,
                        help="Hard timeout (seconds) per LLM metadata call; on timeout, fallback metadata is used")
     args = parser.parse_args()
+
+    writable, reason = ensure_directory_writable(args.db_path)
+    if not writable:
+        logging.error(f"Database path '{args.db_path}' is not writable: {reason}")
+        sys.exit(1)
+    logging.info(f"Knowledge base path resolved to: {args.db_path}")
 
     initialize_script()
 

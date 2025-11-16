@@ -12,6 +12,8 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
 import json
+import base64
+import tempfile
 
 # Existing imports (maintain compatibility)
 from llama_index.core import Document
@@ -156,7 +158,7 @@ class EnhancedDocumentProcessor:
             if strategy == 'image':
                 return self._process_image(file_path, skip_image_processing)
             elif strategy == 'docling':
-                return self._process_with_docling(file_path)
+                return self._process_with_docling(file_path, skip_image_processing)
             else:  # legacy
                 return self._process_with_legacy(file_path)
                 
@@ -177,7 +179,7 @@ class EnhancedDocumentProcessor:
             # Return minimal document with error info
             return [self._create_error_document(file_path, str(e))]
     
-    def _process_with_docling(self, file_path: Path) -> List[Document]:
+    def _process_with_docling(self, file_path: Path, skip_image_processing: bool = False) -> List[Document]:
         """Process document using Docling."""
         if not self.docling_reader or not self.docling_reader.is_available:
             raise RuntimeError("Docling reader not available")
@@ -187,6 +189,7 @@ class EnhancedDocumentProcessor:
         
         # Enhance documents with additional metadata
         for doc in documents:
+            self._enrich_docling_figures(doc, skip_image_processing)
             doc.metadata['processing_strategy'] = 'docling'
             doc.metadata['enhanced_processing'] = True
             doc.metadata['layout_preserved'] = True
@@ -358,6 +361,77 @@ class EnhancedDocumentProcessor:
         }
         
         return report
+
+    def _enrich_docling_figures(self, document: Document, skip_image_processing: bool) -> None:
+        """Convert Docling figure payloads into VLM summaries when allowed."""
+        figures = document.metadata.get('docling_figures') or []
+        payloads = document.metadata.pop('docling_figures_payload', None)
+
+        if not figures or not payloads:
+            return
+
+        if skip_image_processing:
+            for figure in figures:
+                figure['vlm_status'] = 'skipped'
+            return
+
+        try:
+            from .query_cortex import describe_image_with_vlm_for_ingestion
+        except Exception as import_error:
+            logger.warning(f"VLM unavailable for Docling figures: {import_error}")
+            return
+
+        payload_map = {
+            payload.get('index'): payload
+            for payload in payloads
+            if isinstance(payload, dict) and payload.get('index') is not None
+        }
+
+        figure_blocks: List[str] = []
+        for figure in figures:
+            idx = figure.get('index')
+            if idx is None or idx not in payload_map:
+                continue
+
+            summary = self._summarize_figure_with_vlm(payload_map[idx], describe_image_with_vlm_for_ingestion)
+            if summary:
+                figure['vlm_summary'] = summary
+                figure['vlm_status'] = 'processed'
+                heading = figure.get('caption') or f"Figure {idx + 1}"
+                figure_blocks.append(f"### Figure {idx + 1}: {heading}\n{summary}")
+            else:
+                figure['vlm_status'] = 'error'
+
+        if figure_blocks:
+            document.text += "\n\n## Figure Intelligence\n" + "\n\n".join(figure_blocks)
+
+    def _summarize_figure_with_vlm(self, payload: Dict[str, Any], vlm_fn) -> Optional[str]:
+        """Decode the Docling figure payload and call the shared VLM utility."""
+        image_b64 = payload.get('image_base64')
+        if not image_b64:
+            return None
+
+        try:
+            image_bytes = base64.b64decode(image_b64)
+        except Exception as decode_error:
+            logger.warning(f"Invalid Docling figure payload: {decode_error}")
+            return None
+
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
+                tmp_file.write(image_bytes)
+                tmp_path = tmp_file.name
+            return vlm_fn(tmp_path)
+        except Exception as vlm_error:
+            logger.warning(f"Docling figure VLM summary failed: {vlm_error}")
+            return None
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
 
 # Factory function for easy integration

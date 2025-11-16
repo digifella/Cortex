@@ -2,8 +2,10 @@ from .path_utils import (
     convert_windows_to_wsl_path,
     convert_to_docker_mount_path,
     convert_source_path_to_docker_mount,
+    resolve_db_root_path,
     normalize_path,
     ensure_directory,
+    ensure_directory_writable,
     get_project_root,
     validate_path_exists,
 )
@@ -13,11 +15,12 @@ __all__ = [
     'convert_windows_to_wsl_path',
     'convert_to_docker_mount_path',
     'convert_source_path_to_docker_mount',
+    'resolve_db_root_path',
     'normalize_path',
     'ensure_directory',
+    'ensure_directory_writable',
     'get_project_root',
     'validate_path_exists',
     'get_logger',
     'setup_logging',
 ]
-

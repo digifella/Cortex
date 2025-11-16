@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.10.1"
+CORTEX_VERSION = "4.10.3"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
     "minor": 10,
-    "patch": 1,
+    "patch": 3,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,34 +24,32 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-10-09",
-    "release_name": "GPU Acceleration & Docker Parity",
-    "description": "GPU acceleration support for Docker with automatic detection and build optimization, plus UI completion bug fixes",
+    "release_date": "2025-11-16",
+    "release_name": "Docling Ingest & Recovery Hardening",
+    "description": "Improved document ingestion with Docling, robust database cleanup, and safer WSL/Docker path handling for long-running batches.",
     "breaking_changes": [],
     "new_features": [
-        "GPU-enabled Docker build with CUDA 12.1 support (Dockerfile.gpu)",
-        "Automatic GPU detection in run-cortex.bat - builds GPU or CPU image appropriately",
-        "CUDA-enabled PyTorch wheels for NVIDIA GPU acceleration (torch==2.3.1+cu121)",
-        "Comprehensive GPU setup documentation (GPU_SETUP.md)",
-        "Performance benchmarks: 3-5x speedup with GPU acceleration"
+        "Docling-based ingestion pipeline enabled for richer Office/PDF parsing in both host and Docker engine.",
+        "New Clean Start flow in Maintenance with detailed debug output and step-by-step verification.",
+        "Detection of orphaned ingestion artifacts (staging, batch_state, progress) during Knowledge Search validation.",
+        "Shared path utilities for resolving user-specified database roots across Windows, WSL, and Docker."
     ],
     "improvements": [
-        "Docker build now automatically detects NVIDIA GPU via nvidia-smi",
-        "Builds Dockerfile.gpu for NVIDIA systems, standard Dockerfile for CPU-only",
-        "GPU setup guide includes Windows/Linux installation, verification, troubleshooting",
-        "Requirements-gpu.txt for CUDA dependencies separate from base requirements"
+        "Knowledge Ingest now centralizes DB path resolution via runtime-safe helpers, avoiding hardcoded locations.",
+        "Clean Start and Delete KB flows clear batch_state, staging_ingestion, recovery metadata, and logs even after failed runs.",
+        "Knowledge Search validates the configured database path, suggests existing populated roots, and reports stale state clearly.",
+        "Batch ingest UI uses stage-based routing so analysis and finalization auto-refresh correctly without manual refresh confusion."
     ],
     "bug_fixes": [
-        "Fixed persistent 'Starting automatic finalization...' message in Knowledge Ingest",
-        "Added finalize_done_detected flag for proper completion state tracking",
-        "Removed lingering st.info() widgets that persisted across streamlit reruns",
-        "GPU now properly utilized in Docker containers (was CPU-only before)"
+        "Fixed Clean Start NameError and made it resilient when knowledge_hub_db is missing or partial.",
+        "Resolved cases where ingestion logs and UI state could stay in a 'processing' state after subprocess termination.",
+        "Prevented active batch management view from blocking automatic finalization and completion routing.",
+        "Ensured Docker/host path conversions do not attempt to write under the project directory."
     ],
     "performance": [
-        "GPU acceleration in Docker: 3-5x faster embedding generation",
-        "Batch sizing up to 128 for high-memory GPUs (24GB+)",
-        "CUDA 12.1 compatibility with compute capability 6.0+ (Pascal+)",
-        "Automatic fallback to CPU-only build when no NVIDIA GPU detected"
+        "Non-blocking ingestion log reader keeps GPU/CPU throttle metrics live while processing batches.",
+        "Reduced likelihood of stalls in long-running ingests by enforcing unbuffered subprocess output.",
+        "Cleaner recovery of interrupted ingests reduces the need for manual directory cleanup."
     ]
 }
 

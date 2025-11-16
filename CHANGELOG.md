@@ -6,6 +6,30 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## v4.10.3 - 2025-11-16
+
+### Docling Ingest & Recovery Hardening
+
+Improved document ingestion with Docling, robust database cleanup, and safer WSL/Docker path handling for long-running batches.
+
+### ✨ New Features
+- Enabled Docling-based ingestion pipeline for richer Office/PDF parsing in both host and Docker engines.
+- Added a Clean Start flow in Maintenance with detailed debug output and step-by-step verification of what is deleted.
+- Detects orphaned ingestion artifacts (staging, batch_state, progress) during Knowledge Search validation and guides users to Clean Start.
+- Introduced shared path utilities to resolve user-provided database roots consistently across Windows, WSL, and Docker.
+
+### 🚀 Improvements
+- Knowledge Ingest now centralizes database path resolution via runtime-safe helpers instead of relying on hardcoded defaults.
+- Clean Start and Delete KB functions aggressively clear batch_state, staging_ingestion, recovery metadata, and ingestion logs even after failed runs.
+- Knowledge Search validates the configured database path, suggests populated fallback roots when available, and surfaces stale state warnings clearly.
+- Batch ingest routing now ensures that analysis and finalization use the live log view with automatic reruns, avoiding confusion with manual refresh-only views.
+
+### 🔧 Bug Fixes
+- Fixed Clean Start NameError and ensured it behaves safely when `knowledge_hub_db` is missing or partially created.
+- Resolved cases where ingestion logs and UI state would remain in a “processing” state after the ingestion subprocess had terminated.
+- Prevented the Active Batch Management panel from blocking automatic finalization and completion routing.
+- Hardened WSL/Docker path conversion so ingestion never attempts to write under the project directory instead of the external database path.
+
 ## v4.10.2 - 2025-10-11
 
 ### Bug Fixes & UX Improvements

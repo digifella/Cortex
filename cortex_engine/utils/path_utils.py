@@ -7,7 +7,16 @@
 import re
 import os
 from pathlib import Path
-from typing import Union, Optional, List
+from typing import Union, Optional, List, Tuple
+from contextlib import suppress
+
+
+def _safe_path_exists(candidate: Union[str, Path]) -> bool:
+    """Check for path existence without propagating device errors."""
+    try:
+        return Path(candidate).exists()
+    except (OSError, PermissionError):
+        return False
 
 
 def convert_windows_to_wsl_path(path_str: Union[str, Path, None]) -> str:
@@ -50,7 +59,7 @@ def convert_windows_to_wsl_path(path_str: Union[str, Path, None]) -> str:
         drive_mount = f"/mnt/{drive_letter.lower()}"
         wsl_path = f"{drive_mount}/{rest}" if rest else drive_mount
         # Prefer WSL mounts when available (WSL / Docker Desktop)
-        if os.path.exists(drive_mount):
+        if _safe_path_exists(drive_mount):
             return wsl_path
         # Fallback to normalized Windows path for native Windows environments
         return f"{drive_letter.upper()}:/{rest}" if rest else f"{drive_letter.upper()}:/"
@@ -60,7 +69,7 @@ def convert_windows_to_wsl_path(path_str: Union[str, Path, None]) -> str:
     if match:
         drive_letter = match.group(1)
         drive_mount = f"/mnt/{drive_letter.lower()}"
-        if os.path.exists(drive_mount):
+        if _safe_path_exists(drive_mount):
             return drive_mount
         return f"{drive_letter.upper()}:/"
     
@@ -79,7 +88,7 @@ def _resolve_docker_host_path(drive: str, rest: str) -> str:
     candidate_roots = [r for r in [preferred_root, '/host_mnt', '/run/desktop/mnt/host', '/mnt'] if r]
     for root in candidate_roots:
         candidate = f"{root}/{drive}/{rest}"
-        if os.path.exists(candidate):
+        if _safe_path_exists(candidate):
             return candidate
     # Fall back to the first root even if it doesn't exist yet
     return f"{candidate_roots[0]}/{drive}/{rest}" if candidate_roots else f"/host_mnt/{drive}/{rest}"
@@ -128,6 +137,26 @@ def convert_source_path_to_docker_mount(path_str: Union[str, Path, None]) -> str
 
     # Fallback to general conversion
     return convert_windows_to_wsl_path(raw)
+
+def resolve_db_root_path(path_str: Union[str, Path, None]) -> Optional[Path]:
+    """
+    Normalize a user-provided database path to the root directory that holds knowledge_hub_db.
+    - Outside Docker: convert Windows paths to WSL.
+    - Inside Docker: use the path as provided (volume mapping handles access).
+    - If the user points directly at the knowledge_hub_db folder, return its parent.
+    """
+    if path_str is None:
+        return None
+
+    raw = str(path_str).strip()
+    if not raw:
+        return None
+
+    normalized = raw if os.path.exists('/.dockerenv') else convert_windows_to_wsl_path(raw)
+    path_obj = Path(normalized)
+    if path_obj.name == "knowledge_hub_db":
+        return path_obj.parent
+    return path_obj
 
 
 def convert_to_docker_mount_path(path_str: Union[str, Path, None]) -> str:
@@ -224,6 +253,39 @@ def ensure_directory(path: Union[str, Path]) -> Path:
     
     path_obj.mkdir(parents=True, exist_ok=True)
     return path_obj
+
+
+def ensure_directory_writable(path: Union[str, Path]) -> Tuple[bool, Optional[str]]:
+    """
+    Ensure that the target directory exists and is writable.
+    
+    Returns:
+        Tuple[bool, Optional[str]]: (True, None) if writable, otherwise (False, reason).
+    """
+    if not path:
+        return False, "Path is empty"
+
+    try:
+        target = Path(path)
+    except (TypeError, ValueError) as exc:
+        return False, f"Invalid path: {exc}"
+
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except (OSError, PermissionError) as exc:
+        return False, f"Cannot create directory '{target}': {exc}"
+
+    test_file = target / ".cortex_write_test"
+    try:
+        with open(test_file, "w", encoding="utf-8") as handle:
+            handle.write("ok")
+        test_file.unlink(missing_ok=True)
+    except (OSError, PermissionError) as exc:
+        with suppress(OSError):
+            test_file.unlink(missing_ok=True)
+        return False, f"Cannot write inside '{target}': {exc}"
+
+    return True, None
 
 
 def get_project_root() -> Path:

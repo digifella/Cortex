@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.10.0"
+CORTEX_VERSION = "4.10.3"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
     "minor": 10,
-    "patch": 0,
+    "patch": 3,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,36 +24,32 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-10-09",
-    "release_name": "Performance Analytics & Adaptive Optimization",
-    "description": "Comprehensive performance monitoring system with real-time analytics dashboard and GPU-adaptive batch sizing for optimal throughput",
+    "release_date": "2025-11-16",
+    "release_name": "Docling Ingest & Recovery Hardening",
+    "description": "Improved document ingestion with Docling, robust database cleanup, and safer WSL/Docker path handling for long-running batches.",
     "breaking_changes": [],
     "new_features": [
-        "Performance monitoring system tracking all critical operations (image, embedding, query)",
-        "Real-time performance dashboard in Maintenance page with GPU metrics",
-        "GPU memory monitoring with adaptive batch size optimization (4-128)",
-        "Automatic batch size tuning based on available GPU memory",
-        "Cache hit/miss analytics with time savings calculations",
-        "Performance metrics export to JSON for analysis"
+        "Docling-based ingestion pipeline enabled for richer Office/PDF parsing inside Docker engine.",
+        "Clean Start flow with detailed debug output and step-by-step verification for mounted volumes.",
+        "Detection of orphaned ingestion artifacts (staging, batch_state, progress) during Knowledge Search validation.",
+        "Shared path utilities for resolving user-specified database roots across Windows hosts and Docker containers."
     ],
     "improvements": [
-        "Embedding batch sizes now adapt to GPU memory (24GB GPU: 128, 16GB: 64, 8GB: 32, CPU: 4)",
-        "Performance data collection with percentile statistics (P50, P95, P99)",
-        "Query cache now tracks hit/miss rates with detailed analytics",
-        "Image processing timing instrumentation for bottleneck identification",
-        "Ingestion finalization UI now properly transitions without persistent messages",
-        "GPU utilization monitoring for CUDA, MPS, and CPU devices"
+        "Knowledge Ingest now centralizes DB path resolution via runtime-safe helpers, avoiding hardcoded container paths.",
+        "Clean Start and Delete KB flows clear batch_state, staging_ingestion, recovery metadata, and logs even after failed runs.",
+        "Knowledge Search validates the configured database path in-container, suggests existing populated roots, and reports stale state clearly.",
+        "Batch ingest UI uses stage-based routing so analysis and finalization auto-refresh correctly in Docker without manual refresh confusion."
     ],
     "bug_fixes": [
-        "Fixed persistent 'Starting automatic finalization...' message after completion",
-        "Fixed finalization completion detection with CORTEX_STAGE::FINALIZE_DONE marker",
-        "Removed lingering UI messages that persisted across reruns"
+        "Fixed Clean Start NameError and made it resilient when knowledge_hub_db is missing or partial on mounted volumes.",
+        "Resolved cases where ingestion logs and UI state could stay in a 'processing' state after subprocess termination.",
+        "Prevented active batch management view from blocking automatic finalization and completion routing.",
+        "Ensured Docker/host path conversions do not attempt to write under the project directory inside the container."
     ],
     "performance": [
-        "Adaptive batching: 10-30% throughput improvement on high-memory GPUs",
-        "Zero-overhead performance tracking (<1ms per operation)",
-        "Optimal batch sizes prevent OOM while maximizing GPU utilization",
-        "Real-time monitoring identifies performance bottlenecks"
+        "Non-blocking ingestion log reader keeps GPU/CPU throttle metrics live while processing batches in Docker.",
+        "Reduced likelihood of stalls in long-running ingests by enforcing unbuffered subprocess output.",
+        "Cleaner recovery of interrupted ingests reduces the need for manual directory cleanup in mounted volumes."
     ]
 }
 

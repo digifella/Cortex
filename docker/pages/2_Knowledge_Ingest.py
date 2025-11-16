@@ -2963,9 +2963,12 @@ help_system.show_contextual_help("ingest")
 container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
 batch_manager = BatchState(container_db_path)
 batch_status = batch_manager.get_status()
+stage = st.session_state.get("ingestion_stage", "config")
 
-if batch_status["active"]:
-    # ACTIVE BATCH SECTION - Show only batch management
+# When a batch is actively processing (analysis or finalization), prefer the
+# standard stage-based views so automatic progress/auto-finalize works.
+if batch_status["active"] and stage not in {"analysis_running", "finalizing"}:
+    # ACTIVE (BUT NOT CURRENTLY RUNNING) BATCH SECTION - management only
     render_active_batch_management(batch_manager, batch_status)
     
     # Add "Start Fresh" option
@@ -3005,7 +3008,7 @@ else:
         except Exception as e:
             pass  # Ignore errors in log parsing
 
-    if orphaned_session:
+    if orphaned_session and stage in {"config", "pre_analysis"}:
         st.warning("⚠️ **Interrupted Processing Detected**")
         
         col1, col2 = st.columns([2, 1])

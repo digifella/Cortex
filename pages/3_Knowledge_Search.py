@@ -31,6 +31,7 @@ import os
 import pandas as pd
 from pathlib import Path
 import re
+from typing import Optional
 
 # Import only ChromaDB components needed for direct search
 import chromadb
@@ -45,8 +46,15 @@ warnings.filterwarnings("ignore", message=".*Failed to send telemetry.*")
 
 # Import project modules
 from cortex_engine.config import EMBED_MODEL, COLLECTION_NAME, KB_LLM_MODEL
+from cortex_engine.config_manager import ConfigManager
 from cortex_engine.collection_manager import WorkingCollectionManager
-from cortex_engine.utils import get_logger, convert_to_docker_mount_path, convert_windows_to_wsl_path
+from cortex_engine.utils import (
+    get_logger,
+    convert_to_docker_mount_path,
+    convert_windows_to_wsl_path,
+    resolve_db_root_path,
+)
+from cortex_engine.utils.default_paths import get_default_ai_database_path
 from cortex_engine.embedding_service import embed_query
 
 # Set up logging
@@ -60,6 +68,7 @@ st.set_page_config(page_title="Knowledge Search", layout="wide")
 
 def get_document_type_options():
     """Get document type options - Docker-safe version"""
+    st.session_state.pop("kb_fallback_path", None)
     try:
         # In Docker environment, use fallback to static options since collections may not be initialized
         collection_mgr = WorkingCollectionManager()
@@ -84,6 +93,27 @@ def get_document_type_options():
                 "Meeting Minutes", "Financial Report", "Research Paper", "Email Correspondence", "Other"]
 
 
+def find_existing_kb_root(exclude: Optional[str] = None) -> Optional[str]:
+    """Look for a populated knowledge base at common fallback paths."""
+    normalized_exclude = convert_to_docker_mount_path(exclude) if exclude else ""
+    potential_paths = []
+    default_path = get_default_ai_database_path()
+    env_path = os.getenv("AI_DATABASE_PATH")
+    home_path = str(Path.home() / "ai_databases")
+    project_path = str(Path(__file__).parent.parent / "data" / "ai_databases")
+
+    for raw in {default_path, env_path, home_path, project_path}:
+        if not raw:
+            continue
+        normalized = convert_to_docker_mount_path(raw)
+        if not normalized or normalized == normalized_exclude:
+            continue
+        chroma_candidate = Path(normalized) / "knowledge_hub_db"
+        if chroma_candidate.is_dir():
+            return normalized
+    return None
+
+
 def validate_database(db_path, silent=False):
     """Validate database exists and return ChromaDB collection info"""
     import os
@@ -91,13 +121,38 @@ def validate_database(db_path, silent=False):
         if not silent:
             st.warning("Database path is not configured.")
         return None
-        
-    safe_db_path = convert_to_docker_mount_path(db_path)
+
+    db_root = resolve_db_root_path(db_path) if not os.path.exists('/.dockerenv') else Path(db_path)
+    if db_root is None:
+        if not silent:
+            st.warning("Database path is not configured.")
+        return None
+
+    safe_db_path = str(db_root)
     chroma_db_path = os.path.join(safe_db_path, "knowledge_hub_db")
     
     if not os.path.isdir(chroma_db_path):
         if not silent:
-            st.warning(f"🧠 Knowledge base directory not found at '{chroma_db_path}'.")
+            stale_artifacts = []
+            for candidate in ["batch_state.json", "staging_ingestion.json", "ingestion_progress.json"]:
+                candidate_path = db_root / candidate
+                if candidate_path.exists():
+                    stale_artifacts.append(str(candidate_path))
+            progress_dir = db_root / "ingestion_progress"
+            if progress_dir.exists():
+                stale_artifacts.append(str(progress_dir))
+
+            fallback = find_existing_kb_root(safe_db_path)
+            if fallback:
+                st.session_state["kb_fallback_path"] = fallback
+                st.warning(f"🧠 Knowledge base not found at '{chroma_db_path}', but we detected data at '{fallback}'. Update your database path to use the populated knowledge base.")
+            else:
+                st.session_state.pop("kb_fallback_path", None)
+                if stale_artifacts:
+                    artifacts = "\n".join(f"- {path}" for path in stale_artifacts)
+                    st.warning(f"🧹 Knowledge base directory not found at '{chroma_db_path}', and stuck ingestion files were detected:\n{artifacts}\n\nRun **Maintenance → Clean Start** to clear failed ingestion state, then re-ingest.")
+                else:
+                    st.warning(f"🧠 Knowledge base directory not found at '{chroma_db_path}'.")
         return None
         
     try:
@@ -218,6 +273,9 @@ def render_sidebar():
         config_manager = ConfigManager()
         current_config = config_manager.get_config()
         current_path = current_config.get("ai_database_path", "")
+        resolved_current = resolve_db_root_path(current_path)
+        if resolved_current:
+            current_path = str(resolved_current)
     except Exception as e:
         logger.warning(f"Config manager not available: {e}")
         # Use proper default path detection
@@ -240,15 +298,17 @@ def render_sidebar():
         if st.button("🔄 Update Path", help="Save the new database path"):
             if new_path.strip():
                 # Convert and validate path
-                wsl_path = convert_windows_to_wsl_path(new_path.strip())
+                normalized_root = resolve_db_root_path(new_path.strip())
+                wsl_path = convert_windows_to_wsl_path(str(normalized_root)) if normalized_root else convert_windows_to_wsl_path(new_path.strip())
                 
                 if os.path.exists(wsl_path):
+                    final_path = str(normalized_root) if normalized_root else wsl_path
                     # Update session state
-                    st.session_state.db_path_input = new_path.strip()
+                    st.session_state.db_path_input = final_path
                     
                     # Save to persistent config file - Docker-safe
                     try:
-                        config_manager.update_config({"ai_database_path": new_path.strip()})
+                        config_manager.update_config({"ai_database_path": final_path})
                         st.sidebar.success("✅ Database path updated and saved!")
                     except Exception as config_e:
                         logger.warning(f"Could not save config (Docker environment?): {config_e}")
@@ -273,7 +333,8 @@ def render_sidebar():
                 from cortex_engine.utils.default_paths import get_default_database_path
                 default_path = get_default_database_path()
             
-            st.session_state.db_path_input = default_path
+            resolved_default = resolve_db_root_path(default_path)
+            st.session_state.db_path_input = str(resolved_default) if resolved_default else default_path
             try:
                 config_manager.update_config({"ai_database_path": default_path})
                 st.sidebar.success("✅ Path reset to default!")
@@ -313,6 +374,21 @@ def render_sidebar():
                 st.sidebar.error(f"❌ Path validation error: {e}")
         else:
             st.sidebar.error(f"❌ Path does not exist")
+
+    fallback_detected = st.session_state.get("kb_fallback_path")
+    if fallback_detected and fallback_detected != current_path:
+        st.sidebar.warning(f"Detected populated knowledge base at `{fallback_detected}`.")
+        if st.sidebar.button("Use Detected Knowledge Base", key="apply_kb_fallback"):
+            st.session_state.db_path_input = fallback_detected
+            try:
+                config_manager.update_config({"ai_database_path": fallback_detected})
+                st.sidebar.success("✅ Updated to detected knowledge base path.")
+            except Exception as e:
+                logger.warning(f"Failed to save fallback path: {e}")
+                st.sidebar.info("Path updated for this session only.")
+            st.session_state.pop("kb_fallback_path", None)
+            st.cache_resource.clear()
+            st.rerun()
     
     st.sidebar.divider()
     
@@ -395,8 +471,12 @@ def render_sidebar():
             st.session_state.search_scope = "Entire Knowledge Base"
             st.session_state.selected_collection = "default"
     
+    db_path_value = st.session_state.get('db_path_input', current_path)
+    resolved_db_value = resolve_db_root_path(db_path_value)
+    normalized_db_value = str(resolved_db_value) if resolved_db_value else db_path_value
+
     return {
-        'db_path': st.session_state.get('db_path_input', current_path),
+        'db_path': normalized_db_value,
         'doc_type_filter': st.session_state.doc_type_filter,
         'outcome_filter': st.session_state.outcome_filter,
         'filter_operator': st.session_state.filter_operator,
@@ -419,11 +499,17 @@ def perform_search(base_index, query, filters, search_mode="Traditional Vector S
             config_manager = ConfigManager()
             current_config = config_manager.get_config()
             db_path = current_config.get("ai_database_path", "")
+            resolved_db = resolve_db_root_path(db_path)
+            if resolved_db:
+                db_path = str(resolved_db)
         except Exception as e:
             logger.warning(f"Config not available: {e}")
             # Try session state as fallback
             from cortex_engine.utils.default_paths import get_default_ai_database_path
             db_path = st.session_state.get('db_path_input', get_default_ai_database_path())
+            resolved_db = resolve_db_root_path(db_path)
+            if resolved_db:
+                db_path = str(resolved_db)
         
         if not db_path:
             st.error("❌ Database path not configured")
@@ -1261,6 +1347,9 @@ def main():
     
     # Validate database
     db_path = config['db_path']
+    normalized_db_root = resolve_db_root_path(db_path)
+    if normalized_db_root:
+        db_path = str(normalized_db_root)
     if not db_path:
         st.error("❌ Database path not configured. Please set it in the sidebar.")
         return

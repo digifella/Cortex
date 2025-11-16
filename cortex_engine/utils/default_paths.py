@@ -11,6 +11,14 @@ from pathlib import Path
 from .path_utils import convert_windows_to_wsl_path
 
 
+def _safe_path_exists(path: Path) -> bool:
+    """Safely check if a path exists without propagating device errors."""
+    try:
+        return path.exists()
+    except (OSError, PermissionError):
+        return False
+
+
 def get_default_ai_database_path() -> str:
     """
     Get the default AI database path, prioritizing environment variables
@@ -39,8 +47,8 @@ def get_default_ai_database_path() -> str:
         home / "Documents" / "ai_databases", 
         
         # WSL/Linux specific (if we're in WSL) - prioritize C drive since F drive doesn't exist
-        Path("/mnt/c/ai_databases") if Path("/mnt/c").exists() else None,
-        Path("/mnt/d/ai_databases") if Path("/mnt/d").exists() else None,
+        Path("/mnt/c/ai_databases") if _safe_path_exists(Path("/mnt/c")) else None,
+        Path("/mnt/d/ai_databases") if _safe_path_exists(Path("/mnt/d")) else None,
         
         # Fallback to project directory
         Path(__file__).parent.parent.parent / "data" / "ai_databases"
@@ -90,15 +98,15 @@ def get_platform_info() -> dict:
     info = {
         "system": platform.system(),
         "platform": platform.platform(),
-        "is_wsl": Path("/mnt/c").exists(),
-        "is_docker": Path("/.dockerenv").exists(),
+        "is_wsl": _safe_path_exists(Path("/mnt/c")),
+        "is_docker": _safe_path_exists(Path("/.dockerenv")),
         "available_mounts": []
     }
     
     # Check available WSL mounts
     for drive in ['c', 'd', 'e', 'f', 'g', 'h']:
         mount_path = Path(f"/mnt/{drive}")
-        if mount_path.exists():
+        if _safe_path_exists(mount_path):
             info["available_mounts"].append(mount_path)
     
     return info
