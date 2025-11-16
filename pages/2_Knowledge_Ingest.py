@@ -56,6 +56,35 @@ from cortex_engine.ingestion_recovery import IngestionRecoveryManager
 # Set up logging
 logger = get_logger(__name__)
 
+
+def install_missing_models(missing_models: list):
+    """Attempt to install missing models using the model_checker helper commands."""
+    if not missing_models:
+        st.info("No missing models to install.")
+        return
+    try:
+        commands = model_checker.get_model_installation_commands(missing_models)
+        with st.status("Installing models...", expanded=True) as status:
+            for cmd in commands:
+                status.write(f"$ {cmd}")
+                try:
+                    result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+                    if result.stdout:
+                        status.write(result.stdout)
+                    if result.stderr:
+                        status.write(f"stderr: {result.stderr}")
+                except subprocess.CalledProcessError as e:
+                    status.write(f"❌ Failed: {e}")
+                    if e.stdout:
+                        status.write(e.stdout)
+                    if e.stderr:
+                        status.write(e.stderr)
+                    status.update(label="Model install failed", state="error")
+                    return
+            status.update(label="Models installed", state="complete")
+    except Exception as e:
+        st.error(f"Failed to install models automatically: {e}")
+
 st.set_page_config(layout="wide", page_title="Knowledge Ingest")
 
 # Add global CSS for left-aligned directory buttons
@@ -1942,8 +1971,11 @@ def render_config_and_scan_ui():
                     col1, col2 = st.columns(2)
                     with col1:
                         st.markdown("**Option 1: Install missing models**")
-                        for cmd in model_checker.get_model_installation_commands(model_check["missing_models"]):
+                        install_cmds = model_checker.get_model_installation_commands(model_check["missing_models"])
+                        for cmd in install_cmds:
                             st.code(cmd, language="bash")
+                        if st.button("Install missing models now", key="install_missing_models", use_container_width=True):
+                            install_missing_models(model_check["missing_models"])
                     
                     with col2:
                         if "llava" in model_check["missing_models"]:
