@@ -420,7 +420,6 @@ def render_sidebar():
     st.sidebar.multiselect(
         "🏷️ Thematic Tags:",
         options=tag_options,
-        default=st.session_state.get("thematic_tag_filter", []),
         key="thematic_tag_filter",
         help="Filter by one or more metadata tags."
     )
