@@ -12,6 +12,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Improved document ingestion with Docling, robust database cleanup, and safer WSL/Docker path handling for long-running batches.
 
+#### Post-release updates (2025-11-17)
+- Fixed Docker start scripts (CPU & GPU) by switching to heredoc generation to avoid shell quoting errors during image build.
+- Knowledge Ingest “Install missing models now” button now re-checks availability after pulling and surfaces Ollama connectivity errors inline.
+
 ### ✨ New Features
 - Enabled Docling-based ingestion pipeline for richer Office/PDF parsing in both host and Docker engines.
 - Added a Clean Start flow in Maintenance with detailed debug output and step-by-step verification of what is deleted.
