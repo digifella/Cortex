@@ -48,11 +48,20 @@ from cortex_engine.ingestion_recovery import IngestionRecoveryManager
 logger = get_logger(__name__)
 
 
-def install_missing_models(missing_models: list):
-    """Attempt to install missing models using the model_checker helper commands."""
+def install_missing_models(missing_models: list) -> bool:
+    """Attempt to install missing models using the model_checker helper commands.
+
+    Returns True on successful installs so the caller can trigger a re-check/rerun.
+    """
     if not missing_models:
         st.info("No missing models to install.")
-        return
+        return False
+
+    service_ok, service_msg = model_checker.check_ollama_service()
+    if not service_ok:
+        st.error(f"Cannot install models because Ollama is not reachable: {service_msg}")
+        return False
+
     try:
         commands = model_checker.get_model_installation_commands(missing_models)
         with st.status("Installing models...", expanded=True) as status:
@@ -71,10 +80,12 @@ def install_missing_models(missing_models: list):
                     if e.stderr:
                         status.write(e.stderr)
                     status.update(label="Model install failed", state="error")
-                    return
+                    return False
             status.update(label="Models installed", state="complete")
+        return True
     except Exception as e:
         st.error(f"Failed to install models automatically: {e}")
+        return False
 
 st.set_page_config(layout="wide", page_title="Knowledge Ingest")
 
@@ -1758,7 +1769,9 @@ def render_config_and_scan_ui():
                         for cmd in install_cmds:
                             st.code(cmd, language="bash")
                         if st.button("Install missing models now", key="install_missing_models", use_container_width=True):
-                            install_missing_models(model_check["missing_models"])
+                            if install_missing_models(model_check["missing_models"]):
+                                st.success("Models installed. Re-checking availability...")
+                                st.rerun()
                     
                     with col2:
                         if "llava" in model_check["missing_models"]:
