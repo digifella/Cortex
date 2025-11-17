@@ -80,127 +80,124 @@ ENV OLLAMA_ORIGINS=*
 # Expose ports
 EXPOSE 8501 8000
 
-# Create startup script with service-first architecture
-RUN echo '#!/bin/bash\n\
-set -e\n\
-\n\
-echo "🚀 Starting Cortex Suite (CPU-Optimized)"\n\
-python -c 'from cortex_engine.version_config import VERSION_DISPLAY; print(\"Version:\", VERSION_DISPLAY)'\n\
-echo "📅 $(date)"\n\
-echo "💻 Platform: $(uname -m) ($(uname -s))"\n\
-echo "🐳 Docker Environment: $([ -f /.dockerenv ] && echo "Yes" || echo "No")"\n\
-echo "🔧 Multi-Platform Support: Intel x86_64, Apple Silicon M-series, ARM64 PCs"\n\
-echo ""\n\
-\n\
-# Fix data directory permissions (in case of root-owned volumes)\n\
-echo "🔧 Ensuring correct data permissions..."\n\
-# Use gosu or run as root temporarily to fix permissions\n\
-if [ -w /data ]; then\n\
-    echo "Data directory writable, skipping permission fix"\n\
-else\n\
-    echo "Fixing data directory permissions..."\n\
-    # This will be handled in the batch file with docker exec\n\
-fi\n\
-\n\
-# Start Ollama service in background\n\
-echo "🤖 Starting Ollama service..."\n\
-export OLLAMA_HOST=0.0.0.0:11434\n\
-export OLLAMA_ORIGINS=*\n\
-ollama serve &\n\
-OLLAMA_PID=$!\n\
-\n\
-# Wait for Ollama to be ready (longer timeout)\n\
-echo "⏳ Waiting for Ollama to initialize..."\n\
-for i in {1..60}; do\n\
-    if curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then\n\
-        echo "✅ Ollama is ready!"\n\
-        break\n\
-    fi\n\
-    if [ $i -eq 60 ]; then\n\
-        echo "⚠️ Ollama taking longer than expected, continuing..."\n\
-        echo "🔍 Ollama process status: $(ps aux | grep ollama || echo 'Not found')"\n\
-        break\n\
-    fi\n\
-    echo "   ... attempt $i/60"\n\
-    sleep 3\n\
-done\n\
-\n\
-# Start API server immediately (will handle missing models gracefully)\n\
-echo "🔗 Starting API server..."\n\
-uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1 &\n\
-API_PID=$!\n\
-\n\
-# Start Streamlit app immediately (with setup progress page)\n\
-echo "🖥️ Starting Streamlit UI..."\n\
-streamlit run Cortex_Suite.py --server.port 8501 --server.address 0.0.0.0 --server.enableCORS false --server.enableXsrfProtection false &\n\
-STREAMLIT_PID=$!\n\
-\n\
-# Wait for services to be ready\n\
-echo "⏳ Waiting for services to start..."\n\
-sleep 10\n\
-\n\
-echo ""\n\
-echo "🎉 Cortex Suite is now accessible!"\n\
-echo "🌐 Access at: http://localhost:8501"\n\
-echo "🔗 API docs: http://localhost:8000/docs"\n\
-echo "📦 AI models will download in background..."\n\
-echo ""\n\
-\n\
-# Download models in background (non-blocking)\n\
-{\n\
-    echo "📦 Starting AI model downloads..."\n\
-    if ! ollama list 2>/dev/null | grep -q "mistral:latest"; then\n\
-        echo "⬇️ Downloading Mistral model (4.4GB)..."\n\
-        ollama pull mistral:latest\n\
-        echo "✅ Mistral model ready!"\n\
-    fi\n\
-    \n\
-    if ! ollama list 2>/dev/null | grep -q "mistral-small3.2"; then\n\
-        echo "⬇️ Downloading Mistral Small model (15GB)..."\n\
-        ollama pull mistral-small3.2\n\
-        echo "✅ Mistral Small model ready!"\n\
-    fi\n\
-    \n\
-    echo "🎯 All AI models are now ready!"\n\
-    echo "🚀 Full functionality is now available at http://localhost:8501"\n\
-} &\n\
-MODEL_DOWNLOAD_PID=$!\n\
-\n\
-# Function to handle shutdown\n\
-cleanup() {\n\
-    echo ""\n\
-    echo "🛑 Shutting down Cortex Suite..."\n\
-    kill $OLLAMA_PID $API_PID $STREAMLIT_PID $MODEL_DOWNLOAD_PID 2>/dev/null || true\n\
-    echo "✅ Shutdown complete"\n\
-    exit 0\n\
-}\n\
-\n\
-# Set up signal handlers\n\
-trap cleanup SIGTERM SIGINT\n\
-\n\
-# Keep container running and monitor processes\n\
-while true; do\n\
-    # Check if critical processes are still running\n\
-    if ! kill -0 $STREAMLIT_PID 2>/dev/null; then\n\
-        echo "❌ Streamlit process died, restarting..."\n\
-        streamlit run Cortex_Suite.py --server.port 8501 --server.address 0.0.0.0 --server.enableCORS false --server.enableXsrfProtection false &\n\
-        STREAMLIT_PID=$!\n\
-    fi\n\
-    \n\
-    if ! kill -0 $API_PID 2>/dev/null; then\n\
-        echo "❌ API process died, restarting..."\n\
-        uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1 &\n\
-        API_PID=$!\n\
-    fi\n\
-    \n\
-    if ! kill -0 $OLLAMA_PID 2>/dev/null; then\n\
-        echo "❌ Ollama process died, restarting..."\n\
-        ollama serve &\n\
-        OLLAMA_PID=$!\n\
-    fi\n\
-    \n\
-    sleep 30\n\
-done' > /home/cortex/app/start.sh
+# Create startup script with service-first architecture (heredoc for safer quoting)
+RUN cat <<'EOF' > /home/cortex/app/start.sh
+#!/bin/bash
+set -e
+
+echo "🚀 Starting Cortex Suite (CPU-Optimized)"
+python -c 'from cortex_engine.version_config import VERSION_DISPLAY; print("Version:", VERSION_DISPLAY)'
+echo "📅 $(date)"
+echo "💻 Platform: $(uname -m) ($(uname -s))"
+echo "🐳 Docker Environment: $([ -f /.dockerenv ] && echo "Yes" || echo "No")"
+echo "🔧 Multi-Platform Support: Intel x86_64, Apple Silicon M-series, ARM64 PCs"
+echo ""
+
+# Fix data directory permissions (in case of root-owned volumes)
+echo "🔧 Ensuring correct data permissions..."
+if [ -w /data ]; then
+    echo "Data directory writable, skipping permission fix"
+else
+    echo "Fixing data directory permissions..."
+fi
+
+# Start Ollama service in background
+echo "🤖 Starting Ollama service..."
+export OLLAMA_HOST=0.0.0.0:11434
+export OLLAMA_ORIGINS=*
+ollama serve &
+OLLAMA_PID=$!
+
+# Wait for Ollama to be ready (longer timeout)
+echo "⏳ Waiting for Ollama to initialize..."
+for i in {1..60}; do
+    if curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
+        echo "✅ Ollama is ready!"
+        break
+    fi
+    if [ $i -eq 60 ]; then
+        echo "⚠️ Ollama taking longer than expected, continuing..."
+        echo "🔍 Ollama process status: $(ps aux | grep ollama || echo "Not found")"
+        break
+    fi
+    echo "   ... attempt $i/60"
+    sleep 3
+
+done
+
+# Start API server immediately (will handle missing models gracefully)
+echo "🔗 Starting API server..."
+uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1 &
+API_PID=$!
+
+# Start Streamlit app immediately (with setup progress page)
+echo "🖥️ Starting Streamlit UI..."
+streamlit run Cortex_Suite.py --server.port 8501 --server.address 0.0.0.0 --server.enableCORS false --server.enableXsrfProtection false &
+STREAMLIT_PID=$!
+
+# Wait for services to be ready
+echo "⏳ Waiting for services to start..."
+sleep 10
+
+echo ""
+echo "🎉 Cortex Suite (CPU-Optimized) is now accessible!"
+echo "🌐 Access at: http://localhost:8501"
+echo "🔗 API docs: http://localhost:8000/docs"
+echo "🤖 Ollama: ENABLED"
+echo ""
+
+# Download models in background (lightweight set for CPU)
+{
+    echo "📦 Starting AI model downloads..."
+    if ! ollama list 2>/dev/null | grep -q "mistral:latest"; then
+        echo "⬇️ Downloading Mistral model (4.4GB)..."
+        ollama pull mistral:latest
+        echo "✅ Mistral model ready!"
+    fi
+    
+    if ! ollama list 2>/dev/null | grep -q "mistral-small3.2"; then
+        echo "⬇️ Downloading Mistral Small model (15GB)..."
+        ollama pull mistral-small3.2
+        echo "✅ Mistral Small model ready!"
+    fi
+    
+    echo "🎯 All AI models are now ready!"
+    echo "🚀 Full functionality is now available at http://localhost:8501"
+} &
+MODEL_DOWNLOAD_PID=$!
+
+cleanup() {
+    echo ""
+    echo "🛑 Shutting down Cortex Suite..."
+    kill $OLLAMA_PID $API_PID $STREAMLIT_PID $MODEL_DOWNLOAD_PID 2>/dev/null || true
+    echo "✅ Shutdown complete"
+    exit 0
+}
+
+trap cleanup SIGTERM SIGINT
+
+while true; do
+    if ! kill -0 $STREAMLIT_PID 2>/dev/null; then
+        echo "❌ Streamlit process died, restarting..."
+        streamlit run Cortex_Suite.py --server.port 8501 --server.address 0.0.0.0 --server.enableCORS false --server.enableXsrfProtection false &
+        STREAMLIT_PID=$!
+    fi
+    
+    if ! kill -0 $API_PID 2>/dev/null; then
+        echo "❌ API process died, restarting..."
+        uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1 &
+        API_PID=$!
+    fi
+    
+    if ! kill -0 $OLLAMA_PID 2>/dev/null; then
+        echo "❌ Ollama process died, restarting..."
+        ollama serve &
+        OLLAMA_PID=$!
+    fi
+    
+    sleep 30
+ done
+EOF
 
 RUN chmod +x /home/cortex/app/start.sh
 
