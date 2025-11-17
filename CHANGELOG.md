@@ -19,6 +19,7 @@ Improved document ingestion with Docling, robust database cleanup, and safer WSL
 - Introduced shared path utilities to resolve user-provided database roots consistently across Windows, WSL, and Docker.
 - New **Metadata & Tag Management** page to browse, filter, and bulk-edit document metadata (including thematic_tags).
 - Knowledge Search supports filtering by thematic tags alongside document type and proposal outcome.
+- Docker model-init now also pulls `llava:7b` so vision ingestion works out of the box.
 
 ### 🚀 Improvements
 - Knowledge Ingest now centralizes database path resolution via runtime-safe helpers instead of relying on hardcoded defaults.

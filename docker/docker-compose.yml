@@ -131,6 +131,7 @@ services:
         echo 'Pulling Ollama models...'
         curl -X POST http://ollama:11434/api/pull -d '{\"name\":\"mistral:latest\"}'
         curl -X POST http://ollama:11434/api/pull -d '{\"name\":\"mistral-small3.2\"}'
+        curl -X POST http://ollama:11434/api/pull -d '{\"name\":\"llava:7b\"}'
         echo 'Models pulled successfully'
       "
     restart: "no"
