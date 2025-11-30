@@ -1,6 +1,6 @@
 # **`README.md`**
 
-**Version:** v4.10.1 (GPU Acceleration & Docker Parity)
+**Version:** v4.10.2 (Docker Path Auto-Detection Hotfix)
 **Date:** 2025-08-31
 
 **Prelim:**
@@ -204,6 +204,16 @@ docker buildx build --platform linux/amd64,linux/arm64 -t cortex-suite .
 - Rebuild after updates: when docker/ files change, rebuild the image to pick them up: `docker compose down && docker compose build --no-cache && docker compose up -d`.
 - Ingest staging diagnostics: if the UI shows “Analysis complete, but no documents were staged for review”, the ingest page now displays the container path to `staging_ingestion.json`, whether it exists, and the parsed document count. If the file contains documents, click “Retry Finalization” to complete the flow.
 - Knowledge Search fallback: if the project root page is not present in the image, Docker falls back to a minimal search implementation with direct Chroma queries.
+
+### Knowledge base auto-detection in Docker (v4.10.2)
+
+Knowledge Search and the Collection Manager now probe multiple candidate paths when running inside Docker:
+
+1. The configured path (after Windows-to-WSL/Docker conversion)
+2. Direct `/mnt/<drive>` mounts that Docker Desktop exposes automatically
+3. Container defaults such as `/data/ai_databases` and `/app/data/ai_databases`
+
+If the configured path is missing but a fallback succeeds, the UI surfaces a banner telling you which location was used. Update the sidebar path to that detected value so ingestion, search, and batch automation all point to the same directory. If no candidates work, double-check that your host directory is actually mounted (for docker-compose, map it to `/data/ai_databases`; for `run-cortex.bat` ensure the prompt captured the correct drive).
 - .docx reader warnings: Docker may log `DocxReader.load_data() got an unexpected keyword argument 'file_path'`. Analysis proceeds, but a reader‑normalization pass is planned.
 - Logs inside container: use `docker exec -it <container> bash` then `tail -n 120 -f /home/cortex/logs/ingestion.log` (or `/app/logs/ingestion.log` depending on image path).
 

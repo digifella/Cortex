@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v4.10.1
+# Version: v4.10.2
 # Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
@@ -21,6 +21,8 @@ from collections import defaultdict
 from datetime import datetime
 from typing import List, Optional
 import time
+import threading
+import queue
 
 import fitz
 
@@ -112,6 +114,7 @@ div[data-testid="column"] .stButton > button {
 
 # --- Constants & State ---
 REVIEW_PAGE_SIZE = 10
+MAX_AUTO_FINALIZE_RETRIES = 12  # Give staging writes up to ~10 seconds to settle
 # SPRINT 21: Removed image files from the unsupported list. They are now processed by the backend.
 UNSUPPORTED_EXTENSIONS = {
     # Multimedia (Video)
@@ -153,6 +156,18 @@ def get_document_type_options():
 DOC_TYPE_OPTIONS = get_document_type_options()
 PROPOSAL_OUTCOME_OPTIONS = RichMetadata.model_fields['proposal_outcome'].annotation.__args__
 
+def _is_wsl_env() -> bool:
+    try:
+        import os, platform
+        if os.environ.get("WSL_DISTRO_NAME"):
+            return True
+        rel = platform.release().lower()
+        ver = platform.version().lower()
+        return ("microsoft" in rel) or ("microsoft" in ver)
+    except Exception:
+        return False
+
+
 def build_ingestion_command(container_db_path, files_to_process, target_collection=None, resume=False):
     """Build ingestion command with collection assignment support"""
     # Use direct script path to avoid module resolution confusion
@@ -173,41 +188,152 @@ def build_ingestion_command(container_db_path, files_to_process, target_collecti
     if st.session_state.get("skip_image_processing", False):
         command.append("--skip-image-processing")
 
-    # Add throttle delay - always pass the parameter (default 0.5s for system responsiveness)
-    throttle_delay = st.session_state.get("throttle_delay", 0.5)
+    # Add throttle delay - choose a safer default on WSL for NVIDIA 8GB class
+    default_throttle = 2.0 if _is_wsl_env() else 0.5
+    throttle_delay = st.session_state.get("throttle_delay", default_throttle)
     command.extend(["--throttle-delay", str(throttle_delay)])
 
+    # Apply conservative runtime stability defaults automatically on WSL
+    if _is_wsl_env():
+        # Cooler cadence to avoid GPU stalls and UI freezes
+        command.extend(["--cooldown-every", "20", "--cooldown-seconds", "15"])  # defaults are 25/20; tighten for WSL
+        # Lower thresholds to start throttling earlier on laptops
+        command.extend(["--gpu-threshold", "50", "--cpu-threshold", "60"]) 
+        # Slow down indexing slightly between batches to reduce I/O churn
+        command.extend(["--index-batch-cooldown", "2.0"]) 
+        # Enforce hard LLM timeout to avoid indefinite stalls
+        command.extend(["--llm-timeout", "120"])  # seconds
+
     return command
+
+# ---- Subprocess helpers for robust streaming ----
+def spawn_ingest(command: list) -> subprocess.Popen:
+    """Launch an ingestion subprocess with unbuffered stdout and merged stderr."""
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    # Ensure python runs unbuffered even when using -m mode
+    if len(command) >= 2 and command[0] == sys.executable and command[1] != "-u":
+        # Insert -u right after the interpreter if missing
+        command = [command[0], "-u", *command[1:]]
+    return subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        universal_newlines=True,
+        env=env,
+    )
+
+def _reader_to_queue(pipe, q: queue.Queue, stop_event: threading.Event):
+    try:
+        while not stop_event.is_set():
+            line = pipe.readline()
+            if not line:
+                # EOF reached
+                break
+            q.put(line)
+    except Exception:
+        pass
+
+def start_ingest_reader(proc: subprocess.Popen) -> None:
+    """Start a background thread that enqueues stdout lines for non-blocking UI reads."""
+    q = queue.Queue()
+    stop_event = threading.Event()
+    t = threading.Thread(target=_reader_to_queue, args=(proc.stdout, q, stop_event), daemon=True)
+    t.start()
+    st.session_state.ingestion_output_queue = q
+    st.session_state.ingestion_reader_stop = stop_event
+    st.session_state.ingestion_reader_thread = t
+
+def get_ingest_lines(max_lines: int = 50) -> list:
+    """Drain up to max_lines from the ingestion output queue without blocking."""
+    q = st.session_state.get("ingestion_output_queue")
+    if not q:
+        return []
+    lines = []
+    for _ in range(max_lines):
+        try:
+            line = q.get_nowait()
+        except queue.Empty:
+            break
+        if line:
+            s = line.strip()
+            if s:
+                lines.append(s)
+    return lines
+
+def _read_staging_payload_with_retries(container_db_path: str, retries: int = 5, delay_seconds: float = 0.4):
+    """
+    Attempt to read the staging_ingestion.json file with a short retry window.
+    This smooths over network-drive latency where the file can lag behind the
+    ingestion subprocess completing.
+    """
+    if not container_db_path:
+        return None, None
+
+    staging_path = Path(container_db_path) / "staging_ingestion.json"
+    last_error = None
+    for attempt in range(retries):
+        if staging_path.exists():
+            try:
+                with open(staging_path, 'r') as f:
+                    return json.load(f), staging_path
+            except json.JSONDecodeError as exc:
+                last_error = exc
+                logger.debug(
+                    "Staging file not parseable yet (attempt %s/%s): %s",
+                    attempt + 1,
+                    retries,
+                    exc,
+                )
+        else:
+            logger.debug(
+                "Staging file not found yet (attempt %s/%s): %s",
+                attempt + 1,
+                retries,
+                staging_path,
+            )
+        time.sleep(delay_seconds)
+
+    if last_error:
+        logger.warning(f"Staging file never stabilized at {staging_path}: {last_error}")
+    else:
+        logger.debug(f"Staging file still missing after retries: {staging_path}")
+    return None, staging_path
 
 def should_auto_finalize():
     """Check if automatic finalization should proceed"""
     try:
-        from cortex_engine.ingest_cortex import get_staging_file_path
-        from cortex_engine.utils import convert_windows_to_wsl_path
-        import os
-        import json
-        
         # Check if we have a database path
         if not st.session_state.get('db_path'):
+            logger.debug("Auto-finalize check: No db_path in session state")
             return False
-            
+
         container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-        staging_file = get_staging_file_path(container_db_path)
-        
-        # Check if staging file exists and has documents
-        if os.path.exists(staging_file):
-            with open(staging_file, 'r') as f:
-                staging_data = json.load(f)
-            
-            # Handle both old and new staging formats
-            if isinstance(staging_data, list):
-                return len(staging_data) > 0
-            else:
-                return len(staging_data.get('documents', [])) > 0
-        
+        staging_data, staging_path = _read_staging_payload_with_retries(
+            container_db_path,
+            retries=6,
+            delay_seconds=0.5,
+        )
+
+        if not staging_data:
+            logger.debug(f"Auto-finalize check: staging file not ready yet ({staging_path})")
+            return False
+
+        # Handle both old and new staging formats
+        if isinstance(staging_data, list):
+            doc_count = len(staging_data)
+            logger.debug(f"Auto-finalize check: {doc_count} docs detected in staging (list) @ {staging_path}")
+            return doc_count > 0
+        else:
+            doc_count = len(staging_data.get('documents', []))
+            logger.debug(f"Auto-finalize check: {doc_count} docs detected in staging (dict) @ {staging_path}")
+            return doc_count > 0
+
         return False
     except Exception as e:
-        logger.error(f"Error checking auto-finalization: {e}")
+        logger.error(f"Error checking auto-finalization: {e}", exc_info=True)
         return False
 
 def start_automatic_finalization():
@@ -230,14 +356,10 @@ def start_automatic_finalization():
         # Start finalization subprocess
         st.session_state.log_messages = ["Starting automatic finalization..."]
         st.session_state.ingestion_stage = "finalizing"
-        st.session_state.ingestion_process = subprocess.Popen(
-            command, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.STDOUT, 
-            text=True, 
-            bufsize=1, 
-            universal_newlines=True
-        )
+        st.session_state.auto_finalize_retry_attempts = 0
+        st.session_state.auto_finalize_triggered = True
+        st.session_state.ingestion_process = spawn_ingest(command)
+        start_ingest_reader(st.session_state.ingestion_process)
         
         logger.info(f"Started automatic finalization with command: {' '.join(command[:4])}...")
         
@@ -246,6 +368,7 @@ def start_automatic_finalization():
         st.error(f"❌ Failed to start automatic finalization: {e}")
         # Fall back to manual mode
         st.session_state.ingestion_stage = "metadata_review"
+        st.session_state.batch_auto_finalize_started = False
 
 def show_collection_migration_healthcheck():
     """Warn if a project-root collections file exists and offer migration to external DB path."""
@@ -298,15 +421,26 @@ def initialize_state(force_reset: bool = False):
     if "db_path" not in st.session_state:
         st.session_state.db_path = config_db_path
 
+    # Pick safer defaults automatically on WSL
+    try:
+        import os, platform
+        _is_wsl_default = bool(os.environ.get("WSL_DISTRO_NAME") or "microsoft" in platform.release().lower())
+    except Exception:
+        _is_wsl_default = False
+
     defaults = {
         "ingestion_stage": "config", "dir_selections": {},
         "files_to_review": [], "staged_files": [], "file_selections": {},
         "edited_staged_files": [], "staged_metadata": {}, "review_page": 0, "ingestion_process": None,
         "skip_image_processing": False,  # Option to skip VLM image processing
-        "throttle_delay": 0.5,  # Delay between document processing (seconds) - 0.5s default keeps system usable during ingestion
+        # Delay between documents; on WSL default to 1.5s for stability
+        "throttle_delay": 1.5 if _is_wsl_default else 0.5,
         "batch_ingest_mode": False,  # Option to bypass preview check for large ingests
         "batch_mode_active": False,  # Persistent flag set when batch processing starts
         "batch_auto_processed": False,  # Flag to prevent re-processing in batch mode
+        "batch_auto_finalize_started": False,
+        "auto_finalize_retry_attempts": 0,
+        "auto_finalize_triggered": False,
         "log_messages": [], "filter_exclude_common": True, "filter_prefer_docx": True,
         "filter_deduplicate": True, "enable_pattern_exclusion": False,
         "exclude_patterns_input": "", "show_confirm_clear_log": False,
@@ -321,8 +455,10 @@ def initialize_state(force_reset: bool = False):
     for key, val in defaults.items():
         if key not in st.session_state: st.session_state[key] = val
 
+    # Initialize directory_scan_path to match knowledge_source_path (don't use stale values)
+    # Always sync with current knowledge_source_path to prevent showing non-existent directories
     if "directory_scan_path" not in st.session_state or not st.session_state.directory_scan_path:
-        st.session_state.directory_scan_path = config.get("knowledge_source_path", "")
+        st.session_state.directory_scan_path = st.session_state.get("knowledge_source_path", "")
 
 # Path handling now handled by centralized utilities
 
@@ -384,27 +520,37 @@ def load_staged_files():
     st.session_state.staged_files = []
     st.session_state.staged_metadata = {}
     # Use database-specific staging path instead of hardcoded project path
-    if st.session_state.get('db_path'):
-        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-        staging_path = Path(container_db_path) / "staging_ingestion.json"
-        if staging_path.exists():
-            try:
-                with open(staging_path, 'r') as f:
-                    raw_data = json.load(f)
-                if isinstance(raw_data, dict):
-                    st.session_state.staged_metadata = raw_data
-                    st.session_state.staged_files = raw_data.get('documents', [])
-                    target = raw_data.get('target_collection')
-                    if target and not st.session_state.get('target_collection_name'):
-                        st.session_state.target_collection_name = target
-                else:
-                    st.session_state.staged_metadata = {
-                        "documents": raw_data,
-                        "target_collection": st.session_state.get('target_collection_name', ''),
-                    }
-                    st.session_state.staged_files = raw_data
-            except (json.JSONDecodeError, IOError) as e:
-                st.error(f"Error reading staging file: {e}"); st.session_state.staged_files = []
+    db_path = st.session_state.get('db_path')
+    if not db_path:
+        return
+
+    container_db_path = convert_to_docker_mount_path(db_path)
+    raw_data, staging_path = _read_staging_payload_with_retries(
+        container_db_path,
+        retries=6,
+        delay_seconds=0.5,
+    )
+
+    if not raw_data:
+        logger.debug(f"No staging payload available yet at {staging_path}")
+        return
+
+    try:
+        if isinstance(raw_data, dict):
+            st.session_state.staged_metadata = raw_data
+            st.session_state.staged_files = raw_data.get('documents', [])
+            target = raw_data.get('target_collection')
+            if target and not st.session_state.get('target_collection_name'):
+                st.session_state.target_collection_name = target
+        else:
+            st.session_state.staged_metadata = {
+                "documents": raw_data,
+                "target_collection": st.session_state.get('target_collection_name', ''),
+            }
+            st.session_state.staged_files = raw_data
+    except (json.JSONDecodeError, IOError) as e:
+        st.error(f"Error reading staging file: {e}")
+        st.session_state.staged_files = []
 
 def serialize_staging_payload(documents: List[dict], target_collection: Optional[str] = None) -> dict:
     """Build staging payload preserving metadata when user edits documents."""
@@ -547,15 +693,6 @@ def scan_for_files(selected_dirs: List[str]):
         
         # Clear resume mode flag
         st.session_state.resume_mode_enabled = False
-    
-    # Check if batch ingest mode is enabled
-    if st.session_state.get("batch_ingest_mode", False) or st.session_state.get("force_batch_mode", False):
-        st.session_state.ingestion_stage = "batch_processing"
-        # Clear the force flag after using it
-        if "force_batch_mode" in st.session_state:
-            del st.session_state.force_batch_mode
-    else:
-        st.session_state.ingestion_stage = "pre_analysis"
 
 def log_failed_documents(failed_docs, db_path):
     """Log documents that failed during batch processing to a separate failure log."""
@@ -875,10 +1012,18 @@ def render_batch_processing_ui():
                             st.error("❌ No files to process. Please check your file selection or batch state.")
                             return
                         
+                        # Clear any paused flag before resuming
+                        try:
+                            batch_manager.start_new_session()
+                        except Exception:
+                            pass
+
                         st.session_state.log_messages = []
                         st.session_state.ingestion_stage = "analysis_running"
                         st.session_state.batch_mode_active = True
-                        
+                        # Clear batch_ingest_mode to allow transition to analysis_running stage
+                        st.session_state.batch_ingest_mode = False
+
                         # Build command with resume flag and collection assignment
                         target_collection = st.session_state.get('target_collection_name', '')
                         command = build_ingestion_command(container_db_path, files_to_process, target_collection, resume=True)
@@ -888,14 +1033,8 @@ def render_batch_processing_ui():
                         logger.info(f"Command: {' '.join(command[:6])}... (truncated)")
                         
                         try:
-                            st.session_state.ingestion_process = subprocess.Popen(
-                                command, 
-                                stdout=subprocess.PIPE, 
-                                stderr=subprocess.STDOUT, 
-                                text=True, 
-                                bufsize=1, 
-                                universal_newlines=True
-                            )
+                            st.session_state.ingestion_process = spawn_ingest(command)
+                            start_ingest_reader(st.session_state.ingestion_process)
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Failed to start batch processing: {e}")
@@ -911,7 +1050,9 @@ def render_batch_processing_ui():
                     st.session_state.log_messages = []
                     st.session_state.ingestion_stage = "analysis_running"
                     st.session_state.batch_mode_active = True
-                    
+                    # Clear batch_ingest_mode to allow transition to analysis_running stage
+                    st.session_state.batch_ingest_mode = False
+
                     # Build command with collection assignment
                     target_collection = st.session_state.get('target_collection_name', '')
                     command = build_ingestion_command(container_db_path, files_to_process, target_collection)
@@ -921,14 +1062,8 @@ def render_batch_processing_ui():
                     logger.info(f"Command: {' '.join(command[:6])}... (truncated)")
                     
                     try:
-                        st.session_state.ingestion_process = subprocess.Popen(
-                            command, 
-                            stdout=subprocess.PIPE, 
-                            stderr=subprocess.STDOUT, 
-                            text=True, 
-                            bufsize=1, 
-                            universal_newlines=True
-                        )
+                        st.session_state.ingestion_process = spawn_ingest(command)
+                        start_ingest_reader(st.session_state.ingestion_process)
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Failed to start batch processing: {e}")
@@ -965,10 +1100,49 @@ def render_batch_processing_ui():
 def render_active_batch_management(batch_manager: BatchState, batch_status: dict):
     """Render the active batch management section with consolidated controls"""
     st.subheader("📊 Active Batch Management")
+
+    # Manual/auto refresh controls
+    refresher_col1, refresher_col2 = st.columns([1,1])
+    with refresher_col1:
+        if st.button("🔄 Refresh Progress", key="refresh_active_batch_progress"):
+            st.rerun()
+    with refresher_col2:
+        auto_refresh = st.checkbox("Auto refresh (3s)", key="auto_refresh_active_batch")
+        if auto_refresh:
+            import time as _t
+            _t.sleep(3)
+            st.rerun()
+
+    # If batch is marked processing but no subprocess is attached, try to auto-start and attach
+    process_obj = st.session_state.get("ingestion_process")
+    if (
+        batch_status.get('active', False)
+        and not batch_status.get('paused', False)
+        and batch_status.get('remaining', 0) > 0
+        and not process_obj
+    ):
+        try:
+            st.info("🔌 Reattaching to batch and starting processing…")
+            if auto_resume_from_batch_config(batch_manager):
+                st.rerun()
+                return
+        except Exception as _auto_err:
+            logger.warning(f"Auto-start from active state failed: {_auto_err}")
+
+    # If a subprocess exists but no reader is attached (e.g., after refresh), reattach it
+    if process_obj and st.session_state.get("ingestion_output_queue") is None:
+        try:
+            start_ingest_reader(process_obj)
+            st.info("🔌 Reattached log reader to running process…")
+        except Exception as _reattach_err:
+            logger.warning(f"Failed to reattach reader in active mgmt: {_reattach_err}")
     
-    # Manual refresh button for updating progress
-    if st.button("🔄 Refresh Progress", key="refresh_active_batch_progress"):
-        st.rerun()
+    process_running = False
+    if process_obj:
+        try:
+            process_running = process_obj.poll() is None
+        except Exception:
+            process_running = False
     
     # Show batch status metrics
     if batch_status.get('is_chunked', False):
@@ -1034,6 +1208,33 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
         # Single progress bar for non-chunked processing
         progress = batch_status['progress_percent'] / 100.0
         st.progress(progress, text=f"Processing files... {batch_status['completed']}/{batch_status.get('total_files', 0)}")
+
+    # Drain any available process output to keep metrics/log fresh while in active batch view
+    proc = st.session_state.get('ingestion_process')
+    if proc and proc.poll() is None:
+        for line in get_ingest_lines(max_lines=50):
+            if line.startswith("CORTEX_THROTTLE::"):
+                try:
+                    _, delay_str, gpu_str, cpu_str = line.split("::", 3)
+                    st.session_state.current_throttle_delay = float(delay_str)
+                    st.session_state.current_gpu_util = None if gpu_str == "N/A" else float(gpu_str)
+                    st.session_state.current_cpu_util = None if cpu_str == "N/A" else float(cpu_str)
+                    st.session_state.last_heartbeat_ts = time.time()
+                    st.session_state.log_messages.append(
+                        f"THROTTLE delay={float(delay_str):.1f}s GPU={gpu_str}% CPU={cpu_str}%"
+                    )
+                except Exception:
+                    pass
+            elif line.startswith("CORTEX_HEARTBEAT::"):
+                try:
+                    _, gpu_str, cpu_str = line.split("::", 2)
+                    st.session_state.current_gpu_util = None if gpu_str == "N/A" else float(gpu_str)
+                    st.session_state.current_cpu_util = None if cpu_str == "N/A" else float(cpu_str)
+                    st.session_state.last_heartbeat_ts = time.time()
+                    ts = time.strftime('%H:%M:%S')
+                    st.session_state.log_messages.append(f"[{ts}] HEARTBEAT GPU={gpu_str}% CPU={cpu_str}%")
+                except Exception:
+                    pass
 
     # Performance Tuning Display - Always show when batch is active
     st.markdown("---")
@@ -1186,6 +1387,57 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                             st.success("Batch cleared.")
                             st.rerun()
 
+    # Check if there are staged documents ready for finalization
+    auto_finalize_ready = should_auto_finalize() and batch_status.get('completed', 0) > 0 and batch_status.get('remaining', 0) == 0
+    auto_finalize_enabled = bool(
+        st.session_state.get("batch_mode_active", False) or
+        batch_status.get("auto_finalize_enabled", False)
+    )
+    if auto_finalize_ready:
+        st.markdown("---")
+        st.info("📦 **Analysis Complete!** Your documents are ready to be added to the knowledge base.")
+
+        finalize_col1, finalize_col2 = st.columns([3, 1])
+
+        if auto_finalize_enabled and not st.session_state.get("batch_auto_finalize_started"):
+            st.success("🚀 Starting automatic finalization for batch mode…")
+            st.session_state.batch_auto_finalize_started = True
+            st.session_state.auto_finalize_triggered = True
+            start_automatic_finalization()
+            st.rerun()
+            return
+
+        with finalize_col1:
+            if st.button("✅ Complete Ingestion (Finalize to Database)", type="primary", use_container_width=True, key="manual_finalize_batch"):
+                with st.spinner("Finalizing documents to database..."):
+                    try:
+                        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                        command = [
+                            sys.executable, "-m", "cortex_engine.ingest_cortex",
+                            "--finalize-from-staging", "--db-path", container_db_path
+                        ]
+
+                        result = subprocess.run(command, capture_output=True, text=True, timeout=300)
+
+                        if result.returncode == 0:
+                            st.success("✅ Documents successfully added to knowledge base!")
+                            batch_manager.clear_batch()
+                            # Set flag to indicate finalization completed successfully
+                            st.session_state.manual_finalize_success = True
+                            st.session_state.auto_finalize_triggered = False
+                            st.session_state.ingestion_stage = "config_done"
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Finalization failed: {result.stderr}")
+                            logger.error(f"Finalization error: {result.stderr}")
+                    except Exception as e:
+                        st.error(f"❌ Failed to finalize: {e}")
+                        logger.error(f"Manual finalization error: {e}", exc_info=True)
+
+        with finalize_col2:
+            st.caption("This will add your analyzed documents to the searchable database.")
+
     # Consolidated action buttons
     col1, col2, col3, col4 = st.columns(4)
 
@@ -1218,10 +1470,12 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                 button_text = "▶️ Resume Processing"
 
             if st.button(button_text, type="primary", use_container_width=True, key="resume_processing_main"):
-                # If starting a new session, reset the session counter
-                if batch_status.get('auto_pause_after_chunks') and is_paused:
-                    if batch_status.get('chunks_processed_in_session', 0) >= batch_status.get('auto_pause_after_chunks', 0):
+                # If paused for any reason, clear paused flag and session counters
+                try:
+                    if is_paused:
                         batch_manager.start_new_session()
+                except Exception:
+                    pass
 
                 # Resume processing
                 if auto_resume_from_batch_config(batch_manager):
@@ -1355,14 +1609,24 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
 
                 if st.button("🔄 Apply New Settings", type="secondary", use_container_width=True):
                     # Modify existing batch with new settings
-                    batch_state = batch_manager.load_state()
-                    if batch_state:
-                        remaining_files = batch_state.get('files_remaining', [])
-                        if remaining_files:
-                            # Update batch with new settings
-                            batch_manager.clear_batch()
-                            scan_config = batch_state.get('scan_config', {})
-                            batch_manager.create_batch(remaining_files, scan_config, new_chunk_size, new_auto_pause if new_auto_pause != "No auto-pause" else None)
+                            batch_state = batch_manager.load_state()
+                            if batch_state:
+                                remaining_files = batch_state.get('files_remaining', [])
+                                if remaining_files:
+                                    # Update batch with new settings
+                                    batch_manager.clear_batch()
+                                    scan_config = batch_state.get('scan_config', {})
+                                    auto_finalize_enabled = batch_state.get(
+                                        'auto_finalize_enabled',
+                                        scan_config.get('auto_finalize_enabled', False)
+                                    )
+                                    batch_manager.create_batch(
+                                        remaining_files,
+                                        scan_config,
+                                        new_chunk_size,
+                                        new_auto_pause if new_auto_pause != "No auto-pause" else None,
+                                        auto_finalize_enabled=auto_finalize_enabled
+                                    )
 
                             if new_auto_pause != "No auto-pause":
                                 st.success(f"✅ Settings updated! New session mode: {new_auto_pause} chunks ({new_auto_pause * new_chunk_size} files) then auto-pause")
@@ -1416,7 +1680,17 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                                 # Clear old batch and create new chunked one
                                 batch_manager.clear_batch()
                                 scan_config = batch_state.get('scan_config', {})
-                                batch_manager.create_batch(remaining_files, scan_config, chunk_size_main, auto_pause_chunks if auto_pause_chunks != "No auto-pause" else None)
+                                auto_finalize_enabled = batch_state.get(
+                                    'auto_finalize_enabled',
+                                    scan_config.get('auto_finalize_enabled', False)
+                                )
+                                batch_manager.create_batch(
+                                    remaining_files,
+                                    scan_config,
+                                    chunk_size_main,
+                                    auto_pause_chunks if auto_pause_chunks != "No auto-pause" else None,
+                                    auto_finalize_enabled=auto_finalize_enabled
+                                )
 
                                 if auto_pause_chunks != "No auto-pause":
                                     st.success(f"✅ Session mode enabled! Will process {auto_pause_chunks} chunks then auto-pause")
@@ -1427,29 +1701,35 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
             else:
                 st.info("💡 **Small Batch**: No chunking needed for this batch size.")
 
+    if process_running and not batch_status.get('paused', False):
+        time.sleep(1)
+        st.rerun()
+
 def auto_resume_from_batch_config(batch_manager: BatchState) -> bool:
     """Automatically restore scan configuration and resume batch processing"""
     try:
         scan_config = batch_manager.get_scan_config()
         if not scan_config:
-            # Try to recover from staging file if scan config is missing
-            st.warning("⚠️ No scan configuration found in batch state - this can happen after a system crash")
-            st.info("📝 **To resume processing:** Please re-enter your original paths below and select your directories again.")
-            
-            # Add option to clear corrupted batch state
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🗑️ Clear Corrupted Batch", type="secondary", use_container_width=True):
-                    batch_manager.clear_batch()
-                    st.success("✅ Corrupted batch state cleared. You can now start a new scan.")
-                    st.rerun()
-            with col2:
-                if st.button("📁 Go to Configuration", type="primary", use_container_width=True):
-                    st.session_state.ingestion_stage = "config"
-                    st.rerun()
-            
+            # Fallback: attempt to resume directly from files_remaining in batch state
+            state = batch_manager.load_state() or {}
+            files_remaining = state.get('files_remaining', [])
+            if files_remaining:
+                container_db_path = str(batch_manager.db_path)
+                st.session_state.log_messages = []
+                st.session_state.ingestion_stage = "analysis_running"
+                st.session_state.batch_mode_active = True
+                target_collection = st.session_state.get('target_collection_name', '')
+                command = build_ingestion_command(container_db_path, files_remaining, target_collection, resume=True)
+                try:
+                    st.session_state.ingestion_process = spawn_ingest(command)
+                    start_ingest_reader(st.session_state.ingestion_process)
+                    return True
+                except Exception as e:
+                    st.error(f"❌ Failed to start ingestion from batch state: {e}")
+                    logger.error(f"Fallback resume failed: {e}")
+            # If no remaining files or start failed, try staging file path
             return try_resume_from_staging_file(batch_manager)
-            
+        
         return resume_from_scan_config(batch_manager, scan_config)
     except Exception as e:
         st.error(f"❌ Failed to resume batch automatically: {e}")
@@ -1508,6 +1788,11 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
             # Start the actual ingestion process
             container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
             batch_manager_instance = BatchState(container_db_path)
+            # Ensure we clear any paused flag from a prior session
+            try:
+                batch_manager_instance.start_new_session()
+            except Exception:
+                pass
             
             # For chunked processing, get current chunk files
             if batch_manager_instance.is_chunked_processing():
@@ -1525,14 +1810,8 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
             command = build_ingestion_command(container_db_path, files_to_process, target_collection, resume=True)
             
             try:
-                st.session_state.ingestion_process = subprocess.Popen(
-                    command, 
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.STDOUT, 
-                    text=True, 
-                    bufsize=1, 
-                    universal_newlines=True
-                )
+                st.session_state.ingestion_process = spawn_ingest(command)
+                start_ingest_reader(st.session_state.ingestion_process)
                 st.success(f"✅ Auto-resume started! Processing {len(files_to_process)} files...")
                 return True
             except Exception as start_error:
@@ -1572,6 +1851,9 @@ def render_config_and_scan_ui():
     is_knowledge_path_valid = validate_path_exists(root_display_path, must_be_dir=True)
 
     if is_knowledge_path_valid:
+        # Initialize directory_scan_path if not set or if it's from a different root
+        if 'directory_scan_path' not in st.session_state or not st.session_state.directory_scan_path:
+            st.session_state.directory_scan_path = root_display_path
         current_display_path = st.session_state.directory_scan_path
         st.text_input("Current Directory:", current_display_path, disabled=True)
         # Use the appropriate path converter that handles Docker/WSL environments
@@ -1712,13 +1994,22 @@ def render_config_and_scan_ui():
             st.checkbox("⚡ Skip image processing (faster, but loses visual content)", key="skip_image_processing",
                        value=False,
                        help="🖼️ Skip AI vision analysis of JPG/PNG files. Image processing is now optimized with parallel execution (30s timeout). Only skip if you don't need OCR, charts, or diagram analysis.")
-            st.number_input("⏱️ Throttle delay (seconds between documents)",
-                           key="throttle_delay",
-                           min_value=0.0,
-                           max_value=10.0,
-                           value=0.5,
-                           step=0.5,
-                           help="🎛️ Smart adaptive throttling with GPU/CPU monitoring. Set baseline delay (0-10s) - system automatically increases delay when GPU>80% or CPU>85% to prevent freezing. 0.5s default keeps system usable during ingestion, auto-adjusts higher when load increases. 0 = no baseline (auto-throttle only when >threshold), 1-2 = higher baseline + auto. System adapts in real-time to your hardware load.")
+            # Use session default (which is WSL-aware) for initial value
+            st.number_input(
+                "⏱️ Throttle delay (seconds between documents)",
+                key="throttle_delay",
+                min_value=0.0,
+                max_value=10.0,
+                value=float(st.session_state.get("throttle_delay", 1.5 if _is_wsl_env() else 0.5)),
+                step=0.5,
+                help=(
+                    "🎛️ Smart adaptive throttling with GPU/CPU monitoring. Set baseline delay (0-10s) — "
+                    "system automatically increases delay when GPU/CPU load is high to prevent freezing. "
+                    "0 = no baseline (auto-throttle only), 1–2s recommended on laptops/WSL."
+                ),
+            )
+            if _is_wsl_env():
+                st.caption("WSL profile active: baseline default 1.5s; auto-applies cooldown every 20 docs for 15s and LLM timeout 120s.")
         with col2:
             st.write("**Pattern-Based Exclusion**")
             st.checkbox("Enable pattern-based exclusion", key="enable_pattern_exclusion", 
@@ -1743,6 +2034,7 @@ def render_config_and_scan_ui():
                 "exclude_patterns_input": st.session_state.get("exclude_patterns_input", ""),
                 "filter_prefer_docx": st.session_state.get("filter_prefer_docx", False),
                 "batch_ingest_mode": st.session_state.get("batch_ingest_mode", False),
+                "auto_finalize_enabled": st.session_state.get("batch_ingest_mode", False),
                 "scan_timestamp": datetime.now().isoformat()
             }
             # Store in a way that won't conflict with widgets
@@ -1792,6 +2084,39 @@ def render_config_and_scan_ui():
             
             # Start file scanning with enhanced progress monitoring (no spinner to allow progress updates to show)
             scan_for_files(selected_to_scan)
+
+            # After scanning, determine next stage based on batch mode
+            if st.session_state.get("batch_ingest_mode", False):
+                # In batch mode, skip the batch management screen and start processing immediately
+                files_to_process = st.session_state.get("files_to_review", [])
+                if files_to_process:
+                    # Initialize batch state
+                    container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                    batch_manager = BatchState(container_db_path)
+                    batch_manager.create_batch(files_to_process, scan_config)
+
+                    # Start processing immediately - go directly to analysis_running
+                    st.session_state.log_messages = []
+                    st.session_state.ingestion_stage = "analysis_running"
+                    st.session_state.batch_mode_active = True
+
+                    # Build and start ingestion command
+                    target_collection = st.session_state.get('target_collection_name', '')
+                    command = build_ingestion_command(container_db_path, files_to_process, target_collection)
+
+                    try:
+                        st.session_state.ingestion_process = spawn_ingest(command)
+                        start_ingest_reader(st.session_state.ingestion_process)
+                        logger.info(f"Batch mode: Auto-started processing {len(files_to_process)} files")
+                    except Exception as e:
+                        st.error(f"❌ Failed to start processing: {e}")
+                        logger.error(f"Auto-start failed: {e}")
+                        st.session_state.ingestion_stage = "batch_processing"  # Fallback to manual start
+                else:
+                    st.session_state.ingestion_stage = "batch_processing"  # No files, show batch screen
+            else:
+                st.session_state.ingestion_stage = "pre_analysis"
+
             st.rerun()
         else:
             if not is_knowledge_path_valid: st.error(f"Root Source Path is not valid.")
@@ -1899,11 +2224,28 @@ def render_pre_analysis_ui():
         st.session_state.log_messages = []; st.session_state.ingestion_stage = "analysis_running"
         target_collection = st.session_state.get('target_collection_name', '')
         command = build_ingestion_command(container_db_path, globally_selected, target_collection)
-        st.session_state.ingestion_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+        st.session_state.ingestion_process = spawn_ingest(command)
+        start_ingest_reader(st.session_state.ingestion_process)
         st.rerun()
 
 def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
     st.header(stage_title)
+    
+    # If the UI is in processing mode but no subprocess exists (e.g., app reload),
+    # attempt an automatic resume from stored batch configuration.
+    try:
+        if st.session_state.get('ingestion_stage') == 'analysis_running' and not st.session_state.get('ingestion_process'):
+            container_db_path = convert_to_docker_mount_path(st.session_state.get('db_path', ''))
+            if container_db_path:
+                batch_manager = BatchState(container_db_path)
+                batch_state = batch_manager.load_state()
+                if batch_state and batch_state.get('files_remaining'):
+                    if auto_resume_from_batch_config(batch_manager):
+                        st.info("🔄 Auto-resume started after reload; continuing processing…")
+                        st.rerun()
+                        return
+    except Exception as _e:
+        logger.warning(f"Auto-resume on reload skipped: {_e}")
     
     # Add control buttons for pause/stop
     col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
@@ -1921,6 +2263,10 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
             if st.session_state.ingestion_process:
                 st.session_state.ingestion_process.terminate()
                 st.session_state.ingestion_process = None
+                # Signal reader thread to stop
+                stop_ev = st.session_state.get("ingestion_reader_stop")
+                if stop_ev:
+                    stop_ev.set()
                 st.warning("Process stopped by user")
                 st.rerun()
     
@@ -1944,30 +2290,38 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
     else:
         progress_bar = st.progress(0, text="Starting process...")
 
-    # Throttle status indicator (prominent)
-    if st.session_state.get('throttle_active', False):
-        throttle_col1, throttle_col2, throttle_col3 = st.columns([1, 1, 1])
-        with throttle_col1:
-            delay_val = st.session_state.get('current_throttle_delay', 0.0)
-            st.metric("⏱️ Throttle Delay", f"{delay_val:.1f}s", help="Current delay between documents to reduce system load")
-        with throttle_col2:
-            gpu_val = st.session_state.get('current_gpu_util', None)
-            if gpu_val is not None:
-                gpu_delta = f"+{gpu_val - 80:.0f}%" if gpu_val > 80 else None
-                st.metric("🎮 GPU Load", f"{gpu_val:.0f}%", delta=gpu_delta, delta_color="inverse", help="GPU utilization (throttles at >80%)")
-            else:
-                st.metric("🎮 GPU Load", "N/A", help="GPU monitoring unavailable (nvidia-smi not found)")
-        with throttle_col3:
-            cpu_val = st.session_state.get('current_cpu_util', None)
-            if cpu_val is not None:
-                cpu_delta = f"+{cpu_val - 85:.0f}%" if cpu_val > 85 else None
-                st.metric("💻 CPU Load", f"{cpu_val:.0f}%", delta=cpu_delta, delta_color="inverse", help="CPU utilization (throttles at >85%)")
-            else:
-                st.metric("💻 CPU Load", "N/A", help="CPU monitoring unavailable")
+    # Throttle status indicator (always visible; values update as lines arrive)
+    throttle_col1, throttle_col2, throttle_col3 = st.columns([1, 1, 1])
+    with throttle_col1:
+        delay_val = st.session_state.get('current_throttle_delay', 0.0)
+        st.metric("⏱️ Throttle Delay", f"{delay_val:.1f}s", help="Current delay between documents to reduce system load")
+    with throttle_col2:
+        gpu_val = st.session_state.get('current_gpu_util', None)
+        if gpu_val is not None:
+            gpu_delta = f"+{gpu_val - 80:.0f}%" if gpu_val > 80 else None
+            st.metric("🎮 GPU Load", f"{gpu_val:.0f}%", delta=gpu_delta, delta_color="inverse", help="GPU utilization (throttle increases when high)")
+        else:
+            st.metric("🎮 GPU Load", "N/A", help="GPU monitoring unavailable or not yet sampled")
+    with throttle_col3:
+        cpu_val = st.session_state.get('current_cpu_util', None)
+        if cpu_val is not None:
+            cpu_delta = f"+{cpu_val - 85:.0f}%" if cpu_val > 85 else None
+            st.metric("💻 CPU Load", f"{cpu_val:.0f}%", delta=cpu_delta, delta_color="inverse", help="CPU utilization (throttle increases when high)")
+        else:
+            st.metric("💻 CPU Load", "N/A", help="CPU monitoring unavailable or not yet sampled")
 
-        # Visual indicator when throttling is active
-        if (gpu_val and gpu_val > 80) or (cpu_val and cpu_val > 85):
-            st.warning("🎛️ **Adaptive throttling active** - System load detected, automatically slowing down to prevent freezing.")
+    # Visual indicator when throttling is active
+    if (gpu_val and gpu_val > 80) or (cpu_val and cpu_val > 85):
+        st.warning("🎛️ **Adaptive throttling active** - System load detected, automatically slowing down to prevent freezing.")
+
+    # Heartbeat freshness indicator
+    hb_ts = st.session_state.get('last_heartbeat_ts')
+    if hb_ts:
+        try:
+            age = max(0, int(time.time() - hb_ts))
+            st.caption(f"Last update {age}s ago")
+        except Exception:
+            pass
 
     # Check if process is still running BEFORE the expander (so rerun logic works)
     process_still_running = False
@@ -1975,74 +2329,85 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
         poll_result = st.session_state.ingestion_process.poll()
         process_still_running = (poll_result is None)
 
-        # Read available lines without blocking
-        lines_read = 0
-        max_lines_per_render = 50  # Read up to 50 lines per refresh
-
-        while lines_read < max_lines_per_render:
+        # If reader lost (e.g., browser refresh/new session), reattach to running process
+        if process_still_running and not st.session_state.get("ingestion_output_queue"):
             try:
-                # Non-blocking read with timeout
-                import select
-                import sys
+                start_ingest_reader(st.session_state.ingestion_process)
+                st.info("🔌 Reattached to running process; resuming live logs…")
+            except Exception as _reattach_err:
+                logger.warning(f"Failed to reattach reader: {_reattach_err}")
 
-                # Windows doesn't support select on pipes, so use alternative approach
-                if sys.platform == 'win32':
-                    # On Windows, just try to read with timeout
-                    # This may still block briefly but better than nothing
-                    line = st.session_state.ingestion_process.stdout.readline()
-                    if not line:
-                        break
-                else:
-                    # Unix/Mac: use select for true non-blocking
-                    ready, _, _ = select.select([st.session_state.ingestion_process.stdout], [], [], 0.05)
-                    if not ready:
-                        break
-
-                    line = st.session_state.ingestion_process.stdout.readline()
-                    if not line:
-                        break
-
-                line = line.strip()
-                if not line:
-                    continue
-
-                lines_read += 1
-
-                # Parse progress updates
-                if line.startswith("CORTEX_PROGRESS::"):
-                    try:
-                        _, progress_part, filename_part = line.split("::", 2)
-                        current, total = map(int, progress_part.split('/'))
-                        st.session_state.current_doc_number = current
-                        st.session_state.total_docs_in_batch = total
-                        st.session_state.log_messages.append(f"Processing {current}/{total}: {filename_part}")
-                    except (ValueError, IndexError):
-                        st.session_state.log_messages.append(line)
-                elif line.startswith("CORTEX_THROTTLE::"):
-                    try:
-                        _, delay_str, gpu_str, cpu_str = line.split("::", 3)
-                        st.session_state.current_throttle_delay = float(delay_str)
-                        st.session_state.current_gpu_util = None if gpu_str == "N/A" else float(gpu_str)
-                        st.session_state.current_cpu_util = None if cpu_str == "N/A" else float(cpu_str)
-                        st.session_state.throttle_active = True
-                    except (ValueError, IndexError):
-                        pass
-                elif line.startswith("CORTEX_STAGE::FINALIZE_DONE"):
-                    st.session_state.log_messages.append("✅ Finalization completed successfully!")
-                    st.session_state.finalize_done_detected = True
-                elif line.startswith("CORTEX_STAGE::ANALYSIS_DONE"):
-                    st.session_state.log_messages.append("✅ Analysis completed successfully!")
-                    st.session_state.analysis_done_detected = True
-                else:
+        # Drain available lines from background reader
+        for line in get_ingest_lines(max_lines=50):
+            # Parse progress updates
+            if line.startswith("CORTEX_PROGRESS::"):
+                try:
+                    _, progress_part, filename_part = line.split("::", 2)
+                    current, total = map(int, progress_part.split('/'))
+                    st.session_state.current_doc_number = current
+                    st.session_state.total_docs_in_batch = total
+                    st.session_state.log_messages.append(f"Processing {current}/{total}: {filename_part}")
+                except (ValueError, IndexError):
                     st.session_state.log_messages.append(line)
+            elif line.startswith("CORTEX_THROTTLE::"):
+                try:
+                    _, delay_str, gpu_str, cpu_str = line.split("::", 3)
+                    st.session_state.current_throttle_delay = float(delay_str)
+                    gpu_val = None if gpu_str == "N/A" else float(gpu_str)
+                    cpu_val = None if cpu_str == "N/A" else float(cpu_str)
+                    st.session_state.current_gpu_util = gpu_val
+                    st.session_state.current_cpu_util = cpu_val
+                    st.session_state.throttle_active = bool((gpu_val is not None and gpu_val > 80) or (cpu_val is not None and cpu_val > 85))
+                    st.session_state.last_heartbeat_ts = time.time()
+                    # Also surface a compact log line so users see live updates
+                    gpu_disp = gpu_str if gpu_str != "N/A" else "N/A"
+                    cpu_disp = cpu_str if cpu_str != "N/A" else "N/A"
+                    st.session_state.log_messages.append(f"THROTTLE delay={float(delay_str):.1f}s GPU={gpu_disp}% CPU={cpu_disp}%")
+                except (ValueError, IndexError):
+                    pass
+            elif line.startswith("CORTEX_HEARTBEAT::"):
+                try:
+                    _, gpu_str, cpu_str = line.split("::", 2)
+                    gpu_val = None if gpu_str == "N/A" else float(gpu_str)
+                    cpu_val = None if cpu_str == "N/A" else float(cpu_str)
+                    st.session_state.current_gpu_util = gpu_val
+                    st.session_state.current_cpu_util = cpu_val
+                    st.session_state.last_heartbeat_ts = time.time()
+                    # Log heartbeat visibly as a compact line
+                    gpu_disp = gpu_str if gpu_str != "N/A" else "N/A"
+                    cpu_disp = cpu_str if cpu_str != "N/A" else "N/A"
+                    ts = time.strftime('%H:%M:%S')
+                    st.session_state.log_messages.append(f"[{ts}] HEARTBEAT GPU={gpu_disp}% CPU={cpu_disp}%")
+                except (ValueError, IndexError):
+                    pass
+            elif line.startswith("CORTEX_STAGE::FINALIZE_DONE"):
+                st.session_state.log_messages.append("✅ Finalization completed successfully!")
+                st.session_state.finalize_done_detected = True
+                st.session_state.batch_auto_finalize_started = False
+                st.session_state.batch_auto_processed = False
+                st.session_state.batch_mode_active = False
+                st.session_state.auto_finalize_triggered = False
+            elif line.startswith("CORTEX_STAGE::ANALYSIS_DONE"):
+                st.session_state.log_messages.append("✅ Analysis completed successfully!")
+                st.session_state.analysis_done_detected = True
+            else:
+                st.session_state.log_messages.append(line)
 
-            except Exception as e:
-                # Error reading, stop trying
-                break
+        # Trim log to avoid unbounded growth
+        if len(st.session_state.log_messages) > 1000:
+            st.session_state.log_messages = st.session_state.log_messages[-1000:]
 
         # Clean up if process finished
         if not process_still_running:
             st.session_state.ingestion_process = None
+            # Clear GPU/CPU metrics so they don't show stale values
+            st.session_state.current_gpu_util = None
+            st.session_state.current_cpu_util = None
+            st.session_state.throttle_active = False
+            # Signal reader thread to stop
+            stop_ev = st.session_state.get("ingestion_reader_stop")
+            if stop_ev:
+                stop_ev.set()
 
     # Expandable log section (just for display now)
     with st.expander("📋 Processing Log (click to expand/collapse)", expanded=False):
@@ -2076,19 +2441,59 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
 
     # Handle metadata review after process completes (only if not doing auto-finalize)
     if on_complete_stage == "metadata_review" and not process_still_running:
+        # CRITICAL: This section handles auto-finalization after analysis completes
+        st.markdown("---")
+        st.markdown("### 📊 Analysis Complete")
+
         load_staged_files()
 
         # Check if we should automatically proceed to finalization
         # But only if analysis just completed (not if finalization already happened)
-        if should_auto_finalize() and not st.session_state.get('finalize_done_detected', False):
-            # Don't show info message - it persists after rerun
-            # Just silently transition to finalization
+        should_finalize = should_auto_finalize()
+        finalize_done = st.session_state.get('finalize_done_detected', False)
+        retry_attempts = st.session_state.get('auto_finalize_retry_attempts', 0)
+
+        logger.info(f"🔍 Auto-finalize check: on_complete_stage={on_complete_stage}, process_still_running={process_still_running}, should_finalize={should_finalize}, finalize_done={finalize_done}")
+
+        # PROMINENT DEBUG: Show visible status at the top
+        debug_col1, debug_col2, debug_col3 = st.columns(3)
+        with debug_col1:
+            st.metric("Should Finalize", "✅ Yes" if should_finalize else "❌ No")
+        with debug_col2:
+            st.metric("Already Done", "✅ Yes" if finalize_done else "❌ No")
+        with debug_col3:
+            st.metric("Stage", on_complete_stage)
+
+        if should_finalize and not finalize_done:
+            st.session_state.auto_finalize_retry_attempts = 0
+            # Show info message to confirm auto-finalize is triggering
+            st.success("✅ Analysis complete! Starting automatic finalization in 2 seconds...")
             logger.info("Analysis completed successfully - starting automatic finalization")
+            time.sleep(2)  # Brief delay so user sees the message
             start_automatic_finalization()
             st.rerun()  # Immediate rerun to show finalization stage
             return  # Exit early to avoid setting stage to metadata_review
+        else:
+            if not should_finalize and not finalize_done and st.session_state.get('analysis_done_detected'):
+                # Automatically poll for staging availability before surfacing warning
+                if retry_attempts < MAX_AUTO_FINALIZE_RETRIES:
+                    st.session_state.auto_finalize_retry_attempts = retry_attempts + 1
+                    wait_time = min(2.0, 0.5 * st.session_state.auto_finalize_retry_attempts)
+                    st.info(f"⏳ Waiting for staged documents to finish writing ({st.session_state.auto_finalize_retry_attempts}/{MAX_AUTO_FINALIZE_RETRIES})…")
+                    time.sleep(wait_time)
+                    st.rerun()
+                    return
+                else:
+                    logger.warning("Auto-finalize gave up waiting for staging file after retries")
+                    st.warning("⚠️ **Auto-finalize skipped:** Staged documents were not detected after multiple checks.")
+
+            if finalize_done:
+                logger.info("Auto-finalize skipped: finalization already completed")
+                st.info("ℹ️ Finalization already completed")
 
         st.session_state.ingestion_stage = on_complete_stage
+        st.session_state.auto_finalize_retry_attempts = 0
+        time.sleep(1)
         st.rerun()
 
 def render_completion_screen():
@@ -2307,7 +2712,8 @@ def render_metadata_review_ui():
                 if st.session_state.get("skip_image_processing", False):
                     command.append("--skip-image-processing")
                 
-                st.session_state.ingestion_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+                st.session_state.ingestion_process = spawn_ingest(command)
+                start_ingest_reader(st.session_state.ingestion_process)
                 st.rerun()
             else:
                 st.warning("No valid documents to process after filtering errors.")
@@ -2354,7 +2760,8 @@ def render_metadata_review_ui():
             if st.session_state.get("skip_image_processing", False):
                 command.append("--skip-image-processing")
                 
-            st.session_state.ingestion_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+            st.session_state.ingestion_process = spawn_ingest(command)
+            start_ingest_reader(st.session_state.ingestion_process)
             st.rerun()
     
     st.markdown("---")
@@ -2456,7 +2863,8 @@ def render_metadata_review_ui():
         # Add skip image processing flag if enabled
         if st.session_state.get("skip_image_processing", False):
             command.append("--skip-image-processing")
-        st.session_state.ingestion_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+        st.session_state.ingestion_process = spawn_ingest(command)
+        start_ingest_reader(st.session_state.ingestion_process)
         st.rerun()
 
 def render_document_type_management():
@@ -3103,6 +3511,12 @@ else:
         # Health check: prompt to migrate collections if needed
         show_collection_migration_healthcheck()
         stage = st.session_state.get("ingestion_stage", "config")
+
+        # DEBUG: Show stage transition info (temporary for troubleshooting)
+        if stage in ["batch_processing", "analysis_running"]:
+            batch_mode = st.session_state.get("batch_ingest_mode", False)
+            st.info(f"🔍 **DEBUG:** Current stage: `{stage}` | Batch mode checkbox: `{batch_mode}`")
+
         if stage == "config": render_config_and_scan_ui()
         elif stage == "pre_analysis": render_pre_analysis_ui()
         elif stage == "batch_processing": render_batch_processing_ui()

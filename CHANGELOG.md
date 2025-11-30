@@ -14,7 +14,7 @@ Improved document ingestion with Docling, robust database cleanup, and safer WSL
 
 #### Post-release updates (2025-11-17)
 - Fixed Docker start scripts (CPU & GPU) by switching to heredoc generation to avoid shell quoting errors during image build.
-- Knowledge Ingest “Install missing models now” button now re-checks availability after pulling and surfaces Ollama connectivity errors inline.
+- Knowledge Ingest "Install missing models now" button now re-checks availability after pulling and surfaces Ollama connectivity errors inline.
 
 ### ✨ New Features
 - Enabled Docling-based ingestion pipeline for richer Office/PDF parsing in both host and Docker engines.
@@ -33,44 +33,30 @@ Improved document ingestion with Docling, robust database cleanup, and safer WSL
 
 ### 🔧 Bug Fixes
 - Fixed Clean Start NameError and ensured it behaves safely when `knowledge_hub_db` is missing or partially created.
-- Resolved cases where ingestion logs and UI state would remain in a “processing” state after the ingestion subprocess had terminated.
+- Resolved cases where ingestion logs and UI state would remain in a "processing" state after the ingestion subprocess had terminated.
 - Prevented the Active Batch Management panel from blocking automatic finalization and completion routing.
 - Hardened WSL/Docker path conversion so ingestion never attempts to write under the project directory instead of the external database path.
 
-## v4.10.2 - 2025-10-11
+## v4.10.2 - 2025-11-12
 
-### Bug Fixes & UX Improvements
+### Docker Path Auto-Detection Hotfix
 
-Critical bug fixes for ingestion errors, improved search result deduplication, and better user feedback during processing.
-
-### 🔧 Bug Fixes
-- Fixed LlamaIndex DocxReader API errors (changed `file_path=` keyword to positional argument)
-- Removed calls to non-existent `get_recently_ingested_documents()` method
-- Fixed BackupManager async coroutine warning (added asyncio.run wrapper)
-- Removed auto-submit behavior in Knowledge Search (now requires explicit button press)
-- Improved LLM timeout handling (reduced 600s → 180s with better error messages)
+Eliminates false “Docker Setup Required” warnings by detecting mounted knowledge bases automatically and aligning every UI surface with the central version metadata.
 
 ### ✨ New Features
-- Search results now deduplicate by document (shows unique docs instead of all chunks)
-- Display "X results (Y unique documents)" for better clarity
-- Shows "Showing Y unique documents (from X chunks)" when deduplication occurs
+- Knowledge Search now walks the configured path, `/mnt/<drive>` mounts, and container defaults to locate `knowledge_hub_db`, surfacing the winning path in the UI.
+- Sidebar configuration and the Working Collection Manager guide users to update their stored database path whenever a fallback is detected.
+- Documentation now includes a Docker-specific troubleshooting section covering bind-mount verification and the new auto-detection flow.
 
 ### 🚀 Improvements
-- Consistent UI behavior across all pages - Tab accepts input, button press initiates action
-- Better progress feedback during long-running LLM metadata extraction
-- Logs elapsed time for LLM calls taking >60 seconds
-- Explicit TimeoutError handling with clear error messages
-- Ingestion completion screen now queries ChromaDB for accurate document counts
+- Batch ingestion and Knowledge Search derive their header/version labels directly from `cortex_engine/version_config.py`, keeping the app chrome consistent.
+- Docker launch scripts echo the same semantic version shown in the UI, simplifying release verification.
+- Reduced redundant filesystem checks by caching the successful knowledge base path during validation.
 
-### 📋 Technical Details
-- Fixed 12+ DocxReader.load_data() calls across enhanced_ingest_cortex.py and ingest_cortex.py
-- All fixes synchronized to Docker distribution
-- Improved error handling prevents confusing timeout messages
-
-
-
-
-
+### 🔧 Bug Fixes
+- Resolved cases where Docker builds reported “Knowledge base directory not found at '/data/ai_databases/knowledge_hub_db'” even when the data existed under `/mnt/e` or `/mnt/f`.
+- Prevented Knowledge Search from exiting early when the configured path was empty but mounted volumes were available.
+- Ensured documentation and runtime instructions stay in sync so batch jobs, ingestion flows, and search all point to the same storage root.
 
 ## v4.10.1 - 2025-10-09
 

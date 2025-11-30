@@ -1010,7 +1010,8 @@ def main():
                         st.write(f"**Docker:** ✅ Available")
                     else:
                         st.write(f"**Docker:** ❌ Not available")
-                except:
+                except (FileNotFoundError, PermissionError, subprocess.SubprocessError) as e:
+                    logger.debug(f"Error checking Docker availability: {e}")
                     st.write(f"**Docker:** ❓ Unknown")
                     
             except Exception as e:

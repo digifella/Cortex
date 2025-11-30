@@ -70,6 +70,7 @@ class SuppressTelemetryErrors:
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Literal, Tuple
+import threading
 import re
 
 from pydantic import BaseModel, Field, ValidationError
@@ -223,6 +224,23 @@ def initialize_script():
         logging.warning(f"EmbeddingServiceAdapter failed ({e}); falling back to HuggingFaceEmbedding")
         Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
         logging.info(f"Models configured (Embed: {EMBED_MODEL}).")
+
+    # LLM safety: add a hard-timeout wrapper to prevent hangs during metadata extraction
+    # Uses a single worker thread to enforce a wall-clock timeout per LLM call.
+    # On timeout, callers should fall back to basic metadata and continue.
+    global _run_with_timeout
+    def _run_with_timeout(fn, timeout_s: float):
+        _futures = __import__('concurrent').futures
+        _executor = _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="metadata-timeout")
+        _future = _executor.submit(fn)
+        try:
+            return _future.result(timeout=timeout_s)
+        except _futures.TimeoutError as exc:
+            _future.cancel()
+            raise TimeoutError(f"Operation timed out after {timeout_s:.1f}s") from exc
+        finally:
+            # Avoid blocking shutdown when the worker is still running after a timeout.
+            _executor.shutdown(wait=_future.done())
 
 class RichMetadata(BaseModel):
     document_type: Literal[
@@ -579,6 +597,7 @@ def _legacy_manual_load_documents(file_paths: List[str], args=None) -> List[Docu
 
     # Process images in batch (parallel with timeout)
     if image_files:
+        # Respect conservative pacing for image processing
         image_workers = getattr(args, 'image_workers', 1) if hasattr(args, 'image_workers') else 1
         image_docs = _process_images_batch(image_files, skip_images, max_workers=image_workers)
         documents.extend(image_docs)
@@ -691,6 +710,7 @@ def get_gpu_utilization() -> Optional[float]:
     Returns:
         GPU utilization as float (0-100), or None if unavailable
     """
+    # 1) Try nvidia-smi (best signal on supported systems)
     try:
         import subprocess
         result = subprocess.run(
@@ -700,11 +720,24 @@ def get_gpu_utilization() -> Optional[float]:
             timeout=2
         )
         if result.returncode == 0:
-            # Parse first GPU utilization (handles multi-GPU, takes first)
             gpu_util = float(result.stdout.strip().split('\n')[0])
             return gpu_util
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError):
-        pass  # nvidia-smi not available or failed
+        pass
+
+    # 2) Fallback: approximate utilization from CUDA memory (works in WSL when nvidia-smi is unavailable)
+    try:
+        import torch
+        if torch.cuda.is_available():
+            total = torch.cuda.get_device_properties(0).total_memory
+            reserved = torch.cuda.memory_reserved(0)
+            if total and total > 0:
+                util_pct = (reserved / total) * 100.0
+                # Clamp to [0, 100]
+                util_pct = max(0.0, min(100.0, util_pct))
+                return float(util_pct)
+    except Exception:
+        pass
     return None
 
 
@@ -721,8 +754,68 @@ def get_cpu_utilization() -> Optional[float]:
         # This avoids adding 1 second blocking delay per document
         return psutil.cpu_percent(interval=None)
     except ImportError:
-        pass
+        # Fallback to system load average if psutil is unavailable
+        try:
+            import os
+            load1, _, _ = os.getloadavg()
+            cores = os.cpu_count() or 1
+            # Approximate utilization percentage relative to core count
+            return float(min(100.0, max(0.0, (load1 / cores) * 100.0)))
+        except Exception:
+            pass
     return None
+
+
+# ---------------------------------------------------------------------------------
+# Heartbeat: periodic status pings to UI (CPU/GPU load) to keep UI fresh
+# ---------------------------------------------------------------------------------
+_heartbeat_stop_event: Optional[threading.Event] = None
+_heartbeat_thread: Optional[threading.Thread] = None
+
+
+def _heartbeat_loop(period_s: float = 5.0):
+    try:
+        import time as _t
+        while _heartbeat_stop_event and not _heartbeat_stop_event.is_set():
+            gpu_util = get_gpu_utilization()
+            cpu_util = get_cpu_utilization()
+            gpu_str = f"{gpu_util:.0f}" if gpu_util is not None else "N/A"
+            cpu_str = f"{cpu_util:.0f}" if cpu_util is not None else "N/A"
+            print(f"CORTEX_HEARTBEAT::{gpu_str}::{cpu_str}", flush=True)
+            # Sleep in small steps to allow responsive stop
+            for _ in range(int(period_s * 10)):
+                if _heartbeat_stop_event and _heartbeat_stop_event.is_set():
+                    break
+                _t.sleep(0.1)
+    except Exception:
+        pass
+
+
+def start_heartbeat(period_s: float = 5.0):
+    """Start background heartbeat pings for UI."""
+    global _heartbeat_stop_event, _heartbeat_thread
+    try:
+        if _heartbeat_thread and _heartbeat_thread.is_alive():
+            return
+        _heartbeat_stop_event = threading.Event()
+        _heartbeat_thread = threading.Thread(target=_heartbeat_loop, args=(period_s,), daemon=True)
+        _heartbeat_thread.start()
+    except Exception:
+        pass
+
+
+def stop_heartbeat(timeout_s: float = 1.0):
+    """Stop background heartbeat pings."""
+    global _heartbeat_stop_event, _heartbeat_thread
+    try:
+        if _heartbeat_stop_event:
+            _heartbeat_stop_event.set()
+        if _heartbeat_thread and _heartbeat_thread.is_alive():
+            _heartbeat_thread.join(timeout=timeout_s)
+        _heartbeat_thread = None
+        _heartbeat_stop_event = None
+    except Exception:
+        pass
 
 
 def calculate_adaptive_throttle(
@@ -790,6 +883,8 @@ def extract_entities_and_relationships(doc_text: str, metadata: Dict, entity_ext
 def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, target_collection: str = None):
     logging.info(f"--- Starting Stage 2: Document Analysis with Graph Extraction (Cortex v13.0.0) ---")
     print("CORTEX_STAGE::ANALYSIS_START", flush=True)
+    # Start periodic heartbeat for UI responsiveness
+    start_heartbeat(period_s=5.0)
     
     # Initialize batch manager if db_path is available
     batch_manager = None
@@ -903,13 +998,21 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
                     # Add timeout handling with progress feedback
                     import time
                     start_time = time.time()
+                    # Enforce a hard timeout around the LLM call to avoid indefinite stalls
+                    llm_timeout = float(getattr(args, 'llm_timeout', 120.0)) if args else 120.0
                     try:
-                        response_str = str(Settings.llm.complete(prompt))
+                        response_str = str(_run_with_timeout(lambda: Settings.llm.complete(prompt), llm_timeout))
                         elapsed = time.time() - start_time
                         if elapsed > 60:
                             logging.info(f"LLM call took {elapsed:.1f}s (longer document)")
                     except TimeoutError as te:
                         logging.warning(f"LLM timeout after {time.time() - start_time:.1f}s for {file_name}, using fallback metadata")
+                        # Brief backoff to let Ollama recover a bit before the next document
+                        try:
+                            import time as _t
+                            _t.sleep(5)
+                        except Exception:
+                            pass
                         raise ValueError(f"LLM timeout: {te}")
                     except Exception as llm_ex:
                         logging.warning(f"LLM error after {time.time() - start_time:.1f}s for {file_name}: {llm_ex}")
@@ -1069,6 +1172,8 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
     collection_info = f" -> '{target_collection}'" if target_collection else " -> 'default'"
     logging.info(f"--- Analysis complete. {len(staged_docs)} documents staged{collection_info} at {staging_file} ---")
     print(f"CORTEX_STAGE::ANALYSIS_DONE::{len(staged_docs)}::{staging_file}", flush=True)
+    # Stop heartbeat
+    stop_heartbeat()
 
 def finalize_ingestion(db_path: str, args=None):
     logging.info(f"--- Starting Stage 3: Finalize from Staging with Graph Building (Cortex v13.0.0) ---")
@@ -1225,12 +1330,11 @@ def finalize_ingestion(db_path: str, args=None):
     vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-    # Batch indexing with cooldown between batches
+    # Emit coarse-grained progress during finalization by indexing in small batches
     total_docs = len(documents_for_indexing)
     batch_size = 25 if total_docs > 50 else max(5, total_docs // 4 or 1)
     indexed = 0
     logging.info(f"Indexing {total_docs} documents in batches of {batch_size}...")
-
     # Optional cooldown between index batches
     index_batch_cooldown = float(getattr(args, 'index_batch_cooldown', 1.0)) if args else 1.0
 
@@ -1240,9 +1344,13 @@ def finalize_ingestion(db_path: str, args=None):
             VectorStoreIndex.from_documents(batch_docs, storage_context=storage_context, show_progress=True)
         except Exception as e:
             logging.error(f"Batch indexing failed at {start}-{start+len(batch_docs)}: {e}", exc_info=True)
+            # Continue with next batch to be resilient
         indexed += len(batch_docs)
+        # Emit machine-readable progress update for UI
         last_name = batch_docs[-1].metadata.get('file_name', 'batch') if batch_docs else 'batch'
         print(f"CORTEX_PROGRESS::{indexed}/{total_docs}::{last_name}", flush=True)
+
+        # Gentle pause between index batches to reduce sustained load
         if index_batch_cooldown > 0:
             import time as _t
             _t.sleep(index_batch_cooldown)

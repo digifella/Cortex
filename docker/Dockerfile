@@ -154,13 +154,13 @@ echo ""
         ollama pull mistral:latest
         echo "✅ Mistral model ready!"
     fi
-    
+
     if ! ollama list 2>/dev/null | grep -q "mistral-small3.2"; then
         echo "⬇️ Downloading Mistral Small model (15GB)..."
         ollama pull mistral-small3.2
         echo "✅ Mistral Small model ready!"
     fi
-    
+
     echo "🎯 All AI models are now ready!"
     echo "🚀 Full functionality is now available at http://localhost:8501"
 } &
@@ -182,19 +182,19 @@ while true; do
         streamlit run Cortex_Suite.py --server.port 8501 --server.address 0.0.0.0 --server.enableCORS false --server.enableXsrfProtection false &
         STREAMLIT_PID=$!
     fi
-    
+
     if ! kill -0 $API_PID 2>/dev/null; then
         echo "❌ API process died, restarting..."
         uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1 &
         API_PID=$!
     fi
-    
+
     if ! kill -0 $OLLAMA_PID 2>/dev/null; then
         echo "❌ Ollama process died, restarting..."
         ollama serve &
         OLLAMA_PID=$!
     fi
-    
+
     sleep 30
  done
 EOF

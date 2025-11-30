@@ -4,9 +4,41 @@
 
 set -e
 
+normalize_path_for_docker() {
+    local input="$1"
+    if [ -z "$input" ]; then
+        echo ""
+        return
+    fi
+
+    # Prefer wslpath when available (WSL/git-bash with WSL)
+    if command -v wslpath >/dev/null 2>&1; then
+        # wslpath handles both Windows and WSL-style inputs
+        local converted
+        converted=$(wslpath -u "$input" 2>/dev/null || true)
+        if [ -n "$converted" ]; then
+            echo "$converted"
+            return
+        fi
+    fi
+
+    # Fallback: convert Windows drive paths (e.g., C:\path or C:/path) to /c/path
+    if [[ "$input" =~ ^[A-Za-z]:[\\/] ]]; then
+        local drive rest
+        drive="${input:0:1}"
+        rest="${input:2}"
+        rest="${rest//\\//}"
+        echo "/${drive,,}/${rest}"
+        return
+    fi
+
+    # Otherwise return as-is (already POSIX/WSL)
+    echo "$input"
+}
+
 echo ""
 echo "==============================================="
-echo "   CORTEX SUITE v4.10.1 (GPU Acceleration & Docker Parity)"
+echo "   CORTEX SUITE v4.10.2 (Docker Path Auto-Detection Hotfix)"
 echo "   Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64"
 echo "   GPU acceleration, timeout fixes, and improved reliability (2025-09-02)"
 echo "   Date: $(date)"
@@ -69,8 +101,10 @@ if [ ! -f .env ]; then
 fi
 
 # Read any existing host mapping from .env
-ENV_AI_DB_PATH=$(grep -E '^WINDOWS_AI_DATABASE_PATH=' .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
-ENV_SOURCE_PATH=$(grep -E '^WINDOWS_KNOWLEDGE_SOURCE_PATH=' .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+ENV_AI_DB_PATH_RAW=$(grep -E '^WINDOWS_AI_DATABASE_PATH=' .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+ENV_SOURCE_PATH_RAW=$(grep -E '^WINDOWS_KNOWLEDGE_SOURCE_PATH=' .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+ENV_AI_DB_PATH=$(normalize_path_for_docker "$ENV_AI_DB_PATH_RAW")
+ENV_SOURCE_PATH=$(normalize_path_for_docker "$ENV_SOURCE_PATH_RAW")
 
 # Offer interactive storage mapping (once) if not set in .env
 ADD_AI_DB_MOUNT=""
@@ -83,6 +117,7 @@ if [ -z "$ENV_AI_DB_PATH" ]; then
     read -p "Use host folder for AI database? (y/N): " USE_HOST_AI_DB
     if [[ "$USE_HOST_AI_DB" =~ ^[Yy]$ ]]; then
         read -p "Enter host path for AI database (e.g., /Users/you/ai_databases): " HOST_AI_DB
+        HOST_AI_DB=$(normalize_path_for_docker "$HOST_AI_DB")
         if [ -n "$HOST_AI_DB" ]; then
             # Persist to .env for future runs
             if grep -q '^WINDOWS_AI_DATABASE_PATH=' .env; then
@@ -99,6 +134,7 @@ if [ -z "$ENV_SOURCE_PATH" ]; then
     read -p "Bind a host folder for Knowledge Source (documents to ingest)? (y/N): " USE_HOST_SRC
     if [[ "$USE_HOST_SRC" =~ ^[Yy]$ ]]; then
         read -p "Enter host path for Knowledge Source (e.g., /Users/you/Knowledge): " HOST_SRC
+        HOST_SRC=$(normalize_path_for_docker "$HOST_SRC")
         if [ -n "$HOST_SRC" ]; then
             if grep -q '^WINDOWS_KNOWLEDGE_SOURCE_PATH=' .env; then
                 sed -i.bak "s|^WINDOWS_KNOWLEDGE_SOURCE_PATH=.*|WINDOWS_KNOWLEDGE_SOURCE_PATH=$HOST_SRC|" .env

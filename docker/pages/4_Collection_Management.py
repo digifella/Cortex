@@ -1,5 +1,5 @@
 # ## File: pages/4_Collection_Management.py
-# Version: v4.9.0
+# Version: v4.10.1
 # Date: 2025-08-28
 # Purpose: A UI for managing Working Collections only.
 #          Knowledge base maintenance functions moved to Maintenance page (page 13).
@@ -182,6 +182,180 @@ if 'collection_sort_order_asc' not in st.session_state: st.session_state.collect
 def set_sort_order(key):
     if st.session_state.collection_sort_key == key: st.session_state.collection_sort_order_asc = not st.session_state.collection_sort_order_asc
     else: st.session_state.collection_sort_key = key; st.session_state.collection_sort_order_asc = True if key == 'name' else False
+
+def render_document_metadata_editor(doc_id, meta, vector_collection, collection_name):
+    """Render metadata viewer and editor for a document"""
+    import json
+
+    st.markdown("### 📊 Document Metadata")
+
+    # Basic file info (read-only)
+    with st.container(border=True):
+        st.markdown("**📁 File Information**")
+        info_col1, info_col2 = st.columns(2)
+        with info_col1:
+            st.text_input("Document ID", value=doc_id, disabled=True, key=f"doc_id_{doc_id}")
+            st.text_input("File Name", value=meta.get('file_name', 'N/A'), disabled=True, key=f"filename_{doc_id}")
+        with info_col2:
+            st.text_input("Last Modified", value=meta.get('last_modified_date', 'N/A'), disabled=True, key=f"modified_{doc_id}")
+            st.text_input("File Path", value=meta.get('doc_posix_path', 'N/A'), disabled=True, key=f"path_{doc_id}")
+
+    st.markdown("---")
+
+    # Editable rich metadata
+    with st.container(border=True):
+        st.markdown("**✏️ Editable Metadata** *(Changes will be saved to the database)*")
+
+        # Document Type
+        doc_type_options = [
+            "Project Plan", "Technical Documentation", "Proposal/Quote", "Case Study / Trophy",
+            "Final Report", "Draft Report", "Presentation", "Contract/SOW",
+            "Meeting Minutes", "Financial Report", "Research Paper", "Email Correspondence",
+            "Image/Diagram", "Other"
+        ]
+        current_doc_type = meta.get('document_type', 'Other')
+        new_doc_type = st.selectbox(
+            "Document Type",
+            options=doc_type_options,
+            index=doc_type_options.index(current_doc_type) if current_doc_type in doc_type_options else doc_type_options.index('Other'),
+            key=f"doc_type_edit_{doc_id}"
+        )
+
+        # Proposal Outcome
+        outcome_options = ["Won", "Lost", "Pending", "N/A"]
+        current_outcome = meta.get('proposal_outcome', 'N/A')
+        new_outcome = st.selectbox(
+            "Proposal Outcome",
+            options=outcome_options,
+            index=outcome_options.index(current_outcome) if current_outcome in outcome_options else outcome_options.index('N/A'),
+            key=f"outcome_edit_{doc_id}",
+            help="Only relevant for proposals/quotes"
+        )
+
+        # Summary
+        current_summary = meta.get('summary', '')
+        new_summary = st.text_area(
+            "Summary",
+            value=current_summary,
+            height=100,
+            key=f"summary_edit_{doc_id}",
+            help="1-3 sentence summary of the document's content and purpose"
+        )
+
+        # Thematic Tags
+        current_tags = meta.get('thematic_tags', [])
+        if isinstance(current_tags, list):
+            tags_str = ", ".join(current_tags)
+        else:
+            tags_str = str(current_tags)
+
+        new_tags_str = st.text_area(
+            "Thematic Tags",
+            value=tags_str,
+            height=60,
+            key=f"tags_edit_{doc_id}",
+            help="Comma-separated list of 3-5 key themes, topics, or technologies"
+        )
+
+        # Save button
+        save_col1, save_col2 = st.columns([1, 3])
+        with save_col1:
+            if st.button("💾 Save Changes", key=f"save_meta_{doc_id}", type="primary", use_container_width=True):
+                try:
+                    # Parse new tags
+                    new_tags = [tag.strip() for tag in new_tags_str.split(',') if tag.strip()]
+
+                    # Update metadata in ChromaDB
+                    updated_metadata = {
+                        'document_type': new_doc_type,
+                        'proposal_outcome': new_outcome,
+                        'summary': new_summary,
+                        'thematic_tags': json.dumps(new_tags),  # Store as JSON string
+                        # Preserve other metadata
+                        'file_name': meta.get('file_name', ''),
+                        'doc_posix_path': meta.get('doc_posix_path', ''),
+                        'last_modified_date': meta.get('last_modified_date', ''),
+                    }
+
+                    # Update in vector collection
+                    vector_collection.update(
+                        ids=[doc_id],
+                        metadatas=[updated_metadata]
+                    )
+
+                    st.success("✅ Metadata updated successfully!")
+                    logger.info(f"Updated metadata for document {doc_id}")
+
+                    # Close the expander and refresh
+                    time.sleep(0.5)
+                    st.session_state[f"show_metadata_{doc_id}_{collection_name}"] = False
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"❌ Failed to update metadata: {e}")
+                    logger.error(f"Metadata update error for {doc_id}: {e}", exc_info=True)
+
+        with save_col2:
+            st.caption("Changes are saved immediately to the database when you click Save.")
+
+    st.markdown("---")
+
+    # Additional metadata (read-only)
+    with st.container(border=True):
+        st.markdown("**🔍 Additional Metadata (Read-Only)**")
+        # Extracted entities
+        entities = meta.get('extracted_entities', [])
+        if entities:
+            st.markdown("**Extracted Entities:**")
+            if isinstance(entities, str):
+                try:
+                    entities = json.loads(entities)
+                except:
+                    pass
+            if isinstance(entities, list) and len(entities) > 0:
+                entity_df_data = []
+                for ent in entities[:20]:  # Show first 20
+                    if isinstance(ent, dict):
+                        entity_df_data.append({
+                            'Name': ent.get('name', 'N/A'),
+                            'Type': ent.get('type', 'N/A'),
+                            'Description': ent.get('description', 'N/A')[:50] + '...' if len(ent.get('description', '')) > 50 else ent.get('description', 'N/A')
+                        })
+                if entity_df_data:
+                    st.dataframe(entity_df_data, use_container_width=True)
+                if len(entities) > 20:
+                    st.caption(f"... and {len(entities) - 20} more entities")
+            else:
+                st.caption("No entities extracted")
+        else:
+            st.caption("No entities extracted")
+
+        # Extracted relationships
+        relationships = meta.get('extracted_relationships', [])
+        if relationships:
+            st.markdown("**Extracted Relationships:**")
+            if isinstance(relationships, str):
+                try:
+                    relationships = json.loads(relationships)
+                except:
+                    pass
+            if isinstance(relationships, list) and len(relationships) > 0:
+                rel_df_data = []
+                for rel in relationships[:15]:  # Show first 15
+                    if isinstance(rel, dict):
+                        rel_df_data.append({
+                            'Source': rel.get('source', 'N/A'),
+                            'Relation': rel.get('relation', 'N/A'),
+                            'Target': rel.get('target', 'N/A')
+                        })
+                if rel_df_data:
+                    st.dataframe(rel_df_data, use_container_width=True)
+                if len(relationships) > 15:
+                    st.caption(f"... and {len(relationships) - 15} more relationships")
+            else:
+                st.caption("No relationships extracted")
+        else:
+            st.caption("No relationships extracted")
 
 def display_enhanced_document_list(unique_docs, collection_name, collection_mgr):
     """Display documents with enhanced pagination, sorting, and filtering options"""
@@ -380,8 +554,8 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
     # Display documents
     if page_docs:
         # Column headers
-        header_col1, header_col2, header_col3, header_col4, header_col5, header_col6 = st.columns([2.5, 2, 1.5, 1.5, 0.8, 0.5])
-        
+        header_col1, header_col2, header_col3, header_col4, header_col5, header_col6, header_col7 = st.columns([2.5, 2, 1.5, 1.5, 0.8, 0.5, 0.7])
+
         with header_col1:
             st.markdown("**📄 Document Name**")
         with header_col2:
@@ -394,13 +568,15 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
             st.markdown("**📥 Add To**")
         with header_col6:
             st.markdown("**🗑️**")
-        
+        with header_col7:
+            st.markdown("**📝 Meta**")
+
         st.markdown("---")
-        
+
         # Display each document
         for doc_id, meta in page_docs:
-            doc_col1, doc_col2, doc_col3, doc_col4, doc_col5, doc_col6 = st.columns([2.5, 2, 1.5, 1.5, 0.8, 0.5])
-            
+            doc_col1, doc_col2, doc_col3, doc_col4, doc_col5, doc_col6, doc_col7 = st.columns([2.5, 2, 1.5, 1.5, 0.8, 0.5, 0.7])
+
             with doc_col1:
                 file_name = meta.get('file_name', 'N/A')
                 st.markdown(f"**{file_name}**")
@@ -442,7 +618,8 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
                         st.markdown(formatted_date)
                     else:
                         st.markdown('N/A')
-                except:
+                except (ValueError, AttributeError) as e:
+                    logger.debug(f"Error formatting date: {e}")
                     st.markdown('N/A')
                     
             with doc_col5:
@@ -466,6 +643,21 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
                     collection_mgr.remove_from_collection(collection_name, [doc_id])
                     st.toast(f"Removed '{file_name}' from '{collection_name}'.")
                     st.rerun()
+
+            with doc_col7:
+                # Toggle metadata viewer for this document
+                metadata_key = f"show_metadata_{doc_id}_{collection_name}"
+                if metadata_key not in st.session_state:
+                    st.session_state[metadata_key] = False
+
+                if st.button("📝", key=f"view_meta_{doc_id}_{collection_name}", help=f"View/Edit metadata for '{file_name}'"):
+                    st.session_state[metadata_key] = not st.session_state[metadata_key]
+                    st.rerun()
+
+            # Show metadata viewer if toggled
+            if st.session_state.get(metadata_key, False):
+                with st.expander(f"📋 Metadata for: {file_name}", expanded=True):
+                    render_document_metadata_editor(doc_id, meta, vector_collection, collection_name)
         
         # Bulk action execution
         if page_docs:

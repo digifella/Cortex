@@ -36,9 +36,11 @@ class BatchState:
         self.state_file = self.db_path / "batch_state.json"
         self.processed_log = self.db_path / "knowledge_hub_db" / "ingested_files.log"
         
-    def create_batch(self, file_paths: List[str], scan_config: Optional[Dict] = None, chunk_size: Optional[int] = None, auto_pause_after_chunks: Optional[int] = None) -> str:
+    def create_batch(self, file_paths: List[str], scan_config: Optional[Dict] = None, chunk_size: Optional[int] = None, auto_pause_after_chunks: Optional[int] = None, auto_finalize_enabled: Optional[bool] = None) -> str:
         """Create a new batch processing job with optional scan configuration and chunking"""
         batch_id = str(uuid.uuid4())
+        if auto_finalize_enabled is None:
+            auto_finalize_enabled = bool((scan_config or {}).get("batch_ingest_mode") or (scan_config or {}).get("auto_finalize_enabled"))
         
         # Handle chunked processing
         chunks = []
@@ -70,7 +72,8 @@ class BatchState:
             "current_chunk_files": chunks[0] if chunks else [],
             "auto_pause_after_chunks": auto_pause_after_chunks,
             "chunks_processed_in_session": 0,
-            "current_chunk_progress": 0  # Track documents processed in current chunk
+            "current_chunk_progress": 0,  # Track documents processed in current chunk
+            "auto_finalize_enabled": bool(auto_finalize_enabled)
         }
         
         self._save_state(state)
@@ -339,6 +342,8 @@ class BatchState:
         else:
             chunk_info = {"is_chunked": False}
         
+        scan_cfg = state.get('scan_config') or {}
+
         return {
             "active": True,
             "batch_id": state['batch_id'],
@@ -350,7 +355,12 @@ class BatchState:
             "started_at": state['started_at'],
             "last_updated": state['last_updated'],
             "progress_percent": round((state['files_completed'] / state['total_files']) * 100, 1) if state['total_files'] > 0 else 0,
-            "has_scan_config": bool(state.get('scan_config')),
+            "has_scan_config": bool(scan_cfg),
+            "auto_finalize_enabled": bool(
+                state.get('auto_finalize_enabled') or
+                scan_cfg.get('batch_ingest_mode') or
+                scan_cfg.get('auto_finalize_enabled')
+            ),
             **chunk_info
         }
     

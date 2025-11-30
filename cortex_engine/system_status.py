@@ -262,7 +262,8 @@ class SystemStatusChecker:
                                     performance_tier = "standard"
                                 else:
                                     display_name = "Docker Model Runner"
-                            except:
+                            except Exception as e:
+                                logger.debug(f"Error checking Docker model runner availability: {e}")
                                 display_name = "Docker Model Runner"
                         else:
                             display_name = "Docker Model Runner"
