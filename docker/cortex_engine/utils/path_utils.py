@@ -8,11 +8,11 @@ import re
 import os
 from pathlib import Path
 from typing import Union, Optional, List, Tuple
-import urllib.parse
 from contextlib import suppress
 
 
 def _safe_path_exists(candidate: Union[str, Path]) -> bool:
+    """Check for path existence without propagating device errors."""
     try:
         return Path(candidate).exists()
     except (OSError, PermissionError):
@@ -63,7 +63,7 @@ def convert_windows_to_wsl_path(path_str: Union[str, Path, None]) -> str:
             return wsl_path
         # Fallback to normalized Windows path for native Windows environments
         return f"{drive_letter.upper()}:/{rest}" if rest else f"{drive_letter.upper()}:/"
-
+    
     # Handle bare drive patterns like C:, D:, E:
     match = re.match(r'^([a-zA-Z]):$', normalized_path)
     if match:
@@ -72,7 +72,7 @@ def convert_windows_to_wsl_path(path_str: Union[str, Path, None]) -> str:
         if _safe_path_exists(drive_mount):
             return drive_mount
         return f"{drive_letter.upper()}:/"
-
+    
     return normalized_path
 
 
@@ -256,6 +256,12 @@ def ensure_directory(path: Union[str, Path]) -> Path:
 
 
 def ensure_directory_writable(path: Union[str, Path]) -> Tuple[bool, Optional[str]]:
+    """
+    Ensure that the target directory exists and is writable.
+    
+    Returns:
+        Tuple[bool, Optional[str]]: (True, None) if writable, otherwise (False, reason).
+    """
     if not path:
         return False, "Path is empty"
 

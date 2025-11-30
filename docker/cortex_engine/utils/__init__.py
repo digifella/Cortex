@@ -19,7 +19,7 @@ __all__ = [
     'convert_to_docker_mount_path',
     'convert_source_path_to_docker_mount',
     'resolve_db_root_path',
-    'normalize_path',
+    'normalize_path', 
     'ensure_directory',
     'ensure_directory_writable',
     'get_project_root',

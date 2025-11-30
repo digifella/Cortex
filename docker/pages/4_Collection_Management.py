@@ -1,5 +1,5 @@
 # ## File: pages/4_Collection_Management.py
-# Version: v4.10.1
+# Version: v4.10.3
 # Date: 2025-08-28
 # Purpose: A UI for managing Working Collections only.
 #          Knowledge base maintenance functions moved to Maintenance page (page 13).
@@ -28,6 +28,17 @@ from cortex_engine.config_manager import ConfigManager
 
 # Set up logging
 logger = get_logger(__name__)
+
+
+def _normalize_tags(raw) -> list:
+    """Normalize thematic_tags to a clean list of strings."""
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        return [p.strip() for p in raw.split(",") if p.strip()]
+    if isinstance(raw, list):
+        return [str(p).strip() for p in raw if str(p).strip()]
+    return []
 
 @st.cache_resource
 def init_chroma_client(db_path):
@@ -1003,6 +1014,46 @@ for collection in page_collections:
 
                         if not unique_docs:
                             st.warning("Could not retrieve details for documents in this collection. They may have been deleted from the Knowledge Base.")
+
+                        # Tag management controls
+                        if unique_docs:
+                            with st.expander("🏷️ Tag Management (thematic_tags)", expanded=False):
+                                options = []
+                                for doc_id, meta in unique_docs.items():
+                                    label = f"{meta.get('file_name', meta.get('doc_posix_path', doc_id))} ({doc_id})"
+                                    options.append((label, doc_id))
+                                options.sort(key=lambda x: x[0].lower())
+                                labels = [opt[0] for opt in options]
+                                label_to_id = {opt[0]: opt[1] for opt in options}
+                                selected_labels = st.multiselect("Select documents", labels, key=f"tag_select_{name}")
+                                selected_ids = [label_to_id[lbl] for lbl in selected_labels]
+
+                                c1, c2 = st.columns(2)
+                                with c1:
+                                    add_tags = st.text_input("Add tags (comma-separated)", key=f"add_tags_{name}")
+                                with c2:
+                                    remove_tags = st.text_input("Remove tags (comma-separated)", key=f"remove_tags_{name}")
+
+                                if st.button("Apply Tag Updates", key=f"apply_tags_{name}", disabled=not selected_ids):
+                                    add_list = [t.strip() for t in add_tags.split(",") if t.strip()]
+                                    remove_list = [t.strip() for t in remove_tags.split(",") if t.strip()]
+                                    updated = 0
+                                    for doc_id in selected_ids:
+                                        meta = dict(unique_docs.get(doc_id, {}))
+                                        existing = set(_normalize_tags(meta.get("thematic_tags")))
+                                        if add_list:
+                                            existing.update(add_list)
+                                        if remove_list:
+                                            existing.difference_update(remove_list)
+                                        meta["thematic_tags"] = ", ".join(sorted(existing))
+                                        try:
+                                            vector_collection.update(ids=[doc_id], metadatas=[meta])
+                                            updated += 1
+                                        except Exception as e:
+                                            logger.warning(f"Failed to update tags for {doc_id}: {e}")
+                                    st.success(f"Updated tags for {updated} document(s).")
+                                    if updated:
+                                        st.experimental_rerun()
 
                         # Enhanced document display with pagination and sorting
                         display_enhanced_document_list(unique_docs, name, collection_mgr)

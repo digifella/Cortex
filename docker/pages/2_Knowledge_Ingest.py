@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v4.10.2
+# Version: v4.10.3
 # Date: 2025-09-02
 # Purpose: GUI for knowledge base ingestion.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
@@ -35,7 +35,14 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 # Import centralized utilities
-from cortex_engine.utils import convert_windows_to_wsl_path, get_logger, validate_path_exists, convert_to_docker_mount_path, convert_source_path_to_docker_mount
+from cortex_engine.utils import (
+    convert_windows_to_wsl_path,
+    get_logger,
+    validate_path_exists,
+    convert_to_docker_mount_path,
+    convert_source_path_to_docker_mount,
+    ensure_directory_writable,
+)
 from cortex_engine.utils.model_checker import model_checker
 from cortex_engine.config import STAGING_INGESTION_FILE, INGESTED_FILES_LOG, DEFAULT_EXCLUSION_PATTERNS_STR
 from cortex_engine.config_manager import ConfigManager
@@ -111,6 +118,37 @@ div[data-testid="column"] .stButton > button {
 }
 </style>
 """, unsafe_allow_html=True)
+
+# --- Path Helpers ---
+def _resolve_db_path(raw_path: str) -> str:
+    """Convert the user-provided DB path into a runtime-safe path."""
+    return convert_to_docker_mount_path(raw_path) if raw_path else ""
+
+
+def get_runtime_db_path() -> str:
+    """
+    Get the active runtime database path.
+    Falls back to the current text-input value if no runtime override is stored.
+    """
+    runtime_path = st.session_state.get("db_path_runtime")
+    if runtime_path:
+        return runtime_path
+    raw = st.session_state.get("db_path", "")
+    resolved = _resolve_db_path(raw)
+    if resolved:
+        st.session_state.db_path_runtime = resolved
+    return resolved
+
+
+def set_runtime_db_path(resolved_path: Optional[str] = None) -> str:
+    """Persist the runtime DB path for the current ingestion session."""
+    if resolved_path is None:
+        resolved_path = _resolve_db_path(st.session_state.get("db_path", ""))
+    if resolved_path:
+        st.session_state.db_path_runtime = resolved_path
+    else:
+        st.session_state.pop("db_path_runtime", None)
+    return resolved_path
 
 # --- Constants & State ---
 REVIEW_PAGE_SIZE = 10
@@ -310,7 +348,7 @@ def should_auto_finalize():
             logger.debug("Auto-finalize check: No db_path in session state")
             return False
 
-        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+        container_db_path = get_runtime_db_path()
         staging_data, staging_path = _read_staging_payload_with_retries(
             container_db_path,
             retries=6,
@@ -331,7 +369,6 @@ def should_auto_finalize():
             logger.debug(f"Auto-finalize check: {doc_count} docs detected in staging (dict) @ {staging_path}")
             return doc_count > 0
 
-        return False
     except Exception as e:
         logger.error(f"Error checking auto-finalization: {e}", exc_info=True)
         return False
@@ -341,7 +378,7 @@ def start_automatic_finalization():
     try:
         from cortex_engine.utils import convert_windows_to_wsl_path
         
-        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+        container_db_path = get_runtime_db_path()
         
         # Build finalization command
         command = [
@@ -420,6 +457,8 @@ def initialize_state(force_reset: bool = False):
         st.session_state.knowledge_source_path = config_knowledge_path
     if "db_path" not in st.session_state:
         st.session_state.db_path = config_db_path
+    if "db_path_runtime" not in st.session_state and st.session_state.get("db_path"):
+        st.session_state.db_path_runtime = _resolve_db_path(st.session_state.db_path)
 
     # Pick safer defaults automatically on WSL
     try:
@@ -524,7 +563,7 @@ def load_staged_files():
     if not db_path:
         return
 
-    container_db_path = convert_to_docker_mount_path(db_path)
+    container_db_path = get_runtime_db_path()
     raw_data, staging_path = _read_staging_payload_with_retries(
         container_db_path,
         retries=6,
@@ -564,7 +603,7 @@ def serialize_staging_payload(documents: List[dict], target_collection: Optional
     return payload
 
 def scan_for_files(selected_dirs: List[str]):
-    container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+    container_db_path = get_runtime_db_path()
     chroma_db_dir = Path(container_db_path) / "knowledge_hub_db"
     ingested_log_path = chroma_db_dir / INGESTED_FILES_LOG
 
@@ -668,8 +707,10 @@ def scan_for_files(selected_dirs: List[str]):
     
     # Handle resume mode - create batch state with proper filtering
     if st.session_state.get("resume_mode_enabled"):
-        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+        container_db_path = get_runtime_db_path()
         batch_manager = BatchState(container_db_path)
+        set_runtime_db_path(str(batch_manager.db_path))
+        set_runtime_db_path(str(batch_manager.db_path))
         
         # Create batch with resume logic, passing the scan configuration
         scan_config = st.session_state.get("current_scan_config", {})
@@ -738,8 +779,9 @@ def render_batch_processing_ui():
     files_to_process = st.session_state.get("files_to_review", [])
     
     # Check for existing batch state
-    container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+    container_db_path = get_runtime_db_path()
     batch_manager = BatchState(container_db_path)
+    set_runtime_db_path(str(batch_manager.db_path))
     batch_status = batch_manager.get_status()
     
     # If resuming from main screen, use batch remaining files
@@ -1765,6 +1807,8 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
         # Restore session state from batch configuration
         st.session_state.knowledge_source_path = scan_config.get("knowledge_source_path", "")
         st.session_state.db_path = scan_config.get("db_path", "")
+        runtime_path = scan_config.get("db_path_runtime")
+        set_runtime_db_path(runtime_path if runtime_path else _resolve_db_path(st.session_state.db_path))
         st.session_state.filter_exclude_common = scan_config.get("filter_exclude_common", False)
         st.session_state.enable_pattern_exclusion = scan_config.get("enable_pattern_exclusion", False)
         st.session_state.exclude_patterns_input = scan_config.get("exclude_patterns_input", "")
@@ -1786,8 +1830,9 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
         files_to_process = st.session_state.get("files_to_review", [])
         if files_to_process:
             # Start the actual ingestion process
-            container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+            container_db_path = get_runtime_db_path()
             batch_manager_instance = BatchState(container_db_path)
+            set_runtime_db_path(str(batch_manager_instance.db_path))
             # Ensure we clear any paused flag from a prior session
             try:
                 batch_manager_instance.start_new_session()
@@ -1841,6 +1886,9 @@ def render_config_and_scan_ui():
                   help="📁 Path to your source documents folder. This is where Cortex will scan for files to ingest. You can use Windows paths (C:\\Documents) or Linux paths (/home/user/docs).")
     st.text_input("2. Database Storage Path (Destination)", key="db_path",
                   help="💾 Path where your knowledge base will be stored. This directory will contain the processed documents, embeddings, and knowledge graph. Needs sufficient space for your document collection.")
+    resolved_preview = _resolve_db_path(st.session_state.get("db_path", ""))
+    if resolved_preview:
+        st.caption(f"Resolved runtime path: `{resolved_preview}`")
     st.markdown("---")
     st.markdown("**3. Select Directories to Scan**")
 
@@ -2017,11 +2065,27 @@ def render_config_and_scan_ui():
             if st.session_state.enable_pattern_exclusion: st.text_area("File Patterns (one per line)", key="exclude_patterns_input", height=150)
 
     st.markdown("---")
-    is_db_path_valid = os.path.isdir(os.path.dirname(convert_to_docker_mount_path(st.session_state.db_path)))
+    converted_db_path = _resolve_db_path(st.session_state.get("db_path", ""))
+    if converted_db_path and "db_path_runtime" not in st.session_state and not st.session_state.get("ingestion_process"):
+        st.session_state.db_path_runtime = converted_db_path
+    db_parent = Path(converted_db_path).parent if converted_db_path else None
+    is_db_path_valid = bool(converted_db_path) and db_parent.exists()
+    db_path_writable = False
+    db_path_error = None
+    if is_db_path_valid:
+        db_path_writable, db_path_error = ensure_directory_writable(converted_db_path)
+    elif st.session_state.db_path:
+        parent_display = db_parent if db_parent else Path(st.session_state.db_path).parent
+        db_path_error = f"Parent directory '{parent_display}' is not accessible."
+
+    if db_path_error and not db_path_writable:
+        st.error(f"Database storage path issue: {db_path_error}")
+
     selected_to_scan = [path for path, selected in st.session_state.dir_selections.items() if selected]
 
     if st.button(f"🔎 Scan {len(selected_to_scan)} Selected Director(y/ies) for New Files", type="primary", use_container_width=True, disabled=not selected_to_scan):
-        if is_knowledge_path_valid and is_db_path_valid:
+        if is_knowledge_path_valid and is_db_path_valid and db_path_writable:
+            resolved_runtime = set_runtime_db_path(converted_db_path)
             config_manager = ConfigManager(); config_manager.update_config({"knowledge_source_path": st.session_state.knowledge_source_path, "ai_database_path": st.session_state.db_path})
             
             # Capture scan configuration for batch resume (avoid modifying existing widget keys)
@@ -2029,6 +2093,7 @@ def render_config_and_scan_ui():
                 "selected_directories": selected_to_scan,
                 "knowledge_source_path": st.session_state.knowledge_source_path,
                 "db_path": st.session_state.db_path,
+                "db_path_runtime": resolved_runtime,
                 "filter_exclude_common": st.session_state.get("filter_exclude_common", False),
                 "enable_pattern_exclusion": st.session_state.get("enable_pattern_exclusion", False),
                 "exclude_patterns_input": st.session_state.get("exclude_patterns_input", ""),
@@ -2120,7 +2185,10 @@ def render_config_and_scan_ui():
             st.rerun()
         else:
             if not is_knowledge_path_valid: st.error(f"Root Source Path is not valid.")
-            if not is_db_path_valid: st.error(f"DB Path's parent is not valid.")
+            if not is_db_path_valid:
+                st.error(f"DB path's parent directory is not accessible: {db_parent}")
+            elif not db_path_writable:
+                st.error(db_path_error or "Database path is not writable. Please choose a directory on a mounted drive that allows write access.")
 
     with st.expander("⚙️ Database Maintenance"):
         st.info("Database maintenance functions have been moved to the dedicated **Maintenance** page for better organization and security.")
@@ -2192,7 +2260,7 @@ def render_pre_analysis_ui():
     proc_c1, proc_c2 = st.columns(2)
     if proc_c1.button("⬅️ Back to Configuration", use_container_width=True): initialize_state(force_reset=True); st.rerun()
     if proc_c2.button(f"Process {len(globally_selected)} files & Ignore {len(globally_ignored)}", type="primary", use_container_width=True, disabled=not globally_selected):
-        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+        container_db_path = get_runtime_db_path()
         if globally_ignored:
             chroma_db_dir = Path(container_db_path) / "knowledge_hub_db"
             chroma_db_dir.mkdir(parents=True, exist_ok=True)
@@ -2238,6 +2306,7 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
             container_db_path = convert_to_docker_mount_path(st.session_state.get('db_path', ''))
             if container_db_path:
                 batch_manager = BatchState(container_db_path)
+                set_runtime_db_path(str(batch_manager.db_path))
                 batch_state = batch_manager.load_state()
                 if batch_state and batch_state.get('files_remaining'):
                     if auto_resume_from_batch_config(batch_manager):
@@ -2253,8 +2322,9 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
     with col1:
         if st.button("⏸️ Pause", key="pause_processing", use_container_width=True):
             # Get batch manager and pause the batch
-            container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+            container_db_path = get_runtime_db_path()
             batch_manager = BatchState(container_db_path)
+            set_runtime_db_path(str(batch_manager.db_path))
             batch_manager.pause_batch()
             st.success("Pause requested")
             
@@ -2690,7 +2760,7 @@ def render_metadata_review_ui():
                 # Auto-proceed to finalization
                 st.session_state.last_ingested_doc_ids = [doc['doc_id'] for doc in valid_files if not doc.get('exclude_from_final')]
                 # Write staging file to database directory, not project root
-                container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                container_db_path = get_runtime_db_path()
                 staging_file_path = Path(container_db_path) / "staging_ingestion.json"
                 payload = serialize_staging_payload(st.session_state.edited_staged_files, st.session_state.get('target_collection_name'))
                 with open(staging_file_path, 'w') as f:
@@ -2741,14 +2811,14 @@ def render_metadata_review_ui():
             doc_ids_to_ingest = [doc['doc_id'] for doc in final_files_to_process if not doc.get('exclude_from_final')]
             st.session_state.last_ingested_doc_ids = doc_ids_to_ingest
             # Write staging file to database directory, not project root
-            container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+            container_db_path = get_runtime_db_path()
             staging_file_path = Path(container_db_path) / "staging_ingestion.json"
             payload = serialize_staging_payload(final_files_to_process, st.session_state.get('target_collection_name'))
             with open(staging_file_path, 'w') as f:
                 json.dump(payload, f, indent=2)
             st.session_state.staged_metadata = payload
 
-            container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+            container_db_path = get_runtime_db_path()
             if not container_db_path or not Path(container_db_path).exists():
                 st.error(f"Database path is invalid or does not exist: {container_db_path}")
                 st.stop()
@@ -2847,7 +2917,7 @@ def render_metadata_review_ui():
         doc_ids_to_ingest = [doc['doc_id'] for doc in final_files_to_process if not doc.get('exclude_from_final')]
         st.session_state.last_ingested_doc_ids = doc_ids_to_ingest
         # Write staging file to database directory, not project root
-        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+        container_db_path = get_runtime_db_path()
         staging_file_path = Path(container_db_path) / "staging_ingestion.json"
         payload = serialize_staging_payload(final_files_to_process, st.session_state.get('target_collection_name'))
         with open(staging_file_path, 'w') as f:
@@ -3413,8 +3483,9 @@ if st.session_state.get("show_help_modal", False):
 help_system.show_contextual_help("ingest")
 
 # Check for existing batch state and show resume option
-container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+container_db_path = get_runtime_db_path()
 batch_manager = BatchState(container_db_path)
+set_runtime_db_path(str(batch_manager.db_path))
 batch_status = batch_manager.get_status()
 stage = st.session_state.get("ingestion_stage", "config")
 

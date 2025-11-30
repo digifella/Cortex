@@ -1,5 +1,5 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v4.10.2
+# Version: v4.10.3
 # Date: 2025-08-30
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
 #          - GRAPHRAG INTEGRATION (v4.2.1): Re-enabled GraphRAG search modes with radio button
@@ -31,6 +31,7 @@ import os
 import pandas as pd
 from pathlib import Path
 import re
+from typing import Optional
 
 # Import only ChromaDB components needed for direct search
 import chromadb
@@ -45,6 +46,7 @@ warnings.filterwarnings("ignore", message=".*Failed to send telemetry.*")
 
 # Import project modules
 from cortex_engine.config import EMBED_MODEL, COLLECTION_NAME, KB_LLM_MODEL
+from cortex_engine.config_manager import ConfigManager
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.utils import (
     get_logger,
@@ -52,6 +54,7 @@ from cortex_engine.utils import (
     convert_windows_to_wsl_path,
     resolve_db_root_path,
 )
+from cortex_engine.utils.default_paths import get_default_ai_database_path
 from cortex_engine.embedding_service import embed_query
 from cortex_engine.version_config import VERSION_STRING
 
@@ -110,6 +113,7 @@ def get_candidate_db_paths(db_path: str):
 
 def get_document_type_options():
     """Get document type options - Docker-safe version"""
+    st.session_state.pop("kb_fallback_path", None)
     try:
         # In Docker environment, use fallback to static options since collections may not be initialized
         collection_mgr = WorkingCollectionManager()
@@ -132,8 +136,6 @@ def get_document_type_options():
         return ["Project Plan", "Technical Documentation", "Proposal/Quote", "Case Study / Trophy",
                 "Final Report", "Draft Report", "Presentation", "Contract/SOW",
                 "Meeting Minutes", "Financial Report", "Research Paper", "Email Correspondence", "Other"]
-
-
 
 
 def get_available_thematic_tags(db_path: str) -> list:
@@ -169,6 +171,28 @@ def get_available_thematic_tags(db_path: str) -> list:
     except Exception as e:
         logger.warning(f"Could not gather thematic tags: {e}")
         return []
+
+
+def find_existing_kb_root(exclude: Optional[str] = None) -> Optional[str]:
+    """Look for a populated knowledge base at common fallback paths."""
+    normalized_exclude = convert_to_docker_mount_path(exclude) if exclude else ""
+    potential_paths = []
+    default_path = get_default_ai_database_path()
+    env_path = os.getenv("AI_DATABASE_PATH")
+    home_path = str(Path.home() / "ai_databases")
+    project_path = str(Path(__file__).parent.parent / "data" / "ai_databases")
+
+    for raw in {default_path, env_path, home_path, project_path}:
+        if not raw:
+            continue
+        normalized = convert_to_docker_mount_path(raw)
+        if not normalized or normalized == normalized_exclude:
+            continue
+        chroma_candidate = Path(normalized) / "knowledge_hub_db"
+        if chroma_candidate.is_dir():
+            return normalized
+    return None
+
 
 def validate_database(db_path, silent=False):
     """Validate database exists and return ChromaDB collection info"""
@@ -208,15 +232,23 @@ def validate_database(db_path, silent=False):
                 if progress_dir.exists():
                     stale_artifacts.append(str(progress_dir))
 
-                if stale_artifacts:
-                    artifacts = "\n".join(f"- {path}" for path in stale_artifacts)
-                    st.warning(f"🧹 Knowledge base directory not found, and stuck ingestion files were detected:\n{artifacts}\n\nRun **Maintenance → Clean Start** to clear failed ingestion state, then re-ingest.")
+                # Check for fallback KB location
+                safe_db_path = str(first_base)
+                fallback = find_existing_kb_root(safe_db_path)
+                if fallback:
+                    st.session_state["kb_fallback_path"] = fallback
+                    st.warning(f"🧠 Knowledge base not found, but we detected data at '{fallback}'. Update your database path to use the populated knowledge base.")
                 else:
-                    attempt_lines = "\n".join(f"- {lbl}: {path}" for lbl, path in attempted if path)
-                    st.warning(
-                        "🧠 Knowledge base directory not found in any configured location.\n"
-                        f"Tried:\n{attempt_lines}"
-                    )
+                    st.session_state.pop("kb_fallback_path", None)
+                    if stale_artifacts:
+                        artifacts = "\n".join(f"- {path}" for path in stale_artifacts)
+                        st.warning(f"🧹 Knowledge base directory not found, and stuck ingestion files were detected:\n{artifacts}\n\nRun **Maintenance → Clean Start** to clear failed ingestion state, then re-ingest.")
+                    else:
+                        attempt_lines = "\n".join(f"- {lbl}: {path}" for lbl, path in attempted if path)
+                        st.warning(
+                            "🧠 Knowledge base directory not found in any configured location.\n"
+                            f"Tried:\n{attempt_lines}"
+                        )
             else:
                 st.warning("🧠 Knowledge base directory not found. Please verify your database path.")
         return None
@@ -450,6 +482,21 @@ def render_sidebar():
                 st.sidebar.error(f"❌ Path validation error: {e}")
         else:
             st.sidebar.error(f"❌ Path does not exist")
+
+    fallback_detected = st.session_state.get("kb_fallback_path")
+    if fallback_detected and fallback_detected != current_path:
+        st.sidebar.warning(f"Detected populated knowledge base at `{fallback_detected}`.")
+        if st.sidebar.button("Use Detected Knowledge Base", key="apply_kb_fallback"):
+            st.session_state.db_path_input = fallback_detected
+            try:
+                config_manager.update_config({"ai_database_path": fallback_detected})
+                st.sidebar.success("✅ Updated to detected knowledge base path.")
+            except Exception as e:
+                logger.warning(f"Failed to save fallback path: {e}")
+                st.sidebar.info("Path updated for this session only.")
+            st.session_state.pop("kb_fallback_path", None)
+            st.cache_resource.clear()
+            st.rerun()
     
     st.sidebar.divider()
     
@@ -497,7 +544,7 @@ def render_sidebar():
     num_active_filters = sum([
         1 if st.session_state.doc_type_filter != "Any" else 0,
         1 if st.session_state.outcome_filter != "Any" else 0,
-        1 if st.session_state.thematic_tag_filter else 0
+        1 if st.session_state.thematic_tag_filter else 0,
     ])
     
     if num_active_filters >= 2:
@@ -824,8 +871,9 @@ def apply_post_search_filters(result, filters):
                      result.get('document_type') == doc_type_filter)
     
     outcome_match = (outcome_filter == "Any" or 
-                   result.get('proposal_outcome') == outcome_filter)
+                    result.get('proposal_outcome') == outcome_filter)
 
+    # Tags: require all selected tags by default
     tag_match = True
     if tag_filter:
         raw_tags = result.get('thematic_tags') or result.get('tags') or result.get('metadata', {}).get('thematic_tags')

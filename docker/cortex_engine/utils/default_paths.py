@@ -11,13 +11,13 @@ from pathlib import Path
 from .path_utils import convert_windows_to_wsl_path
 
 
-
 def _safe_path_exists(path: Path) -> bool:
-    """Safely check mount points without surfacing device errors."""
+    """Safely check if a path exists without propagating device errors."""
     try:
         return path.exists()
     except (OSError, PermissionError):
         return False
+
 
 def get_default_ai_database_path() -> str:
     """
@@ -36,24 +36,20 @@ def get_default_ai_database_path() -> str:
     env_path = os.getenv("AI_DATABASE_PATH")
     if env_path:
         return convert_windows_to_wsl_path(env_path)
-
-    # In Docker: prefer standard mount
-    if _safe_path_exists(Path("/data")):
-        return "/data/ai_databases"
-
+    
     # Platform-aware defaults
     home = Path.home()
-
+    
     # Check common locations in order of preference
     candidate_paths = [
         # User home directory
         home / "ai_databases",
-        home / "Documents" / "ai_databases",
-
-        # WSL/Linux specific (if we're in WSL)
+        home / "Documents" / "ai_databases", 
+        
+        # WSL/Linux specific (if we're in WSL) - prioritize C drive since F drive doesn't exist
         Path("/mnt/c/ai_databases") if _safe_path_exists(Path("/mnt/c")) else None,
         Path("/mnt/d/ai_databases") if _safe_path_exists(Path("/mnt/d")) else None,
-
+        
         # Fallback to project directory
         Path(__file__).parent.parent.parent / "data" / "ai_databases"
     ]
@@ -84,11 +80,7 @@ def get_default_knowledge_source_path() -> str:
     env_path = os.getenv("KNOWLEDGE_SOURCE_PATH")
     if env_path:
         return convert_windows_to_wsl_path(env_path)
-
-    # In Docker: prefer standard mount
-    if _safe_path_exists(Path("/data")):
-        return "/data/knowledge_base"
-
+    
     # Default to home directory
     home = Path.home()
     return str(home / "Documents" / "knowledge_base")
@@ -97,24 +89,24 @@ def get_default_knowledge_source_path() -> str:
 def get_platform_info() -> dict:
     """
     Get information about the current platform for debugging.
-
+    
     Returns:
         Dictionary with platform information
     """
     import platform
-
+    
     info = {
         "system": platform.system(),
         "platform": platform.platform(),
-        "is_wsl": Path("/mnt/c").exists(),
-        "is_docker": Path("/.dockerenv").exists(),
+        "is_wsl": _safe_path_exists(Path("/mnt/c")),
+        "is_docker": _safe_path_exists(Path("/.dockerenv")),
         "available_mounts": []
     }
-
+    
     # Check available WSL mounts
     for drive in ['c', 'd', 'e', 'f', 'g', 'h']:
         mount_path = Path(f"/mnt/{drive}")
-        if mount_path.exists():
+        if _safe_path_exists(mount_path):
             info["available_mounts"].append(mount_path)
-
+    
     return info

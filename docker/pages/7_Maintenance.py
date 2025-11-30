@@ -1,5 +1,5 @@
 # ## File: pages/7_Maintenance.py
-# Version: v4.10.1
+# Version: v4.10.3
 # Date: 2025-08-31
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -27,13 +27,18 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.10.1"
+PAGE_VERSION = "v4.10.3"
 
 # Import Cortex modules
 try:
     from cortex_engine.config import INGESTED_FILES_LOG
     from cortex_engine.config_manager import ConfigManager
-    from cortex_engine.utils import get_logger, convert_windows_to_wsl_path, ensure_directory
+    from cortex_engine.utils import (
+        get_logger,
+        convert_windows_to_wsl_path,
+        ensure_directory,
+        resolve_db_root_path,
+    )
     from cortex_engine.utils.command_executor import display_command_executor_widget, SafeCommandExecutor
     from cortex_engine.utils.performance_monitor import get_performance_monitor, get_all_stats, get_session_summary
     from cortex_engine.utils.gpu_monitor import get_gpu_memory_info, get_device_recommendations
@@ -112,19 +117,113 @@ def clear_ingestion_session_state(reason: str = "maintenance") -> None:
         if key in transient_keys or key.startswith("ingestion_"):
             st.session_state.pop(key, None)
 
+def purge_ingestion_state_files(
+    db_root: Path, deleted_items: list, debug_log_lines: list | None = None, errors: list | None = None
+) -> None:
+    """Remove staging, batch, and progress artifacts so failed ingests don't stick around."""
+    project_root = Path(__file__).parent.parent
+
+    def _record(message: str) -> None:
+        if debug_log_lines is not None:
+            debug_log_lines.append(message)
+        logger.info(message)
+
+    def _error(message: str, exc: Exception) -> None:
+        if errors is not None:
+            errors.append(f"{message}: {exc}")
+        logger.warning(f"{message}: {exc}")
+
+    staging_patterns = [
+        "staging_ingestion.json",
+        "staging_*.json",
+        "staging_test.json",
+        "batch_progress.json",
+        "batch_state.json",
+        "ingestion_progress.json",
+        "failed_ingestion.json",
+        "scan_config.json",
+    ]
+
+    for base in (project_root, db_root):
+        for pattern in staging_patterns:
+            for staging_file in base.glob(pattern):
+                if staging_file.is_file():
+                    try:
+                        staging_file.unlink()
+                        deleted_items.append(f"State file: {staging_file}")
+                        _record(f"Removed state file: {staging_file}")
+                    except Exception as e:
+                        _error(f"Failed to remove state file {staging_file}", e)
+    # Ingestion progress directory (auto-created by tracker)
+    progress_dir = db_root / "ingestion_progress"
+    if progress_dir.exists():
+        try:
+            shutil.rmtree(progress_dir)
+            deleted_items.append(f"Ingestion progress dir: {progress_dir}")
+            _record(f"Removed ingestion progress directory: {progress_dir}")
+        except Exception as e:
+            _error(f"Failed to remove ingestion progress directory {progress_dir}", e)
+
+    # Recovery metadata/state
+    recovery_metadata_dir = db_root / "recovery_metadata"
+    if recovery_metadata_dir.exists():
+        try:
+            shutil.rmtree(recovery_metadata_dir)
+            deleted_items.append(f"Recovery metadata: {recovery_metadata_dir}")
+            _record(f"Removed recovery metadata directory: {recovery_metadata_dir}")
+        except Exception as e:
+            _error(f"Failed to remove recovery metadata {recovery_metadata_dir}", e)
+
+    recovery_state_file = db_root / "knowledge_hub_db" / "recovery_state.json"
+    if recovery_state_file.exists():
+        try:
+            recovery_state_file.unlink()
+            deleted_items.append(f"Recovery state file: {recovery_state_file}")
+            _record(f"Removed recovery state file: {recovery_state_file}")
+        except Exception as e:
+            _error(f"Failed to remove recovery state file {recovery_state_file}", e)
+
+    # Local logs (ingestion/query) to clear stale "processing" status
+    logs_dir = project_root / "logs"
+    if logs_dir.exists():
+        for log_file in logs_dir.glob("*.log"):
+            try:
+                log_file.unlink()
+                deleted_items.append(f"Log file: {log_file}")
+                _record(f"Cleared log file: {log_file}")
+            except Exception as e:
+                _error(f"Failed to clear log file {log_file}", e)
+
 def delete_ingested_document_database(db_path: str):
     """Delete the ingested document database with proper error handling and logging."""
-    wsl_db_path = convert_windows_to_wsl_path(db_path)
-    chroma_db_dir = Path(wsl_db_path) / "knowledge_hub_db"
-    graph_file = Path(wsl_db_path) / "knowledge_cortex.gpickle"
-    collections_file = Path(wsl_db_path) / "working_collections.json"
-    batch_state_file = Path(wsl_db_path) / "batch_state.json"
-    staging_file = Path(wsl_db_path) / "staging_ingestion.json"
-    scan_config_file = Path(wsl_db_path) / "scan_config.json"
+    db_root = resolve_db_root_path(db_path)
+    if not db_root:
+        st.error("❌ Database path is empty. Set a database path before deleting the knowledge base.")
+        return
+
+    chroma_db_dir = db_root / "knowledge_hub_db"
+    graph_file = db_root / "knowledge_cortex.gpickle"
+    collections_file = db_root / "working_collections.json"
+    project_root = Path(__file__).parent.parent
+    project_collections_file = project_root / "working_collections.json"
     
     try:
         deleted_items = []
+        cleanup_errors = []
+        cleanup_errors = []
         errors = []
+
+        # Clear the ingested log explicitly in case the directory delete fails
+        ingested_log = chroma_db_dir / INGESTED_FILES_LOG
+        if ingested_log.exists():
+            try:
+                ingested_log.unlink()
+                deleted_items.append(f"Ingested files log: {ingested_log}")
+                logger.info(f"Cleared ingested files log: {ingested_log}")
+            except Exception as e:
+                error_msg = f"Failed to delete ingested files log: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
         
         # Delete ChromaDB directory
         if chroma_db_dir.exists() and chroma_db_dir.is_dir():
@@ -148,61 +247,32 @@ def delete_ingested_document_database(db_path: str):
                 errors.append(error_msg)
                 logger.error(error_msg)
         
-        # Delete collections file (only stored in KB database path now)
-        if collections_file.exists():
-            try:
-                collections_file.unlink()
-                deleted_items.append(f"Collections file: {collections_file}")
-                logger.info(f"Successfully deleted collections file: {collections_file}")
-            except Exception as e:
-                error_msg = f"Failed to delete collections file: {e}"
-                errors.append(error_msg)
-                logger.error(error_msg)
-        
-        # Delete batch state file
-        if batch_state_file.exists():
-            try:
-                batch_state_file.unlink()
-                deleted_items.append(f"Batch state file: {batch_state_file}")
-                logger.info(f"Successfully deleted batch state file: {batch_state_file}")
-            except Exception as e:
-                error_msg = f"Failed to delete batch state file: {e}"
-                errors.append(error_msg)
-                logger.error(error_msg)
-        
-        # Delete staging ingestion file
-        if staging_file.exists():
-            try:
-                staging_file.unlink()
-                deleted_items.append(f"Staging file: {staging_file}")
-                logger.info(f"Successfully deleted staging file: {staging_file}")
-            except Exception as e:
-                error_msg = f"Failed to delete staging file: {e}"
-                errors.append(error_msg)
-                logger.error(error_msg)
+        # Delete collections file (stored in both project and DB root)
+        for target in (project_collections_file, collections_file):
+            if target.exists():
+                try:
+                    target.unlink()
+                    deleted_items.append(f"Collections file: {target}")
+                    logger.info(f"Successfully deleted collections file: {target}")
+                except Exception as e:
+                    error_msg = f"Failed to delete collections file {target}: {e}"
+                    errors.append(error_msg)
+                    logger.error(error_msg)
 
-        # Delete scan configuration file
-        if scan_config_file.exists():
-            try:
-                scan_config_file.unlink()
-                deleted_items.append(f"Scan config file: {scan_config_file}")
-                logger.info(f"Successfully deleted scan config file: {scan_config_file}")
-            except Exception as e:
-                error_msg = f"Failed to delete scan config file: {e}"
-                errors.append(error_msg)
-                logger.error(error_msg)
+        # Clear staging/batch/progress artifacts even if the database directory is missing
+        purge_ingestion_state_files(db_root, deleted_items, errors=errors)
 
         # Report results
         if deleted_items:
-            st.success(f"✅ Successfully deleted ingested document database components:\\n" + "\\n".join(f"- {item}" for item in deleted_items))
+            st.success(f"✅ Successfully deleted ingested document database components:\n" + "\n".join(f"- {item}" for item in deleted_items))
             logger.info("Ingested document database deletion completed successfully")
         
         if errors:
-            st.error(f"❌ Some items could not be deleted:\\n" + "\\n".join(f"- {error}" for error in errors))
+            st.error(f"❌ Some items could not be deleted:\n" + "\n".join(f"- {error}" for error in errors))
             
         if not deleted_items and not errors:
             st.warning("⚠️ No ingested document database components found to delete.")
-            logger.warning(f"No ingested document database found at: {wsl_db_path}")
+            logger.warning(f"No ingested document database found at: {db_root}")
 
     except Exception as e:
         error_msg = f"Failed to delete ingested document database: {e}"
@@ -229,23 +299,29 @@ def perform_clean_start(db_path: str):
     debug_log_lines.append(f"Running in Docker: {os.path.exists('/.dockerenv')}")
     
     # Handle Docker environment path resolution properly
-    if os.path.exists('/.dockerenv'):
-        # In Docker container - use the configured path directly
-        # Docker volumes handle the path mapping, so we use the path as configured by user
-        final_db_path = db_path
+    is_docker_env = os.path.exists('/.dockerenv')
+    resolved_root = resolve_db_root_path(db_path) if not is_docker_env else Path(db_path) if db_path else None
+
+    if is_docker_env:
+        final_db_path = str(resolved_root) if resolved_root else ""
         msg = f"🐳 **Docker Mode:** Using configured database path `{final_db_path}` (Docker handles volume mapping)"
         st.info(msg)
         debug_log_lines.append("ENVIRONMENT: Docker Container")
         debug_log_lines.append(f"Final DB Path: {final_db_path}")
         debug_log_lines.append("Path Conversion: None (Docker handles volume mapping)")
     else:
-        # Non-Docker environment, use WSL path conversion for Windows paths
-        final_db_path = convert_windows_to_wsl_path(db_path)
+        resolved_root = resolve_db_root_path(db_path)
+        final_db_path = str(resolved_root) if resolved_root else convert_windows_to_wsl_path(db_path)
         msg = f"💻 **Host Mode:** Converted `{db_path}` to `{final_db_path}`"
         st.info(msg)
         debug_log_lines.append("ENVIRONMENT: Host/WSL")
         debug_log_lines.append(f"Final DB Path: {final_db_path}")
         debug_log_lines.append("Path Conversion: Applied WSL conversion")
+
+    if not final_db_path:
+        st.error("❌ Database path is empty. Set a valid knowledge base path before running Clean Start.")
+        logger.error("Clean Start aborted: no database path provided")
+        return
     
     debug_log_lines.append("")
     debug_log_lines.append("OPERATIONS LOG:")
@@ -253,6 +329,7 @@ def perform_clean_start(db_path: str):
 
     try:
         deleted_items = []
+        cleanup_errors = []
         
         # Show current knowledge base location before deletion
         chroma_db_dir = Path(final_db_path) / "knowledge_hub_db"
@@ -429,44 +506,11 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
                 deleted_items.append(f"Working collections: {new_collections_file}")
                 logger.info(f"Clean Start: Cleared working collections from KB database: {new_collections_file}")
             
-            # 4. Clear ALL ingestion logs and metadata (comprehensive)
-            logs_dir = project_root / "logs"
-            if logs_dir.exists():
-                for log_file in logs_dir.glob("*.log"):
-                    log_file.unlink()
-                    deleted_items.append(f"Log file: {log_file}")
-                logger.info(f"Clean Start: Cleared logs directory: {logs_dir}")
-            
-            # 5. Clear ALL staging and batch ingestion files (comprehensive)
-            staging_patterns = [
-                "staging_ingestion.json",
-                "staging_*.json",
-                "staging_test.json",
-                "batch_progress.json",
-                "batch_state.json",
-                "ingestion_progress.json",
-                "failed_ingestion.json",
-                "scan_config.json"
-            ]
-            
-            # Clear from project root (legacy location)
-            for pattern in staging_patterns:
-                for staging_file in project_root.glob(pattern):
-                    if staging_file.is_file():
-                        staging_file.unlink()
-                        deleted_items.append(f"Staging/batch file (project): {staging_file}")
-                        logger.info(f"Clean Start: Cleared staging file from project: {staging_file}")
-            
-            # Clear from database path (current location)
+            # 4. Clear ALL ingestion logs, staging, batch, and recovery metadata
             db_path_obj = Path(final_db_path)
-            for pattern in staging_patterns:
-                for staging_file in db_path_obj.glob(pattern):
-                    if staging_file.is_file():
-                        staging_file.unlink()
-                        deleted_items.append(f"Staging/batch file (database): {staging_file}")
-                        logger.info(f"Clean Start: Cleared staging file from database: {staging_file}")
+            purge_ingestion_state_files(db_path_obj, deleted_items, debug_log_lines, cleanup_errors)
             
-            # 6. Clear session state and cached configuration files
+            # 5. Clear session state and cached configuration files
             config_files_to_clear = [
                 project_root / "cortex_config.json",
                 project_root / "boilerplate.json"
@@ -491,14 +535,7 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
                         config_file.unlink()
                         deleted_items.append(f"Configuration file: {config_file}")
             
-            # 7. Clear ingestion recovery metadata  
-            recovery_metadata_dir = Path(final_db_path) / "recovery_metadata"
-            if recovery_metadata_dir.exists():
-                shutil.rmtree(recovery_metadata_dir)
-                deleted_items.append(f"Recovery metadata: {recovery_metadata_dir}")
-                logger.info(f"Clean Start: Cleared recovery metadata: {recovery_metadata_dir}")
-            
-            # 8. Clear Streamlit session state cache files
+            # 6. Clear Streamlit session state cache files
             streamlit_cache_patterns = [".streamlit/cache", "__pycache__", "*.pyc"]
             for pattern in streamlit_cache_patterns:
                 for cache_item in project_root.rglob(pattern):
@@ -509,7 +546,7 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
                         shutil.rmtree(cache_item)
                         deleted_items.append(f"Cache directory: {cache_item}")
             
-            # 9. Clear any remaining temporary and state files
+            # 7. Clear any remaining temporary and state files
             temp_patterns = ["*.tmp", "*.temp", "temp_*", "*.pid", "*.lock", "*_state.json"]
             for pattern in temp_patterns:
                 for temp_file in project_root.glob(pattern):
@@ -522,6 +559,9 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
         debug_log_lines.append("FINAL RESULTS:")
         debug_log_lines.append("-" * 40)
         debug_log_lines.append(f"Total items cleaned: {len(deleted_items)}")
+        if cleanup_errors:
+            debug_log_lines.append("Warnings during cleanup:")
+            debug_log_lines.extend(f"- {err}" for err in cleanup_errors)
         debug_log_lines.append("Deleted items:")
         for item in deleted_items:
             debug_log_lines.append(f"  - {item}")
@@ -552,6 +592,9 @@ Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.
                 exists = p.exists()
                 icon = "❌" if exists else "✅"
                 st.write(f"{icon} {label}: `{p}` (exists={exists})")
+
+        if cleanup_errors:
+            st.warning("⚠️ Some cleanup steps reported warnings:\n" + "\n".join(f"- {err}" for err in cleanup_errors))
         
         # Show final comprehensive debug log on screen
         st.subheader("📋 Complete Debug Log")
@@ -676,8 +719,12 @@ def clear_ingestion_log_file():
         
         from cortex_engine.utils.default_paths import get_default_ai_database_path
         db_path = config.get('db_path', get_default_ai_database_path())
-        wsl_db_path = convert_windows_to_wsl_path(db_path)
-        log_path = Path(wsl_db_path) / "knowledge_hub_db" / INGESTED_FILES_LOG
+        db_root = resolve_db_root_path(db_path)
+        if not db_root:
+            st.error("❌ Database path is empty. Set a database path before clearing logs.")
+            return
+
+        log_path = db_root / "knowledge_hub_db" / INGESTED_FILES_LOG
         
         if log_path.exists():
             os.remove(log_path)
@@ -692,13 +739,15 @@ def clear_ingestion_log_file():
 def delete_ingested_document_database_simple(db_path):
     """Permanently delete the entire ingested document database (simple version)"""
     try:
-        wsl_db_path = convert_windows_to_wsl_path(db_path)
-        kb_dir = Path(wsl_db_path) / "knowledge_hub_db"
-        collections_file = Path(wsl_db_path) / "working_collections.json"
-        graph_file = Path(wsl_db_path) / "knowledge_cortex.gpickle"
-        batch_state_file = Path(wsl_db_path) / "batch_state.json"
-        staging_file = Path(wsl_db_path) / "staging_ingestion.json"
-        scan_config_file = Path(wsl_db_path) / "scan_config.json"
+        db_root = resolve_db_root_path(db_path)
+        if not db_root:
+            st.error("❌ Database path is empty. Set a database path before deleting the knowledge base.")
+            return
+
+        kb_dir = db_root / "knowledge_hub_db"
+        collections_file = db_root / "working_collections.json"
+        project_collections_file = Path(__file__).parent.parent / "working_collections.json"
+        graph_file = db_root / "knowledge_cortex.gpickle"
         
         deleted_items = []
         errors = []
@@ -713,16 +762,17 @@ def delete_ingested_document_database_simple(db_path):
                 errors.append(error_msg)
                 logger.error(error_msg)
         
-        # Delete collections file (only stored in KB database path now)
-        if collections_file.exists():
-            try:
-                collections_file.unlink()
-                deleted_items.append("Collections")
-                logger.info(f"Collections file deleted: {collections_file}")
-            except Exception as e:
-                error_msg = f"Failed to delete collections file: {e}"
-                errors.append(error_msg)
-                logger.error(error_msg)
+        # Delete collections file (DB root and legacy project copy)
+        for collection_target in (project_collections_file, collections_file):
+            if collection_target.exists():
+                try:
+                    collection_target.unlink()
+                    deleted_items.append(f"Collections ({collection_target})")
+                    logger.info(f"Collections file deleted: {collection_target}")
+                except Exception as e:
+                    error_msg = f"Failed to delete collections file {collection_target}: {e}"
+                    errors.append(error_msg)
+                    logger.error(error_msg)
         
         if graph_file.exists():
             try:
@@ -734,38 +784,8 @@ def delete_ingested_document_database_simple(db_path):
                 errors.append(error_msg)
                 logger.error(error_msg)
         
-        # Delete batch state file
-        if batch_state_file.exists():
-            try:
-                batch_state_file.unlink()
-                deleted_items.append("Batch state")
-                logger.info(f"Batch state file deleted: {batch_state_file}")
-            except Exception as e:
-                error_msg = f"Failed to delete batch state file: {e}"
-                errors.append(error_msg)
-                logger.error(error_msg)
-        
-        # Delete staging file
-        if staging_file.exists():
-            try:
-                staging_file.unlink()
-                deleted_items.append("Staging file")
-                logger.info(f"Staging file deleted: {staging_file}")
-            except Exception as e:
-                error_msg = f"Failed to delete staging file: {e}"
-                errors.append(error_msg)
-                logger.error(error_msg)
-
-        # Delete scan configuration file
-        if scan_config_file.exists():
-            try:
-                scan_config_file.unlink()
-                deleted_items.append("Scan config file")
-                logger.info(f"Scan config file deleted: {scan_config_file}")
-            except Exception as e:
-                error_msg = f"Failed to delete scan config file: {e}"
-                errors.append(error_msg)
-                logger.error(error_msg)
+        # Purge remaining ingestion artifacts
+        purge_ingestion_state_files(db_root, deleted_items, errors=errors)
 
         if deleted_items:
             st.success(f"✅ Ingested document database deleted successfully: {', '.join(deleted_items)}")

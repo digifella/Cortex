@@ -29,27 +29,27 @@ VERSION_METADATA = {
     "description": "Improved document ingestion with Docling, robust database cleanup, and safer WSL/Docker path handling for long-running batches.",
     "breaking_changes": [],
     "new_features": [
-        "Docling-based ingestion pipeline enabled for richer Office/PDF parsing inside Docker engine.",
-        "Clean Start flow with detailed debug output and step-by-step verification for mounted volumes.",
+        "Docling-based ingestion pipeline enabled for richer Office/PDF parsing in both host and Docker engine.",
+        "New Clean Start flow in Maintenance with detailed debug output and step-by-step verification.",
         "Detection of orphaned ingestion artifacts (staging, batch_state, progress) during Knowledge Search validation.",
-        "Shared path utilities for resolving user-specified database roots across Windows hosts and Docker containers."
+        "Shared path utilities for resolving user-specified database roots across Windows, WSL, and Docker."
     ],
     "improvements": [
-        "Knowledge Ingest now centralizes DB path resolution via runtime-safe helpers, avoiding hardcoded container paths.",
+        "Knowledge Ingest now centralizes DB path resolution via runtime-safe helpers, avoiding hardcoded locations.",
         "Clean Start and Delete KB flows clear batch_state, staging_ingestion, recovery metadata, and logs even after failed runs.",
-        "Knowledge Search validates the configured database path in-container, suggests existing populated roots, and reports stale state clearly.",
-        "Batch ingest UI uses stage-based routing so analysis and finalization auto-refresh correctly in Docker without manual refresh confusion."
+        "Knowledge Search validates the configured database path, suggests existing populated roots, and reports stale state clearly.",
+        "Batch ingest UI uses stage-based routing so analysis and finalization auto-refresh correctly without manual refresh confusion."
     ],
     "bug_fixes": [
-        "Fixed Clean Start NameError and made it resilient when knowledge_hub_db is missing or partial on mounted volumes.",
+        "Fixed Clean Start NameError and made it resilient when knowledge_hub_db is missing or partial.",
         "Resolved cases where ingestion logs and UI state could stay in a 'processing' state after subprocess termination.",
         "Prevented active batch management view from blocking automatic finalization and completion routing.",
-        "Ensured Docker/host path conversions do not attempt to write under the project directory inside the container."
+        "Ensured Docker/host path conversions do not attempt to write under the project directory."
     ],
     "performance": [
-        "Non-blocking ingestion log reader keeps GPU/CPU throttle metrics live while processing batches in Docker.",
+        "Non-blocking ingestion log reader keeps GPU/CPU throttle metrics live while processing batches.",
         "Reduced likelihood of stalls in long-running ingests by enforcing unbuffered subprocess output.",
-        "Cleaner recovery of interrupted ingests reduces the need for manual directory cleanup in mounted volumes."
+        "Cleaner recovery of interrupted ingests reduces the need for manual directory cleanup."
     ]
 }
 
