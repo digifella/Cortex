@@ -1,5 +1,5 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v4.10.2
+# Version: v4.10.3
 # Date: 2025-08-30
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
 #          - GRAPHRAG INTEGRATION (v4.2.1): Re-enabled GraphRAG search modes with radio button

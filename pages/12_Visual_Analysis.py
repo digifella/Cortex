@@ -24,7 +24,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.10.1"
+PAGE_VERSION = "v4.10.3"
 
 # Import Cortex modules
 try:

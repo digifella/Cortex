@@ -1,7 +1,7 @@
 # **`README.md`**
 
-**Version:** v4.10.2 (Docker Path Auto-Detection Hotfix)
-**Date:** 2025-08-31
+**Version:** v4.10.3 (Docling Ingest & Recovery Hardening)
+**Date:** 2025-11-16
 
 **Prelim:**
 Please be aware that the system operates in a WSL2 environment, so all paths should support linux and windows.
@@ -205,7 +205,7 @@ docker buildx build --platform linux/amd64,linux/arm64 -t cortex-suite .
 - Ingest staging diagnostics: if the UI shows “Analysis complete, but no documents were staged for review”, the ingest page now displays the container path to `staging_ingestion.json`, whether it exists, and the parsed document count. If the file contains documents, click “Retry Finalization” to complete the flow.
 - Knowledge Search fallback: if the project root page is not present in the image, Docker falls back to a minimal search implementation with direct Chroma queries.
 
-### Knowledge base auto-detection in Docker (v4.10.2)
+### Knowledge base auto-detection in Docker (v4.10.3)
 
 Knowledge Search and the Collection Manager now probe multiple candidate paths when running inside Docker:
 

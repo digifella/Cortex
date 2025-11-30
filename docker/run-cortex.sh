@@ -38,7 +38,7 @@ normalize_path_for_docker() {
 
 echo ""
 echo "==============================================="
-echo "   CORTEX SUITE v4.10.2 (Docker Path Auto-Detection Hotfix)"
+echo "   CORTEX SUITE v4.10.3 (Docker Path Auto-Detection Hotfix)"
 echo "   Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64"
 echo "   GPU acceleration, timeout fixes, and improved reliability (2025-09-02)"
 echo "   Date: $(date)"

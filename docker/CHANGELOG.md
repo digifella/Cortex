@@ -6,6 +6,37 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## v4.10.3 - 2025-11-16
+
+### Docling Ingest & Recovery Hardening
+
+Improved document ingestion with Docling, robust database cleanup, and safer WSL/Docker path handling for long-running batches.
+
+#### Post-release updates (2025-11-17)
+- Fixed Docker start scripts (CPU & GPU) by switching to heredoc generation to avoid shell quoting errors during image build.
+- Knowledge Ingest "Install missing models now" button now re-checks availability after pulling and surfaces Ollama connectivity errors inline.
+
+### ✨ New Features
+- Enabled Docling-based ingestion pipeline for richer Office/PDF parsing in both host and Docker engines.
+- Added a Clean Start flow in Maintenance with detailed debug output and step-by-step verification of what is deleted.
+- Detects orphaned ingestion artifacts (staging, batch_state, progress) during Knowledge Search validation and guides users to Clean Start.
+- Introduced shared path utilities to resolve user-provided database roots consistently across Windows, WSL, and Docker.
+- New **Metadata & Tag Management** page to browse, filter, and bulk-edit document metadata (including thematic_tags).
+- Knowledge Search supports filtering by thematic tags alongside document type and proposal outcome.
+- Docker model-init now also pulls `llava:7b` so vision ingestion works out of the box.
+
+### 🚀 Improvements
+- Knowledge Ingest now centralizes database path resolution via runtime-safe helpers instead of relying on hardcoded defaults.
+- Clean Start and Delete KB functions aggressively clear batch_state, staging_ingestion, recovery metadata, and ingestion logs even after failed runs.
+- Knowledge Search validates the configured database path, suggests populated fallback roots when available, and surfaces stale state warnings clearly.
+- Batch ingest routing now ensures that analysis and finalization use the live log view with automatic reruns, avoiding confusion with manual refresh-only views.
+
+### 🔧 Bug Fixes
+- Fixed Clean Start NameError and ensured it behaves safely when `knowledge_hub_db` is missing or partially created.
+- Resolved cases where ingestion logs and UI state would remain in a "processing" state after the ingestion subprocess had terminated.
+- Prevented the Active Batch Management panel from blocking automatic finalization and completion routing.
+- Hardened WSL/Docker path conversion so ingestion never attempts to write under the project directory instead of the external database path.
+
 ## v4.10.2 - 2025-11-12
 
 ### Docker Path Auto-Detection Hotfix
@@ -26,11 +57,6 @@ Eliminates false “Docker Setup Required” warnings by detecting mounted knowl
 - Resolved cases where Docker builds reported “Knowledge base directory not found at '/data/ai_databases/knowledge_hub_db'” even when the data existed under `/mnt/e` or `/mnt/f`.
 - Prevented Knowledge Search from exiting early when the configured path was empty but mounted volumes were available.
 - Ensured documentation and runtime instructions stay in sync so batch jobs, ingestion flows, and search all point to the same storage root.
-
-
-
-
-
 
 ## v4.10.1 - 2025-10-09
 
