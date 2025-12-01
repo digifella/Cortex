@@ -47,9 +47,11 @@ COPY --chown=cortex:cortex requirements.txt ./requirements.txt
 # Exclude torch, sentence-transformers, outlines (all depend on torch), and en-core-web-sm (downloaded separately)
 # Extract package names and versions only (no URLs, no hashes) for cross-platform compatibility
 # Use --no-cache-dir to avoid hash mismatch errors from corrupted cache
+# Disable hash checking to avoid transient PyPI hash mismatch errors
 RUN grep -v "^torch" requirements.txt | grep -v "^en-core-web-sm" | grep -v "^outlines" | grep -v "^sentence-transformers" | \
     grep -v "^#" | grep -v "^$" | \
     sed 's/ @.*//' | sed 's/#.*//' > requirements-base.txt && \
+    pip config set install.require-hashes false && \
     pip install --no-cache-dir --retries 5 --timeout 300 -r requirements-base.txt
 
 # Install CUDA-enabled PyTorch

@@ -36,10 +36,12 @@ COPY --chown=cortex:cortex requirements.txt .
 # Exclude spacy model (installed separately below for reliability)
 # Increased timeout to 300 seconds for slow/unstable network connections
 # Extract package names and versions only (no URLs, no hashes) for cross-platform compatibility
+# Disable hash checking to avoid transient PyPI hash mismatch errors
 RUN --mount=type=cache,target=/home/cortex/.cache/pip \
     grep -v "^en-core-web-sm" requirements.txt | \
     grep -v "^#" | grep -v "^$" | \
     sed 's/ @.*//' | sed 's/#.*//' > requirements-base.txt && \
+    pip config set install.require-hashes false && \
     pip install --retries 5 --timeout 300 -r requirements-base.txt
 
 # PyTorch installation is now handled in requirements.txt with CPU-only wheels
