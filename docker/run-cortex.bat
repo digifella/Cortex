@@ -366,6 +366,7 @@ if not exist "%HOST_AI_DB%" (
     )
 )
 >>.env echo WINDOWS_AI_DATABASE_PATH=!HOST_AI_DB!
+>>.env echo AI_DATABASE_PATH=/data/ai_databases
 set "ENV_AI_DB_PATH=!HOST_AI_DB!"
 echo OK: AI database will be stored at: !HOST_AI_DB!
 :SKIP_AI_DB_PROMPT
@@ -402,6 +403,7 @@ if not exist "%HOST_SRC%" (
     )
 )
 >>.env echo WINDOWS_KNOWLEDGE_SOURCE_PATH=!HOST_SRC!
+>>.env echo KNOWLEDGE_SOURCE_PATH=/data/knowledge_base
 set "ENV_SOURCE_PATH=!HOST_SRC!"
 echo OK: Knowledge Source documents at: !HOST_SRC!
 :SKIP_SRC_PROMPT

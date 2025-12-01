@@ -23,18 +23,23 @@ def get_default_ai_database_path() -> str:
     """
     Get the default AI database path, prioritizing environment variables
     and avoiding hardcoded platform assumptions.
-    
+
     Priority order:
     1. AI_DATABASE_PATH environment variable
     2. Platform-aware defaults
     3. Current directory fallback
-    
+
     Returns:
         Cross-platform compatible database path
     """
     # Check environment variable first
     env_path = os.getenv("AI_DATABASE_PATH")
     if env_path:
+        # CRITICAL: In Docker, use paths exactly as configured
+        # Docker volumes handle the mapping, don't convert
+        is_docker = _safe_path_exists(Path("/.dockerenv"))
+        if is_docker:
+            return env_path
         return convert_windows_to_wsl_path(env_path)
     
     # Platform-aware defaults
@@ -72,13 +77,18 @@ def get_default_ai_database_path() -> str:
 def get_default_knowledge_source_path() -> str:
     """
     Get the default knowledge source path.
-    
+
     Returns:
         Cross-platform compatible knowledge source path
     """
     # Check environment variable first
     env_path = os.getenv("KNOWLEDGE_SOURCE_PATH")
     if env_path:
+        # CRITICAL: In Docker, use paths exactly as configured
+        # Docker volumes handle the mapping, don't convert
+        is_docker = _safe_path_exists(Path("/.dockerenv"))
+        if is_docker:
+            return env_path
         return convert_windows_to_wsl_path(env_path)
     
     # Default to home directory
