@@ -106,42 +106,100 @@ ENV_SOURCE_PATH_RAW=$(grep -E '^WINDOWS_KNOWLEDGE_SOURCE_PATH=' .env 2>/dev/null
 ENV_AI_DB_PATH=$(normalize_path_for_docker "$ENV_AI_DB_PATH_RAW")
 ENV_SOURCE_PATH=$(normalize_path_for_docker "$ENV_SOURCE_PATH_RAW")
 
-# Offer interactive storage mapping (once) if not set in .env
-ADD_AI_DB_MOUNT=""
-ADD_SOURCE_MOUNT=""
-
-if [ -z "$ENV_AI_DB_PATH" ]; then
+# Show existing configuration if present
+if [ -n "$ENV_AI_DB_PATH" ]; then
     echo ""
-    echo "📦 Storage Setup"
-    echo "Would you like to store the AI database on a host folder (for easy backups)?"
-    read -p "Use host folder for AI database? (y/N): " USE_HOST_AI_DB
-    if [[ "$USE_HOST_AI_DB" =~ ^[Yy]$ ]]; then
-        read -p "Enter host path for AI database (e.g., /Users/you/ai_databases): " HOST_AI_DB
+    echo "ℹ️  Found existing storage configuration:"
+    [ -n "$ENV_AI_DB_PATH" ] && echo "   AI Database: $ENV_AI_DB_PATH"
+    [ -n "$ENV_SOURCE_PATH" ] && echo "   Knowledge Source: $ENV_SOURCE_PATH"
+    echo ""
+    echo "You can press ENTER to keep existing paths or type new ones."
+    echo ""
+    # Clear old entries from .env - will be re-added with user confirmation
+    grep -v -E '^(WINDOWS_AI_DATABASE_PATH=|AI_DATABASE_PATH=|WINDOWS_KNOWLEDGE_SOURCE_PATH=|KNOWLEDGE_SOURCE_PATH=)' .env > .env.tmp
+    mv .env.tmp .env
+fi
+
+# ALWAYS prompt for AI Database Path (with default if exists)
+echo ""
+echo "==================================================================="
+echo "STORAGE CONFIGURATION: AI Database Path"
+echo "==================================================================="
+echo "This is where Cortex will store the knowledge graph and vector DB."
+echo ""
+if [ -n "$ENV_AI_DB_PATH" ]; then
+    echo "Current: $ENV_AI_DB_PATH"
+    echo ""
+fi
+read -p "Use host folder for AI database storage? (y/N): " USE_HOST_AI_DB
+if [[ "$USE_HOST_AI_DB" =~ ^[Yy]$ ]]; then
+    if [ -n "$ENV_AI_DB_PATH" ]; then
+        read -p "Enter host path [$ENV_AI_DB_PATH]: " HOST_AI_DB
+    else
+        read -p "Enter host path (e.g., /Users/you/ai_databases): " HOST_AI_DB
+    fi
+    # Use existing path if user just pressed ENTER
+    if [ -z "$HOST_AI_DB" ] && [ -n "$ENV_AI_DB_PATH" ]; then
+        HOST_AI_DB="$ENV_AI_DB_PATH"
+        echo "ℹ️  Using existing path: $HOST_AI_DB"
+    fi
+    if [ -n "$HOST_AI_DB" ]; then
         HOST_AI_DB=$(normalize_path_for_docker "$HOST_AI_DB")
-        if [ -n "$HOST_AI_DB" ]; then
-            # Persist to .env for future runs
-            if grep -q '^WINDOWS_AI_DATABASE_PATH=' .env; then
-                sed -i.bak "s|^WINDOWS_AI_DATABASE_PATH=.*|WINDOWS_AI_DATABASE_PATH=$HOST_AI_DB|" .env
-            else
-                echo "WINDOWS_AI_DATABASE_PATH=$HOST_AI_DB" >> .env
-            fi
-            ENV_AI_DB_PATH="$HOST_AI_DB"
-        fi
+        # Create directory if it doesn't exist
+        mkdir -p "$HOST_AI_DB" 2>/dev/null || true
+        echo "WINDOWS_AI_DATABASE_PATH=$HOST_AI_DB" >> .env
+        echo "AI_DATABASE_PATH=/data/ai_databases" >> .env
+        ENV_AI_DB_PATH="$HOST_AI_DB"
+        echo "✅ AI database will be stored at: $HOST_AI_DB"
     fi
 fi
 
-if [ -z "$ENV_SOURCE_PATH" ]; then
-    read -p "Bind a host folder for Knowledge Source (documents to ingest)? (y/N): " USE_HOST_SRC
-    if [[ "$USE_HOST_SRC" =~ ^[Yy]$ ]]; then
-        read -p "Enter host path for Knowledge Source (e.g., /Users/you/Knowledge): " HOST_SRC
+# ALWAYS prompt for Knowledge Source Path (with default if exists)
+echo ""
+echo "==================================================================="
+echo "STORAGE CONFIGURATION: Knowledge Source Path"
+echo "==================================================================="
+echo "This is where your source documents are stored for ingestion."
+echo "(PDF, Word, text files, etc.)"
+echo ""
+if [ -n "$ENV_SOURCE_PATH" ]; then
+    echo "Current: $ENV_SOURCE_PATH"
+    echo ""
+fi
+read -p "Use host folder for Knowledge Source documents? (y/N): " USE_HOST_SRC
+if [[ "$USE_HOST_SRC" =~ ^[Yy]$ ]]; then
+    if [ -n "$ENV_SOURCE_PATH" ]; then
+        read -p "Enter host path [$ENV_SOURCE_PATH]: " HOST_SRC
+    else
+        read -p "Enter host path (e.g., /Users/you/Documents/KB_Source): " HOST_SRC
+    fi
+    # Use existing path if user just pressed ENTER
+    if [ -z "$HOST_SRC" ] && [ -n "$ENV_SOURCE_PATH" ]; then
+        HOST_SRC="$ENV_SOURCE_PATH"
+        echo "ℹ️  Using existing path: $HOST_SRC"
+    fi
+    if [ -n "$HOST_SRC" ]; then
         HOST_SRC=$(normalize_path_for_docker "$HOST_SRC")
-        if [ -n "$HOST_SRC" ]; then
-            if grep -q '^WINDOWS_KNOWLEDGE_SOURCE_PATH=' .env; then
-                sed -i.bak "s|^WINDOWS_KNOWLEDGE_SOURCE_PATH=.*|WINDOWS_KNOWLEDGE_SOURCE_PATH=$HOST_SRC|" .env
+        # Verify source directory exists
+        if [ ! -d "$HOST_SRC" ]; then
+            echo "⚠️  WARNING: Source directory does not exist"
+            echo "Path: $HOST_SRC"
+            echo "The directory will be created if you continue."
+            read -p "Create this directory? (y/N): " CREATE_SRC
+            if [[ "$CREATE_SRC" =~ ^[Yy]$ ]]; then
+                mkdir -p "$HOST_SRC" 2>/dev/null || {
+                    echo "❌ Failed to create directory"
+                    HOST_SRC=""
+                }
             else
-                echo "WINDOWS_KNOWLEDGE_SOURCE_PATH=$HOST_SRC" >> .env
+                HOST_SRC=""
             fi
+        fi
+        if [ -n "$HOST_SRC" ]; then
+            echo "WINDOWS_KNOWLEDGE_SOURCE_PATH=$HOST_SRC" >> .env
+            echo "KNOWLEDGE_SOURCE_PATH=/data/knowledge_base" >> .env
             ENV_SOURCE_PATH="$HOST_SRC"
+            echo "✅ Knowledge Source documents at: $HOST_SRC"
         fi
     fi
 fi
