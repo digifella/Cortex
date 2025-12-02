@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 import threading
+import os
 
 from sentence_transformers import SentenceTransformer
 
@@ -19,6 +20,11 @@ from .utils.performance_monitor import measure
 from .utils.gpu_monitor import get_optimal_batch_size, log_gpu_status
 
 logger = get_logger(__name__)
+
+# Force offline mode for HuggingFace transformers library
+# This prevents unnecessary internet checks when model is already cached
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 
 _model_lock = threading.Lock()
@@ -46,8 +52,32 @@ def _load_model() -> SentenceTransformer:
 
             logger.info(f"Loading embedding model: {EMBED_MODEL} on {device}")
             # Normalize embeddings improves Chroma recall for BGE models
-            _model = SentenceTransformer(EMBED_MODEL, device=device)
-            logger.info(f"✅ Embedding model loaded on {device}")
+            try:
+                # Try loading in offline mode first (HF_HUB_OFFLINE env var is set above)
+                _model = SentenceTransformer(EMBED_MODEL, device=device)
+                logger.info(f"✅ Embedding model loaded from cache on {device} (offline mode)")
+            except Exception as offline_error:
+                # If offline mode fails, temporarily enable online mode and try downloading
+                logger.warning(f"Cached model not found, attempting download (requires internet)")
+                logger.debug(f"Offline error details: {offline_error}")
+                try:
+                    # Temporarily disable offline mode for download
+                    os.environ["HF_HUB_OFFLINE"] = "0"
+                    os.environ["TRANSFORMERS_OFFLINE"] = "0"
+                    _model = SentenceTransformer(EMBED_MODEL, device=device)
+                    logger.info(f"✅ Embedding model downloaded and loaded on {device}")
+                    # Re-enable offline mode after successful download
+                    os.environ["HF_HUB_OFFLINE"] = "1"
+                    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+                except Exception as download_error:
+                    logger.error(f"❌ Failed to load embedding model (offline and online)")
+                    logger.error(f"Offline error: {str(offline_error)[:200]}")
+                    logger.error(f"Download error: {str(download_error)[:200]}")
+                    raise RuntimeError(
+                        f"Cannot load embedding model '{EMBED_MODEL}'. "
+                        f"Model not cached locally and internet unavailable. "
+                        f"Please rebuild Docker image with internet access to pre-download the model."
+                    ) from download_error
 
             # Calculate optimal batch size for this device
             _optimal_batch_size = get_optimal_batch_size(model_name=EMBED_MODEL, conservative=True)

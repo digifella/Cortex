@@ -24,32 +24,33 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-11-16",
-    "release_name": "Docling Ingest & Recovery Hardening",
-    "description": "Improved document ingestion with Docling, robust database cleanup, and safer WSL/Docker path handling for long-running batches.",
+    "release_date": "2025-12-02",
+    "release_name": "Docker Path Configuration & Offline Embedding Support",
+    "description": "Enhanced Docker setup workflow with interactive path configuration and full offline operation support for embeddings.",
     "breaking_changes": [],
     "new_features": [
-        "Docling-based ingestion pipeline enabled for richer Office/PDF parsing in both host and Docker engine.",
-        "New Clean Start flow in Maintenance with detailed debug output and step-by-step verification.",
-        "Detection of orphaned ingestion artifacts (staging, batch_state, progress) during Knowledge Search validation.",
-        "Shared path utilities for resolving user-specified database roots across Windows, WSL, and Docker."
+        "Docker batch file now prompts for both AI database and knowledge source paths with pre-filled defaults",
+        "Pre-downloads embedding model (BAAI/bge-base-en-v1.5) during Docker build for offline operation",
+        "Automatic path reconfiguration workflow - press ENTER to keep existing paths or type new ones",
+        "Knowledge Ingest UI now properly pre-fills configured source paths from environment variables"
     ],
     "improvements": [
-        "Knowledge Ingest now centralizes DB path resolution via runtime-safe helpers, avoiding hardcoded locations.",
-        "Clean Start and Delete KB flows clear batch_state, staging_ingestion, recovery metadata, and logs even after failed runs.",
-        "Knowledge Search validates the configured database path, suggests existing populated roots, and reports stale state clearly.",
-        "Batch ingest UI uses stage-based routing so analysis and finalization auto-refresh correctly without manual refresh confusion."
+        "Docker containers now work fully offline for document ingestion and search after initial build",
+        "HuggingFace offline mode enforcement at both system and application levels",
+        "Graceful fallback from offline to online mode for embedding model loading",
+        "Enhanced session state initialization to respect environment-configured paths in Docker",
+        "Clear error messages when embedding model cache is missing and internet unavailable"
     ],
     "bug_fixes": [
-        "Fixed Clean Start NameError and made it resilient when knowledge_hub_db is missing or partial.",
-        "Resolved cases where ingestion logs and UI state could stay in a 'processing' state after subprocess termination.",
-        "Prevented active batch management view from blocking automatic finalization and completion routing.",
-        "Ensured Docker/host path conversions do not attempt to write under the project directory."
+        "Fixed Docker batch file only prompting for AI database path (now prompts for both paths)",
+        "Fixed blank 'Root Source Documents Path' field in Knowledge Ingest UI when running in Docker",
+        "Resolved embedding service attempting HuggingFace connections in offline Docker environments",
+        "Fixed session state not respecting KNOWLEDGE_SOURCE_PATH environment variable on first load"
     ],
     "performance": [
-        "Non-blocking ingestion log reader keeps GPU/CPU throttle metrics live while processing batches.",
-        "Reduced likelihood of stalls in long-running ingests by enforcing unbuffered subprocess output.",
-        "Cleaner recovery of interrupted ingests reduces the need for manual directory cleanup."
+        "Eliminated unnecessary HuggingFace connection attempts in offline mode (faster embedding loading)",
+        "Embedding model cached in Docker image (~420MB) eliminates runtime download overhead",
+        "Reduced Docker startup time by preventing network timeouts when offline"
     ]
 }
 

@@ -450,13 +450,15 @@ def initialize_state(force_reset: bool = False):
     # Always sync with config - update session state if config has different values
     config_knowledge_path = config.get("knowledge_source_path", "")
     config_db_path = config.get("ai_database_path", "")
-    
+
     # Update session state from config (this fixes stale session values)
-    # But ONLY if the session state is empty/uninitialized - don't overwrite user input
-    if "knowledge_source_path" not in st.session_state:
-        st.session_state.knowledge_source_path = config_knowledge_path
-    if "db_path" not in st.session_state:
-        st.session_state.db_path = config_db_path
+    # Initialize with config values if not set OR if currently empty (handles Docker first-run case)
+    if "knowledge_source_path" not in st.session_state or not st.session_state.get("knowledge_source_path"):
+        if config_knowledge_path:  # Only override if config has a value
+            st.session_state.knowledge_source_path = config_knowledge_path
+    if "db_path" not in st.session_state or not st.session_state.get("db_path"):
+        if config_db_path:  # Only override if config has a value
+            st.session_state.db_path = config_db_path
     if "db_path_runtime" not in st.session_state and st.session_state.get("db_path"):
         st.session_state.db_path_runtime = _resolve_db_path(st.session_state.db_path)
 

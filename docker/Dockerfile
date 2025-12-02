@@ -61,6 +61,15 @@ RUN python -c "import nltk; nltk.download('averaged_perceptron_tagger'); nltk.do
 # Note: Install with proper NumPy constraints to prevent conflicts
 RUN pip install 'docling>=1.0.0' 'numpy>=1.26.4,<2.0.0' || echo "Docling installation failed, will use legacy readers"
 
+# Pre-download embedding model for offline operation
+# Temporarily disable offline mode during build to allow download
+ENV HF_HUB_OFFLINE=0
+ENV TRANSFORMERS_OFFLINE=0
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-base-en-v1.5')" || echo "WARNING: Embedding model download failed - container will require internet on first use"
+# Re-enable offline mode for runtime
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+
 # Copy application code
 COPY --chown=cortex:cortex . .
 
