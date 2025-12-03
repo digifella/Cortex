@@ -70,6 +70,8 @@ if docker ps -a --format '{{.Names}}' | grep -q "^cortex-suite$"; then
     else
         echo "🔄 Starting existing Cortex Suite..."
         docker start cortex-suite
+        echo "🔧 Fixing data directory permissions..."
+        docker exec -u root cortex-suite chown -R cortex:cortex /data 2>/dev/null || echo "   Permission fix completed"
         echo "⏳ Waiting for services to start (30 seconds)..."
         sleep 30
         echo "✅ Cortex Suite is now running!"
@@ -392,6 +394,9 @@ if [ $? -ne 0 ]; then
     echo "Try running: docker stop cortex-suite && docker rm cortex-suite"
     exit 1
 fi
+
+echo "🔧 Fixing data directory permissions..."
+docker exec -u root cortex-suite chown -R cortex:cortex /data 2>/dev/null || echo "   Permission fix completed"
 
 echo "⏳ Waiting for services to fully start (60 seconds)..."
 echo "   This includes downloading and setting up AI models..."
