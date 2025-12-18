@@ -1885,12 +1885,10 @@ def render_config_and_scan_ui():
         st.session_state.dir_selections = {}
 
     st.text_input("1. Root Source Documents Path",
-                  value=st.session_state.get("knowledge_source_path", ""),
                   key="knowledge_source_path",
                   on_change=reset_scan_path,
                   help="📁 Path to your source documents folder. This is where Cortex will scan for files to ingest. You can use Windows paths (C:\\Documents) or Linux paths (/home/user/docs).")
     st.text_input("2. Database Storage Path (Destination)",
-                  value=st.session_state.get("db_path", ""),
                   key="db_path",
                   help="💾 Path where your knowledge base will be stored. This directory will contain the processed documents, embeddings, and knowledge graph. Needs sufficient space for your document collection.")
     resolved_preview = _resolve_db_path(st.session_state.get("db_path", ""))
