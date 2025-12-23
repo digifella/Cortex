@@ -1,0 +1,55 @@
+# Development Dependencies for Cortex Suite
+# Version: 1.0.0
+# Purpose: Additional packages needed for development and testing
+
+# Testing Framework
+pytest==8.3.4
+pytest-cov==6.0.0              # Code coverage reporting
+pytest-mock==3.14.0            # Mocking utilities
+pytest-asyncio==0.24.0         # Async test support
+pytest-xdist==3.6.1            # Parallel test execution
+pytest-timeout==2.3.1          # Test timeout enforcement
+pytest-benchmark==5.1.0        # Performance benchmarking
+
+# Code Quality
+black==24.10.0                 # Code formatting
+isort==5.13.2                  # Import sorting
+pylint==3.3.2                  # Static code analysis
+flake8==7.1.1                  # Style guide enforcement
+mypy==1.13.0                   # Type checking
+bandit==1.8.0                  # Security linting
+
+# Pre-commit Hooks
+pre-commit==4.0.1              # Git pre-commit hook framework
+
+# Documentation
+sphinx==8.1.3                  # Documentation generator
+sphinx-rtd-theme==3.0.2        # ReadTheDocs theme
+sphinx-autodoc-typehints==2.5.0  # Type hints in docs
+
+# Debugging
+ipdb==0.13.13                  # Interactive debugger
+ipython==8.30.0                # Enhanced Python shell
+
+# Security
+safety==3.2.11                 # Dependency vulnerability scanner
+pip-audit==2.7.3               # Audit Python packages for known vulnerabilities
+
+# Code Coverage Reporting
+coverage[toml]==7.6.9          # Coverage.py with TOML support
+
+# Performance Profiling
+memory-profiler==0.61.0        # Memory usage profiling
+py-spy==0.4.0                  # Sampling profiler
+
+# License Checking
+pip-licenses==5.0.0            # List licenses of dependencies
+
+# Development Utilities
+watchdog==6.0.0                # File system monitoring
+python-dotenv==1.0.1           # Environment variable management (already in main)
+
+# Type Stubs
+types-requests==2.32.0.20241016
+types-PyYAML==6.0.12.20240917
+types-setuptools==75.6.0.20241126

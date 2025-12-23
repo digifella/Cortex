@@ -1,0 +1,74 @@
+# Coverage.py Configuration
+# Version: 1.0.0
+# Purpose: Configure code coverage reporting
+
+[run]
+source = cortex_engine,pages
+omit =
+    */tests/*
+    */test_*.py
+    */__pycache__/*
+    */venv/*
+    */.venv/*
+    */archive/*
+    */docker/*
+    */scripts/*
+    # Exclude UI pages from coverage (harder to test)
+    # pages/*.py
+
+branch = True
+parallel = True
+
+[report]
+precision = 2
+skip_empty = True
+show_missing = True
+
+# Fail if coverage is below threshold
+# Commented out initially, uncomment when ready
+# fail_under = 70
+
+exclude_lines =
+    # Standard pragma
+    pragma: no cover
+
+    # Don't complain about missing debug code
+    def __repr__
+    def __str__
+
+    # Don't complain if tests don't hit defensive assertion code
+    raise AssertionError
+    raise NotImplementedError
+
+    # Don't complain about abstract methods
+    @abstractmethod
+    @abc.abstractmethod
+
+    # Don't complain about type checking blocks
+    if TYPE_CHECKING:
+    if typing.TYPE_CHECKING:
+
+    # Don't complain about main blocks
+    if __name__ == .__main__.:
+
+    # Don't complain about debug logging
+    logger.debug
+
+    # Don't complain about platform-specific code
+    if sys.platform
+    if platform.system
+
+    # Don't complain about optional imports
+    except ImportError:
+    except ModuleNotFoundError:
+
+[html]
+directory = htmlcov
+title = Cortex Suite Coverage Report
+
+[json]
+output = coverage.json
+pretty_print = True
+
+[xml]
+output = coverage.xml
