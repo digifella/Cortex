@@ -100,8 +100,11 @@ def detect_nvidia_gpu() -> Tuple[bool, Optional[Dict]]:
         gpu_info["issues"].append("CUDA toolkit found but GPU not accessible - reinstall PyTorch with CUDA support")
         logger.info("💡 CUDA toolkit detected but GPU not accessible via PyTorch")
 
-    # Method 4: Check Windows nvidia-smi.exe (for WSL)
-    if os.path.exists("/.dockerenv") or "microsoft" in os.uname().release.lower():
+    # Method 4: Check Windows nvidia-smi.exe (WSL-specific detection)
+    # Only check in WSL environment (not Docker, Mac, or native Linux)
+    is_wsl = "microsoft" in os.uname().release.lower() and not os.path.exists("/.dockerenv")
+
+    if is_wsl:
         try:
             # Try Windows nvidia-smi from WSL
             result = subprocess.run(
