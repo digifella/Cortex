@@ -16,44 +16,124 @@ logger = logging.getLogger(__name__)
 
 def detect_nvidia_gpu() -> Tuple[bool, Optional[Dict]]:
     """
-    Detect NVIDIA GPU presence and capabilities.
+    Detect NVIDIA GPU presence and capabilities with WSL support.
 
     Returns:
         Tuple of (has_nvidia_gpu, gpu_info_dict)
     """
+    gpu_info = {
+        "detected": False,
+        "method": None,
+        "device_name": None,
+        "issues": []
+    }
+
+    # Method 1: PyTorch CUDA detection
     try:
         import torch
         if torch.cuda.is_available():
-            gpu_info = {
+            gpu_info.update({
+                "detected": True,
+                "method": "pytorch",
                 "device_count": torch.cuda.device_count(),
                 "device_name": torch.cuda.get_device_name(0) if torch.cuda.device_count() > 0 else "Unknown",
                 "memory_total_gb": torch.cuda.get_device_properties(0).total_memory / (1024**3) if torch.cuda.device_count() > 0 else 0,
                 "cuda_version": torch.version.cuda,
                 "compute_capability": torch.cuda.get_device_capability(0) if torch.cuda.device_count() > 0 else (0, 0)
-            }
-            logger.info(f"🎮 NVIDIA GPU Detected: {gpu_info['device_name']} ({gpu_info['memory_total_gb']:.1f}GB)")
+            })
+            logger.info(f"🎮 NVIDIA GPU Detected (PyTorch): {gpu_info['device_name']} ({gpu_info['memory_total_gb']:.1f}GB)")
             return True, gpu_info
+        else:
+            # PyTorch available but no CUDA
+            gpu_info["issues"].append("PyTorch installed without CUDA support")
+            logger.debug("PyTorch is available but CUDA is not enabled")
     except ImportError:
+        gpu_info["issues"].append("PyTorch not installed")
         logger.debug("PyTorch not available for GPU detection")
     except Exception as e:
-        logger.debug(f"GPU detection failed: {e}")
+        gpu_info["issues"].append(f"PyTorch error: {str(e)}")
+        logger.debug(f"PyTorch GPU detection failed: {e}")
 
-    # Fallback: try nvidia-smi
+    # Method 2: nvidia-smi (works on Windows host, may fail in WSL)
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            stderr=subprocess.PIPE
         )
         if result.returncode == 0 and result.stdout.strip():
-            gpu_name = result.stdout.strip().split(',')[0]
-            logger.info(f"🎮 NVIDIA GPU Detected (nvidia-smi): {gpu_name}")
-            return True, {"device_name": gpu_name, "detected_via": "nvidia-smi"}
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+            parts = result.stdout.strip().split(',')
+            gpu_name = parts[0].strip()
+            memory_str = parts[1].strip() if len(parts) > 1 else "Unknown"
 
-    return False, None
+            gpu_info.update({
+                "detected": True,
+                "method": "nvidia-smi",
+                "device_name": gpu_name,
+                "memory_info": memory_str
+            })
+            logger.info(f"🎮 NVIDIA GPU Detected (nvidia-smi): {gpu_name}")
+            return True, gpu_info
+        else:
+            if "GPU access blocked" in result.stderr or "Failed to initialize NVML" in result.stderr:
+                gpu_info["issues"].append("NVIDIA GPU present but access blocked (WSL/permissions issue)")
+            else:
+                gpu_info["issues"].append("nvidia-smi failed to detect GPU")
+    except FileNotFoundError:
+        gpu_info["issues"].append("nvidia-smi not found (NVIDIA drivers not installed)")
+    except subprocess.TimeoutExpired:
+        gpu_info["issues"].append("nvidia-smi timed out")
+    except Exception as e:
+        gpu_info["issues"].append(f"nvidia-smi error: {str(e)}")
+
+    # Method 3: Check for CUDA toolkit installation (indicates GPU likely present)
+    cuda_paths = [
+        "/usr/local/cuda",
+        "/usr/local/cuda/bin/nvcc",
+        Path.home() / ".local/cuda",
+    ]
+
+    cuda_found = any(Path(p).exists() for p in cuda_paths)
+    if cuda_found:
+        gpu_info["issues"].append("CUDA toolkit found but GPU not accessible - reinstall PyTorch with CUDA support")
+        logger.info("💡 CUDA toolkit detected but GPU not accessible via PyTorch")
+
+    # Method 4: Check Windows nvidia-smi.exe (for WSL)
+    if os.path.exists("/.dockerenv") or "microsoft" in os.uname().release.lower():
+        try:
+            # Try Windows nvidia-smi from WSL
+            result = subprocess.run(
+                ["/mnt/c/Windows/System32/nvidia-smi.exe", "--query-gpu=name,memory.total", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                parts = result.stdout.strip().split(',')
+                gpu_name = parts[0].strip()
+                memory_str = parts[1].strip() if len(parts) > 1 else "Unknown"
+
+                gpu_info.update({
+                    "detected": True,
+                    "method": "wsl-windows-nvidia-smi",
+                    "device_name": gpu_name,
+                    "memory_info": memory_str,
+                    "wsl_note": "GPU detected on Windows host - install PyTorch with CUDA to use it"
+                })
+                logger.info(f"🎮 NVIDIA GPU Detected on Windows host (WSL): {gpu_name}")
+                logger.warning("⚠️ Install PyTorch with CUDA support to enable GPU acceleration in WSL")
+                return True, gpu_info
+        except Exception as e:
+            logger.debug(f"Windows nvidia-smi check failed: {e}")
+
+    # No GPU detected by any method
+    logger.info("💻 No NVIDIA GPU detected")
+    if gpu_info["issues"]:
+        logger.debug(f"GPU detection issues: {', '.join(gpu_info['issues'])}")
+
+    return False, gpu_info
 
 # Model resource requirements (in GB)
 MODEL_MEMORY_REQUIREMENTS = {

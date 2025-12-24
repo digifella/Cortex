@@ -212,7 +212,18 @@ def get_model_info_summary() -> Dict:
         "llm_model": KB_LLM_MODEL,
         "vlm_model": VLM_MODEL,
         "has_nvidia_gpu": has_nvidia,
-        "gpu_info": gpu_info,
+        "gpu_info": gpu_info or {},
         "recommended_model": get_recommended_embedding_model(),
         "available_models": list(EMBEDDING_MODELS.keys())
     }
+
+
+def get_pytorch_cuda_install_command() -> str:
+    """
+    Get the command to install PyTorch with CUDA support.
+
+    Returns:
+        pip install command string
+    """
+    # CUDA 12.1 is widely compatible with recent NVIDIA drivers
+    return "pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121"

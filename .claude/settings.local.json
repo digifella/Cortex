@@ -63,7 +63,8 @@
       "Bash(python3:*)",
       "Read(//mnt/c/Users/paul/OneDrive - VentraIP Australia/Knowledge_Base/**)",
       "Bash(wc:*)",
-      "Skill(frontend-design)"
+      "Skill(frontend-design)",
+      "Bash(/mnt/c/Windows/System32/nvidia-smi.exe:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",
