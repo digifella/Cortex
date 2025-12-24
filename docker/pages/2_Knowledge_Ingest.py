@@ -1897,35 +1897,35 @@ def render_model_status_bar():
     # Custom styled status bar
     status_html = f"""
     <div style="
-        background: linear-gradient(135deg, #1E2F47 0%, #2A3F5F 100%);
+        background: linear-gradient(135deg, #2A4362 0%, #3A5575 100%);
         border-radius: 12px;
-        padding: 16px 24px;
+        padding: 20px 28px;
         margin-bottom: 24px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
     ">
-        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px;">
             <div style="flex: 1; min-width: 200px;">
-                <div style="color: #E3F2FD; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; font-weight: 600;">
+                <div style="color: #FFFFFF; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">
                     System Configuration
                 </div>
-                <div style="color: #FFFFFF; font-size: 1.1rem; font-weight: 700;">
+                <div style="color: #FFFFFF; font-size: 1.35rem; font-weight: 800; text-shadow: 0 2px 4px rgba(0,0,0,0.4);">
                     {'🎮 ' + gpu_info.get('device_name', 'No GPU') if model_info['has_nvidia_gpu'] else '💻 CPU Mode'}
                 </div>
             </div>
             <div style="flex: 1; min-width: 200px;">
-                <div style="color: #E3F2FD; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; font-weight: 600;">
+                <div style="color: #FFFFFF; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">
                     Embedding Model
                 </div>
-                <div style="color: #FFFFFF; font-size: 1.1rem; font-weight: 700;">
+                <div style="color: #FFFFFF; font-size: 1.35rem; font-weight: 800; text-shadow: 0 2px 4px rgba(0,0,0,0.4);">
                     {model_info['embedding_model'].split('/')[-1][:30]}
                 </div>
             </div>
-            <div style="flex: 0; min-width: 120px; text-align: right;">
-                <div style="color: #E3F2FD; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; font-weight: 600;">
+            <div style="flex: 0; min-width: 140px; text-align: right;">
+                <div style="color: #FFFFFF; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">
                     Quick Access
                 </div>
-                <div style="color: #FFB74D; font-size: 0.9rem; font-weight: 600; cursor: pointer;">
+                <div style="color: #FFD54F; font-size: 1.05rem; font-weight: 700; cursor: pointer; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">
                     → Configure in Sidebar
                 </div>
             </div>
