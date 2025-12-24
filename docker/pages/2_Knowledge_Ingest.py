@@ -1906,26 +1906,26 @@ def render_model_status_bar():
     ">
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
             <div style="flex: 1; min-width: 200px;">
-                <div style="color: #91ACD1; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">
+                <div style="color: #E3F2FD; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; font-weight: 600;">
                     System Configuration
                 </div>
-                <div style="color: white; font-size: 1rem; font-weight: 600;">
+                <div style="color: #FFFFFF; font-size: 1.1rem; font-weight: 700;">
                     {'🎮 ' + gpu_info.get('device_name', 'No GPU') if model_info['has_nvidia_gpu'] else '💻 CPU Mode'}
                 </div>
             </div>
             <div style="flex: 1; min-width: 200px;">
-                <div style="color: #91ACD1; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">
+                <div style="color: #E3F2FD; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; font-weight: 600;">
                     Embedding Model
                 </div>
-                <div style="color: white; font-size: 1rem; font-weight: 600;">
+                <div style="color: #FFFFFF; font-size: 1.1rem; font-weight: 700;">
                     {model_info['embedding_model'].split('/')[-1][:30]}
                 </div>
             </div>
             <div style="flex: 0; min-width: 120px; text-align: right;">
-                <div style="color: #91ACD1; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">
+                <div style="color: #E3F2FD; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; font-weight: 600;">
                     Quick Access
                 </div>
-                <div style="color: #B6704F; font-size: 0.85rem; font-weight: 500; cursor: pointer;">
+                <div style="color: #FFB74D; font-size: 0.9rem; font-weight: 600; cursor: pointer;">
                     → Configure in Sidebar
                 </div>
             </div>
@@ -1955,6 +1955,35 @@ def render_model_status_bar():
 
 def render_sidebar_model_config():
     """Render comprehensive model configuration in sidebar"""
+
+    # Add custom CSS for better sidebar text visibility
+    st.markdown("""
+    <style>
+    /* Improve sidebar text contrast */
+    [data-testid="stSidebar"] {
+        color: #FFFFFF !important;
+    }
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] .stMarkdown,
+    [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] h2 {
+        color: #FFFFFF !important;
+    }
+    [data-testid="stSidebar"] .stMarkdown small,
+    [data-testid="stSidebar"] [class*="caption"] {
+        color: #E3F2FD !important;
+        font-weight: 500 !important;
+    }
+    [data-testid="stSidebar"] code {
+        background-color: #1E2F47 !important;
+        color: #FFD54F !important;
+        font-weight: 600 !important;
+        padding: 8px !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     st.sidebar.markdown("---")
     st.sidebar.markdown("## 🤖 Model Configuration")
 
