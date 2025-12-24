@@ -115,7 +115,32 @@ pip install -r requirements.txt
 python -m spacy download en_core_web_sm
 ```
 
-**3a. Optional: Enhanced Document Processing (Docling)**
+**3a. Optional: GPU Acceleration (NVIDIA GPUs)**
+
+For significantly faster embedding generation and document processing:
+
+```bash
+# Uninstall CPU-only PyTorch
+pip uninstall torch torchvision torchaudio -y
+
+# Install PyTorch with CUDA 12.1 support
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+**Benefits:**
+- 🚀 **3-5x faster** embedding generation with NVIDIA Nemotron models
+- 🎮 Automatic GPU detection and model selection
+- 💡 System intelligently switches to `nvidia/NV-Embed-v2` when GPU available
+- 📊 Real-time GPU status in Knowledge Ingest interface
+
+**Platform-Specific Setup:**
+- **Windows/Linux Native**: Install NVIDIA drivers, then run command above
+- **WSL2**: Install NVIDIA drivers on Windows host, then run command in WSL
+- **Docker**: See GPU_SETUP.md for container configuration
+
+For comprehensive GPU setup instructions, troubleshooting, and model selection details, see: **[GPU_SETUP.md](GPU_SETUP.md)**
+
+**3b. Optional: Enhanced Document Processing (Docling)**
 
 For superior document layout recognition and structure extraction:
 ```bash

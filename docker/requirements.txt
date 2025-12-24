@@ -223,15 +223,27 @@ zipp==3.23.0
 # To enable advanced document parsing: pip install "docling>=1.0.0,<1.9.0"
 # System automatically falls back to proven legacy readers if not available
 
-# Optional: GPU Acceleration (x86_64 only - not compatible with ARM64/Snapdragon)
-# For NVIDIA GPU support on x86_64 systems:
-# pip uninstall torch torchvision
-# pip install torch==2.3.1 torchvision==0.18.1 --extra-index-url https://download.pytorch.org/whl/cu121
+# ============================================================================
+# GPU ACCELERATION SETUP
+# ============================================================================
+# By default, CPU-only PyTorch is installed (compatible with all architectures).
+# For NVIDIA GPU acceleration (significantly faster embeddings):
 #
-# Architecture-specific PyTorch installation:
-# - x86_64 with NVIDIA GPU: Use CUDA 12.1 wheels (cu121)
-# - x86_64 CPU-only: Use CPU wheels (cpu) - default above
-# - ARM64 (Apple Silicon, Snapdragon): Use CPU wheels (cpu) - default above
-# - Apple Silicon with MPS: pip install torch torchvision (default PyPI)
+# QUICK SETUP (NVIDIA GPU):
+#   pip uninstall torch torchvision torchaudio -y
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 #
-# The system automatically detects available acceleration (CUDA, MPS, CPU)
+# For detailed GPU setup instructions, see: GPU_SETUP.md
+#
+# Architecture Support:
+# - x86_64 with NVIDIA GPU: CUDA 12.1 (see GPU_SETUP.md)
+# - x86_64 CPU-only: Default installation above
+# - ARM64/Apple Silicon: Default installation above (MPS support included)
+# - WSL2 + NVIDIA GPU: Special setup required (see GPU_SETUP.md)
+#
+# Model Selection:
+# - With NVIDIA GPU: nvidia/NV-Embed-v2 (Nemotron) - Best quality & speed
+# - Without GPU: BAAI/bge-base-en-v1.5 (default) - Good balance
+#
+# The system automatically detects GPU and recommends optimal models.
+# Configure models in Knowledge Ingest page → Sidebar → Model Configuration
