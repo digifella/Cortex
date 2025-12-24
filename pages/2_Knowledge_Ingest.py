@@ -1934,20 +1934,7 @@ def render_model_status_bar():
 
     # Show setup warning if GPU detected but not accessible
     if model_info['has_nvidia_gpu'] and gpu_info.get('method') == 'wsl-windows-nvidia-smi':
-        status_html += """
-        <div style="
-            margin-top: 14px;
-            padding: 18px 24px;
-            background: #FFA726;
-            border-left: 5px solid #FF6F00;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        ">
-            <div style="color: #1A1A1A; font-size: 1.15rem; font-weight: 800; letter-spacing: 0.02em;">
-                ⚠️ GPU detected but not accessible - See sidebar for setup instructions
-            </div>
-        </div>
-        """
+        status_html += """<div style="margin-top: 14px; padding: 18px 24px; background: #FFA726; border-left: 5px solid #FF6F00; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"><div style="color: #1A1A1A; font-size: 1.15rem; font-weight: 800; letter-spacing: 0.02em;">⚠️ GPU detected but not accessible - See sidebar for setup instructions</div></div>"""
 
     status_html += "</div>"
 
