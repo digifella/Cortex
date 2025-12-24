@@ -1937,12 +1937,13 @@ def render_model_status_bar():
         status_html += """
         <div style="
             margin-top: 14px;
-            padding: 16px 20px;
-            background: rgba(255, 193, 7, 0.2);
-            border-left: 4px solid #FFC107;
+            padding: 18px 24px;
+            background: #FFA726;
+            border-left: 5px solid #FF6F00;
             border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
         ">
-            <div style="color: #FFFFFF; font-size: 1.1rem; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,0.4);">
+            <div style="color: #1A1A1A; font-size: 1.15rem; font-weight: 800; letter-spacing: 0.02em;">
                 ⚠️ GPU detected but not accessible - See sidebar for setup instructions
             </div>
         </div>
