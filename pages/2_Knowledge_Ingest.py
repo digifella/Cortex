@@ -2009,8 +2009,10 @@ def render_sidebar_model_config():
         if detection_method == 'wsl-windows-nvidia-smi':
             st.sidebar.warning("⚠️ **GPU Not Accessible**")
             st.sidebar.markdown("**Enable GPU Acceleration:**")
+            st.sidebar.markdown("Copy and run this **complete command** in WSL terminal:")
             st.sidebar.code(get_pytorch_cuda_install_command(), language="bash")
-            st.sidebar.caption("Run in WSL terminal, then restart Streamlit")
+            st.sidebar.caption("⚠️ Make sure to copy the ENTIRE command including 'pip3'")
+            st.sidebar.caption("Then restart Streamlit to activate GPU acceleration")
     else:
         st.sidebar.info("💻 **CPU Mode**")
         if gpu_info.get('issues'):
