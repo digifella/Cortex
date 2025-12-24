@@ -61,7 +61,9 @@
       "Bash(git checkout:*)",
       "Read(//mnt/c/ai_databases/**)",
       "Bash(python3:*)",
-      "Read(//mnt/c/Users/paul/OneDrive - VentraIP Australia/Knowledge_Base/**)"
+      "Read(//mnt/c/Users/paul/OneDrive - VentraIP Australia/Knowledge_Base/**)",
+      "Bash(wc:*)",
+      "Skill(frontend-design)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",

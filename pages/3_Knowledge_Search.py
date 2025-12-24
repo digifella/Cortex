@@ -57,6 +57,7 @@ from cortex_engine.utils import (
 from cortex_engine.utils.default_paths import get_default_ai_database_path
 from cortex_engine.embedding_service import embed_query
 from cortex_engine.version_config import VERSION_STRING
+from cortex_engine.ui_theme import apply_theme, section_header
 
 # Set up logging
 logger = get_logger(__name__)
@@ -65,6 +66,9 @@ logger = get_logger(__name__)
 PAGE_VERSION = VERSION_STRING
 
 st.set_page_config(page_title="Knowledge Search", layout="wide")
+
+# Apply refined editorial theme
+apply_theme()
 
 
 def get_candidate_db_paths(db_path: str):

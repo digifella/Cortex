@@ -1,7 +1,8 @@
 # Smart Model Selector - Intelligent Model Selection Based on System Resources
-# Version: v1.0.0
-# Date: 2025-08-30
+# Version: v2.0.0
+# Date: 2025-12-24
 # Purpose: Automatically select appropriate models based on available system resources
+#          - NEW (v2.0.0): Added NVIDIA GPU detection and Nematron model selection
 
 import psutil
 import subprocess
@@ -12,18 +13,62 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+
+def detect_nvidia_gpu() -> Tuple[bool, Optional[Dict]]:
+    """
+    Detect NVIDIA GPU presence and capabilities.
+
+    Returns:
+        Tuple of (has_nvidia_gpu, gpu_info_dict)
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            gpu_info = {
+                "device_count": torch.cuda.device_count(),
+                "device_name": torch.cuda.get_device_name(0) if torch.cuda.device_count() > 0 else "Unknown",
+                "memory_total_gb": torch.cuda.get_device_properties(0).total_memory / (1024**3) if torch.cuda.device_count() > 0 else 0,
+                "cuda_version": torch.version.cuda,
+                "compute_capability": torch.cuda.get_device_capability(0) if torch.cuda.device_count() > 0 else (0, 0)
+            }
+            logger.info(f"🎮 NVIDIA GPU Detected: {gpu_info['device_name']} ({gpu_info['memory_total_gb']:.1f}GB)")
+            return True, gpu_info
+    except ImportError:
+        logger.debug("PyTorch not available for GPU detection")
+    except Exception as e:
+        logger.debug(f"GPU detection failed: {e}")
+
+    # Fallback: try nvidia-smi
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            gpu_name = result.stdout.strip().split(',')[0]
+            logger.info(f"🎮 NVIDIA GPU Detected (nvidia-smi): {gpu_name}")
+            return True, {"device_name": gpu_name, "detected_via": "nvidia-smi"}
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    return False, None
+
 # Model resource requirements (in GB)
 MODEL_MEMORY_REQUIREMENTS = {
     # Efficient models (recommended for most systems)
     "mistral:latest": 4.4,
     "llava:7b": 4.7,
-    
+
     # Memory-intensive models (require 32GB+ systems)
     "mistral-small3.2": 15.0,  # Actually uses ~26GB when loaded
     "codellama": 8.0,
-    
+
     # Embedding models (lightweight)
     "nomic-embed-text": 0.7,
+    "BAAI/bge-base-en-v1.5": 0.5,  # Standard BGE model
+    "nvidia/NV-Embed-v2": 1.2,  # Latest NVIDIA Nemotron embedding model (optimized for NVIDIA GPUs)
 }
 
 # Model capability tiers
@@ -191,3 +236,23 @@ def get_recommended_text_model() -> str:
 def get_system_resource_summary() -> Dict:
     """Get comprehensive system resource summary"""
     return smart_selector.get_system_summary()
+
+
+def get_optimal_embedding_model() -> str:
+    """
+    Get the optimal embedding model based on available hardware.
+
+    Returns NVIDIA Nemotron models when NVIDIA GPUs are detected,
+    otherwise returns standard BGE model.
+
+    Returns:
+        Model identifier string for sentence-transformers
+    """
+    has_nvidia, gpu_info = detect_nvidia_gpu()
+
+    if has_nvidia:
+        logger.info("🚀 NVIDIA GPU detected - using latest Nemotron NV-Embed-v2 model for superior embedding quality")
+        return "nvidia/NV-Embed-v2"  # Latest NVIDIA Nemotron embedding model
+    else:
+        logger.info("💻 No NVIDIA GPU detected - using standard BGE embedding model")
+        return "BAAI/bge-base-en-v1.5"  # Standard high-quality embedding model

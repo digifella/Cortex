@@ -50,7 +50,13 @@ DOCKER_MODEL_REGISTRY = os.getenv("DOCKER_MODEL_REGISTRY", "docker.io/ai")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 # --- Core Local Models (Required) ---
-EMBED_MODEL = "BAAI/bge-base-en-v1.5"  # Embedding model for vector storage
+# Intelligent Embedding Model Selection (NVIDIA Nemotron when GPU available)
+try:
+    from cortex_engine.utils.smart_model_selector import get_optimal_embedding_model
+    EMBED_MODEL = get_optimal_embedding_model()  # Auto-selects nvidia/NV-Embed-v2 on NVIDIA GPUs
+except Exception:
+    EMBED_MODEL = "BAAI/bge-base-en-v1.5"  # Fallback to standard BGE model
+
 # Vision Language Model Configuration
 # Options: "llava:7b", "llava:13b", "llava:34b" (newer, more capable models)
 # or "moondream" (smaller, faster alternative)

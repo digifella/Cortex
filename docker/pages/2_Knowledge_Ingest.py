@@ -52,6 +52,7 @@ from cortex_engine.document_type_manager import get_document_type_manager
 from cortex_engine.help_system import help_system
 from cortex_engine.batch_manager import BatchState
 from cortex_engine.ingestion_recovery import IngestionRecoveryManager
+from cortex_engine.ui_theme import apply_theme, section_header
 
 # Set up logging
 logger = get_logger(__name__)
@@ -97,6 +98,9 @@ def install_missing_models(missing_models: list) -> bool:
         return False
 
 st.set_page_config(layout="wide", page_title="Knowledge Ingest")
+
+# Apply refined editorial theme
+apply_theme()
 
 # Add global CSS for left-aligned directory buttons
 st.markdown("""

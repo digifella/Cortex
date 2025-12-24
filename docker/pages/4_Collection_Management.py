@@ -1061,6 +1061,52 @@ for collection in page_collections:
         # --- Expander for Management Actions ---
         if st.session_state.get(f"manage_visible_{name}", False):
             with st.container(border=True):
+                # Special workflow for default collection
+                if name == "default":
+                    st.info("💡 **Renaming the 'default' collection**: Create a new collection with your desired name and merge default into it.")
+
+                    st.markdown("**🔄 Rename Default Collection Workflow**")
+                    st.markdown("1. Create a new collection with your desired name below")
+                    st.markdown("2. All documents from 'default' will be moved to the new collection")
+                    st.markdown("3. The 'default' collection will be emptied (but remain available)")
+
+                    new_collection_name = st.text_input("New Collection Name", key=f"new_name_{name}", placeholder="e.g., Deakin")
+
+                    if st.button("✨ Create & Migrate Documents", key=f"create_migrate_{name}", type="primary"):
+                        if new_collection_name and new_collection_name.strip():
+                            new_name = new_collection_name.strip()
+                            if new_name in collection_mgr.get_collection_names():
+                                st.error(f"Collection '{new_name}' already exists. Please choose a different name.")
+                            else:
+                                try:
+                                    # Create new collection
+                                    if collection_mgr.create_collection(new_name):
+                                        # Get all doc IDs from default
+                                        default_docs = collection_mgr.collections.get('default', {}).get('doc_ids', [])
+
+                                        if default_docs:
+                                            # Add docs to new collection
+                                            collection_mgr.add_docs_by_id_to_collection(new_name, default_docs)
+
+                                            # Clear default collection
+                                            collection_mgr.collections['default']['doc_ids'] = []
+                                            collection_mgr.collections['default']['modified_at'] = datetime.now().isoformat()
+                                            collection_mgr._save()
+
+                                            st.success(f"✅ Created '{new_name}' with {len(default_docs)} documents! Default collection cleared.")
+                                        else:
+                                            st.success(f"✅ Created '{new_name}' collection (default was empty).")
+
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to create new collection.")
+                                except Exception as e:
+                                    st.error(f"Failed to create and migrate: {e}")
+                        else:
+                            st.error("Please enter a collection name.")
+
+                    st.divider()
+
                 st.markdown("**Combine Collections**")
                 merge_options = [c for c in collection_mgr.get_collection_names() if c != name]
                 dest_collection = st.selectbox("Merge this collection into:", merge_options, key=f"merge_dest_{name}", index=None, placeholder="Select a destination...")
