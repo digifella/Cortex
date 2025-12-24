@@ -53,6 +53,14 @@ from cortex_engine.help_system import help_system
 from cortex_engine.batch_manager import BatchState
 from cortex_engine.ingestion_recovery import IngestionRecoveryManager
 from cortex_engine.ui_theme import apply_theme, section_header
+from cortex_engine.model_manager import (
+    get_available_embedding_models,
+    get_recommended_embedding_model,
+    check_model_cached,
+    validate_model_available,
+    download_model,
+    get_model_info_summary
+)
 
 # Set up logging
 logger = get_logger(__name__)
@@ -2034,9 +2042,141 @@ def render_config_and_scan_ui():
             st.caption("This collection will be created and populated with the ingested documents.")
         else:
             st.warning("⚠️ Collection assignment incomplete")
-    
+
     st.markdown("---")
-    st.markdown("**6. Advanced Options**")
+    st.markdown("**6. Model Configuration**")
+
+    # Get model info
+    model_info = get_model_info_summary()
+    available_models = get_available_embedding_models()
+
+    with st.expander("🤖 Embedding Model Selection", expanded=False):
+        st.markdown("**Current Model Configuration**")
+
+        # Display GPU status
+        col1, col2 = st.columns(2)
+        with col1:
+            if model_info['has_nvidia_gpu']:
+                gpu_name = model_info['gpu_info'].get('device_name', 'Unknown')
+                gpu_memory = model_info['gpu_info'].get('memory_total_gb', 0)
+                st.success(f"🎮 **NVIDIA GPU Detected**: {gpu_name}")
+                if gpu_memory > 0:
+                    st.caption(f"Memory: {gpu_memory:.1f}GB")
+            else:
+                st.info("💻 **CPU Mode**: No NVIDIA GPU detected")
+
+        with col2:
+            current_model = model_info['embedding_model']
+            is_cached, cache_path = check_model_cached(current_model)
+            if is_cached:
+                st.success(f"✅ **Current Model Cached**")
+                st.caption(f"Model: {current_model}")
+            else:
+                st.warning(f"⬇️ **Model Download Required**")
+                st.caption(f"Model: {current_model}")
+
+        st.markdown("---")
+        st.markdown("**Select Embedding Model**")
+
+        # Create model selection options
+        model_options = []
+        model_labels = {}
+
+        for model_id, model_data in available_models.items():
+            is_recommended = (model_id == model_info['recommended_model'])
+            is_current = (model_id == current_model)
+
+            label = model_data['name']
+            if is_recommended:
+                label += " ⭐ (Recommended)"
+            if is_current:
+                label += " ✓ (Current)"
+
+            model_options.append(model_id)
+            model_labels[model_id] = label
+
+        # Find current model index
+        try:
+            current_index = model_options.index(current_model)
+        except ValueError:
+            current_index = 0
+
+        selected_model = st.selectbox(
+            "Choose embedding model:",
+            options=model_options,
+            index=current_index,
+            format_func=lambda x: model_labels[x],
+            help="Select the embedding model to use for document indexing and search"
+        )
+
+        # Display selected model details
+        if selected_model:
+            model_data = available_models[selected_model]
+
+            st.markdown(f"**{model_data['name']}**")
+            st.markdown(f"_{model_data['description']}_")
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Quality", model_data['quality'])
+            with col2:
+                st.metric("Speed", model_data['speed'])
+            with col3:
+                st.metric("Size", f"{model_data['size_gb']:.2f} GB")
+
+            st.caption(f"**Best for**: {model_data['recommended_for']}")
+
+            # Check if model is available
+            is_available, status_msg = validate_model_available(selected_model)
+
+            if selected_model != current_model:
+                st.warning(f"⚠️ **Model change detected**: Switching from `{current_model}` to `{selected_model}`")
+                st.info("This change will take effect on the next ingestion run. The model will be downloaded automatically if needed.")
+
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button("🔄 Apply Model Change", type="primary", use_container_width=True):
+                        # Update session state
+                        st.session_state.selected_embedding_model = selected_model
+
+                        # Update config
+                        from cortex_engine import config
+                        config.EMBED_MODEL = selected_model
+
+                        st.success(f"✅ Model changed to: {selected_model}")
+                        st.info("Model will be loaded on next processing run")
+                        st.rerun()
+
+                with col_b:
+                    if not is_available and st.button("⬇️ Pre-Download Model", use_container_width=True):
+                        with st.spinner(f"Downloading {selected_model}..."):
+                            success, message = download_model(selected_model, device="cpu")
+                            if success:
+                                st.success(message)
+                            else:
+                                st.error(message)
+            else:
+                st.info(status_msg)
+
+                # Offer to download if not cached
+                if not is_available:
+                    if st.button("⬇️ Download Model Now", use_container_width=True):
+                        with st.spinner(f"Downloading {selected_model}..."):
+                            success, message = download_model(selected_model, device="cpu")
+                            if success:
+                                st.success(message)
+                                st.rerun()
+                            else:
+                                st.error(message)
+
+        st.markdown("---")
+        st.markdown("**LLM Models (for entity extraction and indexing)**")
+        st.info(f"📝 **Text Model**: {model_info['llm_model']}")
+        st.info(f"👁️ **Vision Model**: {model_info['vlm_model']}")
+        st.caption("These models are managed through Ollama. Use `ollama pull <model>` to download.")
+
+    st.markdown("---")
+    st.markdown("**7. Advanced Options**")
     with st.expander("Filtering & Pattern-Based Exclusion"):
         st.info("The 'Smart Filtering' options below provide robust, default exclusions. Use 'Pattern-Based' for more specific needs.")
         col1, col2 = st.columns(2)
