@@ -1936,13 +1936,13 @@ def render_model_status_bar():
     if model_info['has_nvidia_gpu'] and gpu_info.get('method') == 'wsl-windows-nvidia-smi':
         status_html += """
         <div style="
-            margin-top: 12px;
-            padding: 12px 16px;
-            background: rgba(255, 183, 77, 0.25);
-            border-left: 3px solid #FFB74D;
-            border-radius: 6px;
+            margin-top: 14px;
+            padding: 16px 20px;
+            background: rgba(255, 193, 7, 0.2);
+            border-left: 4px solid #FFC107;
+            border-radius: 8px;
         ">
-            <div style="color: #FFF3E0; font-size: 0.875rem; font-weight: 600;">
+            <div style="color: #FFFFFF; font-size: 1.1rem; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,0.4);">
                 ⚠️ GPU detected but not accessible - See sidebar for setup instructions
             </div>
         </div>
