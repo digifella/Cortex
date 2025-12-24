@@ -212,6 +212,77 @@ pip3 install torch torchvision torchaudio --index-url https://download.pytorch.o
 #### Issue: "Failed to initialize NVML" (WSL)
 This is normal in WSL2. PyTorch will still work with CUDA after installation.
 
+#### Issue: PyTorch with CUDA installed but `torch.cuda.is_available()` returns False (WSL) ⚠️ CRITICAL
+
+**Symptoms:**
+- PyTorch version shows `+cu121` (CUDA installed correctly)
+- `torch.cuda.is_available()` returns `False`
+- nvidia-smi shows "GPU access blocked by the operating system"
+- No NVIDIA kernel modules loaded in WSL
+
+**Diagnosis:**
+```bash
+# Check PyTorch version
+python -c "import torch; print(torch.__version__)"
+# Should show: 2.3.1+cu121 (or similar with +cu121)
+
+# Check CUDA availability
+python -c "import torch; print(torch.cuda.is_available())"
+# Shows: False (this is the problem)
+
+# Check if NVIDIA modules loaded
+lsmod | grep nvidia
+# Shows: Nothing (no modules loaded - this is the root cause)
+```
+
+**Root Cause:** WSL2 hasn't loaded the NVIDIA kernel modules needed for GPU access.
+
+**Solution - Complete WSL Restart:**
+
+1. **From Windows PowerShell or Command Prompt** (NOT from WSL):
+   ```powershell
+   wsl --shutdown
+   ```
+
+2. **Wait 10-15 seconds** for WSL to fully shut down
+
+3. **Restart your WSL terminal** (Ubuntu, Debian, etc.)
+
+4. **Verify NVIDIA modules are now loaded:**
+   ```bash
+   lsmod | grep nvidia
+   ```
+   Expected output - should see multiple nvidia modules:
+   ```
+   nvidia_uvm            1576960  2
+   nvidia_drm             77824  0
+   nvidia_modeset       1306624  1 nvidia_drm
+   nvidia              56709120  78 nvidia_uvm,nvidia_modeset
+   ```
+
+5. **Test CUDA availability:**
+   ```bash
+   python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}')"
+   ```
+   Expected output:
+   ```
+   CUDA available: True
+   GPU: Quadro RTX 8000
+   ```
+
+6. **Restart Streamlit:**
+   ```bash
+   streamlit run Cortex_Suite.py
+   ```
+
+**Why This Happens:**
+WSL2 loads NVIDIA kernel modules on-demand when GPU access is first needed. Sometimes these modules don't load automatically after driver updates or PyTorch installation. A full WSL restart triggers the module loading process.
+
+**If Still Not Working After WSL Restart:**
+- Update Windows NVIDIA drivers to latest version
+- Update WSL2 kernel: `wsl --update` (from Windows)
+- Ensure Windows version supports WSL2 CUDA (Windows 11 or Windows 10 21H2+)
+
 ### Model Download Fails
 
 **Issue**: Can't download embedding models
