@@ -997,7 +997,7 @@ for collection in page_collections:
             if st.button("📄 View", key=f"view_{name}", use_container_width=True):
                 st.session_state[f"view_visible_{name}"] = not st.session_state.get(f"view_visible_{name}", False)
         with col5:
-            if st.button("⚙️ Manage", key=f"manage_{name}", use_container_width=True, disabled=(name=="default")):
+            if st.button("⚙️ Manage", key=f"manage_{name}", use_container_width=True):
                 st.session_state[f"manage_visible_{name}"] = not st.session_state.get(f"manage_visible_{name}", False)
 
         # --- Expander for Viewing Documents ---
@@ -1059,7 +1059,7 @@ for collection in page_collections:
                         display_enhanced_document_list(unique_docs, name, collection_mgr)
 
         # --- Expander for Management Actions ---
-        if st.session_state.get(f"manage_visible_{name}", False) and name != "default":
+        if st.session_state.get(f"manage_visible_{name}", False):
             with st.container(border=True):
                 st.markdown("**Combine Collections**")
                 merge_options = [c for c in collection_mgr.get_collection_names() if c != name]
