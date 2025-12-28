@@ -172,6 +172,9 @@ safetensors==0.5.3
 scikit-learn==1.7.0
 scipy==1.16.0
 sentence-transformers==2.7.0
+# Required for nvidia/NV-Embed-v2 model (auto-selected when NVIDIA GPU detected)
+datasets>=2.14.0
+einops>=0.7.0
 shellingham==1.5.4
 six==1.17.0
 smart_open==7.3.0.post1

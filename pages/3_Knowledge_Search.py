@@ -1,7 +1,9 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v4.10.3
-# Date: 2025-08-30
+# Version: v4.11.0
+# Date: 2025-12-27
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
+#          - FEATURE (v4.11.0): Added embedding model validation before queries with
+#            user-friendly warnings and solutions for embedding model mismatches
 #          - GRAPHRAG INTEGRATION (v4.2.1): Re-enabled GraphRAG search modes with radio button
 #            selection. Added Traditional Vector Search, GraphRAG Enhanced, and Hybrid Search
 #            options with entity relationship analysis and graph context feedback.
@@ -985,7 +987,38 @@ def direct_chromadb_search(db_path, query, filters, top_k=20):
             client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
             collection = client.get_collection(COLLECTION_NAME)
             logger.info(f"Connected to collection '{COLLECTION_NAME}'")
-            
+
+            # Validate embedding model compatibility before querying
+            try:
+                from cortex_engine.utils.embedding_validator import (
+                    validate_embedding_compatibility,
+                    EmbeddingModelMismatchError
+                )
+                from cortex_engine.collection_manager import WorkingCollectionManager
+                from cortex_engine.config import EMBED_MODEL
+
+                collection_mgr = WorkingCollectionManager()
+                collection_metadata = collection_mgr.get_embedding_model_metadata("default")
+
+                validation_result = validate_embedding_compatibility(
+                    collection_metadata,
+                    current_model=EMBED_MODEL,
+                    strict=False  # Don't raise exception, just warn
+                )
+
+                if not validation_result["compatible"]:
+                    for error in validation_result["errors"]:
+                        logger.error(error)
+                        st.warning(error)
+                    st.warning("⚠️ **Embedding model mismatch detected!** Search results may be unreliable.")
+                    st.info("💡 **Solution:** Set `CORTEX_EMBED_MODEL` environment variable or delete database and re-ingest.")
+                elif validation_result["warnings"]:
+                    for warning in validation_result["warnings"]:
+                        logger.warning(warning)
+
+            except Exception as validation_error:
+                logger.warning(f"Could not validate embedding model (non-critical): {validation_error}")
+
             # Try simple get first to test collection access
             logger.info("Testing collection access...")
             try:

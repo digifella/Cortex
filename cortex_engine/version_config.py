@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.10.3"
+CORTEX_VERSION = "4.11.0"
 
 # Version details
 VERSION_INFO = {
     "major": 4,
-    "minor": 10,
-    "patch": 3,
+    "minor": 11,
+    "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,33 +24,38 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-12-02",
-    "release_name": "Docker Path Configuration & Offline Embedding Support",
-    "description": "Enhanced Docker setup workflow with interactive path configuration and full offline operation support for embeddings.",
+    "release_date": "2025-12-28",
+    "release_name": "Embedding Model Safeguards & BGE Stability",
+    "description": "Comprehensive embedding model safeguards system to prevent data corruption from mixed embeddings. Includes environment variable override for forcing stable BGE model instead of auto-detected NVIDIA models with compatibility issues.",
     "breaking_changes": [],
     "new_features": [
-        "Docker batch file now prompts for both AI database and knowledge source paths with pre-filled defaults",
-        "Pre-downloads embedding model (BAAI/bge-base-en-v1.5) during Docker build for offline operation",
-        "Automatic path reconfiguration workflow - press ENTER to keep existing paths or type new ones",
-        "Knowledge Ingest UI now properly pre-fills configured source paths from environment variables"
+        "Environment variable CORTEX_EMBED_MODEL to override auto-detection and force specific embedding models",
+        "Embedding model metadata tracking in collection manager (model name and dimension)",
+        "Embedding compatibility validation at ingestion and query time",
+        "Embedding inspector tool (scripts/embedding_inspector.py) for database diagnostics",
+        "Embedding migration tool (scripts/embedding_migrator.py) for safe model switching",
+        "BGE model setup script (setup_bge_model.sh) for one-click stable configuration",
+        "Startup script (start_cortex_bge.sh) with automatic BGE model environment setup"
     ],
     "improvements": [
-        "Docker containers now work fully offline for document ingestion and search after initial build",
-        "HuggingFace offline mode enforcement at both system and application levels",
-        "Graceful fallback from offline to online mode for embedding model loading",
-        "Enhanced session state initialization to respect environment-configured paths in Docker",
-        "Clear error messages when embedding model cache is missing and internet unavailable"
+        "Knowledge Ingest page now validates embedding compatibility before ingestion",
+        "Knowledge Search page displays warnings when model mismatch detected",
+        "Maintenance page shows embedding model status with compatibility checks",
+        "Comprehensive documentation in RECOVERY_GUIDE.md and QUICK_START_BGE.md",
+        "Embedding model safeguards prevent silent data corruption from mixed embeddings",
+        "Added trust_remote_code=True parameter to all SentenceTransformer instantiations",
+        "Added datasets>=2.14.0 and einops>=0.7.0 dependencies for advanced models"
     ],
     "bug_fixes": [
-        "Fixed Docker batch file only prompting for AI database path (now prompts for both paths)",
-        "Fixed blank 'Root Source Documents Path' field in Knowledge Ingest UI when running in Docker",
-        "Resolved embedding service attempting HuggingFace connections in offline Docker environments",
-        "Fixed session state not respecting KNOWLEDGE_SOURCE_PATH environment variable on first load"
+        "Fixed NVIDIA NV-Embed-v2 model compatibility issues with transformers library",
+        "Fixed ingestion failures when embedding model cache corrupted mid-process",
+        "Fixed confusing UI status display during finalization phase of ingestion",
+        "Prevented auto-detection from selecting unstable NVIDIA models in production"
     ],
     "performance": [
-        "Eliminated unnecessary HuggingFace connection attempts in offline mode (faster embedding loading)",
-        "Embedding model cached in Docker image (~420MB) eliminates runtime download overhead",
-        "Reduced Docker startup time by preventing network timeouts when offline"
+        "BGE model (768D) provides stable production performance without compatibility issues",
+        "Eliminated overnight ingestion failures by avoiding problematic NVIDIA model API changes",
+        "Proper batch processing with optimal GPU memory utilization"
     ]
 }
 

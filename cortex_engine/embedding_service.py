@@ -54,7 +54,7 @@ def _load_model() -> SentenceTransformer:
             # Normalize embeddings improves Chroma recall for BGE models
             try:
                 # Try loading in offline mode first (HF_HUB_OFFLINE env var is set above)
-                _model = SentenceTransformer(EMBED_MODEL, device=device)
+                _model = SentenceTransformer(EMBED_MODEL, device=device, trust_remote_code=True)
                 logger.info(f"✅ Embedding model loaded from cache on {device} (offline mode)")
             except Exception as offline_error:
                 # If offline mode fails, temporarily enable online mode and try downloading
@@ -64,7 +64,7 @@ def _load_model() -> SentenceTransformer:
                     # Temporarily disable offline mode for download
                     os.environ["HF_HUB_OFFLINE"] = "0"
                     os.environ["TRANSFORMERS_OFFLINE"] = "0"
-                    _model = SentenceTransformer(EMBED_MODEL, device=device)
+                    _model = SentenceTransformer(EMBED_MODEL, device=device, trust_remote_code=True)
                     logger.info(f"✅ Embedding model downloaded and loaded on {device}")
                     # Re-enable offline mode after successful download
                     os.environ["HF_HUB_OFFLINE"] = "1"

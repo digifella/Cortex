@@ -1,9 +1,11 @@
 # ## File: pages/7_Maintenance.py
-# Version: v4.10.3
-# Date: 2025-08-31
+# Version: v4.11.0
+# Date: 2025-12-27
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
 #          from various pages into a single, organized maintenance interface.
+#          - FEATURE (v4.11.0): Added Embedding Model Status display with compatibility checking
+#            and actionable solutions for embedding model mismatches
 #          - BUGFIX (v1.0.1): Fixed import error by using ConfigManager instead of load_config
 #          - ENHANCEMENT (v4.4.0): Added Clean Start function for complete system reset
 #            Specifically addresses ChromaDB schema conflicts and provides fresh installation state
@@ -27,7 +29,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.10.3"
+PAGE_VERSION = "v4.11.0"
 
 # Import Cortex modules
 try:
@@ -861,6 +863,98 @@ def display_database_maintenance():
             st.code(f"Resolved path: {preview}")
         except Exception:
             pass
+
+    # Embedding Model Status Display
+    with st.container(border=True):
+        st.subheader("🤖 Embedding Model Status")
+
+        try:
+            from cortex_engine.config import EMBED_MODEL
+            from cortex_engine.utils.embedding_validator import (
+                get_embedding_dimension,
+                validate_embedding_compatibility
+            )
+            from cortex_engine.collection_manager import WorkingCollectionManager
+
+            # Check if model is locked via environment variable
+            model_locked = os.getenv("CORTEX_EMBED_MODEL") is not None
+            lock_source = "🔒 Environment Variable" if model_locked else "⚡ Auto-detected (hardware-based)"
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.metric("Current Model", EMBED_MODEL)
+                st.caption(lock_source)
+
+            with col_b:
+                try:
+                    dimension = get_embedding_dimension(EMBED_MODEL)
+                    st.metric("Embedding Dimension", f"{dimension}D")
+                except Exception as e:
+                    st.error(f"Cannot determine dimension: {e}")
+
+            # Check collection metadata
+            try:
+                collection_mgr = WorkingCollectionManager()
+                collection_metadata = collection_mgr.get_embedding_model_metadata("default")
+
+                if collection_metadata.get("embedding_model"):
+                    st.markdown("**Collection Metadata:**")
+
+                    stored_model = collection_metadata.get("embedding_model")
+                    stored_dim = collection_metadata.get("embedding_dimension")
+
+                    st.code(f"Stored Model: {stored_model} ({stored_dim}D)")
+
+                    # Validate compatibility
+                    validation_result = validate_embedding_compatibility(
+                        collection_metadata,
+                        current_model=EMBED_MODEL,
+                        strict=False
+                    )
+
+                    if not validation_result["compatible"]:
+                        st.error("❌ **EMBEDDING MODEL MISMATCH DETECTED**")
+                        st.error("Your current embedding model does not match the collection's model.")
+                        st.error("**Search results will be unreliable!**")
+
+                        with st.expander("🔧 Solutions", expanded=True):
+                            st.markdown("""
+                            **Option 1: Lock to Collection's Model (Recommended)**
+                            ```bash
+                            export CORTEX_EMBED_MODEL="{stored_model}"
+                            # Or in Windows PowerShell:
+                            $env:CORTEX_EMBED_MODEL="{stored_model}"
+                            ```
+
+                            **Option 2: Delete Database and Re-ingest**
+                            Use the "Delete Knowledge Base" function below to start fresh with the current model.
+
+                            **Option 3: Run Embedding Inspector**
+                            ```bash
+                            python scripts/embedding_inspector.py
+                            ```
+
+                            **Option 4: Migrate to New Model**
+                            ```bash
+                            python scripts/embedding_migrator.py --target-model {EMBED_MODEL}
+                            ```
+                            """.format(stored_model=stored_model, EMBED_MODEL=EMBED_MODEL))
+                    else:
+                        st.success("✅ Embedding model is compatible")
+                else:
+                    st.warning("⚠️ No embedding metadata found for collection")
+                    st.info("This may be a legacy collection. Consider running the embedding inspector.")
+
+            except Exception as meta_error:
+                st.warning(f"Could not check collection metadata: {meta_error}")
+
+            # Recommendation for production use
+            if not model_locked:
+                st.warning("⚠️ **Recommendation:** Lock your embedding model using the `CORTEX_EMBED_MODEL` environment variable")
+                st.info("This prevents automatic model switching when hardware changes, which can corrupt your database.")
+
+        except Exception as e:
+            st.error(f"Failed to load embedding model status: {e}")
 
         # Quick scan for likely locations
         def scan_candidates():

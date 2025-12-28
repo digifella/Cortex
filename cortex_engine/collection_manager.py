@@ -1,7 +1,9 @@
 # ## File: cortex_engine/collection_manager.py
-# Version: 6.0.0 (Utilities Refactor)
-# Date: 2025-07-23
+# Version: 6.1.0 (Embedding Model Metadata)
+# Date: 2025-12-27
 # Purpose: Manages CRUD operations for collections.
+#          - FEATURE (v6.1.0): Added embedding model metadata tracking to prevent
+#            mixed embedding model corruption in ChromaDB collections
 #          - REFACTOR (v6.0.0): Updated to use centralized utilities for path handling,
 #            logging, and error handling. Removed code duplication.
 
@@ -105,10 +107,33 @@ class WorkingCollectionManager:
     def get_doc_ids_by_name(self, name: str) -> list:
         return self.collections.get(name, {}).get("doc_ids", [])
 
-    def create_collection(self, name: str) -> bool:
+    def create_collection(self, name: str, embedding_model: str = None, embedding_dimension: int = None) -> bool:
+        """
+        Create a new collection with optional embedding model metadata.
+
+        Args:
+            name: Collection name
+            embedding_model: HuggingFace model identifier (e.g., "nvidia/NV-Embed-v2")
+            embedding_dimension: Embedding vector dimension (e.g., 1536)
+
+        Returns:
+            True if collection was created, False if it already exists
+        """
         if name and name not in self.collections:
             now_iso = datetime.now().isoformat()
-            self.collections[name] = {"name": name, "doc_ids": [], "created_at": now_iso, "modified_at": now_iso}
+            self.collections[name] = {
+                "name": name,
+                "doc_ids": [],
+                "created_at": now_iso,
+                "modified_at": now_iso
+            }
+
+            # Store embedding model metadata if provided
+            if embedding_model:
+                self.collections[name]["embedding_model"] = embedding_model
+            if embedding_dimension:
+                self.collections[name]["embedding_dimension"] = embedding_dimension
+
             self._save()
             return True
         return False
@@ -398,6 +423,41 @@ class WorkingCollectionManager:
                 "document_count": doc_count,
                 "created_at": data.get("created_at", "Unknown"),
                 "modified_at": data.get("modified_at", "Unknown"),
-                "is_empty": doc_count == 0
+                "is_empty": doc_count == 0,
+                "embedding_model": data.get("embedding_model"),
+                "embedding_dimension": data.get("embedding_dimension")
             }
         return summary
+
+    def set_embedding_model_metadata(self, name: str, embedding_model: str, embedding_dimension: int):
+        """
+        Set or update embedding model metadata for an existing collection.
+
+        Args:
+            name: Collection name
+            embedding_model: HuggingFace model identifier
+            embedding_dimension: Embedding vector dimension
+        """
+        if name in self.collections:
+            self.collections[name]["embedding_model"] = embedding_model
+            self.collections[name]["embedding_dimension"] = embedding_dimension
+            self.collections[name]["modified_at"] = datetime.now().isoformat()
+            self._save()
+            logger.info(f"Updated embedding metadata for collection '{name}': {embedding_model} ({embedding_dimension}D)")
+
+    def get_embedding_model_metadata(self, name: str) -> dict:
+        """
+        Get embedding model metadata for a collection.
+
+        Args:
+            name: Collection name
+
+        Returns:
+            Dict with 'embedding_model' and 'embedding_dimension' keys, or empty dict if not found
+        """
+        if name in self.collections:
+            return {
+                "embedding_model": self.collections[name].get("embedding_model"),
+                "embedding_dimension": self.collections[name].get("embedding_dimension")
+            }
+        return {}

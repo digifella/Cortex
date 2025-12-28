@@ -176,7 +176,7 @@ def download_model(model_id: str, device: str = "cpu") -> Tuple[bool, str]:
         os.environ["TRANSFORMERS_OFFLINE"] = "0"
 
         # Download model
-        model = SentenceTransformer(model_id, device=device)
+        model = SentenceTransformer(model_id, device=device, trust_remote_code=True)
 
         # Restore offline settings
         if old_offline:

@@ -6,6 +6,31 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+
+## v4.11.0 - 2025-12-28
+
+### Embedding Model Safeguards & BGE Stability
+
+Comprehensive embedding model safeguards system to prevent data corruption from mixed embeddings. Includes environment variable override for forcing stable BGE model instead of auto-detected NVIDIA models with compatibility issues.
+
+### ✨ New Features
+- Environment variable CORTEX_EMBED_MODEL to override auto-detection and force specific embedding models
+- Embedding model metadata tracking in collection manager (model name and dimension)
+- Embedding compatibility validation at ingestion and query time
+- Embedding inspector tool (scripts/embedding_inspector.py) for database diagnostics
+- Embedding migration tool (scripts/embedding_migrator.py) for safe model switching
+- BGE model setup script (setup_bge_model.sh) for one-click stable configuration
+- Startup script (start_cortex_bge.sh) with automatic BGE model environment setup
+
+### 🚀 Improvements
+- Knowledge Ingest page now validates embedding compatibility before ingestion
+- Knowledge Search page displays warnings when model mismatch detected
+- Maintenance page shows embedding model status with compatibility checks
+- Comprehensive documentation in RECOVERY_GUIDE.md and QUICK_START_BGE.md
+- Embedding model safeguards prevent silent data corruption from mixed embeddings
+- Added trust_remote_code=True parameter to all SentenceTransformer instantiations
+- Added datasets>=2.14.0 and einops>=0.7.0 dependencies for advanced models
+
 ## v4.10.3 - 2025-11-16
 
 ### Docling Ingest & Recovery Hardening
