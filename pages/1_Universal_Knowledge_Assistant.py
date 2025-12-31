@@ -3,9 +3,8 @@ Universal Knowledge Assistant - Streamlined Interface for Knowledge Work
 Version: 1.0.0
 Date: 2026-01-01
 
-Single unified interface replacing:
-- AI Assisted Research (pages/1_AI_Assisted_Research.py)
-- Knowledge Synthesizer (pages/11_Knowledge_Synthesizer.py)
+Purpose: Single unified interface replacing AI Assisted Research and Knowledge Synthesizer.
+Combines internal RAG + external sources with real-time streaming synthesis.
 """
 
 import streamlit as st
@@ -13,9 +12,23 @@ import asyncio
 import sys
 from pathlib import Path
 
+# Set page config FIRST
+st.set_page_config(
+    page_title="Universal Knowledge Assistant",
+    page_icon="🧠",
+    layout="wide"
+)
+
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Import theme and components
+from cortex_engine.ui_theme import apply_theme, section_header
+from cortex_engine.ui_components import (
+    collection_selector,
+    error_display,
+    render_version_footer
+)
 from cortex_engine.universal_assistant import (
     UniversalKnowledgeAssistant,
     SourceConfig,
@@ -28,24 +41,33 @@ from llama_index.core import VectorStoreIndex
 
 logger = get_logger(__name__)
 
-# Page config
-st.set_page_config(
-    page_title="Universal Knowledge Assistant",
-    page_icon="🧠",
-    layout="wide"
-)
+# Apply theme IMMEDIATELY
+apply_theme()
 
-# Title and description
+# ============================================
+# PAGE HEADER
+# ============================================
+
 st.title("🧠 Universal Knowledge Assistant")
 st.markdown("""
 **One interface for all knowledge work** - Research, synthesis, ideation, and exploration.
-Ask anything, and I'll intelligently search your knowledge base, academic papers, and synthesize insights in real-time.
+Ask anything, and I'll intelligently search your knowledge base and academic papers, then synthesize insights in real-time.
 """)
 
-# Initialize session state
+st.caption("💡 Use the sidebar (←) to navigate between pages")
+st.markdown("---")
+
+# ============================================
+# SESSION STATE
+# ============================================
+
 if 'assistant_history' not in st.session_state:
     st.session_state.assistant_history = []
 
+
+# ============================================
+# HELPER FUNCTIONS
+# ============================================
 
 def get_rag_index(collection_name: str = None):
     """Get RAG index for the specified collection."""
@@ -53,10 +75,8 @@ def get_rag_index(collection_name: str = None):
         collection_manager = WorkingCollectionManager()
 
         if collection_name:
-            # Load specific collection
             index = collection_manager.load_index(collection_name)
         else:
-            # Load default/primary collection
             collections = collection_manager.list_collections()
             if collections:
                 index = collection_manager.load_index(collections[0])
@@ -78,13 +98,11 @@ async def process_query_async(
 ):
     """Process user query with streaming updates."""
 
-    # Create assistant
     assistant = UniversalKnowledgeAssistant(
         rag_index=rag_index,
         collection_name=collection_name
     )
 
-    # Create placeholders for streaming output
     status_placeholder = st.empty()
     output_placeholder = st.empty()
 
@@ -97,18 +115,13 @@ async def process_query_async(
             sources=sources,
             depth=depth
         ):
-            # Handle status updates
             if chunk.metadata and "status" in chunk.metadata:
                 current_status = chunk.content
                 status_placeholder.info(current_status)
             else:
-                # Accumulate response chunks
                 full_response.append(chunk.content)
-
-                # Update display
                 output_placeholder.markdown("".join(full_response))
 
-        # Clear status when done
         status_placeholder.success("✅ Complete!")
 
         # Save to history
@@ -126,13 +139,20 @@ async def process_query_async(
         return "".join(full_response)
 
     except Exception as e:
-        error_msg = f"⚠️ Error during processing: {str(e)}"
+        error_msg = f"Error during processing: {str(e)}"
         logger.error(error_msg)
-        output_placeholder.error(error_msg)
+        error_display(
+            error_msg,
+            error_type="Processing Error",
+            recovery_suggestion="Try simplifying your query or selecting different sources"
+        )
         return None
 
 
-# Sidebar - Configuration
+# ============================================
+# SIDEBAR CONFIGURATION
+# ============================================
+
 with st.sidebar:
     st.header("⚙️ Configuration")
 
@@ -158,7 +178,7 @@ with st.sidebar:
             st.warning("No collections found. Ingest documents first.")
             selected_collection = None
     except Exception as e:
-        st.error(f"Error loading collections: {e}")
+        error_display(str(e), "Collection Loading Error")
         selected_collection = None
 
     st.divider()
@@ -219,19 +239,23 @@ with st.sidebar:
         **Router Model:** llama3.2:3b (intent classification)
         **Power Model:** qwen2.5:72b or llama3.3:70b (synthesis)
 
-        Models are automatically selected based on task requirements.
+        Models are automatically selected based on task requirements and your GPU capabilities.
         """)
 
 
-# Main interface
-st.markdown("---")
+# ============================================
+# MAIN CONTENT
+# ============================================
+
+section_header("🔍", "Knowledge Query", "Enter your question, topic, or goal")
 
 # Query input
 user_query = st.text_area(
-    "🔍 What would you like to explore?",
+    "What would you like to explore?",
     placeholder="Examples:\n- How does GraphRAG improve retrieval quality?\n- Synthesize key insights about knowledge management from my documents\n- Generate innovative ideas for improving our RAG pipeline",
     height=120,
-    help="Enter your question, topic, or goal. The assistant will automatically determine the best approach."
+    help="Enter your question, topic, or goal. The assistant will automatically determine the best approach.",
+    label_visibility="collapsed"
 )
 
 # Action buttons
@@ -246,7 +270,7 @@ with col1:
 
 with col2:
     clear_button = st.button(
-        "🗑️ Clear",
+        "🗑️ Clear History",
         use_container_width=True
     )
 
@@ -257,7 +281,7 @@ if clear_button:
 # Process query
 if generate_button and user_query:
     st.markdown("---")
-    st.subheader("📊 Results")
+    section_header("📊", "Results", f"Query: {user_query[:50]}...")
 
     # Create source config
     sources = SourceConfig(
@@ -280,10 +304,9 @@ if generate_button and user_query:
                 st.warning("Could not load RAG index. Internal search disabled.")
                 sources.internal_rag = False
 
-        # Process query with async
+        # Process query
         with st.spinner("Processing your query..."):
             try:
-                # Run async function
                 response = asyncio.run(
                     process_query_async(
                         user_input=user_query,
@@ -295,43 +318,50 @@ if generate_button and user_query:
                 )
 
                 if response:
-                    # Add export option
                     st.markdown("---")
                     st.download_button(
                         label="📥 Download Response (Markdown)",
                         data=response,
                         file_name=f"knowledge_assistant_{user_query[:30].replace(' ', '_')}.md",
-                        mime="text/markdown"
+                        mime="text/markdown",
+                        use_container_width=False
                     )
 
             except Exception as e:
-                st.error(f"⚠️ Error: {str(e)}")
+                error_display(
+                    str(e),
+                    error_type="Query Processing Error",
+                    recovery_suggestion="Try simplifying your query or check your connection",
+                    show_details=True
+                )
                 logger.error(f"Error in process_query_async: {e}", exc_info=True)
 
 elif generate_button:
     st.warning("⚠️ Please enter a query first!")
 
 
-# History section
+# ============================================
+# QUERY HISTORY
+# ============================================
+
 if st.session_state.assistant_history:
     st.markdown("---")
-    st.subheader("📚 Query History")
+    section_header("📚", "Query History", f"{len(st.session_state.assistant_history)} previous queries")
 
     with st.expander("View Previous Queries", expanded=False):
         for i, item in enumerate(reversed(st.session_state.assistant_history), 1):
             st.markdown(f"**{i}. {item['query']}**")
             st.caption(f"Depth: {item['depth']} | Sources: {', '.join([k for k, v in item['sources'].items() if v])}")
+
             with st.container():
-                st.markdown(item['response'][:500] + "..." if len(item['response']) > 500 else item['response'])
+                preview = item['response'][:500] + "..." if len(item['response']) > 500 else item['response']
+                st.markdown(preview)
+
             st.divider()
 
 
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: #666; font-size: 0.85em;'>
-    <strong>🕒 Latest Code Changes:</strong> 2026-01-01<br>
-    <em>Version 1.0.0 - Universal Knowledge Assistant replaces AI Assisted Research + Knowledge Synthesizer</em><br>
-    <em>Powered by adaptive local LLMs - No cloud API dependency</em>
-</div>
-""", unsafe_allow_html=True)
+# ============================================
+# FOOTER
+# ============================================
+
+render_version_footer()
