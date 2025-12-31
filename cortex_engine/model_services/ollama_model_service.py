@@ -42,7 +42,7 @@ class OllamaModelService(ModelServiceInterface):
     
     async def is_available(self) -> bool:
         """Check if Ollama service is available."""
-        is_running, _ = check_ollama_service(self.host, self.port)
+        is_running, _, _ = check_ollama_service(self.host, self.port)
         return is_running
     
     async def list_available_models(self) -> List[ModelInfo]:
@@ -99,7 +99,7 @@ class OllamaModelService(ModelServiceInterface):
             import requests
             
             # Check if service is available
-            is_running, _ = check_ollama_service(self.host, self.port)
+            is_running, _, _ = check_ollama_service(self.host, self.port)
             if not is_running:
                 return []
             
