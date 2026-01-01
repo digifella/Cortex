@@ -1,0 +1,338 @@
+{
+  "10_Idea_Generator.py": {
+    "file": "10_Idea_Generator.py",
+    "score": 66.7,
+    "checks": {
+      "has_apply_theme": false,
+      "has_page_config": true,
+      "has_page_icon": true,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": true,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": true,
+      "has_help_text": true,
+      "has_wide_layout": true
+    },
+    "version": "Unknown",
+    "date": "Unknown",
+    "lines": 1001
+  },
+  "11_Knowledge_Synthesizer.py": {
+    "file": "11_Knowledge_Synthesizer.py",
+    "score": 33.3,
+    "checks": {
+      "has_apply_theme": false,
+      "has_page_config": true,
+      "has_page_icon": false,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": false,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": false,
+      "has_help_text": false,
+      "has_wide_layout": true
+    },
+    "version": "Unknown",
+    "date": "Unknown",
+    "lines": 100
+  },
+  "12_Visual_Analysis.py": {
+    "file": "12_Visual_Analysis.py",
+    "score": 58.3,
+    "checks": {
+      "has_apply_theme": false,
+      "has_page_config": true,
+      "has_page_icon": true,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": true,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": false,
+      "has_help_text": true,
+      "has_wide_layout": true
+    },
+    "version": "1.0.0",
+    "date": "2025-08-25",
+    "lines": 577
+  },
+  "13_Metadata_Management.py": {
+    "file": "13_Metadata_Management.py",
+    "score": 41.7,
+    "checks": {
+      "has_apply_theme": false,
+      "has_page_config": true,
+      "has_page_icon": false,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": true,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": false,
+      "has_logger": true,
+      "has_help_text": false,
+      "has_wide_layout": true
+    },
+    "version": "Unknown",
+    "date": "Unknown",
+    "lines": 199
+  },
+  "1_AI_Assisted_Research.py": {
+    "file": "1_AI_Assisted_Research.py",
+    "score": 33.3,
+    "checks": {
+      "has_apply_theme": false,
+      "has_page_config": true,
+      "has_page_icon": false,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": false,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": false,
+      "has_help_text": false,
+      "has_wide_layout": true
+    },
+    "version": "4.11.0",
+    "date": "Unknown",
+    "lines": 414
+  },
+  "1_Universal_Knowledge_Assistant.py": {
+    "file": "1_Universal_Knowledge_Assistant.py",
+    "score": 100.0,
+    "checks": {
+      "has_apply_theme": true,
+      "has_page_config": true,
+      "has_page_icon": true,
+      "has_title": true,
+      "has_nav_caption": true,
+      "has_divider_after_header": true,
+      "uses_section_header": true,
+      "uses_error_display": true,
+      "has_version_footer": true,
+      "has_logger": true,
+      "has_help_text": true,
+      "has_wide_layout": true
+    },
+    "version": "1.0.0",
+    "date": "2026-01-01",
+    "lines": 367
+  },
+  "2_Knowledge_Ingest.py": {
+    "file": "2_Knowledge_Ingest.py",
+    "score": 75.0,
+    "checks": {
+      "has_apply_theme": true,
+      "has_page_config": true,
+      "has_page_icon": false,
+      "has_title": true,
+      "has_nav_caption": true,
+      "has_divider_after_header": true,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": true,
+      "has_help_text": true,
+      "has_wide_layout": true
+    },
+    "version": "4.11.0",
+    "date": "2025-12-28",
+    "lines": 3843
+  },
+  "3_Knowledge_Search.py": {
+    "file": "3_Knowledge_Search.py",
+    "score": 58.3,
+    "checks": {
+      "has_apply_theme": true,
+      "has_page_config": true,
+      "has_page_icon": false,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": false,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": true,
+      "has_help_text": true,
+      "has_wide_layout": true
+    },
+    "version": "4.11.0",
+    "date": "2025-12-27",
+    "lines": 1735
+  },
+  "4_Collection_Management.py": {
+    "file": "4_Collection_Management.py",
+    "score": 58.3,
+    "checks": {
+      "has_apply_theme": false,
+      "has_page_config": true,
+      "has_page_icon": false,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": true,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": true,
+      "has_help_text": true,
+      "has_wide_layout": true
+    },
+    "version": "4.11.0",
+    "date": "2025-08-28",
+    "lines": 1157
+  },
+  "4_Proposal_Step_1_Prep.py": {
+    "file": "4_Proposal_Step_1_Prep.py",
+    "score": 50.0,
+    "checks": {
+      "has_apply_theme": false,
+      "has_page_config": true,
+      "has_page_icon": false,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": true,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": false,
+      "has_help_text": true,
+      "has_wide_layout": true
+    },
+    "version": "4.11.0",
+    "date": "2025-07-15",
+    "lines": 281
+  },
+  "5_Proposal_Step_2_Make.py": {
+    "file": "5_Proposal_Step_2_Make.py",
+    "score": 50.0,
+    "checks": {
+      "has_apply_theme": false,
+      "has_page_config": true,
+      "has_page_icon": false,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": true,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": false,
+      "has_help_text": true,
+      "has_wide_layout": true
+    },
+    "version": "4.11.0",
+    "date": "2025-08-31",
+    "lines": 146
+  },
+  "6_Knowledge_Analytics.py": {
+    "file": "6_Knowledge_Analytics.py",
+    "score": 58.3,
+    "checks": {
+      "has_apply_theme": false,
+      "has_page_config": true,
+      "has_page_icon": true,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": false,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": true,
+      "has_help_text": true,
+      "has_wide_layout": true
+    },
+    "version": "Unknown",
+    "date": "Unknown",
+    "lines": 821
+  },
+  "7_Maintenance.py": {
+    "file": "7_Maintenance.py",
+    "score": 66.7,
+    "checks": {
+      "has_apply_theme": false,
+      "has_page_config": true,
+      "has_page_icon": true,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": true,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": true,
+      "has_help_text": true,
+      "has_wide_layout": true
+    },
+    "version": "4.11.0",
+    "date": "2025-12-27",
+    "lines": 2116
+  },
+  "8_Document_Anonymizer.py": {
+    "file": "8_Document_Anonymizer.py",
+    "score": 58.3,
+    "checks": {
+      "has_apply_theme": false,
+      "has_page_config": true,
+      "has_page_icon": true,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": false,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": true,
+      "has_help_text": true,
+      "has_wide_layout": true
+    },
+    "version": "4.11.0",
+    "date": "2025-08-30",
+    "lines": 403
+  },
+  "9_Document_Summarizer.py": {
+    "file": "9_Document_Summarizer.py",
+    "score": 58.3,
+    "checks": {
+      "has_apply_theme": false,
+      "has_page_config": true,
+      "has_page_icon": true,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": false,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": true,
+      "has_help_text": true,
+      "has_wide_layout": true
+    },
+    "version": "4.11.0",
+    "date": "2025-08-28",
+    "lines": 407
+  },
+  "Proposal_Copilot.py": {
+    "file": "Proposal_Copilot.py",
+    "score": 33.3,
+    "checks": {
+      "has_apply_theme": false,
+      "has_page_config": false,
+      "has_page_icon": false,
+      "has_title": true,
+      "has_nav_caption": false,
+      "has_divider_after_header": false,
+      "uses_section_header": false,
+      "uses_error_display": false,
+      "has_version_footer": true,
+      "has_logger": true,
+      "has_help_text": true,
+      "has_wide_layout": false
+    },
+    "version": "4.11.0",
+    "date": "2025-07-23",
+    "lines": 442
+  }
+}
