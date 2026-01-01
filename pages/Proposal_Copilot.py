@@ -1,11 +1,19 @@
-# ## File: Proposal_Copilot.py
-# Version: v4.11.0
-# Date: 2025-07-23
-# Purpose: Core UI for drafting proposals.
-#          - REFACTOR (v28.0.0): Updated to use centralized utilities for path handling,
-#            logging, and error handling. Removed code duplication.
+"""
+Proposal Copilot - AI-assisted proposal drafting
+Version: v1.0.0
+Date: 2026-01-01
+Purpose: Core UI for drafting proposals with AI assistance and KB integration
+"""
 
 import streamlit as st
+
+# Set page config FIRST (before any other Streamlit commands)
+st.set_page_config(
+    page_title="Proposal Copilot",
+    page_icon="🤖",
+    layout="wide"
+)
+
 import os
 import io
 import docx
@@ -16,6 +24,13 @@ from pathlib import Path
 # Add the project root to the Python path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+# Import theme
+from cortex_engine.ui_theme import apply_theme, section_header
+from cortex_engine.ui_components import error_display, render_version_footer
+
+# Apply theme IMMEDIATELY
+apply_theme()
 
 from llama_index.core import Settings, VectorStoreIndex
 from llama_index.vector_stores.chroma import ChromaVectorStore
@@ -274,7 +289,13 @@ if st.session_state.loaded_proposal_id != st.session_state.current_proposal_id:
         load_proposal_into_session(st.session_state.current_proposal_id, collection_mgr)
         st.session_state.loaded_proposal_id = st.session_state.current_proposal_id
 
-st.title(f"🤖 Co-pilot: {st.session_state.get('proposal_name', 'Untitled Proposal')}")
+st.title(f"🤖 Proposal Copilot: {st.session_state.get('proposal_name', 'Untitled Proposal')}")
+st.markdown("""
+**AI-assisted proposal drafting** using your knowledge base and custom templates.
+Draft, refine, and assemble professional proposals with intelligent context from your organization's knowledge.
+""")
+st.caption("💡 Use the sidebar (←) to navigate between pages")
+st.markdown("---")
 
 with st.sidebar:
     if st.button("💾 Save Progress & Draft", type="primary", use_container_width=True):
@@ -290,7 +311,7 @@ with st.sidebar:
 
     if st.button("⬅️ Back to Proposal Management"): st.switch_page("pages/6_Proposal_Step_2_Make.py")
     st.divider()
-    st.header("1. Proposal Context")
+    section_header("📋", "Proposal Context")
     st.selectbox("Responding Organisation", options=RESPONDING_ORGS, key="responding_org")
     st.multiselect("Knowledge Source(s)", options=["Main Cortex Knowledge Base"] + collection_mgr.get_collection_names(), key="knowledge_sources")
 
@@ -298,7 +319,7 @@ if not st.session_state.get('responding_org'):
     st.info("⬅️ Please select a Responding Organisation in the sidebar to begin."); st.stop()
 
 if not st.session_state.get('doc_template'):
-    st.header("2. Upload Proposal Template")
+    section_header("📤", "Upload Proposal Template", "Upload your .docx template with Cortex instructions")
     uploaded_file = st.file_uploader("Upload your .docx template with Cortex instructions.", type="docx")
     if uploaded_file:
         st.session_state.original_filename = uploaded_file.name
@@ -310,7 +331,7 @@ else:
 
 if st.session_state.get('parsed_instructions'):
     st.divider()
-    st.header("3. Co-pilot Drafting")
+    section_header("✍️", "Co-pilot Drafting", "Review and generate content for each section")
     engine = TaskExecutionEngine(main_index=index, collection_manager=collection_mgr)
 
     for i, inst in enumerate(st.session_state.parsed_instructions):
@@ -415,7 +436,7 @@ if st.session_state.get('parsed_instructions'):
                         )
 
     st.divider()
-    st.header("4. Assemble & Download")
+    section_header("🚀", "Assemble & Download", "Generate final proposal document")
     if st.button("🚀 Assemble Proposal", type="primary", use_container_width=True):
         if not st.session_state.get('doc_template'):
             st.error("Template not found.")
@@ -434,9 +455,5 @@ if st.session_state.get('parsed_instructions'):
         dl_filename = f"DRAFT_{st.session_state.get('proposal_name', 'proposal').replace(' ', '_')}.docx"
         st.download_button("📥 Download Generated Proposal", st.session_state.generated_doc_bytes, file_name=dl_filename)
 
-# Consistent version footer
-try:
-    from cortex_engine.ui_components import render_version_footer
-    render_version_footer()
-except Exception:
-    pass
+# Version footer
+render_version_footer()
