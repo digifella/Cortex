@@ -1161,6 +1161,57 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
     """Render the active batch management section with consolidated controls"""
     st.subheader("📊 Active Batch Management")
 
+    # CRITICAL: Always show Stop/Pause controls at the top
+    st.markdown("### 🎛️ Batch Controls")
+    st.warning("⚠️ **Batch processing is active.** Use the controls below to manage it.")
+
+    control_col1, control_col2, control_col3, control_col4 = st.columns(4)
+
+    with control_col1:
+        if st.button("⏹️ **STOP BATCH**", key="stop_active_batch", type="secondary", use_container_width=True):
+            # Force stop the batch and subprocess
+            if st.session_state.get('ingestion_process'):
+                try:
+                    st.session_state.ingestion_process.terminate()
+                except Exception as e:
+                    logger.warning(f"Process termination failed: {e}")
+                st.session_state.ingestion_process = None
+
+            # Signal reader thread to stop
+            stop_ev = st.session_state.get("ingestion_reader_stop")
+            if stop_ev:
+                stop_ev.set()
+
+            # Clear the batch
+            batch_manager.clear_batch()
+
+            # Reset to config
+            st.session_state.ingestion_stage = "config"
+            st.success("✅ Batch stopped and cleared!")
+            st.rerun()
+
+    with control_col2:
+        if not batch_status.get("paused", False):
+            if st.button("⏸️ Pause", key="pause_active_batch", use_container_width=True):
+                batch_manager.pause_batch()
+                st.success("Pause request sent")
+                st.rerun()
+        else:
+            st.info("⏸️ Paused")
+
+    with control_col3:
+        if st.button("🗑️ Clear Batch", key="clear_active_batch", use_container_width=True):
+            batch_manager.clear_batch()
+            st.success("Batch cleared")
+            st.rerun()
+
+    with control_col4:
+        if st.button("⬅️ Back", key="back_from_active_batch", use_container_width=True):
+            initialize_state(force_reset=True)
+            st.rerun()
+
+    st.markdown("---")
+
     # Manual/auto refresh controls
     refresher_col1, refresher_col2 = st.columns([1,1])
     with refresher_col1:
@@ -2416,7 +2467,7 @@ def render_config_and_scan_ui():
         st.markdown("- ⚠️ Delete Entire Knowledge Base")
         
         if st.button("🔧 Open Maintenance Page", use_container_width=True, type="primary"):
-            st.switch_page("pages/13_Maintenance.py")
+            st.switch_page("pages/7_Maintenance.py")
 
 def render_pre_analysis_ui():
     st.header("Pre-Analysis Review")
@@ -3538,7 +3589,7 @@ def render_recovery_section():
             # Redirect to maintenance page for advanced tools
             st.info("💡 **Database maintenance and recovery tools** have been moved to the dedicated **Maintenance** page for better organization.")
             if st.button("🔧 Open Maintenance Page", use_container_width=True, help="Access advanced database repair and recovery features"):
-                st.switch_page("pages/13_Maintenance.py")
+                st.switch_page("pages/7_Maintenance.py")
         
         # Show urgent recovery message if issues detected (already handled by check_recovery_needed dismiss logic)
         if show_maintenance or recovery_needed:
