@@ -2533,9 +2533,12 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
     except Exception as _e:
         logger.warning(f"Auto-resume on reload skipped: {_e}")
     
-    # Add control buttons for pause/stop
+    # Add control buttons for pause/stop (always visible during processing)
+    st.markdown("### 🎛️ Ingestion Controls")
+    st.info("💡 **Tip:** You can stop the ingestion at any time using the Stop button below.")
+
     col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
-    
+
     with col1:
         if st.button("⏸️ Pause", key="pause_processing", use_container_width=True):
             # Get batch manager and pause the batch
@@ -2544,18 +2547,27 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
             set_runtime_db_path(str(batch_manager.db_path))
             batch_manager.pause_batch()
             st.success("Pause requested")
-            
+
     with col2:
-        if st.button("⏹️ Stop", key="stop_processing", use_container_width=True):
-            if st.session_state.ingestion_process:
-                st.session_state.ingestion_process.terminate()
+        # Make Stop button more prominent and always functional
+        if st.button("⏹️ **STOP INGESTION**", key="stop_processing", use_container_width=True, type="secondary"):
+            # Always allow stopping, even if process doesn't exist
+            if st.session_state.get('ingestion_process'):
+                try:
+                    st.session_state.ingestion_process.terminate()
+                except Exception as e:
+                    logger.warning(f"Process termination failed: {e}")
                 st.session_state.ingestion_process = None
-                # Signal reader thread to stop
-                stop_ev = st.session_state.get("ingestion_reader_stop")
-                if stop_ev:
-                    stop_ev.set()
-                st.warning("Process stopped by user")
-                st.rerun()
+
+            # Signal reader thread to stop
+            stop_ev = st.session_state.get("ingestion_reader_stop")
+            if stop_ev:
+                stop_ev.set()
+
+            # Force reset the ingestion stage to allow fresh start
+            st.session_state.ingestion_stage = "config"
+            st.warning("⚠️ Ingestion stopped by user. Returning to configuration...")
+            st.rerun()
     
     with col3:
         if st.button("⬅️ Back", key="back_from_processing", use_container_width=True):
