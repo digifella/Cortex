@@ -1,7 +1,10 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v4.10.3
-# Date: 2025-09-02
+# Version: v5.0.0
+# Date: 2025-12-28
 # Purpose: GUI for knowledge base ingestion.
+#          - UX FIX (v4.11.0): Fixed confusing status display during finalization.
+#            Now clearly shows "Finalization in Progress" instead of "Analysis Complete!"
+#            while embedding documents. Added FINALIZE_START event handler.
 #          - REFACTOR (v39.3.0): Moved maintenance functions to dedicated Maintenance page
 #            for better organization and UI cleanup. Functions moved: clear_ingestion_log_file,
 #            delete_knowledge_base, and all database recovery tools.
@@ -2567,8 +2570,16 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
     
     # Progress counter display (prominent)
     if st.session_state.total_docs_in_batch > 0:
-        progress_text = f"📄 Processing document {st.session_state.current_doc_number} of {st.session_state.total_docs_in_batch}"
-        st.markdown(f"### {progress_text}")
+        # Distinguish between analysis and finalization phases
+        if st.session_state.get('finalize_started_detected', False):
+            progress_text = f"🔄 Embedding document {st.session_state.current_doc_number} of {st.session_state.total_docs_in_batch}"
+            status_header = "**Finalization in Progress** (Embedding & Indexing)"
+        else:
+            progress_text = f"📄 Analyzing document {st.session_state.current_doc_number} of {st.session_state.total_docs_in_batch}"
+            status_header = "**Analysis in Progress** (Scanning & Metadata Extraction)"
+
+        st.markdown(f"### {status_header}")
+        st.markdown(f"{progress_text}")
         progress_percent = st.session_state.current_doc_number / st.session_state.total_docs_in_batch
         progress_bar = st.progress(progress_percent, text=progress_text)
     else:
@@ -2664,9 +2675,14 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
                     st.session_state.log_messages.append(f"[{ts}] HEARTBEAT GPU={gpu_disp}% CPU={cpu_disp}%")
                 except (ValueError, IndexError):
                     pass
+            elif line.startswith("CORTEX_STAGE::FINALIZE_START"):
+                st.session_state.log_messages.append("🔄 Starting finalization (embedding documents)...")
+                st.session_state.finalize_started_detected = True
+                # Don't clear analysis_done_detected - analysis DID complete, we just moved to next stage
             elif line.startswith("CORTEX_STAGE::FINALIZE_DONE"):
                 st.session_state.log_messages.append("✅ Finalization completed successfully!")
                 st.session_state.finalize_done_detected = True
+                st.session_state.finalize_started_detected = False
                 st.session_state.batch_auto_finalize_started = False
                 st.session_state.batch_auto_processed = False
                 st.session_state.batch_mode_active = False
@@ -2713,8 +2729,13 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
             st.rerun()
             return
         elif st.session_state.get('analysis_done_detected', False):
-            progress_bar.progress(1.0, text="✅ Analysis Complete!")
-            st.success("✅ Analysis complete!")
+            # Only show "Analysis Complete!" if finalization hasn't started yet
+            if not st.session_state.get('finalize_started_detected', False):
+                progress_bar.progress(1.0, text="✅ Analysis Complete!")
+                st.success("✅ Analysis complete!")
+            else:
+                # Finalization is running, don't show analysis complete
+                pass
         else:
             progress_bar.progress(1.0, text="Process completed")
             st.info("Process completed.")

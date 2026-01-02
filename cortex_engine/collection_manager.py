@@ -104,6 +104,10 @@ class WorkingCollectionManager:
     def get_collection_names(self) -> list:
         return list(self.collections.keys())
 
+    def list_collections(self) -> list:
+        """Alias for get_collection_names() for consistency with UI expectations."""
+        return self.get_collection_names()
+
     def get_doc_ids_by_name(self, name: str) -> list:
         return self.collections.get(name, {}).get("doc_ids", [])
 

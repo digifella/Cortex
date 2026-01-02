@@ -1,5 +1,5 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v4.11.0
+# Version: v5.0.0
 # Date: 2025-12-27
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
 #          - FEATURE (v4.11.0): Added embedding model validation before queries with

@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.10.3"
+CORTEX_VERSION = "5.0.0"
 
 # Version details
 VERSION_INFO = {
-    "major": 4,
-    "minor": 10,
-    "patch": 3,
+    "major": 5,
+    "minor": 0,
+    "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,33 +24,42 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-12-02",
-    "release_name": "Docker Path Configuration & Offline Embedding Support",
-    "description": "Enhanced Docker setup workflow with interactive path configuration and full offline operation support for embeddings.",
+    "release_date": "2026-01-02",
+    "release_name": "Mixture of Experts (MoE) & Adaptive Intelligence",
+    "description": "Major intelligence upgrade with Mixture of Experts synthesis, adaptive model selection, creativity controls, and enhanced source attribution. Universal Knowledge Assistant now runs multiple 70B models in parallel for superior analysis quality.",
     "breaking_changes": [],
     "new_features": [
-        "Docker batch file now prompts for both AI database and knowledge source paths with pre-filled defaults",
-        "Pre-downloads embedding model (BAAI/bge-base-en-v1.5) during Docker build for offline operation",
-        "Automatic path reconfiguration workflow - press ENTER to keep existing paths or type new ones",
-        "Knowledge Ingest UI now properly pre-fills configured source paths from environment variables"
+        "Mixture of Experts (MoE) mode: Runs 2-3 expert models (qwen2.5:72b, llama3.3:70b) in parallel with meta-synthesis",
+        "Adaptive model selection with reasoning display: System explains WHY each model was chosen for the task",
+        "Creativity slider (0-3 scale): Adjust from factual/conservative to highly experimental outputs",
+        "Enhanced source citations: Shows collection names, file names, and relevance scores with proper fallbacks",
+        "Model selection override: Manual selection of power models when auto-select isn't desired",
+        "Real-time streaming synthesis with async architecture for responsive UI",
+        "Intent classification: Automatic detection of ideation, synthesis, research, or exploration tasks"
     ],
     "improvements": [
-        "Docker containers now work fully offline for document ingestion and search after initial build",
-        "HuggingFace offline mode enforcement at both system and application levels",
-        "Graceful fallback from offline to online mode for embedding model loading",
-        "Enhanced session state initialization to respect environment-configured paths in Docker",
-        "Clear error messages when embedding model cache is missing and internet unavailable"
+        "Extended timeout support (600s) for large 70B models to prevent premature timeouts",
+        "Improved ModernOllamaLLM with proper async/await streaming using aiohttp",
+        "Better source metadata extraction: Tries multiple fields (title, file_name, source) with content fallback",
+        "Debug logging for timeout diagnostics in production environments",
+        "Collection-aware search with 'All Collections' global search option",
+        "Temperature mapping: Creativity slider intelligently maps to LLM temperature (0.2-2.0)",
+        "MoE meta-synthesis: Combines expert analyses into superior insights beyond individual outputs",
+        "Collapsible expert outputs: Clean UI with expandable sections for each expert analysis"
     ],
     "bug_fixes": [
-        "Fixed Docker batch file only prompting for AI database path (now prompts for both paths)",
-        "Fixed blank 'Root Source Documents Path' field in Knowledge Ingest UI when running in Docker",
-        "Resolved embedding service attempting HuggingFace connections in offline Docker environments",
-        "Fixed session state not respecting KNOWLEDGE_SOURCE_PATH environment variable on first load"
+        "Fixed async completion callback validation errors in LlamaIndex integration",
+        "Fixed aiohttp streaming timeout issues by using sock_read instead of total timeout",
+        "Fixed tuple unpacking errors when retrieving model selection with reasoning",
+        "Fixed ChromaVectorStore import path for compatibility with current LlamaIndex version",
+        "Fixed missing list_collections() method in WorkingCollectionManager",
+        "Cleared Python bytecode cache to ensure fresh module loading after updates"
     ],
     "performance": [
-        "Eliminated unnecessary HuggingFace connection attempts in offline mode (faster embedding loading)",
-        "Embedding model cached in Docker image (~420MB) eliminates runtime download overhead",
-        "Reduced Docker startup time by preventing network timeouts when offline"
+        "MoE synthesis delivers higher quality analysis by leveraging multiple expert perspectives",
+        "Non-blocking async streaming ensures responsive UI during long synthesis operations",
+        "Proper timeout handling prevents resource waste on stalled requests",
+        "GPU-accelerated embeddings with optimal batch sizing for 48GB Quadro RTX 8000"
     ]
 }
 

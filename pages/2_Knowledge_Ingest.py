@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v4.11.0
+# Version: v5.0.0
 # Date: 2025-12-28
 # Purpose: GUI for knowledge base ingestion.
 #          - UX FIX (v4.11.0): Fixed confusing status display during finalization.

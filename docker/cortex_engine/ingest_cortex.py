@@ -1,7 +1,10 @@
 # ## File: ingest_cortex.py
-# Version: 14.0.0 (Docling Integration with Migration Strategy)
-# Date: 2025-08-22
+# Version: 14.1.0 (Embedding Model Safeguards)
+# Date: 2025-12-27
 # Purpose: Core ingestion script for Project Cortex with integrated knowledge graph extraction.
+#          - CRITICAL FIX (v14.1.0): Added embedding model validation and metadata storage
+#            to prevent mixed embedding corruption. System now validates model compatibility
+#            before ingestion and stores model metadata for future validation.
 #          - FEATURE (v13.0.0): Integrated entity extraction and knowledge graph building
 #            during the ingestion process. The system now extracts people, organizations,
 #            projects, and their relationships while maintaining backward compatibility.
@@ -1325,8 +1328,57 @@ def finalize_ingestion(db_path: str, args=None):
                 flat_metadata['thematic_tags'] = ', '.join(flat_metadata.get('thematic_tags', []))
             doc.metadata = flat_metadata
 
+    # Validate embedding model compatibility before ingestion
+    from cortex_engine.utils.embedding_validator import (
+        validate_embedding_compatibility,
+        get_embedding_dimension,
+        EmbeddingModelMismatchError
+    )
+    from cortex_engine.collection_manager import WorkingCollectionManager
+    from cortex_engine.config import EMBED_MODEL
+
+    # Check if collection already exists and validate compatibility
     db_settings = ChromaSettings(anonymized_telemetry=False)
     chroma_client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+
+    # Get or create collection with embedding model metadata
+    try:
+        existing_collections = chroma_client.list_collections()
+        collection_exists = any(c.name == COLLECTION_NAME for c in existing_collections)
+
+        if collection_exists:
+            # Validate existing collection
+            collection_mgr_temp = WorkingCollectionManager()
+            collection_metadata = collection_mgr_temp.get_embedding_model_metadata("default")
+
+            try:
+                validation_result = validate_embedding_compatibility(
+                    collection_metadata,
+                    current_model=EMBED_MODEL,
+                    strict=True
+                )
+                logging.info(f"✅ Embedding model validation passed: {EMBED_MODEL}")
+            except EmbeddingModelMismatchError as e:
+                logging.error(f"❌ CRITICAL: {e}")
+                logging.error(f"   Current model: {e.current_model}")
+                logging.error(f"   Expected model: {e.expected_model}")
+                logging.error("")
+                logging.error("   SOLUTION:")
+                logging.error("   1. Set CORTEX_EMBED_MODEL environment variable to lock model")
+                logging.error("   2. Or delete database and re-ingest with current model")
+                logging.error("")
+                raise RuntimeError(f"Embedding model mismatch prevents ingestion: {e}")
+        else:
+            # New collection - store embedding model metadata
+            logging.info(f"Creating new collection with embedding model: {EMBED_MODEL}")
+            embedding_dimension = get_embedding_dimension(EMBED_MODEL)
+            logging.info(f"Embedding dimension: {embedding_dimension}")
+
+    except EmbeddingModelMismatchError:
+        raise  # Re-raise validation errors
+    except Exception as e:
+        logging.warning(f"Could not validate embedding model (non-critical): {e}")
+
     chroma_collection = chroma_client.get_or_create_collection(COLLECTION_NAME)
     vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
@@ -1369,8 +1421,24 @@ def finalize_ingestion(db_path: str, args=None):
         logging.info(f"Adding {len(doc_ids_to_add_to_default)} new documents to the '{collection_name}' collection.")
         try:
             from cortex_engine.collection_manager import WorkingCollectionManager
+            from cortex_engine.config import EMBED_MODEL
+            from cortex_engine.utils.embedding_validator import get_embedding_dimension
+
             collection_mgr = WorkingCollectionManager()
             collection_mgr.add_docs_by_id_to_collection(collection_name, doc_ids_to_add_to_default)
+
+            # Store/update embedding model metadata for this collection
+            try:
+                embedding_dimension = get_embedding_dimension(EMBED_MODEL)
+                collection_mgr.set_embedding_model_metadata(
+                    collection_name,
+                    EMBED_MODEL,
+                    embedding_dimension
+                )
+                logging.info(f"Stored embedding model metadata: {EMBED_MODEL} ({embedding_dimension}D)")
+            except Exception as meta_error:
+                logging.warning(f"Could not store embedding metadata (non-critical): {meta_error}")
+
             logging.info("Collections updated via WorkingCollectionManager (Docker)")
         except Exception as e:
             logging.error(f"Could not automatically add documents to '{collection_name}' collection: {e}")

@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "4.11.0"
+CORTEX_VERSION = "5.0.0"
 
 # Version details
 VERSION_INFO = {
-    "major": 4,
-    "minor": 11,
+    "major": 5,
+    "minor": 0,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -24,38 +24,42 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2025-12-28",
-    "release_name": "Embedding Model Safeguards & BGE Stability",
-    "description": "Comprehensive embedding model safeguards system to prevent data corruption from mixed embeddings. Includes environment variable override for forcing stable BGE model instead of auto-detected NVIDIA models with compatibility issues.",
+    "release_date": "2026-01-02",
+    "release_name": "Mixture of Experts (MoE) & Adaptive Intelligence",
+    "description": "Major intelligence upgrade with Mixture of Experts synthesis, adaptive model selection, creativity controls, and enhanced source attribution. Universal Knowledge Assistant now runs multiple 70B models in parallel for superior analysis quality.",
     "breaking_changes": [],
     "new_features": [
-        "Environment variable CORTEX_EMBED_MODEL to override auto-detection and force specific embedding models",
-        "Embedding model metadata tracking in collection manager (model name and dimension)",
-        "Embedding compatibility validation at ingestion and query time",
-        "Embedding inspector tool (scripts/embedding_inspector.py) for database diagnostics",
-        "Embedding migration tool (scripts/embedding_migrator.py) for safe model switching",
-        "BGE model setup script (setup_bge_model.sh) for one-click stable configuration",
-        "Startup script (start_cortex_bge.sh) with automatic BGE model environment setup"
+        "Mixture of Experts (MoE) mode: Runs 2-3 expert models (qwen2.5:72b, llama3.3:70b) in parallel with meta-synthesis",
+        "Adaptive model selection with reasoning display: System explains WHY each model was chosen for the task",
+        "Creativity slider (0-3 scale): Adjust from factual/conservative to highly experimental outputs",
+        "Enhanced source citations: Shows collection names, file names, and relevance scores with proper fallbacks",
+        "Model selection override: Manual selection of power models when auto-select isn't desired",
+        "Real-time streaming synthesis with async architecture for responsive UI",
+        "Intent classification: Automatic detection of ideation, synthesis, research, or exploration tasks"
     ],
     "improvements": [
-        "Knowledge Ingest page now validates embedding compatibility before ingestion",
-        "Knowledge Search page displays warnings when model mismatch detected",
-        "Maintenance page shows embedding model status with compatibility checks",
-        "Comprehensive documentation in RECOVERY_GUIDE.md and QUICK_START_BGE.md",
-        "Embedding model safeguards prevent silent data corruption from mixed embeddings",
-        "Added trust_remote_code=True parameter to all SentenceTransformer instantiations",
-        "Added datasets>=2.14.0 and einops>=0.7.0 dependencies for advanced models"
+        "Extended timeout support (600s) for large 70B models to prevent premature timeouts",
+        "Improved ModernOllamaLLM with proper async/await streaming using aiohttp",
+        "Better source metadata extraction: Tries multiple fields (title, file_name, source) with content fallback",
+        "Debug logging for timeout diagnostics in production environments",
+        "Collection-aware search with 'All Collections' global search option",
+        "Temperature mapping: Creativity slider intelligently maps to LLM temperature (0.2-2.0)",
+        "MoE meta-synthesis: Combines expert analyses into superior insights beyond individual outputs",
+        "Collapsible expert outputs: Clean UI with expandable sections for each expert analysis"
     ],
     "bug_fixes": [
-        "Fixed NVIDIA NV-Embed-v2 model compatibility issues with transformers library",
-        "Fixed ingestion failures when embedding model cache corrupted mid-process",
-        "Fixed confusing UI status display during finalization phase of ingestion",
-        "Prevented auto-detection from selecting unstable NVIDIA models in production"
+        "Fixed async completion callback validation errors in LlamaIndex integration",
+        "Fixed aiohttp streaming timeout issues by using sock_read instead of total timeout",
+        "Fixed tuple unpacking errors when retrieving model selection with reasoning",
+        "Fixed ChromaVectorStore import path for compatibility with current LlamaIndex version",
+        "Fixed missing list_collections() method in WorkingCollectionManager",
+        "Cleared Python bytecode cache to ensure fresh module loading after updates"
     ],
     "performance": [
-        "BGE model (768D) provides stable production performance without compatibility issues",
-        "Eliminated overnight ingestion failures by avoiding problematic NVIDIA model API changes",
-        "Proper batch processing with optimal GPU memory utilization"
+        "MoE synthesis delivers higher quality analysis by leveraging multiple expert perspectives",
+        "Non-blocking async streaming ensures responsive UI during long synthesis operations",
+        "Proper timeout handling prevents resource waste on stalled requests",
+        "GPU-accelerated embeddings with optimal batch sizing for 48GB Quadro RTX 8000"
     ]
 }
 

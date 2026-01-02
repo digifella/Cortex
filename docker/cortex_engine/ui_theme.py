@@ -473,42 +473,84 @@ def get_custom_css():
     }}
 
     /* ============================================
-       SIDEBAR STYLING
+       SIDEBAR STYLING - HIGH CONTRAST FOR READABILITY
        ============================================ */
 
     .css-1d391kg,
-    [data-testid="stSidebar"] {{
-        background-color: var(--color-primary-dark);
+    [data-testid="stSidebar"],
+    section[data-testid="stSidebar"] {{
+        background-color: #FFFFFF !important;
         padding-top: 2rem;
     }}
 
+    /* Sidebar text - dark for readability */
     .css-1d391kg .stMarkdown,
-    [data-testid="stSidebar"] .stMarkdown {{
-        color: {COLORS['neutral']['100']};
+    [data-testid="stSidebar"] .stMarkdown,
+    section[data-testid="stSidebar"] .stMarkdown,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] div {{
+        color: {COLORS['neutral']['900']} !important;
     }}
 
+    /* Sidebar headers - dark blue */
     .css-1d391kg h1,
     .css-1d391kg h2,
     .css-1d391kg h3,
     [data-testid="stSidebar"] h1,
     [data-testid="stSidebar"] h2,
     [data-testid="stSidebar"] h3 {{
-        color: white;
+        color: {COLORS['primary']['900']} !important;
         font-family: var(--font-heading);
+        font-weight: 600;
+    }}
+
+    /* Sidebar navigation links */
+    [data-testid="stSidebar"] a,
+    [data-testid="stSidebarNav"] a,
+    .css-1d391kg a {{
+        color: {COLORS['neutral']['900']} !important;
+        text-decoration: none;
+        font-weight: 500;
+    }}
+
+    [data-testid="stSidebar"] a:hover,
+    [data-testid="stSidebarNav"] a:hover {{
+        color: {COLORS['primary']['700']} !important;
+        background-color: {COLORS['primary']['50']} !important;
     }}
 
     /* Sidebar buttons */
     .css-1d391kg .stButton > button,
     [data-testid="stSidebar"] .stButton > button {{
-        background-color: rgba(255, 255, 255, 0.1);
-        color: white;
-        border: 1px solid rgba(255, 255, 255, 0.2);
+        background-color: white;
+        color: {COLORS['primary']['700']} !important;
+        border: 1.5px solid {COLORS['neutral']['200']};
+        font-weight: 500;
     }}
 
     .css-1d391kg .stButton > button:hover,
     [data-testid="stSidebar"] .stButton > button:hover {{
-        background-color: rgba(255, 255, 255, 0.15);
-        border-color: rgba(255, 255, 255, 0.3);
+        background-color: {COLORS['primary']['50']};
+        border-color: {COLORS['primary']['400']};
+        color: {COLORS['primary']['900']} !important;
+    }}
+
+    /* Sidebar inputs - ensure readability */
+    [data-testid="stSidebar"] input,
+    [data-testid="stSidebar"] select,
+    [data-testid="stSidebar"] textarea {{
+        color: {COLORS['neutral']['900']} !important;
+        background-color: white !important;
+        border: 1.5px solid {COLORS['neutral']['200']} !important;
+    }}
+
+    /* Sidebar checkboxes and radio buttons */
+    [data-testid="stSidebar"] .stCheckbox label,
+    [data-testid="stSidebar"] .stRadio label {{
+        color: {COLORS['neutral']['900']} !important;
+        font-weight: 400;
     }}
 
     /* ============================================
