@@ -728,3 +728,185 @@ Return ONLY the JSON object or array, no additional text or explanation.
 
         except Exception:
             return True
+
+    async def populate_workspace_with_extraction(
+        self,
+        workspace_manager: Any,
+        workspace_id: str,
+        structured_data: StructuredKnowledge
+    ) -> bool:
+        """
+        Populate a workspace with extracted structured data.
+
+        Args:
+            workspace_manager: WorkspaceManager instance
+            workspace_id: Workspace ID to populate
+            structured_data: Extracted structured data
+
+        Returns:
+            True if successful
+        """
+        from .workspace_schema import DocumentSource
+
+        try:
+            logger.info(f"Populating workspace {workspace_id} with extracted data")
+
+            # 1. Save entity snapshot (JSON)
+            entity_data_dict = structured_data.to_json_serializable()
+            workspace_manager.add_entity_snapshot(workspace_id, entity_data_dict)
+
+            # 2. Add organization data to collection
+            if structured_data.organization:
+                org = structured_data.organization
+                content = f"""Organization: {org.legal_name}
+ABN: {org.abn or 'Not available'}
+ACN: {org.acn or 'Not available'}
+Address: {org.address.get('street', '')}, {org.address.get('city', '')}, {org.address.get('state', '')} {org.address.get('postcode', '')}
+Phone: {org.phone or 'Not available'}
+Email: {org.email or 'Not available'}
+Website: {org.website or 'Not available'}
+"""
+                workspace_manager.add_document_to_workspace(
+                    workspace_id=workspace_id,
+                    content=content,
+                    source_type=DocumentSource.ENTITY_DATA,
+                    metadata={"category": "organization", "entity_name": org.legal_name},
+                    doc_id="org_profile"
+                )
+
+            # 3. Add insurances to collection
+            for i, insurance in enumerate(structured_data.insurances):
+                content = f"""Insurance: {insurance.insurance_type.value}
+Insurer: {insurance.insurer}
+Policy Number: {insurance.policy_number}
+Coverage: ${insurance.coverage_amount or 'Not specified'}
+Effective Date: {insurance.effective_date}
+Expiry Date: {insurance.expiry_date}
+Status: {'Expired' if insurance.is_expired else 'Active'}
+"""
+                workspace_manager.add_document_to_workspace(
+                    workspace_id=workspace_id,
+                    content=content,
+                    source_type=DocumentSource.ENTITY_DATA,
+                    metadata={
+                        "category": "insurance",
+                        "insurance_type": insurance.insurance_type.value,
+                        "policy_number": insurance.policy_number
+                    },
+                    doc_id=f"insurance_{i}"
+                )
+
+            # 4. Add qualifications to collection
+            for i, qual in enumerate(structured_data.team_qualifications):
+                content = f"""Person: {qual.person_name}
+Qualification: {qual.qualification_name}
+Type: {qual.qualification_type.value if qual.qualification_type else 'Not specified'}
+Institution: {qual.institution or 'Not specified'}
+Date Obtained: {qual.date_obtained or 'Not specified'}
+"""
+                workspace_manager.add_document_to_workspace(
+                    workspace_id=workspace_id,
+                    content=content,
+                    source_type=DocumentSource.ENTITY_DATA,
+                    metadata={
+                        "category": "qualification",
+                        "person_name": qual.person_name,
+                        "qualification": qual.qualification_name
+                    },
+                    doc_id=f"qualification_{i}"
+                )
+
+            # 5. Add work experience to collection
+            for i, work in enumerate(structured_data.team_work_experience):
+                content = f"""Person: {work.person_name}
+Role: {work.role}
+Organization: {work.organization}
+Duration: {work.start_date} to {work.end_date or 'Present'}
+Years: {work.duration_years}
+Responsibilities: {work.responsibilities or 'Not specified'}
+"""
+                workspace_manager.add_document_to_workspace(
+                    workspace_id=workspace_id,
+                    content=content,
+                    source_type=DocumentSource.ENTITY_DATA,
+                    metadata={
+                        "category": "work_experience",
+                        "person_name": work.person_name,
+                        "organization": work.organization
+                    },
+                    doc_id=f"work_exp_{i}"
+                )
+
+            # 6. Add projects to collection
+            for i, project in enumerate(structured_data.projects):
+                content = f"""Project: {project.project_name}
+Client: {project.client}
+Description: {project.description}
+Start Date: {project.start_date or 'Not specified'}
+End Date: {project.end_date or 'Not specified'}
+Status: {'Ongoing' if project.is_ongoing else 'Completed'}
+Value: ${project.project_value or 'Not specified'}
+Deliverables: {project.deliverables or 'Not specified'}
+Outcomes: {project.outcomes or 'Not specified'}
+"""
+                workspace_manager.add_document_to_workspace(
+                    workspace_id=workspace_id,
+                    content=content,
+                    source_type=DocumentSource.ENTITY_DATA,
+                    metadata={
+                        "category": "project",
+                        "project_name": project.project_name,
+                        "client": project.client
+                    },
+                    doc_id=f"project_{i}"
+                )
+
+            # 7. Add references to collection
+            for i, ref in enumerate(structured_data.references):
+                content = f"""Reference: {ref.contact_name}
+Title: {ref.contact_title or 'Not specified'}
+Organization: {ref.organization}
+Phone: {ref.phone or 'Not specified'}
+Email: {ref.email or 'Not specified'}
+Relationship: {ref.relationship or 'Not specified'}
+Project Context: {ref.project_context or 'Not specified'}
+"""
+                workspace_manager.add_document_to_workspace(
+                    workspace_id=workspace_id,
+                    content=content,
+                    source_type=DocumentSource.ENTITY_DATA,
+                    metadata={
+                        "category": "reference",
+                        "contact_name": ref.contact_name,
+                        "organization": ref.organization
+                    },
+                    doc_id=f"reference_{i}"
+                )
+
+            # 8. Add capabilities to collection
+            for i, cap in enumerate(structured_data.capabilities):
+                content = f"""Capability: {cap.capability_name}
+Description: {cap.description}
+Certification Body: {cap.certification_body or 'Not applicable'}
+Certification Number: {cap.certification_number or 'Not applicable'}
+Date Obtained: {cap.date_obtained or 'Not specified'}
+Expiry Date: {cap.expiry_date or 'No expiry'}
+Scope: {cap.scope or 'Not specified'}
+"""
+                workspace_manager.add_document_to_workspace(
+                    workspace_id=workspace_id,
+                    content=content,
+                    source_type=DocumentSource.ENTITY_DATA,
+                    metadata={
+                        "category": "capability",
+                        "capability_name": cap.capability_name
+                    },
+                    doc_id=f"capability_{i}"
+                )
+
+            logger.info(f"Successfully populated workspace {workspace_id} with {structured_data.summary_stats}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to populate workspace: {e}", exc_info=True)
+            return False

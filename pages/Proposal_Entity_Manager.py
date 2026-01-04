@@ -36,6 +36,7 @@ from cortex_engine.kb_navigator import KBNavigator
 from cortex_engine.tender_data_extractor import TenderDataExtractor
 from cortex_engine.adaptive_model_manager import AdaptiveModelManager
 from cortex_engine.config_manager import ConfigManager
+from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.ui_theme import apply_theme, section_header
 from cortex_engine.utils import (
     convert_windows_to_wsl_path,
@@ -127,7 +128,7 @@ def render_entity_list(entity_manager: EntityManager):
 
             with col2:
                 st.metric("Source Documents", entity.source_document_count)
-                st.metric("Folders", len(entity.source_folders))
+                st.metric("Collections", len(entity.source_folders))
 
             # Data completeness
             if entity.data_completeness:
@@ -167,6 +168,25 @@ def render_create_entity_form(entity_manager: EntityManager, kb_navigator: KBNav
     """Render form to create new entity."""
     section_header("➕", "Create New Entity", "Set up a new organizational profile")
 
+    # Get config
+    config_manager = ConfigManager()
+    config = config_manager.get_config()
+    db_path = config.get('ai_database_path')
+    wsl_db_path = convert_windows_to_wsl_path(db_path)
+
+    # Initialize Working Collection Manager (same as Collection Management page)
+    try:
+        collection_mgr = WorkingCollectionManager()
+        working_collections = list(collection_mgr.collections.values())
+    except Exception as e:
+        st.error(f"Failed to load working collections: {e}")
+        logger.error(f"Working collection loading failed: {e}", exc_info=True)
+        return
+
+    if not working_collections:
+        st.warning("No working collections found. Please create collections in the Collection Management page first.")
+        return
+
     with st.form("create_entity_form"):
         # Basic info
         col1, col2 = st.columns(2)
@@ -194,58 +214,57 @@ def render_create_entity_form(entity_manager: EntityManager, kb_navigator: KBNav
         st.divider()
 
         # Source selection
-        st.markdown("### 📁 Select Source Documents")
-        st.caption("Choose KB folders containing data for this entity")
+        st.markdown("### 📚 Select Source Collections")
+        st.caption("Choose working collections containing data for this entity")
 
-        # Folder search
-        search_query = st.text_input(
-            "Search folders",
-            placeholder="e.g., longboardfella",
-            help="Search for folders by name"
-        )
+        # Display working collections (fetched outside form)
+        st.markdown("**📦 Available Collections:**")
 
-        if search_query:
-            # Get folder suggestions
-            suggestions = kb_navigator.get_folder_suggestions(search_query, limit=20)
+        # Initialize selected collections in session state
+        if 'selected_collections' not in st.session_state:
+            st.session_state.selected_collections = []
 
-            if suggestions:
-                st.markdown("**Matching Folders:**")
+        # Sort collections by name
+        sorted_collections = sorted(working_collections, key=lambda c: c.get('name', '').lower())
 
-                for folder_path in suggestions:
-                    folder_node = kb_navigator.get_folder_node(folder_path)
-                    doc_count = folder_node.get_total_document_count() if folder_node else 0
+        for collection in sorted_collections:
+            col_check, col_name, col_count = st.columns([1, 6, 2])
 
-                    col_check, col_info = st.columns([1, 4])
+            collection_name = collection.get('name', '')
+            doc_ids = collection.get('doc_ids', [])
 
-                    with col_check:
-                        is_selected = folder_path in st.session_state.selected_folders
-                        if st.checkbox(
-                            f"{doc_count} docs",
-                            value=is_selected,
-                            key=f"folder_select_{folder_path}"
-                        ):
-                            if folder_path not in st.session_state.selected_folders:
-                                st.session_state.selected_folders.append(folder_path)
-                        else:
-                            if folder_path in st.session_state.selected_folders:
-                                st.session_state.selected_folders.remove(folder_path)
+            with col_check:
+                is_selected = collection_name in st.session_state.selected_collections
+                if st.checkbox(
+                    "",
+                    value=is_selected,
+                    key=f"coll_select_{collection_name}",
+                    label_visibility="collapsed"
+                ):
+                    if collection_name not in st.session_state.selected_collections:
+                        st.session_state.selected_collections.append(collection_name)
+                else:
+                    if collection_name in st.session_state.selected_collections:
+                        st.session_state.selected_collections.remove(collection_name)
 
-                    with col_info:
-                        st.caption(f"📁 `{folder_path}`")
-            else:
-                st.warning("No folders found matching your search")
+            with col_name:
+                st.markdown(f"📚 **{collection_name}**")
 
-        # Show selected folders
-        if st.session_state.selected_folders:
-            st.success(f"✅ Selected {len(st.session_state.selected_folders)} folder(s)")
+            with col_count:
+                st.caption(f"{len(doc_ids)} docs")
 
-            # Calculate total documents
+        # Show selected collections
+        if 'selected_collections' in st.session_state and st.session_state.selected_collections:
+            st.success(f"✅ Selected {len(st.session_state.selected_collections)} collection(s)")
+
+            # Calculate total documents from working collections
             total_docs = 0
-            for folder_path in st.session_state.selected_folders:
-                docs = kb_navigator.filter_by_folder(folder_path, include_subfolders=True)
-                total_docs += len(docs)
+            for coll_name in st.session_state.selected_collections:
+                coll_data = collection_mgr.collections.get(coll_name)
+                if coll_data:
+                    total_docs += len(coll_data.get('doc_ids', []))
 
-            st.info(f"📊 Total documents in selected folders: {total_docs}")
+            st.info(f"📊 Total documents in selected collections: {total_docs}")
 
         # Submit
         submitted = st.form_submit_button("💾 Create Entity", type="primary")
@@ -253,22 +272,28 @@ def render_create_entity_form(entity_manager: EntityManager, kb_navigator: KBNav
         if submitted:
             if not entity_name:
                 st.error("Please enter an entity name")
-            elif not st.session_state.selected_folders:
-                st.error("Please select at least one source folder")
+            elif 'selected_collections' not in st.session_state or not st.session_state.selected_collections:
+                st.error("Please select at least one source collection")
             else:
                 try:
-                    # Get document IDs from selected folders
+                    # Get all document IDs from selected working collections
                     all_doc_ids = []
-                    for folder_path in st.session_state.selected_folders:
-                        docs = kb_navigator.filter_by_folder(folder_path, include_subfolders=True)
-                        all_doc_ids.extend([doc.doc_id for doc in docs])
+                    for coll_name in st.session_state.selected_collections:
+                        coll_data = collection_mgr.collections.get(coll_name)
+                        if coll_data:
+                            doc_ids = coll_data.get('doc_ids', [])
+                            all_doc_ids.extend(doc_ids)
+                            logger.info(f"Added {len(doc_ids)} docs from collection '{coll_name}'")
 
-                    # Create entity
+                    # Remove duplicates while preserving order
+                    all_doc_ids = list(dict.fromkeys(all_doc_ids))
+
+                    # Create entity (store collection names in source_folders field)
                     entity = entity_manager.create_entity(
                         entity_name=entity_name,
                         entity_type=EntityType(entity_type),
                         description=description or None,
-                        source_folders=st.session_state.selected_folders,
+                        source_folders=st.session_state.selected_collections,  # Store collection names
                         source_document_ids=all_doc_ids
                     )
 
@@ -278,8 +303,8 @@ def render_create_entity_form(entity_manager: EntityManager, kb_navigator: KBNav
                         source_document_count=len(all_doc_ids)
                     )
 
-                    st.success(f"✅ Created entity: {entity_name}")
-                    st.session_state.selected_folders = []
+                    st.success(f"✅ Created entity: {entity_name} with {len(all_doc_ids)} documents")
+                    st.session_state.selected_collections = []
                     st.session_state.show_create_form = False
                     st.rerun()
 
