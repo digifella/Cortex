@@ -294,9 +294,84 @@ else:
             if profile.contact.website:
                 st.write(f"**Website:** {profile.contact.website}")
 
-        # Edit Profile Button
-        if st.button("✏️ Edit Profile"):
-            st.info("Profile editing coming soon! For now, edit the YAML file directly.")
+        # Edit Profile
+        st.markdown("---")
+
+        if st.button("✏️ Edit Profile Information"):
+            st.session_state['editing_profile'] = not st.session_state.get('editing_profile', False)
+
+        if st.session_state.get('editing_profile', False):
+            with st.form("edit_profile_form"):
+                st.subheader("Edit Profile")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    edit_legal_name = st.text_input("Legal Name*", value=profile.company.legal_name)
+                    edit_trading_names = st.text_input(
+                        "Trading Names (comma-separated)",
+                        value=", ".join(profile.company.trading_names) if profile.company.trading_names else ""
+                    )
+                    edit_abn = st.text_input("ABN", value=profile.company.abn or "", max_chars=11)
+                    edit_acn = st.text_input("ACN", value=profile.company.acn or "", max_chars=9)
+
+                with col2:
+                    edit_phone = st.text_input("Phone*", value=profile.contact.phone)
+                    edit_email = st.text_input("Email*", value=profile.contact.email)
+                    edit_website = st.text_input("Website", value=profile.contact.website or "")
+
+                st.subheader("Registered Office Address")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    edit_street = st.text_input("Street*", value=profile.contact.registered_office.street)
+                    edit_city = st.text_input("City*", value=profile.contact.registered_office.city)
+                    edit_state = st.text_input("State*", value=profile.contact.registered_office.state)
+
+                with col2:
+                    edit_postcode = st.text_input("Postcode*", value=profile.contact.registered_office.postcode)
+                    edit_country = st.text_input("Country*", value=profile.contact.registered_office.country)
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    save = st.form_submit_button("💾 Save Changes", type="primary")
+                with col2:
+                    cancel = st.form_submit_button("❌ Cancel")
+
+                if cancel:
+                    st.session_state['editing_profile'] = False
+                    st.rerun()
+
+                if save:
+                    try:
+                        # Update profile
+                        profile.company.legal_name = edit_legal_name
+                        profile.company.trading_names = [t.strip() for t in edit_trading_names.split(",")] if edit_trading_names else []
+                        profile.company.abn = edit_abn if edit_abn else None
+                        profile.company.acn = edit_acn if edit_acn else None
+
+                        profile.contact.phone = edit_phone
+                        profile.contact.email = edit_email
+                        profile.contact.website = edit_website if edit_website else None
+
+                        profile.contact.registered_office.street = edit_street
+                        profile.contact.registered_office.city = edit_city
+                        profile.contact.registered_office.state = edit_state
+                        profile.contact.registered_office.postcode = edit_postcode
+                        profile.contact.registered_office.country = edit_country
+
+                        # Save to file
+                        manager.update_entity_metadata(selected_entity_id, profile)
+
+                        st.success("✅ Profile updated successfully!")
+                        st.session_state['editing_profile'] = False
+                        st.rerun()
+
+                    except Exception as e:
+                        st.error(f"Error updating profile: {e}")
+                        logger.error(f"Failed to update profile: {e}", exc_info=True)
 
     # ========================================
     # TAB: TEAM
@@ -330,10 +405,84 @@ else:
                         st.write("**Bio:**")
                         st.write(member.bio.brief)
 
-                    if st.button(f"🗑️ Remove {member.full_name}", key=f"remove_team_{member.person_id}"):
-                        manager.remove_team_member(selected_entity_id, member.person_id)
-                        st.success(f"Removed {member.full_name}")
-                        st.rerun()
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        if st.button(f"✏️ Edit", key=f"edit_team_{member.person_id}"):
+                            st.session_state[f'editing_team_{member.person_id}'] = True
+                            st.rerun()
+
+                    with col2:
+                        if st.button(f"🗑️ Remove", key=f"remove_team_{member.person_id}"):
+                            manager.remove_team_member(selected_entity_id, member.person_id)
+                            st.success(f"Removed {member.full_name}")
+                            st.rerun()
+
+                # Edit form for this team member
+                if st.session_state.get(f'editing_team_{member.person_id}', False):
+                    with st.form(f"edit_team_form_{member.person_id}"):
+                        st.subheader(f"Edit {member.full_name}")
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            edit_full_name = st.text_input("Full Name*", value=member.full_name)
+                            edit_preferred_name = st.text_input("Preferred Name", value=member.preferred_name or "")
+                            edit_role = st.text_input("Role*", value=member.role)
+
+                        with col2:
+                            edit_email = st.text_input("Email", value=member.email or "")
+                            edit_phone = st.text_input("Phone", value=member.phone or "")
+
+                        edit_brief_bio = st.text_area(
+                            "Brief Bio",
+                            value=member.bio.brief if member.bio else "",
+                            help="2-3 sentence summary"
+                        )
+
+                        edit_full_bio = st.text_area(
+                            "Full Bio",
+                            value=member.bio.full if member.bio else "",
+                            height=150,
+                            help="Detailed biography for proposals"
+                        )
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            save_team = st.form_submit_button("💾 Save Changes", type="primary")
+                        with col2:
+                            cancel_team = st.form_submit_button("❌ Cancel")
+
+                        if cancel_team:
+                            st.session_state[f'editing_team_{member.person_id}'] = False
+                            st.rerun()
+
+                        if save_team:
+                            try:
+                                # Update team member
+                                member.full_name = edit_full_name
+                                member.preferred_name = edit_preferred_name if edit_preferred_name else None
+                                member.role = edit_role
+                                member.email = edit_email if edit_email else None
+                                member.phone = edit_phone if edit_phone else None
+
+                                if edit_brief_bio or edit_full_bio:
+                                    member.bio = Bio(
+                                        brief=edit_brief_bio if edit_brief_bio else edit_full_bio[:200],
+                                        full=edit_full_bio if edit_full_bio else edit_brief_bio
+                                    )
+
+                                # Save to file
+                                manager.update_team_member(selected_entity_id, member)
+
+                                st.success(f"✅ Updated {member.full_name}")
+                                st.session_state[f'editing_team_{member.person_id}'] = False
+                                st.rerun()
+
+                            except Exception as e:
+                                st.error(f"Error updating team member: {e}")
+                                logger.error(f"Failed to update team member: {e}", exc_info=True)
         else:
             st.info("No team members yet. Add your first team member!")
 
@@ -411,10 +560,106 @@ else:
                         for o in project.outcomes:
                             st.write(f"- {o.metric}: {o.improvement}")
 
-                    if st.button(f"🗑️ Remove Project", key=f"remove_project_{project.project_id}"):
-                        manager.remove_project(selected_entity_id, project.project_id)
-                        st.success(f"Removed {project.project_name}")
-                        st.rerun()
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        if st.button(f"✏️ Edit", key=f"edit_project_{project.project_id}"):
+                            st.session_state[f'editing_project_{project.project_id}'] = True
+                            st.rerun()
+
+                    with col2:
+                        if st.button(f"🗑️ Remove", key=f"remove_project_{project.project_id}"):
+                            manager.remove_project(selected_entity_id, project.project_id)
+                            st.success(f"Removed {project.project_name}")
+                            st.rerun()
+
+                # Edit form for this project
+                if st.session_state.get(f'editing_project_{project.project_id}', False):
+                    with st.form(f"edit_project_form_{project.project_id}"):
+                        st.subheader(f"Edit {project.project_name}")
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            edit_project_name = st.text_input("Project Name*", value=project.project_name)
+                            edit_client = st.text_input("Client*", value=project.client)
+                            edit_sector = st.text_input("Sector", value=project.sector or "")
+
+                        with col2:
+                            edit_start_date = st.date_input("Start Date*", value=project.timeline.start_date)
+                            edit_end_date = st.date_input("End Date", value=project.timeline.end_date if project.timeline.end_date else None)
+                            edit_contract_value = st.number_input(
+                                "Contract Value*",
+                                min_value=0.0,
+                                value=float(project.financials.contract_value),
+                                step=1000.0
+                            )
+
+                        edit_brief_desc = st.text_area(
+                            "Brief Description*",
+                            value=project.description.brief,
+                            help="2-3 sentence summary"
+                        )
+
+                        edit_full_desc = st.text_area(
+                            "Full Description",
+                            value=project.description.full if project.description.full else "",
+                            height=150,
+                            help="Detailed project description"
+                        )
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            save_project = st.form_submit_button("💾 Save Changes", type="primary")
+                        with col2:
+                            cancel_project = st.form_submit_button("❌ Cancel")
+
+                        if cancel_project:
+                            st.session_state[f'editing_project_{project.project_id}'] = False
+                            st.rerun()
+
+                        if save_project:
+                            try:
+                                # Update project
+                                project.project_name = edit_project_name
+                                project.client = edit_client
+                                project.sector = edit_sector if edit_sector else None
+
+                                # Calculate duration
+                                if edit_end_date:
+                                    duration_months = ((edit_end_date.year - edit_start_date.year) * 12 +
+                                                     (edit_end_date.month - edit_start_date.month))
+                                else:
+                                    duration_months = None
+
+                                project.timeline = Timeline(
+                                    start_date=edit_start_date,
+                                    end_date=edit_end_date,
+                                    duration_months=duration_months
+                                )
+
+                                project.financials = Financials(
+                                    contract_value=edit_contract_value,
+                                    currency=project.financials.currency,
+                                    payment_structure=project.financials.payment_structure
+                                )
+
+                                project.description = ProjectDescription(
+                                    brief=edit_brief_desc,
+                                    full=edit_full_desc if edit_full_desc else edit_brief_desc
+                                )
+
+                                # Save to file
+                                manager.update_project(selected_entity_id, project)
+
+                                st.success(f"✅ Updated {project.project_name}")
+                                st.session_state[f'editing_project_{project.project_id}'] = False
+                                st.rerun()
+
+                            except Exception as e:
+                                st.error(f"Error updating project: {e}")
+                                logger.error(f"Failed to update project: {e}", exc_info=True)
         else:
             st.info("No projects yet. Add your first project!")
 
@@ -455,10 +700,98 @@ else:
                     if ref.quote:
                         st.info(f"💬 *\"{ref.quote}\"*")
 
-                    if st.button(f"🗑️ Remove Reference", key=f"remove_ref_{ref.reference_id}"):
-                        manager.remove_reference(selected_entity_id, ref.reference_id)
-                        st.success(f"Removed {ref.contact_name}")
-                        st.rerun()
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        if st.button(f"✏️ Edit", key=f"edit_ref_{ref.reference_id}"):
+                            st.session_state[f'editing_ref_{ref.reference_id}'] = True
+                            st.rerun()
+
+                    with col2:
+                        if st.button(f"🗑️ Remove", key=f"remove_ref_{ref.reference_id}"):
+                            manager.remove_reference(selected_entity_id, ref.reference_id)
+                            st.success(f"Removed {ref.contact_name}")
+                            st.rerun()
+
+                # Edit form for this reference
+                if st.session_state.get(f'editing_ref_{ref.reference_id}', False):
+                    with st.form(f"edit_ref_form_{ref.reference_id}"):
+                        st.subheader(f"Edit {ref.contact_name}")
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            edit_contact_name = st.text_input("Contact Name*", value=ref.contact_name)
+                            edit_title = st.text_input("Title*", value=ref.title)
+                            edit_organization = st.text_input("Organization*", value=ref.organization)
+
+                        with col2:
+                            edit_email = st.text_input("Email", value=ref.email or "")
+                            edit_phone = st.text_input("Phone", value=ref.phone or "")
+                            edit_available = st.checkbox("Available for contact", value=ref.availability.available)
+
+                        edit_relationship_role = st.text_input(
+                            "Relationship Role*",
+                            value=ref.relationship.role,
+                            help="e.g., 'Project Sponsor', 'Client Manager'"
+                        )
+
+                        edit_working_relationship = st.text_area(
+                            "Working Relationship",
+                            value=ref.context.working_relationship if ref.context else "",
+                            help="Describe how you worked together"
+                        )
+
+                        edit_quote = st.text_area(
+                            "Quote/Testimonial",
+                            value=ref.quote or "",
+                            help="Optional testimonial from this reference"
+                        )
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            save_ref = st.form_submit_button("💾 Save Changes", type="primary")
+                        with col2:
+                            cancel_ref = st.form_submit_button("❌ Cancel")
+
+                        if cancel_ref:
+                            st.session_state[f'editing_ref_{ref.reference_id}'] = False
+                            st.rerun()
+
+                        if save_ref:
+                            try:
+                                # Update reference
+                                ref.contact_name = edit_contact_name
+                                ref.title = edit_title
+                                ref.organization = edit_organization
+                                ref.email = edit_email if edit_email else None
+                                ref.phone = edit_phone if edit_phone else None
+                                ref.quote = edit_quote if edit_quote else None
+
+                                ref.relationship.role = edit_relationship_role
+
+                                ref.availability = ReferenceAvailability(
+                                    available=edit_available,
+                                    preferred_contact=ref.availability.preferred_contact
+                                )
+
+                                if edit_working_relationship:
+                                    ref.context = ReferenceContext(
+                                        working_relationship=edit_working_relationship,
+                                        can_speak_to=ref.context.can_speak_to if ref.context else []
+                                    )
+
+                                # Save to file
+                                manager.update_reference(selected_entity_id, ref)
+
+                                st.success(f"✅ Updated {ref.contact_name}")
+                                st.session_state[f'editing_ref_{ref.reference_id}'] = False
+                                st.rerun()
+
+                            except Exception as e:
+                                st.error(f"Error updating reference: {e}")
+                                logger.error(f"Failed to update reference: {e}", exc_info=True)
         else:
             st.info("No references yet. Add your first reference!")
 
@@ -504,10 +837,86 @@ else:
 
                     st.write(f"**Description:** {policy.coverage.description}")
 
-                    if st.button(f"🗑️ Remove Policy", key=f"remove_insurance_{policy.policy_id}"):
-                        manager.remove_insurance(selected_entity_id, policy.policy_id)
-                        st.success(f"Removed policy")
-                        st.rerun()
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        if st.button(f"✏️ Edit", key=f"edit_insurance_{policy.policy_id}"):
+                            st.session_state[f'editing_insurance_{policy.policy_id}'] = True
+                            st.rerun()
+
+                    with col2:
+                        if st.button(f"🗑️ Remove", key=f"remove_insurance_{policy.policy_id}"):
+                            manager.remove_insurance(selected_entity_id, policy.policy_id)
+                            st.success(f"Removed policy")
+                            st.rerun()
+
+                # Edit form for this insurance policy
+                if st.session_state.get(f'editing_insurance_{policy.policy_id}', False):
+                    with st.form(f"edit_insurance_form_{policy.policy_id}"):
+                        st.subheader(f"Edit {policy.policy_type.value.replace('_', ' ').title()}")
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            edit_insurer = st.text_input("Insurer*", value=policy.insurer)
+                            edit_policy_number = st.text_input("Policy Number*", value=policy.policy_number)
+                            edit_coverage_amount = st.number_input(
+                                "Coverage Amount*",
+                                min_value=0.0,
+                                value=float(policy.coverage.amount),
+                                step=100000.0
+                            )
+
+                        with col2:
+                            edit_effective_date = st.date_input("Effective Date*", value=policy.dates.effective_date)
+                            edit_expiry_date = st.date_input("Expiry Date*", value=policy.dates.expiry_date)
+
+                        edit_description = st.text_area(
+                            "Coverage Description",
+                            value=policy.coverage.description,
+                            help="Describe what this policy covers"
+                        )
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            save_insurance = st.form_submit_button("💾 Save Changes", type="primary")
+                        with col2:
+                            cancel_insurance = st.form_submit_button("❌ Cancel")
+
+                        if cancel_insurance:
+                            st.session_state[f'editing_insurance_{policy.policy_id}'] = False
+                            st.rerun()
+
+                        if save_insurance:
+                            try:
+                                # Update insurance policy
+                                policy.insurer = edit_insurer
+                                policy.policy_number = edit_policy_number
+
+                                policy.coverage = Coverage(
+                                    amount=edit_coverage_amount,
+                                    currency=policy.coverage.currency,
+                                    formatted=f"${edit_coverage_amount:,.0f}",
+                                    description=edit_description
+                                )
+
+                                policy.dates = InsuranceDates(
+                                    effective_date=edit_effective_date,
+                                    expiry_date=edit_expiry_date,
+                                    renewal_status=policy.dates.renewal_status
+                                )
+
+                                # Save to file
+                                manager.update_insurance(selected_entity_id, policy)
+
+                                st.success(f"✅ Updated insurance policy")
+                                st.session_state[f'editing_insurance_{policy.policy_id}'] = False
+                                st.rerun()
+
+                            except Exception as e:
+                                st.error(f"Error updating insurance: {e}")
+                                logger.error(f"Failed to update insurance: {e}", exc_info=True)
         else:
             st.info("No insurance policies yet. Add your first policy!")
 
@@ -552,10 +961,95 @@ else:
 
                     st.write(f"**Description:** {cap.description.brief}")
 
-                    if st.button(f"🗑️ Remove Capability", key=f"remove_cap_{cap.capability_id}"):
-                        manager.remove_capability(selected_entity_id, cap.capability_id)
-                        st.success(f"Removed capability")
-                        st.rerun()
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        if st.button(f"✏️ Edit", key=f"edit_cap_{cap.capability_id}"):
+                            st.session_state[f'editing_cap_{cap.capability_id}'] = True
+                            st.rerun()
+
+                    with col2:
+                        if st.button(f"🗑️ Remove", key=f"remove_cap_{cap.capability_id}"):
+                            manager.remove_capability(selected_entity_id, cap.capability_id)
+                            st.success(f"Removed capability")
+                            st.rerun()
+
+                # Edit form for this capability
+                if st.session_state.get(f'editing_cap_{cap.capability_id}', False):
+                    with st.form(f"edit_cap_form_{cap.capability_id}"):
+                        st.subheader(f"Edit {cap.capability_name}")
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            edit_capability_name = st.text_input("Capability Name*", value=cap.capability_name)
+                            edit_certification_body = st.text_input(
+                                "Certification Body",
+                                value=cap.certification_body or ""
+                            )
+                            edit_certification_number = st.text_input(
+                                "Certification Number",
+                                value=cap.certification_number or ""
+                            )
+
+                        with col2:
+                            edit_obtained_date = st.date_input("Date Obtained*", value=cap.dates.obtained)
+                            edit_expiry_date = st.date_input(
+                                "Expiry Date",
+                                value=cap.dates.expiry if cap.dates.expiry else None
+                            )
+
+                        edit_brief_desc = st.text_area(
+                            "Brief Description*",
+                            value=cap.description.brief,
+                            help="Short description of this capability"
+                        )
+
+                        edit_full_desc = st.text_area(
+                            "Full Description",
+                            value=cap.description.full if cap.description.full else "",
+                            height=100,
+                            help="Detailed description"
+                        )
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            save_cap = st.form_submit_button("💾 Save Changes", type="primary")
+                        with col2:
+                            cancel_cap = st.form_submit_button("❌ Cancel")
+
+                        if cancel_cap:
+                            st.session_state[f'editing_cap_{cap.capability_id}'] = False
+                            st.rerun()
+
+                        if save_cap:
+                            try:
+                                # Update capability
+                                cap.capability_name = edit_capability_name
+                                cap.certification_body = edit_certification_body if edit_certification_body else None
+                                cap.certification_number = edit_certification_number if edit_certification_number else None
+
+                                cap.description = CapabilityDescription(
+                                    brief=edit_brief_desc,
+                                    full=edit_full_desc if edit_full_desc else edit_brief_desc
+                                )
+
+                                cap.dates = CapabilityDates(
+                                    obtained=edit_obtained_date,
+                                    expiry=edit_expiry_date if edit_expiry_date else None
+                                )
+
+                                # Save to file
+                                manager.update_capability(selected_entity_id, cap)
+
+                                st.success(f"✅ Updated capability")
+                                st.session_state[f'editing_cap_{cap.capability_id}'] = False
+                                st.rerun()
+
+                            except Exception as e:
+                                st.error(f"Error updating capability: {e}")
+                                logger.error(f"Failed to update capability: {e}", exc_info=True)
         else:
             st.info("No capabilities yet. Add your first capability!")
 

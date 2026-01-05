@@ -717,3 +717,147 @@ class EntityProfileManager:
                 section_content.append(line)
 
         return '\n'.join(section_content).strip()
+
+    # ========================================
+    # UPDATE OPERATIONS
+    # ========================================
+
+    def update_team_member(self, entity_id: str, team_member: TeamMember) -> bool:
+        """
+        Update existing team member.
+
+        Args:
+            entity_id: Entity ID
+            team_member: Updated TeamMember object
+
+        Returns:
+            True if updated successfully
+        """
+        team_path = self.profiles_dir / entity_id / "team" / f"{team_member.person_id}.yaml"
+
+        if not team_path.exists():
+            raise ValueError(f"Team member not found: {team_member.person_id}")
+
+        # Save updated team member file
+        data = team_member.model_dump(mode='json')
+
+        with open(team_path, 'w') as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+        logger.info(f"Updated team member {team_member.person_id} in {entity_id}")
+        return True
+
+    def update_project(self, entity_id: str, project: Project) -> bool:
+        """
+        Update existing project.
+
+        Args:
+            entity_id: Entity ID
+            project: Updated Project object
+
+        Returns:
+            True if updated successfully
+        """
+        project_path = self.profiles_dir / entity_id / "projects" / f"{project.project_id}.yaml"
+
+        if not project_path.exists():
+            raise ValueError(f"Project not found: {project.project_id}")
+
+        # Save updated project file
+        data = project.model_dump(mode='json')
+
+        with open(project_path, 'w') as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+        logger.info(f"Updated project {project.project_id} in {entity_id}")
+        return True
+
+    def update_reference(self, entity_id: str, reference: Reference) -> bool:
+        """
+        Update existing reference.
+
+        Args:
+            entity_id: Entity ID
+            reference: Updated Reference object
+
+        Returns:
+            True if updated successfully
+        """
+        ref_path = self.profiles_dir / entity_id / "references" / f"{reference.reference_id}.yaml"
+
+        if not ref_path.exists():
+            raise ValueError(f"Reference not found: {reference.reference_id}")
+
+        # Save updated reference file
+        data = reference.model_dump(mode='json')
+
+        with open(ref_path, 'w') as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+        logger.info(f"Updated reference {reference.reference_id} in {entity_id}")
+        return True
+
+    def update_insurance(self, entity_id: str, insurance: Insurance) -> bool:
+        """
+        Update existing insurance policy.
+
+        Args:
+            entity_id: Entity ID
+            insurance: Updated Insurance object
+
+        Returns:
+            True if updated successfully
+        """
+        insurance_path = self.profiles_dir / entity_id / "insurance" / f"{insurance.policy_id}.yaml"
+
+        if not insurance_path.exists():
+            raise ValueError(f"Insurance policy not found: {insurance.policy_id}")
+
+        # Save updated insurance file
+        data = insurance.model_dump(mode='json')
+
+        with open(insurance_path, 'w') as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+        logger.info(f"Updated insurance {insurance.policy_id} in {entity_id}")
+        return True
+
+    def update_capability(self, entity_id: str, capability: Capability) -> bool:
+        """
+        Update existing capability.
+
+        Args:
+            entity_id: Entity ID
+            capability: Updated Capability object
+
+        Returns:
+            True if updated successfully
+        """
+        cap_path = self.profiles_dir / entity_id / "capabilities" / f"{capability.capability_id}.yaml"
+
+        if not cap_path.exists():
+            raise ValueError(f"Capability not found: {capability.capability_id}")
+
+        # Save updated capability file
+        data = capability.model_dump(mode='json')
+
+        with open(cap_path, 'w') as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+        logger.info(f"Updated capability {capability.capability_id} in {entity_id}")
+        return True
+
+    def update_entity_metadata(self, entity_id: str, profile: EntityProfile) -> bool:
+        """
+        Update entity profile metadata (company info, contact info).
+
+        Args:
+            entity_id: Entity ID
+            profile: Updated EntityProfile object
+
+        Returns:
+            True if updated successfully
+        """
+        self._save_profile(profile)
+        logger.info(f"Updated entity metadata for {entity_id}")
+        return True
