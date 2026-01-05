@@ -140,17 +140,37 @@ if selected_entity_id is None:
     section_header("➕", "Create New Entity Profile", "Set up a new organization profile")
 
     with st.form("create_entity_form"):
+        # Helper text
+        st.info("""
+        💡 **Quick Guide:**
+        - **Entity ID**: URL-safe identifier (e.g., `longboardfella_consulting`) - lowercase, underscores only
+        - **Entity Name**: Display name (e.g., `Longboardfella Consulting Pty Ltd`) - can have spaces, capitals
+        """)
+
         col1, col2 = st.columns(2)
 
         with col1:
-            entity_id = st.text_input(
-                "Entity ID*",
-                help="URL-safe identifier (lowercase, underscores). E.g., 'longboardfella_consulting'"
-            )
             entity_name = st.text_input(
                 "Entity Name*",
-                help="Display name. E.g., 'Longboardfella Consulting Pty Ltd'"
+                placeholder="Longboardfella Consulting Pty Ltd",
+                help="Display name - can include spaces, capitals, special characters"
             )
+
+            # Auto-suggest Entity ID based on Entity Name
+            suggested_id = ""
+            if entity_name:
+                # Convert to URL-safe ID: lowercase, replace spaces with underscores, remove special chars
+                suggested_id = entity_name.lower()
+                suggested_id = suggested_id.replace(' ', '_')
+                suggested_id = ''.join(c for c in suggested_id if c.isalnum() or c in ['_', '-'])
+
+            entity_id = st.text_input(
+                "Entity ID*",
+                value=suggested_id,
+                placeholder="longboardfella_consulting",
+                help="Auto-generated from Entity Name. Must be lowercase, underscores/hyphens only."
+            )
+
             entity_type = st.selectbox(
                 "Entity Type*",
                 options=[t.value for t in EntityType]
@@ -595,5 +615,4 @@ else:
 # FOOTER
 # ============================================
 
-st.markdown("---")
-render_version_footer("Entity Profile Manager", "v1.0.0", "2026-01-05")
+render_version_footer()
