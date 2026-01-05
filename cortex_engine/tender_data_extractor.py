@@ -222,13 +222,27 @@ Return JSON matching this structure.
 
             # Parse JSON response
             org_data = json.loads(response.text)
+
+            # Log what was extracted for debugging
+            logger.warning(f"🔍 DEBUG: LLM returned organization data: {org_data}")
+            logger.warning(f"🔍 DEBUG: Context length: {len(combined_context)} chars, Sources: {source_docs}")
+
+            # Add metadata
             org_data["source_documents"] = list(source_docs)
             org_data["last_updated"] = datetime.now()
+
+            # Validate and create OrganizationProfile
+            # If LLM returned None/null for legal_name, use a placeholder
+            if not org_data.get("legal_name"):
+                logger.warning("No legal_name found in extraction, using placeholder")
+                org_data["legal_name"] = "Unknown Organization"
 
             return OrganizationProfile(**org_data)
 
         except Exception as e:
             logger.error(f"Organization profile extraction failed: {e}")
+            logger.error(f"Available context length: {len(combined_context) if 'combined_context' in locals() else 0} characters")
+            logger.error(f"Source documents found: {source_docs if 'source_docs' in locals() else []}")
             return None
 
     async def _extract_insurances(self) -> List[Insurance]:
@@ -571,19 +585,48 @@ Return JSON array: [{"capability_name": "...", "description": "...", ...}, ...]
                 # Get query embedding using local SentenceTransformer
                 query_embedding = embed_query(query)
 
-                # Build where clause for document filtering
-                where_clause = None
-                if self.document_filter:
-                    # Filter to specific documents
-                    where_clause = {"id": {"$in": self.document_filter}}
-                    logger.debug(f"Filtering to {len(self.document_filter)} documents")
+                # Handle document filtering differently based on whether specific docs are requested
+                if self.document_filter and len(self.document_filter) <= 20:
+                    # Small set of documents - retrieve ALL their content instead of semantic search
+                    # This ensures we only use the specified documents, not random similar ones
+                    logger.warning(f"🔍 DEBUG: Retrieving ALL content from {len(self.document_filter)} specific documents (bypassing semantic search)")
 
-                # Query ChromaDB
-                results = self.vector_index.query(
-                    query_embeddings=[query_embedding],
-                    n_results=top_k,
-                    where=where_clause if where_clause else None
-                )
+                    try:
+                        # Get all chunks from the specified documents
+                        get_results = self.vector_index.get(
+                            ids=self.document_filter,
+                            include=['documents', 'metadatas']
+                        )
+
+                        # Convert to query result format
+                        if get_results and 'documents' in get_results and get_results['documents']:
+                            results = {
+                                'documents': [get_results['documents']],  # Wrap in list for compatibility
+                                'metadatas': [get_results['metadatas']] if 'metadatas' in get_results else None,
+                                'distances': [[0.0] * len(get_results['documents'])]  # All distance 0 (exact match)
+                            }
+                            logger.warning(f"📊 DEBUG: Retrieved {len(get_results['documents'])} chunks from specified documents")
+                        else:
+                            logger.warning(f"⚠️ DEBUG: No chunks found for specified document IDs")
+                            results = {'documents': [[]], 'metadatas': None, 'distances': None}
+                    except Exception as e:
+                        logger.error(f"Failed to get specified documents: {e}")
+                        results = {'documents': [[]], 'metadatas': None, 'distances': None}
+                else:
+                    # Large document set or no filter - use semantic search
+                    if self.document_filter:
+                        logger.warning(f"🔍 DEBUG: Document filter requested ({len(self.document_filter)} docs) - too many for direct retrieval, using semantic search on all docs")
+                    else:
+                        logger.warning(f"🔍 DEBUG: No document filter - using semantic search on all documents")
+
+                    results = self.vector_index.query(
+                        query_embeddings=[query_embedding],
+                        n_results=top_k,
+                        where=None
+                    )
+
+                    num_results = len(results.get('documents', [[]])[0]) if results and 'documents' in results else 0
+                    logger.warning(f"📊 DEBUG: Semantic search returned {num_results} results")
 
                 # Extract content and sources
                 content_parts = []
@@ -845,9 +888,9 @@ Description: {project.description}
 Start Date: {project.start_date or 'Not specified'}
 End Date: {project.end_date or 'Not specified'}
 Status: {'Ongoing' if project.is_ongoing else 'Completed'}
-Value: ${project.project_value or 'Not specified'}
-Deliverables: {project.deliverables or 'Not specified'}
-Outcomes: {project.outcomes or 'Not specified'}
+Value: ${project.value or 'Not specified'}
+Deliverables: {', '.join(project.deliverables) if project.deliverables else 'Not specified'}
+Outcomes: {', '.join(project.outcomes) if project.outcomes else 'Not specified'}
 """
                 workspace_manager.add_document_to_workspace(
                     workspace_id=workspace_id,

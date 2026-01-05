@@ -427,7 +427,10 @@ def show_collection_migration_healthcheck():
     """Warn if a project-root collections file exists and offer migration to external DB path."""
     try:
         project_collections = (Path(__file__).parent.parent / "working_collections.json")
-        mgr = WorkingCollectionManager()
+        # Cache the manager instance to avoid repeated file I/O
+        if 'collection_mgr_cache' not in st.session_state:
+            st.session_state.collection_mgr_cache = WorkingCollectionManager()
+        mgr = st.session_state.collection_mgr_cache
         external_path = Path(mgr.collections_file)
         # If a project-root collections file exists and is different from external path
         if project_collections.exists() and project_collections.resolve() != external_path.resolve():
@@ -1945,7 +1948,10 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
 
 def render_model_status_bar():
     """Render persistent model configuration status bar at top of page"""
-    model_info = get_model_info_summary()
+    # Use cached model info to avoid repeated system checks
+    if 'model_info_cache' not in st.session_state:
+        st.session_state.model_info_cache = get_model_info_summary()
+    model_info = st.session_state.model_info_cache
     gpu_info = model_info.get('gpu_info', {})
 
     # Custom styled status bar
@@ -2029,8 +2035,14 @@ def render_sidebar_model_config():
     st.sidebar.markdown("---")
     st.sidebar.markdown("## 🤖 Model Configuration")
 
-    model_info = get_model_info_summary()
-    available_models = get_available_embedding_models()
+    # Cache model info to avoid repeated system checks on every rerun
+    if 'model_info_cache' not in st.session_state:
+        st.session_state.model_info_cache = get_model_info_summary()
+    if 'available_models_cache' not in st.session_state:
+        st.session_state.available_models_cache = get_available_embedding_models()
+
+    model_info = st.session_state.model_info_cache
+    available_models = st.session_state.available_models_cache
     gpu_info = model_info.get('gpu_info', {})
 
     # GPU Status Section
@@ -2135,6 +2147,16 @@ def render_sidebar_model_config():
     st.sidebar.caption(f"👁️ **Vision**: {model_info['vlm_model']}")
     st.sidebar.caption("Managed via Ollama")
 
+    # Add refresh button for cache
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🔄 Refresh Model Info", use_container_width=True, help="Refresh GPU and model status if you've made changes"):
+        # Clear all model-related caches
+        if 'model_info_cache' in st.session_state:
+            del st.session_state.model_info_cache
+        if 'available_models_cache' in st.session_state:
+            del st.session_state.available_models_cache
+        st.rerun()
+
 
 def render_config_and_scan_ui():
     # Render model status bar at top
@@ -2176,7 +2198,11 @@ def render_config_and_scan_ui():
         current_scan_path_converted = convert_source_path_to_docker_mount(current_display_path)
         current_scan_path_wsl = Path(current_scan_path_converted)
         try:
-            subdirs = sorted([d.name for d in os.scandir(current_scan_path_wsl) if d.is_dir()], key=str.lower)
+            # Cache directory scan results to avoid repeated I/O
+            cache_key = f"dir_scan_{current_display_path}"
+            if cache_key not in st.session_state:
+                st.session_state[cache_key] = sorted([d.name for d in os.scandir(current_scan_path_wsl) if d.is_dir()], key=str.lower)
+            subdirs = st.session_state[cache_key]
             c1, c2, c3 = st.columns(3)
             if c1.button("Select All Visible", use_container_width=True):
                 for d in subdirs: st.session_state.dir_selections[str(Path(current_display_path) / d)] = True
@@ -2186,6 +2212,10 @@ def render_config_and_scan_ui():
                 st.rerun()
             if current_scan_path_wsl != Path(root_wsl_path):
                 if c3.button("⬆️ Go Up One Level", use_container_width=True):
+                    # Clear cache for old directory before navigating
+                    old_cache_key = f"dir_scan_{current_display_path}"
+                    if old_cache_key in st.session_state:
+                        del st.session_state[old_cache_key]
                     st.session_state.directory_scan_path = str(Path(current_display_path).parent)
                     st.rerun()
             st.markdown("---")
@@ -2199,6 +2229,10 @@ def render_config_and_scan_ui():
                         with st.container(border=True):
                             # Top row: Directory name button (left-aligned)
                             if st.button(f"📁 {dirname}", key=f"nav_{full_display_path}", help=f"Navigate into {dirname}", use_container_width=True):
+                                # Clear cache for old directory before navigating
+                                old_cache_key = f"dir_scan_{current_display_path}"
+                                if old_cache_key in st.session_state:
+                                    del st.session_state[old_cache_key]
                                 st.session_state.directory_scan_path = full_display_path
                                 st.rerun()
                             
@@ -2224,10 +2258,12 @@ def render_config_and_scan_ui():
     
     st.markdown("---")
     st.markdown("**5. Collection Assignment**")
-    
-    # Collection assignment section
+
+    # Collection assignment section - use cached manager
     try:
-        collection_mgr = WorkingCollectionManager()
+        if 'collection_mgr_cache' not in st.session_state:
+            st.session_state.collection_mgr_cache = WorkingCollectionManager()
+        collection_mgr = st.session_state.collection_mgr_cache
         existing_collections = collection_mgr.get_collection_names()
     except Exception as e:
         existing_collections = []

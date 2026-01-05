@@ -49,6 +49,10 @@ from cortex_engine.utils import (
     convert_windows_to_wsl_path,
     get_logger
 )
+# Phase 2: Field Matching imports
+from cortex_engine.proposals.tender_field_parser import TenderFieldParser
+from cortex_engine.proposals.field_matcher import FieldMatcher
+from cortex_engine.proposals.field_classifier import get_classifier
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 import networkx as nx
@@ -89,6 +93,25 @@ def initialize_session_state():
 
     if 'selected_entity' not in st.session_state:
         st.session_state.selected_entity = None
+
+    # Step 4: Field Matching state
+    if 'field_mappings' not in st.session_state:
+        st.session_state.field_mappings = None
+
+    if 'detected_fields' not in st.session_state:
+        st.session_state.detected_fields = None
+
+    if 'matching_in_progress' not in st.session_state:
+        st.session_state.matching_in_progress = False
+
+    if 'matching_log_messages' not in st.session_state:
+        st.session_state.matching_log_messages = []
+
+    if 'filter_status' not in st.session_state:
+        st.session_state.filter_status = "All"
+
+    if 'filter_confidence' not in st.session_state:
+        st.session_state.filter_confidence = 0.0
 
     if 'workflow_step' not in st.session_state:
         st.session_state.workflow_step = 1
@@ -754,23 +777,494 @@ def render_step4_match_fields():
     """Step 4: Match tender fields to extracted data."""
     section_header("🎯", "Step 4: Match Tender Fields", "Auto-match tender fields to extracted data")
 
-    st.info("🚧 **Phase 2 - Coming Soon**")
-    st.markdown("""
-    This step will:
-    1. Parse tender document to identify fillable fields
-    2. Classify field types (ABN, insurance, qualification, etc.)
-    3. Auto-match fields to extracted structured data
-    4. Show confidence scores (high/medium/low)
-    5. Let you review and approve matches
+    # Check if we have required data
+    if not st.session_state.current_workspace:
+        st.error("No workspace found. Please complete Steps 1-3 first.")
+        if st.button("⬅️ Back to Step 1"):
+            st.session_state.workflow_step = 1
+            st.rerun()
+        return
 
-    **Status:** Phase 1 (Extraction) complete ✅ | Phase 2 (Matching) in development 🚧
-    """)
+    if not st.session_state.tender_document:
+        st.error("No tender document found. Please upload a tender in Step 1.")
+        if st.button("⬅️ Back to Step 1"):
+            st.session_state.workflow_step = 1
+            st.rerun()
+        return
+
+    if not st.session_state.extracted_data:
+        st.error("No extracted data found. Please complete extraction in Step 3.")
+        if st.button("⬅️ Back to Step 3"):
+            st.session_state.workflow_step = 3
+            st.rerun()
+        return
+
+    # Load or initialize field mappings
+    workspace_id = st.session_state.current_workspace.workspace_id
+    workspace_manager = st.session_state.workspace_manager
+
+    if st.session_state.field_mappings is None:
+        # Try to load existing mappings
+        existing_mappings = workspace_manager.get_field_mappings(workspace_id)
+        if existing_mappings:
+            st.session_state.field_mappings = existing_mappings
+            st.success(f"Loaded {len(existing_mappings)} existing field mappings")
+
+    # Initial state: Show auto-match button
+    if st.session_state.field_mappings is None:
+        st.info("**Ready to analyze tender document and match fields**")
+
+        st.markdown("""
+        This step will:
+        1. 🔍 **Parse** the tender document to detect fillable fields
+        2. 🏷️ **Classify** field types (ABN, insurance, experience, etc.)
+        3. 🎯 **Match** fields to your extracted data using AI
+        4. 📊 **Score** matches with confidence levels
+        5. ✅ **Review** - you approve, edit, or reject each match
+        """)
+
+        st.divider()
+
+        col1, col2, col3 = st.columns([2, 1, 2])
+        with col2:
+            if st.button("🚀 Start Auto-Matching", type="primary", use_container_width=True):
+                run_field_matching()
+
+        st.divider()
+        if st.button("⬅️ Back to Extraction"):
+            st.session_state.workflow_step = 3
+            st.rerun()
+
+        return
+
+    # We have field mappings - show the review interface
+    render_matching_interface()
+
+
+def add_matching_log(message: str):
+    """Add message to matching log."""
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    log_entry = f"[{timestamp}] {message}"
+    st.session_state.matching_log_messages.append(log_entry)
+    logger.info(message)
+
+
+def run_field_matching():
+    """Execute the field matching process with real-time logging."""
+    workspace_id = st.session_state.current_workspace.workspace_id
+    workspace_manager = st.session_state.workspace_manager
+
+    # Clear previous logs
+    st.session_state.matching_log_messages = []
+    st.session_state.matching_in_progress = True
+
+    # Create progress containers
+    progress_container = st.empty()
+    log_container_wrapper = st.container()
+
+    try:
+        with log_container_wrapper:
+            with st.expander("📋 Processing Log", expanded=True):
+                log_display = st.container(height=400, border=True)
+
+        # Step 1: Parse tender document
+        add_matching_log("🔍 Starting tender document parsing...")
+        progress_container.info("🔍 Parsing tender document...")
+
+        tender_doc_obj = st.session_state.tender_document
+        parser = TenderFieldParser(use_classification=True)
+
+        add_matching_log(f"  → Parser initialized with classification enabled")
+
+        detected_fields = parser.parse_tender_document(tender_doc_obj)
+        st.session_state.detected_fields = detected_fields
+
+        add_matching_log(f"✅ Detected {len(detected_fields)} fillable fields")
+        add_matching_log(f"  → Field types: Tables, Paragraphs, Placeholders")
+
+        # Update log display
+        with log_display:
+            st.code("\n".join(st.session_state.matching_log_messages), language="log")
+
+        # Step 2: Load entity data
+        add_matching_log("📊 Loading entity data from workspace...")
+        progress_container.info("📊 Loading entity data...")
+
+        entity_data = workspace_manager.get_entity_snapshot(workspace_id)
+        if not entity_data:
+            add_matching_log("❌ ERROR: No entity data found in workspace")
+            with log_display:
+                st.code("\n".join(st.session_state.matching_log_messages), language="log")
+            progress_container.error("No entity data found in workspace")
+            st.session_state.matching_in_progress = False
+            return
+
+        # Log entity data summary
+        org_name = entity_data.get('organization', {}).get('legal_name', 'Unknown')
+        add_matching_log(f"✅ Loaded entity data for: {org_name}")
+
+        if 'insurances' in entity_data:
+            add_matching_log(f"  → Found {len(entity_data['insurances'])} insurance policies")
+        if 'projects' in entity_data:
+            add_matching_log(f"  → Found {len(entity_data['projects'])} project references")
+        if 'capabilities' in entity_data:
+            add_matching_log(f"  → Found {len(entity_data['capabilities'])} capabilities")
+
+        with log_display:
+            st.code("\n".join(st.session_state.matching_log_messages), language="log")
+
+        # Step 3: Match fields
+        add_matching_log("🎯 Starting intelligent field matching...")
+        add_matching_log("  → Using hybrid approach: Structured + Semantic + LLM")
+        progress_container.info("🎯 Matching fields to data (this may take a few minutes)...")
+
+        with log_display:
+            st.code("\n".join(st.session_state.matching_log_messages), language="log")
+
+        matcher = FieldMatcher(
+            entity_data=entity_data,
+            workspace_id=workspace_id,
+            model_name="qwen2.5:14b-instruct-q4_K_M"
+        )
+
+        add_matching_log(f"  → Model: qwen2.5:14b-instruct-q4_K_M")
+
+        with log_display:
+            st.code("\n".join(st.session_state.matching_log_messages), language="log")
+
+        field_mappings = matcher.match_all_fields(detected_fields)
+
+        # Summarize matches
+        matched_count = sum(1 for fm in field_mappings if fm.matched_data)
+        high_conf_count = sum(1 for fm in field_mappings if fm.confidence and fm.confidence >= 0.8)
+
+        add_matching_log(f"✅ Matching complete!")
+        add_matching_log(f"  → Total fields: {len(field_mappings)}")
+        add_matching_log(f"  → Matched: {matched_count}")
+        add_matching_log(f"  → High confidence (≥0.8): {high_conf_count}")
+
+        with log_display:
+            st.code("\n".join(st.session_state.matching_log_messages), language="log")
+
+        # Step 4: Save mappings
+        add_matching_log("💾 Saving field mappings to workspace...")
+        progress_container.info("💾 Saving field mappings...")
+
+        success = workspace_manager.save_field_mappings(workspace_id, field_mappings)
+        if success:
+            st.session_state.field_mappings = field_mappings
+            add_matching_log(f"✅ Field mappings saved successfully")
+
+            # Update workspace status
+            workspace = st.session_state.current_workspace
+            workspace.status = WorkspaceStatus.FIELD_MATCHING
+            workspace_manager._save_metadata(workspace_id, workspace)
+
+            add_matching_log(f"✅ Workspace status updated")
+            add_matching_log("")
+            add_matching_log("🎉 Field matching completed successfully!")
+
+            with log_display:
+                st.code("\n".join(st.session_state.matching_log_messages), language="log")
+
+            progress_container.success("✅ Matching complete! Review matches below.")
+            st.session_state.matching_in_progress = False
+
+            # Small delay to show final logs
+            import time
+            time.sleep(1)
+            st.rerun()
+        else:
+            add_matching_log("❌ ERROR: Failed to save field mappings")
+            with log_display:
+                st.code("\n".join(st.session_state.matching_log_messages), language="log")
+            progress_container.error("Failed to save field mappings")
+            st.session_state.matching_in_progress = False
+
+    except Exception as e:
+        add_matching_log(f"❌ ERROR: {str(e)}")
+        logger.error(f"Field matching failed: {e}", exc_info=True)
+
+        with log_display:
+            st.code("\n".join(st.session_state.matching_log_messages), language="log")
+
+        progress_container.error(f"Field matching failed: {str(e)}")
+        st.session_state.matching_in_progress = False
+
+
+def render_matching_interface():
+    """Render the field matching review interface."""
+    workspace_id = st.session_state.current_workspace.workspace_id
+    workspace_manager = st.session_state.workspace_manager
+    field_mappings = st.session_state.field_mappings
+
+    # Progress statistics
+    render_matching_statistics(field_mappings)
+
+    st.divider()
+
+    # Filter controls
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        filter_status = st.selectbox(
+            "Show:",
+            ["All", "Matched", "Unmatched", "Approved", "Pending Review"],
+            key="filter_status_select"
+        )
+        st.session_state.filter_status = filter_status
+
+    with col2:
+        filter_confidence = st.slider(
+            "Min Confidence:",
+            0.0, 1.0, 0.0, 0.05,
+            key="filter_confidence_slider"
+        )
+        st.session_state.filter_confidence = filter_confidence
+
+    with col3:
+        st.write("")  # Spacing
+        if st.button("🔄 Refresh"):
+            st.rerun()
+
+    # Bulk actions
+    st.divider()
+    render_bulk_actions(field_mappings)
+
+    st.divider()
+
+    # Field list
+    render_field_list(field_mappings)
 
     # Navigation
     st.divider()
-    if st.button("⬅️ Back to Extraction"):
-        st.session_state.workflow_step = 3
-        st.rerun()
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("⬅️ Back to Extraction"):
+            st.session_state.workflow_step = 3
+            st.rerun()
+    with col2:
+        approved_count = sum(1 for fm in field_mappings if fm.user_approved)
+        if approved_count > 0:
+            if st.button("Next: Fill & Export ➡️", type="primary"):
+                st.session_state.workflow_step = 5
+                st.rerun()
+
+
+def render_matching_statistics(field_mappings):
+    """Render progress statistics."""
+    total = len(field_mappings)
+    matched = sum(1 for fm in field_mappings if fm.matched_data is not None)
+    approved = sum(1 for fm in field_mappings if fm.user_approved)
+    high_conf = sum(1 for fm in field_mappings if fm.confidence and fm.confidence >= 0.8)
+
+    completion_pct = (approved / total * 100) if total > 0 else 0
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Fields", total)
+    with col2:
+        st.metric("Matched", f"{matched}/{total}", f"{matched/total*100:.0f}%" if total > 0 else "0%")
+    with col3:
+        st.metric("Approved", f"{approved}/{total}", f"{completion_pct:.0f}%")
+    with col4:
+        st.metric("High Confidence", high_conf, f"≥80%")
+
+    # Progress bar
+    st.progress(completion_pct / 100, text=f"Approval Progress: {completion_pct:.0f}%")
+
+
+def render_bulk_actions(field_mappings):
+    """Render bulk action buttons."""
+    workspace_id = st.session_state.current_workspace.workspace_id
+    workspace_manager = st.session_state.workspace_manager
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        high_conf_count = sum(
+            1 for fm in field_mappings
+            if fm.confidence and fm.confidence >= 0.8 and not fm.user_approved
+        )
+        if st.button(f"✅ Approve All High Confidence ({high_conf_count})", disabled=high_conf_count == 0):
+            for fm in field_mappings:
+                if fm.confidence and fm.confidence >= 0.8 and not fm.user_approved:
+                    workspace_manager.update_field_mapping(
+                        workspace_id,
+                        fm.field_id,
+                        {"user_approved": True}
+                    )
+            # Reload mappings
+            st.session_state.field_mappings = workspace_manager.get_field_mappings(workspace_id)
+            st.success(f"Approved {high_conf_count} high-confidence matches")
+            st.rerun()
+
+    with col2:
+        matched_count = sum(1 for fm in field_mappings if fm.matched_data is not None and not fm.user_approved)
+        if st.button(f"✅ Approve All Matched ({matched_count})", disabled=matched_count == 0):
+            for fm in field_mappings:
+                if fm.matched_data is not None and not fm.user_approved:
+                    workspace_manager.update_field_mapping(
+                        workspace_id,
+                        fm.field_id,
+                        {"user_approved": True}
+                    )
+            st.session_state.field_mappings = workspace_manager.get_field_mappings(workspace_id)
+            st.success(f"Approved {matched_count} matched fields")
+            st.rerun()
+
+    with col3:
+        approved_count = sum(1 for fm in field_mappings if fm.user_approved)
+        if st.button(f"❌ Reset All Approvals ({approved_count})", disabled=approved_count == 0):
+            for fm in field_mappings:
+                if fm.user_approved:
+                    workspace_manager.update_field_mapping(
+                        workspace_id,
+                        fm.field_id,
+                        {"user_approved": False}
+                    )
+            st.session_state.field_mappings = workspace_manager.get_field_mappings(workspace_id)
+            st.success(f"Reset {approved_count} approvals")
+            st.rerun()
+
+
+def render_field_list(field_mappings):
+    """Render filtered list of field cards."""
+    # Apply filters
+    filtered_mappings = apply_filters(field_mappings)
+
+    if not filtered_mappings:
+        st.info("No fields match the current filters")
+        return
+
+    st.markdown(f"**Showing {len(filtered_mappings)} of {len(field_mappings)} fields**")
+
+    # Render each field card
+    for mapping in filtered_mappings:
+        render_field_card(mapping)
+
+
+def apply_filters(field_mappings):
+    """Apply current filters to field mappings."""
+    filtered = field_mappings
+
+    # Status filter
+    if st.session_state.filter_status == "Matched":
+        filtered = [fm for fm in filtered if fm.matched_data is not None]
+    elif st.session_state.filter_status == "Unmatched":
+        filtered = [fm for fm in filtered if fm.matched_data is None]
+    elif st.session_state.filter_status == "Approved":
+        filtered = [fm for fm in filtered if fm.user_approved]
+    elif st.session_state.filter_status == "Pending Review":
+        filtered = [fm for fm in filtered if not fm.user_approved]
+
+    # Confidence filter
+    if st.session_state.filter_confidence > 0:
+        filtered = [
+            fm for fm in filtered
+            if fm.confidence and fm.confidence >= st.session_state.filter_confidence
+        ]
+
+    return filtered
+
+
+def render_field_card(mapping):
+    """Render a single field card with actions."""
+    workspace_id = st.session_state.current_workspace.workspace_id
+    workspace_manager = st.session_state.workspace_manager
+
+    # Confidence badge color
+    if mapping.confidence is None or mapping.confidence == 0:
+        badge = "⚪ **UNMATCHED**"
+        badge_color = "#999"
+    elif mapping.confidence >= 0.95:
+        badge = f"🟢 **HIGH** ({mapping.confidence:.2f})"
+        badge_color = "#28a745"
+    elif mapping.confidence >= 0.7:
+        badge = f"🟡 **MEDIUM** ({mapping.confidence:.2f})"
+        badge_color = "#ffc107"
+    else:
+        badge = f"🟠 **LOW** ({mapping.confidence:.2f})"
+        badge_color = "#fd7e14"
+
+    # Approval status
+    status_emoji = "✅" if mapping.user_approved else "⏳"
+
+    with st.expander(f"{status_emoji} **{mapping.field_description}** - {badge}", expanded=not mapping.user_approved):
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            st.markdown(f"**Location:** {mapping.field_location}")
+            if mapping.field_type:
+                st.markdown(f"**Type:** `{mapping.field_type}`")
+
+            if mapping.matched_data:
+                st.markdown("**Matched Data:**")
+                # Check if user is editing
+                if f"editing_{mapping.field_id}" in st.session_state and st.session_state[f"editing_{mapping.field_id}"]:
+                    new_value = st.text_area(
+                        "Edit value:",
+                        value=mapping.user_override or mapping.matched_data,
+                        key=f"edit_text_{mapping.field_id}",
+                        height=100
+                    )
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        if st.button("💾 Save", key=f"save_{mapping.field_id}"):
+                            workspace_manager.update_field_mapping(
+                                workspace_id,
+                                mapping.field_id,
+                                {"user_override": new_value, "user_approved": True}
+                            )
+                            st.session_state[f"editing_{mapping.field_id}"] = False
+                            st.session_state.field_mappings = workspace_manager.get_field_mappings(workspace_id)
+                            st.success("Saved!")
+                            st.rerun()
+                    with col_b:
+                        if st.button("❌ Cancel", key=f"cancel_{mapping.field_id}"):
+                            st.session_state[f"editing_{mapping.field_id}"] = False
+                            st.rerun()
+                else:
+                    display_value = mapping.user_override or mapping.matched_data
+                    st.markdown(f"```\n{display_value}\n```")
+                    if mapping.user_override:
+                        st.caption("(User edited)")
+
+                if mapping.data_source:
+                    st.markdown(f"**Source:** `{mapping.data_source}`")
+
+            else:
+                st.warning("No match found")
+
+        with col2:
+            if mapping.matched_data and not mapping.user_approved:
+                if st.button("✅ Approve", key=f"approve_{mapping.field_id}", use_container_width=True):
+                    workspace_manager.update_field_mapping(
+                        workspace_id,
+                        mapping.field_id,
+                        {"user_approved": True}
+                    )
+                    st.session_state.field_mappings = workspace_manager.get_field_mappings(workspace_id)
+                    st.rerun()
+
+            if mapping.matched_data:
+                if f"editing_{mapping.field_id}" not in st.session_state:
+                    st.session_state[f"editing_{mapping.field_id}"] = False
+
+                if not st.session_state[f"editing_{mapping.field_id}"]:
+                    if st.button("✏️ Edit", key=f"edit_{mapping.field_id}", use_container_width=True):
+                        st.session_state[f"editing_{mapping.field_id}"] = True
+                        st.rerun()
+
+            if mapping.user_approved:
+                if st.button("↩️ Unapprove", key=f"unapprove_{mapping.field_id}", use_container_width=True):
+                    workspace_manager.update_field_mapping(
+                        workspace_id,
+                        mapping.field_id,
+                        {"user_approved": False}
+                    )
+                    st.session_state.field_mappings = workspace_manager.get_field_mappings(workspace_id)
+                    st.rerun()
 
 
 def render_step5_fill_export():

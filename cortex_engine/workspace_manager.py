@@ -364,6 +364,95 @@ class WorkspaceManager:
             logger.error(f"Failed to save field mappings: {e}")
             return False
 
+    def get_field_mappings(self, workspace_id: str) -> Optional[List[FieldMapping]]:
+        """
+        Load field mappings from workspace.
+
+        Args:
+            workspace_id: Workspace ID
+
+        Returns:
+            List of FieldMapping objects or None if not found
+        """
+        workspace = self.get_workspace(workspace_id)
+        if not workspace or not workspace.field_mappings_file:
+            logger.debug(f"No field mappings file for workspace {workspace_id}")
+            return None
+
+        mappings_file = Path(workspace.field_mappings_file)
+        if not mappings_file.exists():
+            logger.warning(f"Field mappings file not found: {mappings_file}")
+            return None
+
+        try:
+            with open(mappings_file, 'r') as f:
+                data = json.load(f)
+                field_mappings = [FieldMapping(**fm) for fm in data]
+
+            logger.info(f"Loaded {len(field_mappings)} field mappings from workspace {workspace_id}")
+            return field_mappings
+
+        except Exception as e:
+            logger.error(f"Failed to load field mappings: {e}")
+            return None
+
+    def update_field_mapping(
+        self,
+        workspace_id: str,
+        field_id: str,
+        updates: Dict[str, Any]
+    ) -> bool:
+        """
+        Update a single field mapping.
+
+        Args:
+            workspace_id: Workspace ID
+            field_id: Field ID to update
+            updates: Dictionary of fields to update (e.g., {"user_approved": True})
+
+        Returns:
+            True if successful
+
+        Example:
+            manager.update_field_mapping(
+                "workspace_123",
+                "table_0_r1_c1",
+                {"user_approved": True, "user_override": "New value"}
+            )
+        """
+        # Load existing mappings
+        mappings = self.get_field_mappings(workspace_id)
+        if not mappings:
+            logger.error(f"No field mappings found for workspace {workspace_id}")
+            return False
+
+        # Find and update the specific field
+        field_found = False
+        for mapping in mappings:
+            if mapping.field_id == field_id:
+                # Update fields
+                for key, value in updates.items():
+                    if hasattr(mapping, key):
+                        setattr(mapping, key, value)
+                    else:
+                        logger.warning(f"Field mapping does not have attribute: {key}")
+
+                field_found = True
+                logger.info(f"Updated field mapping: {field_id}")
+                break
+
+        if not field_found:
+            logger.error(f"Field ID not found: {field_id}")
+            return False
+
+        # Save updated mappings back
+        success = self.save_field_mappings(workspace_id, mappings)
+
+        if success:
+            logger.info(f"Successfully updated field mapping {field_id} in workspace {workspace_id}")
+
+        return success
+
     def search_workspace(
         self,
         workspace_id: str,

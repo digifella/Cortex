@@ -39,7 +39,6 @@ from cortex_engine.entity_profile_schema import (
     Experience,
     Certification,
     Bio,
-    QualificationType,
     Project,
     Timeline,
     Financials,

@@ -49,19 +49,19 @@ class QualificationType(str, Enum):
 class OrganizationProfile(BaseModel):
     """Core organizational identity and contact information."""
 
-    legal_name: str = Field(description="Official registered business name")
+    legal_name: Optional[str] = Field(None, description="Official registered business name")
     trading_names: List[str] = Field(default_factory=list, description="Trading names or DBA names")
 
     # Legal identifiers
     abn: Optional[str] = Field(None, description="Australian Business Number (11 digits)")
     acn: Optional[str] = Field(None, description="Australian Company Number (9 digits)")
 
-    # Address
-    address: Dict[str, str] = Field(
+    # Address - use Optional to allow None values for individual components
+    address: Dict[str, Optional[str]] = Field(
         default_factory=dict,
         description="Address components: street, city, state, postcode, country"
     )
-    postal_address: Optional[Dict[str, str]] = Field(None, description="Postal address if different")
+    postal_address: Optional[Dict[str, Optional[str]]] = Field(None, description="Postal address if different")
 
     # Contact
     phone: Optional[str] = Field(None, description="Primary phone number")
@@ -197,9 +197,9 @@ class ProjectExperience(BaseModel):
     role: Optional[str] = Field(None, description="Your organization's role in the project")
     value: Optional[float] = Field(None, description="Project value in AUD")
 
-    deliverables: List[str] = Field(default_factory=list, description="Key deliverables")
-    outcomes: List[str] = Field(default_factory=list, description="Project outcomes/benefits")
-    technologies: List[str] = Field(default_factory=list, description="Technologies used")
+    deliverables: Optional[List[str]] = Field(default_factory=list, description="Key deliverables")
+    outcomes: Optional[List[str]] = Field(default_factory=list, description="Project outcomes/benefits")
+    technologies: Optional[List[str]] = Field(default_factory=list, description="Technologies used")
 
     team_size: Optional[int] = Field(None, description="Team size")
 
@@ -326,14 +326,14 @@ class StructuredKnowledge(BaseModel):
     def to_json_serializable(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dict."""
         return {
-            "organization": self.organization.model_dump() if self.organization else None,
-            "insurances": [ins.model_dump() for ins in self.insurances],
-            "team_qualifications": [q.model_dump() for q in self.team_qualifications],
-            "team_work_experience": [exp.model_dump() for exp in self.team_work_experience],
-            "projects": [p.model_dump() for p in self.projects],
-            "references": [r.model_dump() for r in self.references],
-            "capabilities": [c.model_dump() for c in self.capabilities],
-            "extraction_date": self.extraction_date.isoformat(),
+            "organization": self.organization.model_dump(mode='json') if self.organization else None,
+            "insurances": [ins.model_dump(mode='json') for ins in self.insurances],
+            "team_qualifications": [q.model_dump(mode='json') for q in self.team_qualifications],
+            "team_work_experience": [exp.model_dump(mode='json') for exp in self.team_work_experience],
+            "projects": [p.model_dump(mode='json') for p in self.projects],
+            "references": [r.model_dump(mode='json') for r in self.references],
+            "capabilities": [c.model_dump(mode='json') for c in self.capabilities],
+            "extraction_date": self.extraction_date.isoformat() if self.extraction_date else None,
             "kb_version": self.kb_version,
             "total_documents_processed": self.total_documents_processed
         }

@@ -85,7 +85,12 @@
       "Bash(setup_bge_model.sh )",
       "Bash(start_cortex_bge.sh )",
       "Bash(.claude/settings.local.json)",
-      "Bash(__NEW_LINE__ echo \"✅ Added files to staging\")"
+      "Bash(__NEW_LINE__ echo \"✅ Added files to staging\")",
+      "Bash(git rm:*)",
+      "Bash(ollama pull:*)",
+      "Bash(ping:*)",
+      "Bash(tail:*)",
+      "Bash(streamlit run:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",

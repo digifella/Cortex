@@ -231,7 +231,7 @@ class Certification(BaseModel):
     """Professional certification."""
     name: str = Field(description="Certification name")
     issuer: str = Field(description="Issuing body")
-    date: date = Field(description="Date obtained")
+    date_obtained: date = Field(description="Date obtained")
     expiry: Optional[date] = Field(None, description="Expiry date")
     credential_id: Optional[str] = Field(None, description="Credential number")
 
