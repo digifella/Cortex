@@ -457,15 +457,37 @@ with col2:
                 chunk_progress.reviewed_at = datetime.now()
                 workspace.metadata.chunks_reviewed += 1
                 workspace_manager._save_workspace(workspace)
-                st.info("✨ Chunk marked as complete!")
+
+                # Auto-advance to next chunk if not at the end
+                if current_chunk_id < workspace.metadata.total_chunks:
+                    st.info("⏭️ Auto-advancing to next chunk...")
+                    workspace.metadata.current_chunk_id = current_chunk_id + 1
+                    workspace_manager._save_workspace(workspace)
+                    st.rerun()
+                else:
+                    st.balloons()
+                    st.success("🎉 All chunks completed! Click Export when ready.")
+            else:
+                st.info("✨ Chunk already marked as complete. Click Next to continue.")
         elif chunk_progress and chunk_progress.mentions_found == 0:
-            # No mentions found - auto-mark as reviewed
+            # No mentions found - auto-mark as reviewed and advance
             if chunk_progress.status != "reviewed":
                 chunk_progress.status = "reviewed"
                 chunk_progress.reviewed_at = datetime.now()
                 workspace.metadata.chunks_reviewed += 1
                 workspace_manager._save_workspace(workspace)
-                st.success("✅ No mentions found - chunk marked as complete!")
+
+                # Auto-advance to next chunk
+                if current_chunk_id < workspace.metadata.total_chunks:
+                    st.success("✅ No mentions found - advancing to next chunk...")
+                    workspace.metadata.current_chunk_id = current_chunk_id + 1
+                    workspace_manager._save_workspace(workspace)
+                    st.rerun()
+                else:
+                    st.balloons()
+                    st.success("🎉 All chunks completed! Click Export when ready.")
+            else:
+                st.info("✨ No mentions in this chunk. Click Next to continue.")
         else:
             st.info("Click 'Analyze This Chunk' to find mentions")
 
