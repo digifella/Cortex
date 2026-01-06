@@ -293,15 +293,8 @@ st.header("Review Progress")
 # Progress bar
 progress_pct = (workspace.metadata.chunks_reviewed / workspace.metadata.total_chunks) * 100 if workspace.metadata.total_chunks > 0 else 0
 
-st.markdown(f"""
-<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-    <span style="font-weight: 600;">Progress</span>
-    <span style="color: #C85D3C; font-weight: 600;">{workspace.metadata.chunks_reviewed} of {workspace.metadata.total_chunks} chunks reviewed</span>
-</div>
-<div class="chunk-progress">
-    <div class="chunk-progress-fill" style="width: {progress_pct}%"></div>
-</div>
-""", unsafe_allow_html=True)
+progress_html = f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;"><span style="font-weight: 600;">Progress</span><span style="color: #C85D3C; font-weight: 600;">{workspace.metadata.chunks_reviewed} of {workspace.metadata.total_chunks} chunks reviewed</span></div><div class="chunk-progress"><div class="chunk-progress-fill" style="width: {progress_pct}%"></div></div>'
+st.markdown(progress_html, unsafe_allow_html=True)
 
 # Chunk grid
 st.markdown("### Chunks")
@@ -320,12 +313,8 @@ for chunk_progress in workspace.chunks:
     else:
         status_class = "pending"
 
-    chunk_grid_html += f"""
-    <div class="chunk-card {status_class}">
-        <span class="chunk-number">{chunk_progress.chunk_id}</span>
-        <span class="chunk-status">{status_text}</span>
-    </div>
-    """
+    # Build HTML on single line to avoid formatting issues
+    chunk_grid_html += f'<div class="chunk-card {status_class}"><span class="chunk-number">{chunk_progress.chunk_id}</span><span class="chunk-status">{status_text}</span></div>'
 
 chunk_grid_html += '</div>'
 st.markdown(chunk_grid_html, unsafe_allow_html=True)
@@ -375,7 +364,17 @@ with col1:
                 f'<span class="mention-highlight">{mention.mention_text}</span>'
             )
 
-    st.markdown(f'<div style="background: white; padding: 2rem; border-radius: 8px; border: 1px solid #E5E3DF; line-height: 1.8;">{display_content}</div>', unsafe_allow_html=True)
+    # Escape HTML in content but preserve our mention highlights
+    import html
+    # First escape everything
+    safe_content = html.escape(display_content)
+    # Then unescape our highlight spans
+    safe_content = safe_content.replace('&lt;span class=&quot;mention-highlight&quot;&gt;', '<span class="mention-highlight">')
+    safe_content = safe_content.replace('&lt;/span&gt;', '</span>')
+    # Preserve line breaks
+    safe_content = safe_content.replace('\n', '<br>')
+
+    st.markdown(f'<div style="background: white; padding: 2rem; border-radius: 8px; border: 1px solid #E5E3DF; line-height: 1.8;">{safe_content}</div>', unsafe_allow_html=True)
 
 with col2:
     st.header("Mentions Found")
