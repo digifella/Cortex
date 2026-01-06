@@ -20,7 +20,8 @@ from .workspace_model import (
     WorkspaceState,
     MentionBinding,
     GenerationLog,
-    ApprovalRecord
+    ApprovalRecord,
+    ChunkProgress
 )
 from .workspace_git import WorkspaceGit, WorkspaceGitOperations
 from .entity_profile_manager import EntityProfileManager
@@ -158,12 +159,18 @@ class WorkspaceManager:
                 approvals_data = yaml.safe_load(f) or []
                 approvals = [ApprovalRecord(**a) for a in approvals_data]
 
+        # Load chunks (for chunk-based review)
+        chunks = []
+        if 'chunks' in data:
+            chunks = [ChunkProgress(**chunk) for chunk in data['chunks']]
+
         workspace = Workspace(
             metadata=WorkspaceMetadata(**data['metadata']),
             config=WorkspaceConfig(**data.get('config', {})),
             mentions=mentions,
             generation_logs=logs,
             approval_records=approvals,
+            chunks=chunks,
             workspace_path=workspace_dir
         )
 
@@ -546,12 +553,13 @@ class WorkspaceManager:
     # ========================================
 
     def _save_workspace(self, workspace: Workspace):
-        """Save workspace metadata."""
+        """Save workspace metadata and chunks."""
         metadata_path = workspace.workspace_path / "metadata.yaml"
 
         data = {
             'metadata': workspace.metadata.model_dump(mode='json'),
-            'config': workspace.config.model_dump(mode='json')
+            'config': workspace.config.model_dump(mode='json'),
+            'chunks': [chunk.model_dump(mode='json') for chunk in workspace.chunks]
         }
 
         with open(metadata_path, 'w') as f:
