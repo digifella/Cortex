@@ -38,7 +38,9 @@ db_path = convert_windows_to_wsl_path(config.get('ai_database_path'))
 # Initialize managers
 workspace_manager = WorkspaceManager(Path(db_path) / "workspaces")
 entity_manager = EntityProfileManager(Path(db_path))
-llm = LLMInterface()
+
+# Use a powerful model for chunk analysis - qwen2.5:72b is excellent for document understanding
+llm = LLMInterface(model="qwen2.5:72b-instruct-q4_K_M")
 markup_engine = MarkupEngine(entity_manager, llm)
 chunker = DocumentChunker(target_chunk_size=4000, max_chunk_size=6000)
 
@@ -164,20 +166,45 @@ with st.sidebar:
     if workspace.metadata.chunk_mode_enabled:
         st.metric("Chunks Reviewed", f"{workspace.metadata.chunks_reviewed}/{workspace.metadata.total_chunks}")
 
+    st.divider()
+    st.caption("🧠 **Analysis Model**")
+    st.caption("qwen2.5:72b-instruct-q4_K_M")
+    st.caption("(47 GB - High capability)")
+
 # Check if entity bound
 if not workspace.metadata.entity_id:
     st.error("❌ Please bind an entity profile to this workspace first (Proposal Workspace page)")
     st.stop()
 
-# Check if document exists
-doc_path = workspace.workspace_path / "documents" / workspace.metadata.original_filename
-if not doc_path.exists():
-    st.error("❌ Document file not found")
+# Find document file (could be original filename or tender_original.txt)
+documents_dir = workspace.workspace_path / "documents"
+doc_path = None
+
+# Try original filename first
+if (documents_dir / workspace.metadata.original_filename).exists():
+    doc_path = documents_dir / workspace.metadata.original_filename
+# Try tender_original.txt (common converted name)
+elif (documents_dir / "tender_original.txt").exists():
+    doc_path = documents_dir / "tender_original.txt"
+# Try any .txt file in documents directory
+else:
+    txt_files = list(documents_dir.glob("*.txt"))
+    if txt_files:
+        doc_path = txt_files[0]
+
+if not doc_path or not doc_path.exists():
+    st.error(f"❌ Document file not found in {documents_dir}")
+    st.error(f"Expected: {workspace.metadata.original_filename} or tender_original.txt")
     st.stop()
 
 # Load document content
-with open(doc_path, 'r', encoding='utf-8') as f:
-    document_text = f.read()
+try:
+    with open(doc_path, 'r', encoding='utf-8') as f:
+        document_text = f.read()
+    st.info(f"📄 Loaded document: {doc_path.name}")
+except Exception as e:
+    st.error(f"❌ Error reading document: {str(e)}")
+    st.stop()
 
 # Initialize chunk mode if not already
 if not workspace.metadata.chunk_mode_enabled:
