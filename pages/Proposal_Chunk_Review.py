@@ -211,6 +211,12 @@ if not workspace.metadata.chunk_mode_enabled:
     st.info("🔄 Initializing chunk-based review mode...")
 
     with st.spinner("Creating document chunks..."):
+        # Clear old mentions from non-chunk workflow (they have chunk_id=None)
+        old_mentions_count = len([m for m in workspace.mentions if m.chunk_id is None])
+        if old_mentions_count > 0:
+            workspace.mentions = [m for m in workspace.mentions if m.chunk_id is not None]
+            st.warning(f"🧹 Cleared {old_mentions_count} old mentions from previous workflow")
+
         # Create chunks
         chunks = chunker.create_chunks(document_text)
 
@@ -245,6 +251,15 @@ if not workspace.metadata.chunk_mode_enabled:
         st.session_state.document_chunks = completable_chunks
 
         st.rerun()
+
+# Clean up orphaned mentions from old workflow (chunk_id=None)
+orphaned_mentions = [m for m in workspace.mentions if m.chunk_id is None]
+if orphaned_mentions and workspace.metadata.chunk_mode_enabled:
+    st.warning(f"🧹 Found {len(orphaned_mentions)} orphaned mentions from old workflow. Clearing...")
+    workspace.mentions = [m for m in workspace.mentions if m.chunk_id is not None]
+    workspace_manager._save_workspace(workspace)
+    workspace_manager._save_bindings(workspace)
+    st.rerun()
 
 # Load chunks from workspace or session state
 if 'document_chunks' not in st.session_state:
