@@ -326,13 +326,30 @@ class DocumentChunker:
     def filter_completable_chunks(self, chunks: List[DocumentChunk]) -> List[DocumentChunk]:
         """
         Filter chunks to only those that need user completion.
+        Renumbers chunks sequentially starting from 1.
 
         Args:
             chunks: All chunks
 
         Returns:
-            Chunks that contain completable fields (excludes personnel sections)
+            Chunks that contain completable fields (excludes personnel sections), renumbered 1, 2, 3...
         """
         completable = [c for c in chunks if c.is_completable]
-        logger.info(f"Filtered to {len(completable)} completable chunks (from {len(chunks)} total)")
-        return completable
+
+        # Renumber chunks sequentially (1, 2, 3...) for easier navigation
+        renumbered = []
+        for new_id, chunk in enumerate(completable, start=1):
+            renumbered_chunk = DocumentChunk(
+                chunk_id=new_id,
+                title=chunk.title,
+                start_line=chunk.start_line,
+                end_line=chunk.end_line,
+                content=chunk.content,
+                char_count=chunk.char_count,
+                section_types=chunk.section_types,
+                is_completable=chunk.is_completable
+            )
+            renumbered.append(renumbered_chunk)
+
+        logger.info(f"Filtered to {len(renumbered)} completable chunks (from {len(chunks)} total), renumbered 1-{len(renumbered)}")
+        return renumbered

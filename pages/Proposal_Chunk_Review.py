@@ -255,6 +255,34 @@ if 'document_chunks' not in st.session_state:
 
 chunks = st.session_state.document_chunks
 
+# Check if chunk IDs match between workspace and session chunks
+# This handles cases where chunks were created with old numbering scheme
+workspace_chunk_ids = {cp.chunk_id for cp in workspace.chunks}
+session_chunk_ids = {c.chunk_id for c in chunks}
+
+if workspace_chunk_ids != session_chunk_ids and workspace.metadata.chunks_reviewed == 0:
+    # Chunk IDs don't match and no progress made - reinitialize
+    st.warning("🔄 Chunk numbering updated. Reinitializing...")
+
+    # Clear old chunks
+    workspace.chunks.clear()
+    workspace.metadata.current_chunk_id = 1
+
+    # Reinitialize with new chunk IDs
+    for chunk in chunks:
+        workspace.chunks.append(ChunkProgress(
+            chunk_id=chunk.chunk_id,
+            title=chunk.title,
+            start_line=chunk.start_line,
+            end_line=chunk.end_line,
+            status="pending",
+            mentions_found=0,
+            mentions_approved=0
+        ))
+
+    workspace_manager._save_workspace(workspace)
+    st.rerun()
+
 # Get current chunk
 current_chunk_id = workspace.metadata.current_chunk_id or 1
 current_chunk = next((c for c in chunks if c.chunk_id == current_chunk_id), chunks[0])
