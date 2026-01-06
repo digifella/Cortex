@@ -298,6 +298,19 @@ if workspace_chunk_ids != session_chunk_ids and workspace.metadata.chunks_review
     workspace_manager._save_workspace(workspace)
     # Don't call st.rerun() - just continue with corrected data
 
+# Auto-mark any analyzed chunks as reviewed (fixes issue where chunks are analyzed but not marked)
+needs_save = False
+for chunk_progress in workspace.chunks:
+    # If chunk was analyzed but not marked as reviewed
+    if chunk_progress.status != "reviewed" and chunk_progress.mentions_found == 0:
+        chunk_progress.status = "reviewed"
+        chunk_progress.reviewed_at = datetime.now()
+        workspace.metadata.chunks_reviewed += 1
+        needs_save = True
+
+if needs_save:
+    workspace_manager._save_workspace(workspace)
+
 # Get current chunk
 current_chunk_id = workspace.metadata.current_chunk_id or 1
 current_chunk = next((c for c in chunks if c.chunk_id == current_chunk_id), chunks[0])
