@@ -252,14 +252,18 @@ if not workspace.metadata.chunk_mode_enabled:
 
         st.rerun()
 
-# Clean up orphaned mentions from old workflow (chunk_id=None)
-orphaned_mentions = [m for m in workspace.mentions if m.chunk_id is None]
-if orphaned_mentions and workspace.metadata.chunk_mode_enabled:
-    st.warning(f"🧹 Found {len(orphaned_mentions)} orphaned mentions from old workflow. Clearing...")
-    workspace.mentions = [m for m in workspace.mentions if m.chunk_id is not None]
-    workspace_manager._save_workspace(workspace)
-    workspace_manager._save_bindings(workspace)
-    st.rerun()
+# Clean up orphaned mentions from old workflow (chunk_id=None) - ONCE only
+if 'orphaned_mentions_cleaned' not in st.session_state:
+    orphaned_mentions = [m for m in workspace.mentions if m.chunk_id is None]
+    if orphaned_mentions and workspace.metadata.chunk_mode_enabled:
+        st.warning(f"🧹 Found {len(orphaned_mentions)} orphaned mentions from old workflow. Clearing...")
+        workspace.mentions = [m for m in workspace.mentions if m.chunk_id is not None]
+        workspace_manager._save_workspace(workspace)
+        workspace_manager._save_bindings(workspace)
+        st.session_state.orphaned_mentions_cleaned = True
+        st.rerun()
+    else:
+        st.session_state.orphaned_mentions_cleaned = True
 
 # Load chunks from workspace or session state
 if 'document_chunks' not in st.session_state:
@@ -468,26 +472,51 @@ with col2:
 # Navigation
 st.divider()
 
-col_prev, col_next, col_complete = st.columns([1, 1, 1])
+# Jump to specific chunk
+col_jump, col_nav = st.columns([1, 2])
 
-with col_prev:
-    if st.button("⬅️ Previous Chunk", disabled=(current_chunk_id == 1), use_container_width=True):
-        workspace.metadata.current_chunk_id = current_chunk_id - 1
+with col_jump:
+    st.markdown("**Jump to Chunk:**")
+    # Create chunk options with status indicators
+    chunk_options = []
+    for cp in workspace.chunks:
+        status_emoji = "✅" if cp.status == "reviewed" else "⏳"
+        chunk_options.append(f"{status_emoji} Chunk {cp.chunk_id}: {cp.title[:30]}...")
+
+    selected_idx = st.selectbox(
+        "Select chunk",
+        range(len(chunk_options)),
+        index=current_chunk_id - 1,
+        format_func=lambda i: chunk_options[i],
+        label_visibility="collapsed"
+    )
+
+    if selected_idx + 1 != current_chunk_id:
+        workspace.metadata.current_chunk_id = selected_idx + 1
         workspace_manager._save_workspace(workspace)
         st.rerun()
 
-with col_next:
-    if st.button("Next Chunk ➡️", disabled=(current_chunk_id == workspace.metadata.total_chunks), use_container_width=True):
-        # Just navigate to next chunk (marking as reviewed happens automatically above)
-        workspace.metadata.current_chunk_id = current_chunk_id + 1
-        workspace_manager._save_workspace(workspace)
-        st.rerun()
+with col_nav:
+    col_prev, col_next, col_complete = st.columns([1, 1, 1])
 
-with col_complete:
-    all_reviewed = workspace.metadata.chunks_reviewed == workspace.metadata.total_chunks
-    if st.button("📤 Export Final Document", disabled=not all_reviewed, type="primary" if all_reviewed else "secondary", use_container_width=True):
-        st.success("✅ Export functionality will be implemented in next phase")
-        st.info("All chunks reviewed! Ready to export final document.")
+    with col_prev:
+        if st.button("⬅️ Previous", disabled=(current_chunk_id == 1), use_container_width=True):
+            workspace.metadata.current_chunk_id = current_chunk_id - 1
+            workspace_manager._save_workspace(workspace)
+            st.rerun()
+
+    with col_next:
+        if st.button("Next ➡️", disabled=(current_chunk_id == workspace.metadata.total_chunks), use_container_width=True):
+            # Just navigate to next chunk (marking as reviewed happens automatically above)
+            workspace.metadata.current_chunk_id = current_chunk_id + 1
+            workspace_manager._save_workspace(workspace)
+            st.rerun()
+
+    with col_complete:
+        all_reviewed = workspace.metadata.chunks_reviewed == workspace.metadata.total_chunks
+        if st.button("📤 Export", disabled=not all_reviewed, type="primary" if all_reviewed else "secondary", use_container_width=True):
+            st.success("✅ Export functionality will be implemented in next phase")
+            st.info("All chunks reviewed! Ready to export final document.")
 
 # Keyboard shortcuts hint
 st.caption("💡 **Tip:** Use ← → arrow keys to navigate chunks (coming soon)")
