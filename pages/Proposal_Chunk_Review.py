@@ -21,7 +21,8 @@ from cortex_engine.markup_engine import MarkupEngine
 from cortex_engine.document_chunker import DocumentChunker
 from cortex_engine.workspace_model import ChunkProgress, WorkspaceState
 from cortex_engine.llm_interface import LLMInterface
-from cortex_engine.config import get_cortex_config
+from cortex_engine.config_manager import ConfigManager
+from cortex_engine.utils import convert_windows_to_wsl_path
 from datetime import datetime
 
 st.set_page_config(
@@ -30,13 +31,13 @@ st.set_page_config(
     layout="wide"
 )
 
-# Load config
-config = get_cortex_config()
-db_path = Path(config['base_data_path'])
+# Load config (matching Proposal_Workspace.py initialization)
+config = ConfigManager().get_config()
+db_path = convert_windows_to_wsl_path(config.get('ai_database_path'))
 
 # Initialize managers
-workspace_manager = WorkspaceManager(db_path / "workspaces")
-entity_manager = EntityProfileManager(db_path / "entity_profiles")
+workspace_manager = WorkspaceManager(Path(db_path) / "workspaces")
+entity_manager = EntityProfileManager(Path(db_path))
 llm = LLMInterface()
 markup_engine = MarkupEngine(entity_manager, llm)
 chunker = DocumentChunker(target_chunk_size=4000, max_chunk_size=6000)
