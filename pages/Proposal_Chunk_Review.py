@@ -428,7 +428,9 @@ with col2:
                         workspace = workspace_manager.update_mention_binding(
                             workspace.metadata.workspace_id,
                             mention.mention_text,
-                            approved=True
+                            approved=True,
+                            chunk_id=current_chunk_id,
+                            location=mention.location
                         )
 
                         # Update chunk progress
@@ -442,7 +444,9 @@ with col2:
                         workspace = workspace_manager.update_mention_binding(
                             workspace.metadata.workspace_id,
                             mention.mention_text,
-                            rejected=True
+                            rejected=True,
+                            chunk_id=current_chunk_id,
+                            location=mention.location
                         )
 
                         workspace_manager._save_workspace(workspace)

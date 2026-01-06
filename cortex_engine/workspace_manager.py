@@ -319,7 +319,9 @@ class WorkspaceManager:
         approved: Optional[bool] = None,
         rejected: Optional[bool] = None,
         ignored: Optional[bool] = None,
-        resolved_value: Optional[str] = None
+        resolved_value: Optional[str] = None,
+        chunk_id: Optional[int] = None,
+        location: Optional[str] = None
     ) -> Workspace:
         """
         Update mention binding status.
@@ -331,6 +333,8 @@ class WorkspaceManager:
             rejected: Set rejection status
             ignored: Set ignored status (not relevant)
             resolved_value: Set resolved value
+            chunk_id: Optional chunk ID to uniquely identify mention
+            location: Optional location to uniquely identify mention
 
         Returns:
             Updated workspace
@@ -340,8 +344,24 @@ class WorkspaceManager:
         if not workspace:
             raise ValueError(f"Workspace not found: {workspace_id}")
 
-        # Find mention
-        mention = next((m for m in workspace.mentions if m.mention_text == mention_text), None)
+        # Find mention - use chunk_id and location for unique identification
+        if chunk_id is not None and location is not None:
+            # Most specific: match text, chunk, and location
+            mention = next((m for m in workspace.mentions
+                          if m.mention_text == mention_text
+                          and m.chunk_id == chunk_id
+                          and m.location == location), None)
+        elif chunk_id is not None:
+            # Match text and chunk (find first unprocessed mention in chunk)
+            mention = next((m for m in workspace.mentions
+                          if m.mention_text == mention_text
+                          and m.chunk_id == chunk_id
+                          and not m.approved
+                          and not m.rejected
+                          and not m.ignored), None)
+        else:
+            # Fallback: match just text (old behavior)
+            mention = next((m for m in workspace.mentions if m.mention_text == mention_text), None)
 
         if not mention:
             raise ValueError(f"Mention not found: {mention_text}")
