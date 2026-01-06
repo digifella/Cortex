@@ -70,8 +70,13 @@ class DocumentChunker:
 
         # Company section keywords
         self.company_keywords = [
-            'company', 'business', 'organization', 'tenderer details',
-            'legal entity', 'abn', 'acn', 'registered office'
+            'company', 'business', 'organization', 'tenderer details', 'tenderer contact',
+            'legal entity', 'abn', 'acn', 'arbn', 'registered office', 'short form name',
+            'attachment 1', 'attachment 2', 'attachment 3', 'attachment 4',
+            'attachment 5', 'attachment 6', 'attachment 7', 'attachment 8',
+            'schedule 3', 'tender response', 'response form', 'compliance',
+            'deed of undertaking', 'service delivery', 'qualification', 'experience',
+            'responsiveness', 'capacity', 'price schedule', 'insurance'
         ]
 
         logger.info(f"DocumentChunker initialized (target: {target_chunk_size}, max: {max_chunk_size})")
@@ -219,6 +224,15 @@ class DocumentChunker:
         for section in sections:
             section_size = len(section.content)
 
+            # Check if mixing personnel with non-personnel sections
+            # If so, create a chunk boundary to keep them separate
+            should_split_type = False
+            if current_chunk_sections:
+                current_has_personnel = any(s.section_type == 'personnel' for s in current_chunk_sections)
+                section_is_personnel = section.section_type == 'personnel'
+                # Split if we're mixing personnel with non-personnel
+                should_split_type = current_has_personnel != section_is_personnel
+
             # If single section exceeds max size, split it
             if section_size > self.max_chunk_size:
                 # First, save any accumulated sections
@@ -232,6 +246,13 @@ class DocumentChunker:
                 sub_chunks = self._split_large_section(section, chunk_id)
                 chunks.extend(sub_chunks)
                 chunk_id += len(sub_chunks)
+
+            # If we're mixing types, create a chunk boundary
+            elif should_split_type:
+                chunks.append(self._build_chunk(chunk_id, current_chunk_sections))
+                chunk_id += 1
+                current_chunk_sections = [section]
+                current_chunk_size = section_size
 
             # If adding this section would exceed target, create chunk
             elif current_chunk_size + section_size > self.target_chunk_size and current_chunk_sections:
@@ -298,7 +319,7 @@ class DocumentChunker:
                     content=content,
                     char_count=len(content),
                     section_types=[section.section_type],
-                    is_completable=section.section_type in ['company', 'project']
+                    is_completable=section.section_type != 'personnel'
                 ))
 
                 chunk_id += 1
@@ -319,7 +340,7 @@ class DocumentChunker:
                 content=content,
                 char_count=len(content),
                 section_types=[section.section_type],
-                is_completable=section.section_type in ['company', 'project']
+                is_completable=section.section_type != 'personnel'
             ))
 
         return chunks
