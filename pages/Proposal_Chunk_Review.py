@@ -420,7 +420,7 @@ with col2:
                 col_approve, col_reject = st.columns(2)
 
                 with col_approve:
-                    if st.button("✅ Approve", key=f"approve_{mention.mention_text}_{current_chunk_id}", use_container_width=True):
+                    if st.button("✅ Approve", key=f"approve_{mention.mention_text}_{current_chunk_id}_{idx}", use_container_width=True):
                         workspace = workspace_manager.update_mention_binding(
                             workspace.metadata.workspace_id,
                             mention.mention_text,
@@ -434,7 +434,7 @@ with col2:
                         st.rerun()
 
                 with col_reject:
-                    if st.button("❌ Reject", key=f"reject_{mention.mention_text}_{current_chunk_id}", use_container_width=True):
+                    if st.button("❌ Reject", key=f"reject_{mention.mention_text}_{current_chunk_id}_{idx}", use_container_width=True):
                         workspace = workspace_manager.update_mention_binding(
                             workspace.metadata.workspace_id,
                             mention.mention_text,
