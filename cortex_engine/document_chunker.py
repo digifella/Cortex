@@ -261,8 +261,9 @@ class DocumentChunker:
         content = '\n\n'.join(s.content for s in sections)
         section_types = list(set(s.section_type for s in sections))
 
-        # Chunk is completable if it contains company/project sections (not personnel)
-        is_completable = any(t in ['company', 'project'] for t in section_types)
+        # Chunk is completable if it does NOT contain personnel sections
+        # (Include company, project, AND other sections - only exclude personnel)
+        is_completable = 'personnel' not in section_types
 
         return DocumentChunk(
             chunk_id=chunk_id,
@@ -325,14 +326,15 @@ class DocumentChunker:
 
     def filter_completable_chunks(self, chunks: List[DocumentChunk]) -> List[DocumentChunk]:
         """
-        Filter chunks to only those that need user completion.
+        Filter chunks to exclude personnel sections only.
         Renumbers chunks sequentially starting from 1.
 
         Args:
             chunks: All chunks
 
         Returns:
-            Chunks that contain completable fields (excludes personnel sections), renumbered 1, 2, 3...
+            All chunks EXCEPT those containing personnel sections, renumbered 1, 2, 3...
+            Includes: company, project, and general tender response sections
         """
         completable = [c for c in chunks if c.is_completable]
 
