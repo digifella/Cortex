@@ -262,7 +262,7 @@ session_chunk_ids = {c.chunk_id for c in chunks}
 
 if workspace_chunk_ids != session_chunk_ids and workspace.metadata.chunks_reviewed == 0:
     # Chunk IDs don't match and no progress made - reinitialize
-    st.warning("🔄 Chunk numbering updated. Reinitializing...")
+    st.warning("🔄 Chunk numbering mismatch detected. Reinitializing chunks...")
 
     # Clear old chunks
     workspace.chunks.clear()
@@ -281,7 +281,7 @@ if workspace_chunk_ids != session_chunk_ids and workspace.metadata.chunks_review
         ))
 
     workspace_manager._save_workspace(workspace)
-    st.rerun()
+    # Don't call st.rerun() - just continue with corrected data
 
 # Get current chunk
 current_chunk_id = workspace.metadata.current_chunk_id or 1
