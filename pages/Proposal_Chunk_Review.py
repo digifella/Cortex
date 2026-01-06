@@ -418,6 +418,22 @@ with col2:
     else:
         if chunk_progress and chunk_progress.mentions_found > 0:
             st.success("✅ All mentions reviewed!")
+
+            # Auto-mark chunk as reviewed when all mentions processed
+            if chunk_progress.status != "reviewed":
+                chunk_progress.status = "reviewed"
+                chunk_progress.reviewed_at = datetime.now()
+                workspace.metadata.chunks_reviewed += 1
+                workspace_manager._save_workspace(workspace)
+                st.info("✨ Chunk marked as complete!")
+        elif chunk_progress and chunk_progress.mentions_found == 0:
+            # No mentions found - auto-mark as reviewed
+            if chunk_progress.status != "reviewed":
+                chunk_progress.status = "reviewed"
+                chunk_progress.reviewed_at = datetime.now()
+                workspace.metadata.chunks_reviewed += 1
+                workspace_manager._save_workspace(workspace)
+                st.success("✅ No mentions found - chunk marked as complete!")
         else:
             st.info("Click 'Analyze This Chunk' to find mentions")
 
@@ -434,14 +450,7 @@ with col_prev:
 
 with col_next:
     if st.button("Next Chunk ➡️", disabled=(current_chunk_id == workspace.metadata.total_chunks), use_container_width=True):
-        # Mark current chunk as reviewed if all mentions processed
-        if chunk_progress:
-            pending = [m for m in chunk_mentions if not m.approved and not m.rejected and not m.ignored]
-            if len(pending) == 0 and chunk_progress.status != "reviewed":
-                chunk_progress.status = "reviewed"
-                chunk_progress.reviewed_at = datetime.now()
-                workspace.metadata.chunks_reviewed += 1
-
+        # Just navigate to next chunk (marking as reviewed happens automatically above)
         workspace.metadata.current_chunk_id = current_chunk_id + 1
         workspace_manager._save_workspace(workspace)
         st.rerun()
