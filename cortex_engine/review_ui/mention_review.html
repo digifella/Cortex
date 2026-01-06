@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mention Review Interface</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600&family=DM+Sans:wght@400;500;700&display=swap');
+
+        :root {
+            /* Editorial Color Palette - Sophisticated neutrals with accent */
+            --color-bg: #fafaf9;
+            --color-surface: #ffffff;
+            --color-text-primary: #1a1a1a;
+            --color-text-secondary: #6b6b6b;
+            --color-text-tertiary: #9ca3af;
+            --color-border: #e5e5e5;
+            --color-accent: #0f766e;
+            --color-accent-light: #ccfbf1;
+            --color-warning: #ea580c;
+            --color-warning-light: #fed7aa;
+            --color-success: #059669;
+            --color-success-light: #d1fae5;
+
+            /* Typography */
+            --font-display: 'Crimson Pro', serif;
+            --font-body: 'DM Sans', sans-serif;
+
+            /* Spacing */
+            --spacing-xs: 0.5rem;
+            --spacing-sm: 0.75rem;
+            --spacing-md: 1rem;
+            --spacing-lg: 1.5rem;
+            --spacing-xl: 2rem;
+            --spacing-2xl: 3rem;
+
+            /* Shadows */
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-body);
+            background: var(--color-bg);
+            color: var(--color-text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* Main Layout - Split View */
+        .review-container {
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            height: 100vh;
+            gap: 0;
+        }
+
+        /* Document Panel */
+        .document-panel {
+            background: var(--color-surface);
+            overflow-y: auto;
+            padding: var(--spacing-2xl);
+            border-right: 1px solid var(--color-border);
+            position: relative;
+        }
+
+        .document-header {
+            margin-bottom: var(--spacing-xl);
+            padding-bottom: var(--spacing-lg);
+            border-bottom: 2px solid var(--color-text-primary);
+        }
+
+        .document-title {
+            font-family: var(--font-display);
+            font-size: 2.25rem;
+            font-weight: 600;
+            line-height: 1.2;
+            margin-bottom: var(--spacing-sm);
+            color: var(--color-text-primary);
+        }
+
+        .document-meta {
+            font-size: 0.875rem;
+            color: var(--color-text-secondary);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .document-content {
+            font-family: var(--font-display);
+            font-size: 1.125rem;
+            line-height: 1.8;
+            max-width: 65ch;
+        }
+
+        .document-section {
+            margin-bottom: var(--spacing-xl);
+        }
+
+        .section-heading {
+            font-family: var(--font-body);
+            font-size: 0.875rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--color-text-primary);
+            margin-top: var(--spacing-2xl);
+            margin-bottom: var(--spacing-md);
+            padding-top: var(--spacing-lg);
+            border-top: 1px solid var(--color-border);
+        }
+
+        .document-paragraph {
+            margin-bottom: var(--spacing-lg);
+        }
+
+        /* Mention Highlighting */
+        .mention {
+            position: relative;
+            background: var(--color-accent-light);
+            padding: 0.125rem 0.25rem;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border-bottom: 2px solid var(--color-accent);
+        }
+
+        .mention:hover {
+            background: var(--color-accent);
+            color: white;
+        }
+
+        .mention.active {
+            background: var(--color-accent);
+            color: white;
+            box-shadow: 0 0 0 4px var(--color-accent-light);
+        }
+
+        .mention.pending {
+            background: var(--color-warning-light);
+            border-bottom-color: var(--color-warning);
+        }
+
+        .mention.approved {
+            background: var(--color-success-light);
+            border-bottom-color: var(--color-success);
+        }
+
+        /* Review Panel */
+        .review-panel {
+            background: var(--color-text-primary);
+            color: white;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .review-header {
+            padding: var(--spacing-xl);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .review-title {
+            font-family: var(--font-display);
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: var(--spacing-sm);
+        }
+
+        .review-progress {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-md);
+            margin-top: var(--spacing-md);
+        }
+
+        .progress-bar {
+            flex: 1;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--color-accent);
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            font-size: 0.75rem;
+            font-weight: 500;
+            opacity: 0.7;
+            white-space: nowrap;
+        }
+
+        /* Current Mention Card */
+        .current-mention {
+            padding: var(--spacing-xl);
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .mention-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: var(--spacing-md);
+            width: fit-content;
+        }
+
+        .mention-text {
+            font-family: var(--font-display);
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: var(--spacing-lg);
+            color: var(--color-accent);
+        }
+
+        .mention-detail {
+            margin-bottom: var(--spacing-md);
+            opacity: 0.9;
+        }
+
+        .mention-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            opacity: 0.6;
+            margin-bottom: 0.25rem;
+            font-weight: 500;
+        }
+
+        .mention-value {
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .context-preview {
+            background: rgba(255, 255, 255, 0.05);
+            border-left: 3px solid var(--color-accent);
+            padding: var(--spacing-md);
+            margin: var(--spacing-lg) 0;
+            border-radius: 4px;
+            font-family: var(--font-display);
+            font-size: 0.875rem;
+            line-height: 1.6;
+            font-style: italic;
+        }
+
+        /* Action Buttons */
+        .review-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: var(--spacing-md);
+            margin-top: auto;
+        }
+
+        .action-btn {
+            padding: var(--spacing-md) var(--spacing-lg);
+            border: none;
+            border-radius: 6px;
+            font-family: var(--font-body);
+            font-size: 0.875rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .action-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .action-btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-approve {
+            background: var(--color-success);
+            color: white;
+        }
+
+        .btn-reject {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        .btn-reject:hover {
+            background: var(--color-warning);
+        }
+
+        /* Navigation */
+        .review-nav {
+            padding: var(--spacing-lg) var(--spacing-xl);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            gap: var(--spacing-sm);
+        }
+
+        .nav-btn {
+            flex: 1;
+            padding: var(--spacing-sm);
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: white;
+            font-family: var(--font-body);
+            font-size: 0.875rem;
+            font-weight: 500;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .nav-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .nav-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        /* Mention List */
+        .mention-list {
+            padding: var(--spacing-md);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .list-header {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            opacity: 0.6;
+            margin-bottom: var(--spacing-sm);
+            font-weight: 500;
+        }
+
+        .mention-item {
+            padding: var(--spacing-sm);
+            margin-bottom: var(--spacing-xs);
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 0.875rem;
+        }
+
+        .mention-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .mention-item.active {
+            background: var(--color-accent);
+        }
+
+        /* Animations */
+        @keyframes slideInRight {
+            from {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .current-mention > * {
+            animation: slideInRight 0.3s ease forwards;
+        }
+
+        .current-mention > *:nth-child(1) { animation-delay: 0.05s; }
+        .current-mention > *:nth-child(2) { animation-delay: 0.1s; }
+        .current-mention > *:nth-child(3) { animation-delay: 0.15s; }
+        .current-mention > *:nth-child(4) { animation-delay: 0.2s; }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .review-container {
+                grid-template-columns: 1fr;
+                grid-template-rows: 1fr auto;
+            }
+
+            .review-panel {
+                position: sticky;
+                bottom: 0;
+                max-height: 60vh;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="review-container">
+        <!-- Document Panel -->
+        <div class="document-panel" id="documentPanel">
+            <div class="document-header">
+                <div class="document-title">Request for Tender: Professional Services</div>
+                <div class="document-meta">RFT12493 • Department of Health</div>
+            </div>
+
+            <div class="document-content">
+                <div class="section-heading">Section 1: Company Details</div>
+
+                <div class="document-paragraph">
+                    The tenderer must provide their legal entity name: <span class="mention pending" data-mention-id="0">@companyname</span>
+                </div>
+
+                <div class="document-paragraph">
+                    Australian Business Number (ABN): <span class="mention pending" data-mention-id="1">@abn</span>
+                </div>
+
+                <div class="document-paragraph">
+                    Registered office address: <span class="mention pending" data-mention-id="2">@registered_office</span>
+                </div>
+
+                <div class="document-paragraph">
+                    Contact details including email: <span class="mention pending" data-mention-id="3">@email</span> and website: <span class="mention pending" data-mention-id="4">@website</span>
+                </div>
+
+                <div class="section-heading">Section 2: Insurance Coverage</div>
+
+                <div class="document-paragraph">
+                    Please provide evidence of public liability insurance with minimum coverage of: <span class="mention pending" data-mention-id="5">@insurance.public_liability.coverage</span>
+                </div>
+
+                <div class="section-heading">Section 3: Executive Summary</div>
+
+                <div class="document-paragraph">
+                    Provide a brief overview of your company: <span class="mention pending" data-mention-id="6">@narrative[company_overview]</span>
+                </div>
+
+                <div class="section-heading">Section 4: Team Members</div>
+
+                <div class="document-paragraph">
+                    Please provide curriculum vitae for the proposed project manager: <span class="mention pending" data-mention-id="7">@cv[paul_smith]</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Review Panel -->
+        <div class="review-panel">
+            <div class="review-header">
+                <div class="review-title">Review Mentions</div>
+                <div class="review-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                    </div>
+                    <div class="progress-text" id="progressText">0 of 8</div>
+                </div>
+            </div>
+
+            <div class="current-mention" id="currentMention">
+                <div class="mention-badge" id="mentionType">Simple Field</div>
+                <div class="mention-text" id="mentionText">@companyname</div>
+
+                <div class="mention-detail">
+                    <div class="mention-label">Location</div>
+                    <div class="mention-value" id="mentionLocation">Line 12 • Section 1</div>
+                </div>
+
+                <div class="mention-detail">
+                    <div class="mention-label">Field Path</div>
+                    <div class="mention-value" id="mentionPath">company.legal_name</div>
+                </div>
+
+                <div class="context-preview" id="contextPreview">
+                    "The tenderer must provide their legal entity name: @companyname"
+                </div>
+
+                <div class="review-actions">
+                    <button class="action-btn btn-approve" id="btnApprove">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                            <path d="M13.5 4L6 11.5L2.5 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        Approve
+                    </button>
+                    <button class="action-btn btn-reject" id="btnReject">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                            <path d="M12 4L4 12M4 4L12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                        Reject
+                    </button>
+                </div>
+            </div>
+
+            <div class="review-nav">
+                <button class="nav-btn" id="btnPrevious">← Previous</button>
+                <button class="nav-btn" id="btnNext">Next →</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Sample mention data
+        const mentions = [
+            {
+                id: 0,
+                text: '@companyname',
+                type: 'Simple Field',
+                location: 'Line 12 • Section 1',
+                path: 'company.legal_name',
+                context: 'The tenderer must provide their legal entity name: @companyname',
+                status: 'pending'
+            },
+            {
+                id: 1,
+                text: '@abn',
+                type: 'Simple Field',
+                location: 'Line 15 • Section 1',
+                path: 'company.abn',
+                context: 'Australian Business Number (ABN): @abn',
+                status: 'pending'
+            },
+            {
+                id: 2,
+                text: '@registered_office',
+                type: 'Simple Field',
+                location: 'Line 18 • Section 1',
+                path: 'contact.registered_office',
+                context: 'Registered office address: @registered_office',
+                status: 'pending'
+            },
+            // Add more mentions as needed
+        ];
+
+        let currentIndex = 0;
+
+        function updateDisplay() {
+            const mention = mentions[currentIndex];
+
+            // Update current mention display
+            document.getElementById('mentionType').textContent = mention.type;
+            document.getElementById('mentionText').textContent = mention.text;
+            document.getElementById('mentionLocation').textContent = mention.location;
+            document.getElementById('mentionPath').textContent = mention.path;
+            document.getElementById('contextPreview').textContent = `"${mention.context}"`;
+
+            // Update progress
+            const reviewed = mentions.filter(m => m.status !== 'pending').length;
+            const progress = (reviewed / mentions.length) * 100;
+            document.getElementById('progressFill').style.width = `${progress}%`;
+            document.getElementById('progressText').textContent = `${reviewed} of ${mentions.length}`;
+
+            // Update active mention in document
+            document.querySelectorAll('.mention').forEach((el, idx) => {
+                el.classList.remove('active');
+                if (idx === currentIndex) {
+                    el.classList.add('active');
+                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            });
+
+            // Update navigation buttons
+            document.getElementById('btnPrevious').disabled = currentIndex === 0;
+            document.getElementById('btnNext').disabled = currentIndex === mentions.length - 1;
+        }
+
+        function approveMention() {
+            const mention = mentions[currentIndex];
+            mention.status = 'approved';
+            document.querySelector(`[data-mention-id="${currentIndex}"]`).classList.remove('pending');
+            document.querySelector(`[data-mention-id="${currentIndex}"]`).classList.add('approved');
+
+            if (currentIndex < mentions.length - 1) {
+                currentIndex++;
+                updateDisplay();
+            } else {
+                updateDisplay();
+            }
+        }
+
+        function rejectMention() {
+            const mention = mentions[currentIndex];
+            mention.status = 'rejected';
+            document.querySelector(`[data-mention-id="${currentIndex}"]`).classList.remove('pending');
+
+            if (currentIndex < mentions.length - 1) {
+                currentIndex++;
+                updateDisplay();
+            } else {
+                updateDisplay();
+            }
+        }
+
+        // Event listeners
+        document.getElementById('btnApprove').addEventListener('click', approveMention);
+        document.getElementById('btnReject').addEventListener('click', rejectMention);
+        document.getElementById('btnPrevious').addEventListener('click', () => {
+            if (currentIndex > 0) {
+                currentIndex--;
+                updateDisplay();
+            }
+        });
+        document.getElementById('btnNext').addEventListener('click', () => {
+            if (currentIndex < mentions.length - 1) {
+                currentIndex++;
+                updateDisplay();
+            }
+        });
+
+        // Click on mentions in document
+        document.querySelectorAll('.mention').forEach((el, idx) => {
+            el.addEventListener('click', () => {
+                currentIndex = idx;
+                updateDisplay();
+            });
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === 'j') {
+                if (currentIndex < mentions.length - 1) {
+                    currentIndex++;
+                    updateDisplay();
+                }
+            } else if (e.key === 'ArrowLeft' || e.key === 'k') {
+                if (currentIndex > 0) {
+                    currentIndex--;
+                    updateDisplay();
+                }
+            } else if (e.key === 'a' || e.key === 'Enter') {
+                approveMention();
+            } else if (e.key === 'r' || e.key === 'Backspace') {
+                rejectMention();
+            }
+        });
+
+        // Initialize
+        updateDisplay();
+    </script>
+</body>
+</html>

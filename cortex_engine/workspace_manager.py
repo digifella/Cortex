@@ -23,6 +23,8 @@ from .workspace_model import (
     ApprovalRecord
 )
 from .workspace_git import WorkspaceGit, WorkspaceGitOperations
+from .entity_profile_manager import EntityProfileManager
+from .entity_profile_schema import CustomField
 from .utils import get_logger
 
 logger = get_logger(__name__)
@@ -309,6 +311,7 @@ class WorkspaceManager:
         mention_text: str,
         approved: Optional[bool] = None,
         rejected: Optional[bool] = None,
+        ignored: Optional[bool] = None,
         resolved_value: Optional[str] = None
     ) -> Workspace:
         """
@@ -319,6 +322,7 @@ class WorkspaceManager:
             mention_text: Mention text to update
             approved: Set approval status
             rejected: Set rejection status
+            ignored: Set ignored status (not relevant)
             resolved_value: Set resolved value
 
         Returns:
@@ -346,6 +350,11 @@ class WorkspaceManager:
             if rejected:
                 mention.reviewed_at = datetime.now()
 
+        if ignored is not None:
+            mention.ignored = ignored
+            if ignored:
+                mention.reviewed_at = datetime.now()
+
         if resolved_value is not None:
             mention.resolved_value = resolved_value
             mention.generated_at = datetime.now()
@@ -353,11 +362,100 @@ class WorkspaceManager:
         # Update counts
         workspace.metadata.approved_mentions = sum(1 for m in workspace.mentions if m.approved)
         workspace.metadata.rejected_mentions = sum(1 for m in workspace.mentions if m.rejected)
+        workspace.metadata.ignored_mentions = sum(1 for m in workspace.mentions if m.ignored)
         workspace.metadata.generated_mentions = sum(1 for m in workspace.mentions if m.resolved_value)
         workspace.metadata.updated_at = datetime.now()
 
         self._save_workspace(workspace)
         self._save_bindings(workspace)
+
+        return workspace
+
+    def replace_mention_with_custom_field(
+        self,
+        workspace_id: str,
+        mention_text: str,
+        custom_field_name: str,
+        custom_field_value: str,
+        custom_field_description: Optional[str],
+        entity_profile_manager: EntityProfileManager
+    ) -> Workspace:
+        """
+        Replace a mention with a custom field and save to entity profile.
+
+        Args:
+            workspace_id: Workspace identifier
+            mention_text: Mention text to replace
+            custom_field_name: Name for the custom field
+            custom_field_value: Value for the custom field
+            custom_field_description: Optional description
+            entity_profile_manager: Entity profile manager instance
+
+        Returns:
+            Updated workspace
+        """
+        workspace = self.get_workspace(workspace_id)
+
+        if not workspace:
+            raise ValueError(f"Workspace not found: {workspace_id}")
+
+        # Get entity ID from workspace
+        if not workspace.metadata.entity_id:
+            raise ValueError(f"Workspace has no entity bound: {workspace_id}")
+
+        # Load entity profile
+        entity_profile = entity_profile_manager.get_entity_profile(workspace.metadata.entity_id)
+
+        if not entity_profile:
+            raise ValueError(f"Entity profile not found: {workspace.metadata.entity_id}")
+
+        # Add custom field to entity profile
+        custom_field = entity_profile.add_custom_field(
+            field_name=custom_field_name,
+            field_value=custom_field_value,
+            description=custom_field_description
+        )
+
+        # Save updated profile
+        entity_profile_manager._save_profile(entity_profile)
+
+        logger.info(f"Added custom field '{custom_field_name}' to entity {workspace.metadata.entity_id}")
+
+        # Find and update the mention
+        mention = next((m for m in workspace.mentions if m.mention_text == mention_text), None)
+
+        if mention:
+            # Mark original mention as rejected
+            mention.rejected = True
+            mention.reviewed_at = datetime.now()
+
+        # Create new mention binding for the custom field
+        new_mention = MentionBinding(
+            mention_text=f"@{custom_field.field_name}",
+            field_path=f"custom_fields.{custom_field.field_name}",
+            location=mention.location if mention else "Custom",
+            mention_type="simple",
+            approved=True,  # Auto-approve custom fields
+            resolved_value=custom_field.field_value,
+            reviewed_at=datetime.now()
+        )
+
+        workspace.mentions.append(new_mention)
+
+        # Update counts
+        workspace.metadata.approved_mentions = sum(1 for m in workspace.mentions if m.approved)
+        workspace.metadata.rejected_mentions = sum(1 for m in workspace.mentions if m.rejected)
+        workspace.metadata.total_mentions = len(workspace.mentions)
+        workspace.metadata.updated_at = datetime.now()
+
+        self._save_workspace(workspace)
+        self._save_bindings(workspace)
+
+        # Git commit
+        git_ops = WorkspaceGit(workspace)
+        git_ops.commit(f"Replace mention with custom field: {custom_field.field_name}")
+
+        logger.info(f"Replaced mention '{mention_text}' with custom field '@{custom_field.field_name}'")
 
         return workspace
 

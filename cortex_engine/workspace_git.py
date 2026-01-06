@@ -139,7 +139,8 @@ class WorkspaceGit:
             return True
 
         except subprocess.CalledProcessError as e:
-            if "nothing to commit" in e.stderr:
+            # Check both stdout and stderr for "nothing to commit" message
+            if "nothing to commit" in e.stderr or "nothing to commit" in e.stdout:
                 logger.debug("Nothing to commit")
                 return False
             raise
@@ -431,9 +432,15 @@ class WorkspaceGitOperations:
         Returns:
             True if committed
         """
+        # Only commit files that exist
+        files_to_commit = ["metadata.yaml"]
+        bindings_path = git.workspace_path / "field_bindings.yaml"
+        if bindings_path.exists():
+            files_to_commit.append("field_bindings.yaml")
+
         return git.commit_changes(
             f"Entity bound: {entity_name}",
-            files=["metadata.yaml", "field_bindings.yaml"]
+            files=files_to_commit
         )
 
     @staticmethod

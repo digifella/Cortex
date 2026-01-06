@@ -245,13 +245,14 @@ else:
     profile = manager.get_entity_profile(selected_entity_id)
 
     # Tabs for different sections
-    tab_profile, tab_team, tab_projects, tab_references, tab_insurance, tab_capabilities, tab_narrative = st.tabs([
+    tab_profile, tab_team, tab_projects, tab_references, tab_insurance, tab_capabilities, tab_custom, tab_narrative = st.tabs([
         "📋 Profile",
         "👥 Team",
         "🏗️ Projects",
         "📞 References",
         "🛡️ Insurance",
         "⭐ Capabilities",
+        "🔧 Custom Fields",
         "📝 Narrative"
     ])
 
@@ -1055,6 +1056,116 @@ else:
 
         st.markdown("---")
         st.info("💡 **Tip:** For detailed capability profiles, edit YAML files directly.")
+
+    # ========================================
+    # TAB: CUSTOM FIELDS
+    # ========================================
+
+    with tab_custom:
+        section_header("🔧", "Custom Fields", "Tender-specific custom data fields")
+
+        st.info("💡 Custom fields are created during proposal workflows when you need tender-specific data that doesn't fit standard profile fields. They're saved here for reuse across proposals.")
+
+        # Display existing custom fields
+        if profile.custom_fields:
+            st.subheader(f"📋 {len(profile.custom_fields)} Custom Fields")
+
+            for idx, field in enumerate(profile.custom_fields):
+                with st.expander(f"🔧 {field.field_name}", expanded=False):
+                    st.markdown(f"**Field Name:** `@{field.field_name}`")
+                    st.markdown(f"**Field Path:** `custom_fields.{field.field_name}`")
+
+                    if field.description:
+                        st.caption("Description")
+                        st.info(field.description)
+
+                    st.caption("Current Value")
+                    st.code(field.field_value, language=None)
+
+                    st.caption("Metadata")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.text(f"Created: {field.created_date}")
+                    with col2:
+                        if field.last_used:
+                            st.text(f"Last Used: {field.last_used}")
+                        else:
+                            st.text("Last Used: Never")
+
+                    st.markdown("---")
+
+                    # Edit form
+                    with st.form(key=f"edit_custom_field_{idx}"):
+                        st.caption("✏️ EDIT FIELD")
+
+                        new_value = st.text_area(
+                            "Field Value",
+                            value=field.field_value,
+                            height=100
+                        )
+
+                        new_description = st.text_input(
+                            "Description",
+                            value=field.description or ""
+                        )
+
+                        col_save, col_delete = st.columns(2)
+
+                        with col_save:
+                            if st.form_submit_button("💾 Save Changes", use_container_width=True):
+                                field.field_value = new_value
+                                field.description = new_description if new_description else None
+                                manager._save_profile(profile)
+                                st.success(f"✅ Updated custom field: {field.field_name}")
+                                st.rerun()
+
+                        with col_delete:
+                            if st.form_submit_button("🗑️ Delete", use_container_width=True):
+                                profile.custom_fields.remove(field)
+                                manager._save_profile(profile)
+                                st.success(f"✅ Deleted custom field: {field.field_name}")
+                                st.rerun()
+
+        else:
+            st.info("📭 No custom fields yet. Create them during proposal workflows using the 'Replace with Custom Field' feature in the Review tab.")
+
+        # Add new custom field manually
+        st.markdown("---")
+        st.subheader("➕ Add New Custom Field")
+
+        with st.form(key="add_custom_field_manual"):
+            st.caption("Create a custom field manually")
+
+            new_field_name = st.text_input(
+                "Field Name",
+                help="Lowercase letters, numbers, and underscores only (e.g., specified_personnel_1_email)"
+            )
+
+            new_field_value = st.text_area(
+                "Field Value",
+                height=100
+            )
+
+            new_field_description = st.text_input(
+                "Description (optional)",
+                help="What this field represents"
+            )
+
+            if st.form_submit_button("✨ Create Custom Field", type="primary"):
+                if not new_field_name or not new_field_value:
+                    st.error("Field name and value are required")
+                else:
+                    try:
+                        profile.add_custom_field(
+                            field_name=new_field_name,
+                            field_value=new_field_value,
+                            description=new_field_description if new_field_description else None
+                        )
+                        manager._save_profile(profile)
+                        st.success(f"✅ Created custom field: @{new_field_name}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error creating custom field: {str(e)}")
 
     # ========================================
     # TAB: NARRATIVE

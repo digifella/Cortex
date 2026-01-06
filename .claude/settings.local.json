@@ -90,7 +90,9 @@
       "Bash(ollama pull:*)",
       "Bash(ping:*)",
       "Bash(tail:*)",
-      "Bash(streamlit run:*)"
+      "Bash(streamlit run:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(git config:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",

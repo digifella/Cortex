@@ -575,6 +575,30 @@ class Capability(BaseModel):
 
 
 # ============================================
+# CUSTOM FIELD MODELS
+# ============================================
+
+class CustomField(BaseModel):
+    """Custom field for tender-specific data."""
+    field_name: str = Field(description="Field name (e.g., specified_personnel_1_email)")
+    field_value: str = Field(description="Field value")
+    description: Optional[str] = Field(None, description="Human-readable description")
+    created_date: date = Field(default_factory=date.today)
+    last_used: Optional[date] = Field(None, description="Last used in a proposal")
+
+    @field_validator('field_name')
+    @classmethod
+    def validate_field_name(cls, v: str) -> str:
+        """Ensure field_name is URL-safe (lowercase, underscores, no spaces)."""
+        # Convert to lowercase and replace spaces with underscores
+        normalized = v.lower().replace(' ', '_').replace('-', '_')
+        # Ensure only alphanumeric and underscores
+        if not normalized.replace('_', '').isalnum():
+            raise ValueError(f"Field name must be alphanumeric with underscores: {v}")
+        return normalized
+
+
+# ============================================
 # MAIN ENTITY PROFILE
 # ============================================
 
@@ -590,6 +614,12 @@ class EntityProfile(BaseModel):
     references: List[str] = Field(default_factory=list, description="List of reference IDs")
     capabilities: List[str] = Field(default_factory=list, description="List of capability IDs")
     insurance: List[str] = Field(default_factory=list, description="List of insurance policy IDs")
+
+    # Custom fields for tender-specific data
+    custom_fields: List[CustomField] = Field(
+        default_factory=list,
+        description="Custom fields created during proposal workflows"
+    )
 
     # Formatting and display preferences
     formatting: FormattingPreferences = Field(default_factory=FormattingPreferences)
@@ -634,3 +664,40 @@ class EntityProfile(BaseModel):
             return f"{acn[0:3]} {acn[3:6]} {acn[6:9]}"
 
         return acn
+
+    def get_custom_field(self, field_name: str) -> Optional[CustomField]:
+        """Get a custom field by name."""
+        normalized_name = field_name.lower().replace(' ', '_').replace('-', '_')
+        for field in self.custom_fields:
+            if field.field_name == normalized_name:
+                return field
+        return None
+
+    def add_custom_field(self, field_name: str, field_value: str, description: Optional[str] = None) -> CustomField:
+        """Add or update a custom field."""
+        normalized_name = field_name.lower().replace(' ', '_').replace('-', '_')
+
+        # Check if field already exists
+        existing = self.get_custom_field(normalized_name)
+        if existing:
+            # Update existing field
+            existing.field_value = field_value
+            if description:
+                existing.description = description
+            existing.last_used = date.today()
+            return existing
+        else:
+            # Create new field
+            new_field = CustomField(
+                field_name=normalized_name,
+                field_value=field_value,
+                description=description,
+                last_used=date.today()
+            )
+            self.custom_fields.append(new_field)
+            return new_field
+
+    def get_custom_field_value(self, field_name: str) -> Optional[str]:
+        """Get the value of a custom field by name."""
+        field = self.get_custom_field(field_name)
+        return field.field_value if field else None

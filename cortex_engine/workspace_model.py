@@ -26,6 +26,18 @@ class WorkspaceState(str, Enum):
     EXPORTED = "exported"                   # Final document exported
 
 
+class ChunkProgress(BaseModel):
+    """Progress tracking for a single chunk."""
+    chunk_id: int = Field(description="Chunk identifier (1-indexed)")
+    title: str = Field(description="Chunk title/section name")
+    start_line: int = Field(description="Starting line number")
+    end_line: int = Field(description="Ending line number")
+    status: str = Field(default="pending", description="Status: pending, reviewed, approved")
+    mentions_found: int = Field(default=0, description="Number of mentions found in this chunk")
+    mentions_approved: int = Field(default=0, description="Number of mentions approved")
+    reviewed_at: Optional[datetime] = Field(default=None)
+
+
 class MentionBinding(BaseModel):
     """Binding of a mention to entity data."""
     mention_text: str = Field(description="Original @mention text (e.g., '@companyname')")
@@ -33,11 +45,15 @@ class MentionBinding(BaseModel):
     field_path: str = Field(description="Field path in entity (e.g., 'company.legal_name')")
     location: str = Field(description="Location in document (section name or page number)")
 
+    # Chunk association
+    chunk_id: Optional[int] = Field(default=None, description="Associated chunk ID")
+
     # Review status
     suggested_by_llm: bool = Field(default=True, description="Was this suggested by LLM?")
     approved: bool = Field(default=False, description="Has human approved this mention?")
     modified: bool = Field(default=False, description="Did human modify this mention?")
     rejected: bool = Field(default=False, description="Did human reject this mention?")
+    ignored: bool = Field(default=False, description="Did human ignore this mention? (not relevant)")
 
     # Resolution
     requires_llm: bool = Field(default=False, description="Requires LLM generation?")
@@ -81,7 +97,14 @@ class WorkspaceMetadata(BaseModel):
     total_mentions: int = Field(default=0, description="Total @mentions in document")
     approved_mentions: int = Field(default=0, description="Approved @mentions")
     rejected_mentions: int = Field(default=0, description="Rejected @mentions")
+    ignored_mentions: int = Field(default=0, description="Ignored @mentions (not relevant)")
     generated_mentions: int = Field(default=0, description="LLM-generated @mentions")
+
+    # Chunk-based review tracking
+    chunk_mode_enabled: bool = Field(default=False, description="Using chunk-based review?")
+    total_chunks: int = Field(default=0, description="Total chunks in document")
+    chunks_reviewed: int = Field(default=0, description="Chunks reviewed")
+    current_chunk_id: Optional[int] = Field(default=None, description="Current chunk being reviewed")
 
     # Tags and metadata
     tags: List[str] = Field(default_factory=list)
@@ -140,6 +163,9 @@ class Workspace(BaseModel):
     mentions: List[MentionBinding] = Field(default_factory=list)
     generation_logs: List[GenerationLog] = Field(default_factory=list)
     approval_records: List[ApprovalRecord] = Field(default_factory=list)
+
+    # Chunk-based review
+    chunks: List[ChunkProgress] = Field(default_factory=list, description="Chunk progress tracking")
 
     # Directory path (not stored in YAML)
     workspace_path: Optional[Path] = Field(default=None, exclude=True)

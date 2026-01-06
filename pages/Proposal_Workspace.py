@@ -90,18 +90,31 @@ with st.sidebar:
             for ws in workspaces
         }
 
+        # Determine default selection
+        default_index = 0
+        if 'selected_workspace_id' in st.session_state and st.session_state.selected_workspace_id:
+            # Try to find the previously selected workspace
+            for idx, (name, ws_id) in enumerate(workspace_options.items(), start=1):
+                if ws_id == st.session_state.selected_workspace_id:
+                    default_index = idx
+                    break
+
         selected_name = st.selectbox(
             "Select Workspace",
-            options=["-- Create New --"] + list(workspace_options.keys())
+            options=["-- Create New --"] + list(workspace_options.keys()),
+            index=default_index
         )
 
         if selected_name != "-- Create New --":
             selected_workspace_id = workspace_options[selected_name]
+            st.session_state.selected_workspace_id = selected_workspace_id
         else:
             selected_workspace_id = None
+            st.session_state.selected_workspace_id = None
     else:
         st.info("No workspaces yet. Create your first one below!")
         selected_workspace_id = None
+        st.session_state.selected_workspace_id = None
 
     st.markdown("---")
 
@@ -200,8 +213,10 @@ if selected_workspace_id is None:
                         entity_name=entity_name
                     )
 
+                    # Automatically select the newly created workspace
+                    st.session_state.selected_workspace_id = workspace_id
+
                     st.success(f"✅ Created workspace: {workspace_name}")
-                    st.info("👉 Select the workspace from the sidebar to continue.")
                     st.rerun()
 
             except Exception as e:
@@ -374,9 +389,43 @@ else:
                 st.metric("Narrative Sections", narrative_count)
 
             if st.button("🔄 Re-run Markup"):
-                workspace.mentions = []
-                workspace_manager._save_workspace(workspace)
-                st.rerun()
+                try:
+                    with st.spinner("Re-analyzing document with enhanced LLM filtering..."):
+                        # Clear existing mentions
+                        workspace.mentions = []
+                        workspace_manager._save_workspace(workspace)
+
+                        # Load document
+                        document_text = doc_path.read_text(encoding='utf-8')
+
+                        # Create markup engine
+                        markup_engine = MarkupEngine(entity_manager, llm)
+
+                        # Analyze document with new LLM-based filtering
+                        mentions = markup_engine.analyze_document(
+                            document_text,
+                            workspace.metadata.entity_id
+                        )
+
+                        # Add to workspace
+                        workspace = workspace_manager.add_mention_bindings(
+                            workspace.metadata.workspace_id,
+                            mentions
+                        )
+
+                        # Update state (only if not already in MARKUP_SUGGESTED)
+                        if workspace.metadata.state != WorkspaceState.MARKUP_SUGGESTED:
+                            workspace = workspace_manager.update_workspace_state(
+                                workspace.metadata.workspace_id,
+                                WorkspaceState.MARKUP_SUGGESTED
+                            )
+
+                    st.success(f"✅ Re-analyzed with LLM filtering: {len(mentions)} @mention placements suggested")
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"Error during re-markup: {e}")
+                    logger.error(f"Re-markup failed: {e}", exc_info=True)
 
         else:
             st.info("🤖 Run auto-markup to analyze the document and suggest @mention placements")
@@ -402,11 +451,12 @@ else:
                             mentions
                         )
 
-                        # Update state
-                        workspace = workspace_manager.update_workspace_state(
-                            workspace.metadata.workspace_id,
-                            WorkspaceState.MARKUP_SUGGESTED
-                        )
+                        # Update state (only if not already in MARKUP_SUGGESTED)
+                        if workspace.metadata.state != WorkspaceState.MARKUP_SUGGESTED:
+                            workspace = workspace_manager.update_workspace_state(
+                                workspace.metadata.workspace_id,
+                                WorkspaceState.MARKUP_SUGGESTED
+                            )
 
                     st.success(f"✅ Suggested {len(mentions)} @mention placements")
                     st.rerun()
@@ -438,32 +488,317 @@ else:
                         )
                         st.rerun()
             else:
-                st.info(f"📋 {len(pending)} mentions pending review")
+                # Load document text for context
+                doc_path = workspace.workspace_path / "documents" / "tender_original.txt"
 
-                for mention in pending:
-                    with st.expander(f"📌 {mention.mention_text} ({mention.mention_type})"):
-                        st.write(f"**Location:** {mention.location}")
-                        st.write(f"**Field Path:** {mention.field_path}")
+                if doc_path.exists():
+                    document_text = doc_path.read_text(encoding='utf-8')
 
-                        col1, col2, col3 = st.columns(3)
+                    # Use new context-rich review interface
+                    from cortex_engine.review_ui.mention_review_streamlit import render_mention_review
 
-                        with col1:
-                            if st.button("✅ Approve", key=f"approve_{mention.mention_text}"):
+                    render_mention_review(
+                        workspace=workspace,
+                        workspace_manager=workspace_manager,
+                        entity_profile_manager=st.session_state.entity_manager,
+                        document_text=document_text,
+                        mentions=workspace.mentions
+                    )
+                else:
+                    # Fallback to simple list if document not available
+                    st.info(f"📋 {len(pending)} mentions pending review")
+
+                    for idx, mention in enumerate(pending):
+                        with st.expander(f"📌 {mention.mention_text} ({mention.mention_type})"):
+                            st.write(f"**Location:** {mention.location}")
+                            st.write(f"**Field Path:** {mention.field_path}")
+
+                            col1, col2, col3 = st.columns(3)
+
+                            with col1:
+                                if st.button("✅ Approve", key=f"approve_{idx}_{mention.mention_text}"):
+                                    workspace_manager.update_mention_binding(
+                                        workspace.metadata.workspace_id,
+                                        mention.mention_text,
+                                        approved=True
+                                    )
+                                    st.rerun()
+
+                            with col2:
+                                if st.button("❌ Reject", key=f"reject_{idx}_{mention.mention_text}"):
+                                    workspace_manager.update_mention_binding(
+                                        workspace.metadata.workspace_id,
+                                        mention.mention_text,
+                                        rejected=True
+                                    )
+                                    st.rerun()
+
+    # ========================================
+    # TAB: GENERATE
+    # ========================================
+
+    with tab_generate:
+        section_header("✨", "Generate Content", "LLM generation for complex mentions")
+
+        # Check if we have mentions that need LLM generation
+        llm_mentions = workspace.get_llm_mentions()
+
+        if len(workspace.mentions) == 0:
+            st.warning("⚠️ No mentions yet. Complete the markup and review steps first.")
+        elif len(llm_mentions) == 0:
+            st.success("✅ No mentions require LLM generation")
+
+            if workspace.metadata.state == WorkspaceState.MARKUP_REVIEWED:
+                if st.button("Continue to Export"):
+                    workspace = workspace_manager.update_workspace_state(
+                        workspace.metadata.workspace_id,
+                        WorkspaceState.CONTENT_GENERATED
+                    )
+                    st.rerun()
+        else:
+            st.info(f"🤖 {len(llm_mentions)} mentions require LLM content generation")
+
+            # Show mentions that need generation
+            for gen_idx, mention in enumerate(llm_mentions):
+                with st.expander(f"✨ {mention.mention_text} ({mention.mention_type})"):
+                    st.write(f"**Location:** {mention.location}")
+                    st.write(f"**Field Path:** {mention.field_path}")
+
+                    # Determine generation type
+                    generation_type = "unknown"
+                    if "@cv[" in mention.mention_text:
+                        generation_type = "cv"
+                        person_id = mention.mention_text.split('[')[1].split(']')[0]
+
+                        st.write(f"**Type:** CV Generation")
+                        st.write(f"**Person:** {person_id}")
+
+                        # Get person data
+                        team_member = entity_manager.get_team_member(
+                            workspace.metadata.entity_id,
+                            person_id
+                        )
+
+                        if team_member:
+                            # Show preview of data
+                            with st.expander("📋 Source Data"):
+                                st.write(f"**Name:** {team_member.full_name}")
+                                st.write(f"**Role:** {team_member.role}")
+                                st.write(f"**Qualifications:** {len(team_member.qualifications)}")
+                                st.write(f"**Experience:** {len(team_member.experience)}")
+
+                    elif "@project_summary[" in mention.mention_text:
+                        generation_type = "project_summary"
+                        project_id = mention.mention_text.split('[')[1].split(']')[0]
+
+                        st.write(f"**Type:** Project Summary")
+                        st.write(f"**Project:** {project_id}")
+
+                        # Get project data
+                        project = entity_manager.get_project(
+                            workspace.metadata.entity_id,
+                            project_id
+                        )
+
+                        if project:
+                            with st.expander("📋 Source Data"):
+                                st.write(f"**Project:** {project.project_name}")
+                                st.write(f"**Client:** {project.client}")
+                                st.write(f"**Value:** ${project.financials.contract_value:,.0f}")
+
+                    elif "@reference[" in mention.mention_text:
+                        generation_type = "reference"
+                        reference_id = mention.mention_text.split('[')[1].split(']')[0]
+
+                        st.write(f"**Type:** Reference")
+                        st.write(f"**Reference:** {reference_id}")
+
+                    if st.button("▶️ Generate Content", key=f"gen_{gen_idx}_{mention.mention_text}"):
+                        try:
+                            with st.spinner("Generating content..."):
+                                # Create content generation engine
+                                from cortex_engine.content_generator import ContentGenerator
+
+                                generator = ContentGenerator(entity_manager, llm)
+
+                                # Generate content
+                                import time
+                                start_time = time.time()
+
+                                generated_content = generator.generate_content(
+                                    mention,
+                                    workspace.metadata.entity_id,
+                                    generation_type
+                                )
+
+                                generation_time = time.time() - start_time
+
+                                # Update mention with generated content
                                 workspace_manager.update_mention_binding(
                                     workspace.metadata.workspace_id,
                                     mention.mention_text,
-                                    approved=True
+                                    resolved_value=generated_content
                                 )
-                                st.rerun()
 
-                        with col2:
-                            if st.button("❌ Reject", key=f"reject_{mention.mention_text}"):
-                                workspace_manager.update_mention_binding(
-                                    workspace.metadata.workspace_id,
-                                    mention.mention_text,
-                                    rejected=True
+                                # Log generation
+                                from cortex_engine.workspace_model import GenerationLog
+                                log = GenerationLog(
+                                    mention_text=mention.mention_text,
+                                    generation_type=generation_type,
+                                    prompt="Auto-generated from entity data",
+                                    model=llm.model,
+                                    temperature=llm.temperature,
+                                    generated_content=generated_content,
+                                    generation_time=generation_time
                                 )
-                                st.rerun()
+                                workspace_manager.add_generation_log(
+                                    workspace.metadata.workspace_id,
+                                    log
+                                )
+
+                            st.success("✅ Content generated!")
+                            st.rerun()
+
+                        except Exception as e:
+                            st.error(f"Generation failed: {e}")
+                            logger.error(f"Content generation failed: {e}", exc_info=True)
+
+            # Check if all generated
+            if all(m.resolved_value for m in workspace.mentions if m.requires_llm and m.approved):
+                st.success("✅ All content generated!")
+
+                if st.button("Continue to Export", type="primary"):
+                    workspace = workspace_manager.update_workspace_state(
+                        workspace.metadata.workspace_id,
+                        WorkspaceState.CONTENT_GENERATED
+                    )
+                    st.rerun()
+
+    # ========================================
+    # TAB: EXPORT
+    # ========================================
+
+    with tab_export:
+        section_header("📦", "Export Document", "Generate final tender document")
+
+        # Check if ready to export
+        if workspace.metadata.state not in [WorkspaceState.CONTENT_GENERATED, WorkspaceState.DRAFT_READY, WorkspaceState.EXPORTED]:
+            st.warning("⚠️ Complete the Generate step first")
+        else:
+            st.success("✅ Ready to export!")
+
+            # Load original document
+            doc_path = workspace.workspace_path / "documents" / "tender_original.txt"
+
+            if doc_path.exists():
+                document_text = doc_path.read_text(encoding='utf-8')
+
+                # Build replacements dictionary
+                replacements = {}
+
+                # Use field substitution engine to resolve all mentions
+                parser = MentionParser()
+                engine = FieldSubstitutionEngine(entity_manager)
+
+                # Find all mentions in document
+                mentions_in_doc = parser.parse_all(document_text)
+
+                with st.spinner("Resolving all mentions..."):
+                    for parsed_mention in mentions_in_doc:
+                        # Try to resolve from workspace first (for generated content)
+                        workspace_mention = next(
+                            (m for m in workspace.mentions if m.mention_text == parsed_mention.raw_text),
+                            None
+                        )
+
+                        if workspace_mention and workspace_mention.resolved_value:
+                            # Use generated content
+                            replacements[parsed_mention.raw_text] = workspace_mention.resolved_value
+                        else:
+                            # Resolve from entity profile
+                            result = engine.resolve(parsed_mention, workspace.metadata.entity_id)
+
+                            if result.success and not result.requires_llm:
+                                replacements[parsed_mention.raw_text] = result.value
+
+                st.write(f"**Resolved:** {len(replacements)} mentions")
+
+                # Preview
+                with st.expander("👁️ Preview Final Document", expanded=True):
+                    # Apply replacements
+                    filled_text = document_text
+                    for mention, value in replacements.items():
+                        filled_text = filled_text.replace(mention, value)
+
+                    st.text_area(
+                        "Final Document",
+                        value=filled_text,
+                        height=400,
+                        disabled=True
+                    )
+
+                # Export options
+                st.subheader("Export Options")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    export_format = st.selectbox(
+                        "Format",
+                        options=['txt', 'docx'],
+                        help="Choose export format"
+                    )
+
+                with col2:
+                    export_filename = st.text_input(
+                        "Filename",
+                        value=f"tender_final_{datetime.now().strftime('%Y%m%d')}",
+                        help="Filename without extension"
+                    )
+
+                if st.button("📦 Export Document", type="primary"):
+                    try:
+                        with st.spinner("Generating final document..."):
+                            # Replace all mentions
+                            filled_text = document_text
+                            for mention, value in replacements.items():
+                                filled_text = filled_text.replace(mention, value)
+
+                            # Save to exports directory
+                            export_path = workspace.workspace_path / "exports" / f"{export_filename}.{export_format}"
+
+                            success = DocumentProcessor.save_document_with_mentions(
+                                filled_text,
+                                export_path,
+                                export_format
+                            )
+
+                            if success:
+                                # Update workspace state
+                                workspace = workspace_manager.update_workspace_state(
+                                    workspace.metadata.workspace_id,
+                                    WorkspaceState.EXPORTED
+                                )
+
+                                st.success(f"✅ Exported: {export_path.name}")
+
+                                # Provide download
+                                with open(export_path, 'rb') as f:
+                                    st.download_button(
+                                        label="⬇️ Download Document",
+                                        data=f.read(),
+                                        file_name=export_path.name,
+                                        mime='application/octet-stream'
+                                    )
+                            else:
+                                st.error("Export failed")
+
+                    except Exception as e:
+                        st.error(f"Export failed: {e}")
+                        logger.error(f"Export failed: {e}", exc_info=True)
+
+            else:
+                st.error("Original document not found")
 
 # Footer
 st.markdown("---")
