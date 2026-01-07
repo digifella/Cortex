@@ -253,31 +253,75 @@ elif workspace.metadata.analysis_status == "analyzing":
     st.markdown('<div class="progress-container">', unsafe_allow_html=True)
     st.markdown("### 🔬 Analyzing Document...")
 
+    # Initialize log messages in session state
+    if 'analysis_log_messages' not in st.session_state:
+        st.session_state.analysis_log_messages = []
+
     # Progress bar
     progress_bar = st.progress(0)
     status_text = st.empty()
 
-    # Batch analysis with progress
+    # Log container for real-time streaming
+    st.markdown("**Processing Log:**")
+    log_container = st.container(height=300, border=True)
+
+    # Batch analysis with progress and logging
     def update_progress(current, total):
         progress = int((current / total) * 100)
+        chunk = chunks[current - 1]
+
+        # Update progress bar
         progress_bar.progress(progress / 100)
-        status_text.markdown(f"**Analyzing chunk {current}/{total}** ({progress}%)")
+        status_text.markdown(f"**Analyzing chunk {current}/{total}** ({progress}%) - *{chunk.title[:50]}...*")
+
+        # Add log message
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        log_msg = f"[{timestamp}] Chunk {current}/{total} ({progress}%): {chunk.title[:60]}"
+        st.session_state.analysis_log_messages.append(log_msg)
+
+        # Update log display
+        with log_container:
+            st.code("\n".join(st.session_state.analysis_log_messages[-20:]), language="log")
 
         # Update workspace progress
         workspace.metadata.analysis_progress = progress
         workspace_manager._save_workspace(workspace)
 
+    # Add initial log message
+    start_time = datetime.now()
+    st.session_state.analysis_log_messages.append(f"[{start_time.strftime('%H:%M:%S')}] Starting batch analysis of {len(chunks)} chunks...")
+    with log_container:
+        st.code("\n".join(st.session_state.analysis_log_messages), language="log")
+
     # Run batch analysis
+    st.session_state.analysis_log_messages.append(f"[{datetime.now().strftime('%H:%M:%S')}] LLM Model: qwen2.5:72b-instruct-q4_K_M")
     results = markup_engine.analyze_all_chunks_batch(chunks, workspace.metadata.entity_id, update_progress)
 
     # Save all mentions
     all_mentions = []
+    mentions_by_chunk = {}
+
     for chunk_id, mentions in results.items():
         # Update chunk progress
         chunk_progress = next((cp for cp in workspace.chunks if cp.chunk_id == chunk_id), None)
         if chunk_progress:
             chunk_progress.mentions_found = len(mentions)
+
         all_mentions.extend(mentions)
+        mentions_by_chunk[chunk_id] = len(mentions)
+
+        # Log mentions found
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        st.session_state.analysis_log_messages.append(f"[{timestamp}] Chunk {chunk_id}: Found {len(mentions)} mentions")
+
+    # Update final log
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+    st.session_state.analysis_log_messages.append(f"[{end_time.strftime('%H:%M:%S')}] Analysis complete in {duration:.1f}s")
+    st.session_state.analysis_log_messages.append(f"[{end_time.strftime('%H:%M:%S')}] Total mentions found: {len(all_mentions)}")
+
+    with log_container:
+        st.code("\n".join(st.session_state.analysis_log_messages), language="log")
 
     # Add all mentions to workspace
     workspace = workspace_manager.add_mention_bindings(workspace.metadata.workspace_id, all_mentions)
@@ -290,7 +334,12 @@ elif workspace.metadata.analysis_status == "analyzing":
     workspace_manager._save_workspace(workspace)
 
     st.markdown('</div>', unsafe_allow_html=True)
-    st.success(f"✅ **Analysis Complete!** Found {len(all_mentions)} mentions across {len(chunks)} chunks")
+    st.success(f"✅ **Analysis Complete!** Found {len(all_mentions)} mentions across {len(chunks)} chunks in {duration:.1f}s")
+
+    # Keep log visible for review
+    with st.expander("📋 View Full Analysis Log", expanded=False):
+        st.code("\n".join(st.session_state.analysis_log_messages), language="log")
+
     time.sleep(2)
     st.rerun()
 
