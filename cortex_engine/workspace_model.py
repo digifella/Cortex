@@ -106,6 +106,17 @@ class WorkspaceMetadata(BaseModel):
     chunks_reviewed: int = Field(default=0, description="Chunks reviewed")
     current_chunk_id: Optional[int] = Field(default=None, description="Current chunk being reviewed")
 
+    # Batch analysis progress tracking
+    analysis_status: str = Field(default="pending", description="Analysis status: pending, analyzing, complete, failed")
+    analysis_progress: int = Field(default=0, description="Analysis progress percentage (0-100)")
+    analysis_started_at: Optional[datetime] = Field(default=None, description="When batch analysis started")
+    analysis_completed_at: Optional[datetime] = Field(default=None, description="When batch analysis completed")
+    total_mentions_found: int = Field(default=0, description="Total mentions found during batch analysis")
+
+    # Review session tracking
+    last_reviewed_chunk_id: Optional[int] = Field(default=None, description="Last chunk reviewed in session")
+    last_reviewed_at: Optional[datetime] = Field(default=None, description="When last chunk was reviewed")
+
     # Tags and metadata
     tags: List[str] = Field(default_factory=list)
     notes: Optional[str] = Field(default=None)

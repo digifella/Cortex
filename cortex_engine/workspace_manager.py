@@ -398,6 +398,84 @@ class WorkspaceManager:
 
         return workspace
 
+    def edit_mention_binding(
+        self,
+        workspace_id: str,
+        mention_text: str,
+        chunk_id: int,
+        location: str,
+        new_mention_text: Optional[str] = None,
+        new_field_path: Optional[str] = None,
+        new_resolved_value: Optional[str] = None
+    ) -> Workspace:
+        """
+        Edit a mention binding's core fields.
+
+        Allows user to modify:
+        - mention_text: Change the @mention text
+        - field_path: Change which field this mention maps to
+        - resolved_value: Pre-fill or edit the value
+
+        Args:
+            workspace_id: Workspace identifier
+            mention_text: Current mention text to find
+            chunk_id: Chunk ID for unique identification
+            location: Location for unique identification
+            new_mention_text: New @mention text (optional)
+            new_field_path: New field path (optional)
+            new_resolved_value: New resolved value (optional)
+
+        Returns:
+            Updated workspace
+
+        Example:
+            >>> # Change @companyname to @company_legal_name
+            >>> workspace = manager.edit_mention_binding(
+            ...     "workspace_id",
+            ...     "@companyname",
+            ...     chunk_id=1,
+            ...     location="Attachment 1",
+            ...     new_mention_text="@company_legal_name",
+            ...     new_field_path="company.legal_name"
+            ... )
+        """
+        workspace = self.get_workspace(workspace_id)
+
+        if not workspace:
+            raise ValueError(f"Workspace not found: {workspace_id}")
+
+        # Find mention using chunk_id and location for uniqueness
+        mention = next((m for m in workspace.mentions
+                      if m.mention_text == mention_text
+                      and m.chunk_id == chunk_id
+                      and m.location == location), None)
+
+        if not mention:
+            raise ValueError(f"Mention not found: {mention_text} (chunk {chunk_id}, location {location})")
+
+        # Update fields
+        if new_mention_text is not None:
+            mention.mention_text = new_mention_text
+            mention.modified = True
+
+        if new_field_path is not None:
+            mention.field_path = new_field_path
+            mention.modified = True
+
+        if new_resolved_value is not None:
+            mention.resolved_value = new_resolved_value
+            mention.generated_at = datetime.now()
+            mention.modified = True
+
+        workspace.metadata.updated_at = datetime.now()
+
+        self._save_workspace(workspace)
+        self._save_bindings(workspace)
+
+        logger.info(f"Edited mention binding: {mention_text} -> {new_mention_text or mention_text}")
+
+        return workspace
+
     def replace_mention_with_custom_field(
         self,
         workspace_id: str,

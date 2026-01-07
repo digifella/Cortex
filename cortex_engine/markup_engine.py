@@ -173,6 +173,61 @@ class MarkupEngine:
         logger.info(f"Chunk {chunk.chunk_id}: Generated {len(suggestions)} total suggestions")
         return suggestions
 
+    def analyze_all_chunks_batch(
+        self,
+        chunks: List[DocumentChunk],
+        entity_id: str,
+        progress_callback: Optional[callable] = None
+    ) -> Dict[int, List[MentionBinding]]:
+        """
+        Analyze all chunks in batch mode with progress tracking.
+
+        This is the RECOMMENDED method for initial workspace setup:
+        - Processes all chunks automatically
+        - Provides progress updates via callback
+        - Returns all mentions organized by chunk_id
+
+        Args:
+            chunks: List of DocumentChunk objects to analyze
+            entity_id: Entity profile ID to use
+            progress_callback: Optional function(current, total) to track progress
+
+        Returns:
+            Dict mapping chunk_id -> list of mention bindings
+
+        Example:
+            >>> def show_progress(current, total):
+            ...     print(f"Analyzing chunk {current}/{total} ({current*100//total}%)")
+            >>> results = engine.analyze_all_chunks_batch(chunks, "entity_id", show_progress)
+            >>> total_mentions = sum(len(mentions) for mentions in results.values())
+            >>> print(f"Found {total_mentions} mentions across {len(chunks)} chunks")
+        """
+        logger.info(f"Starting batch analysis of {len(chunks)} chunks for entity {entity_id}")
+
+        results = {}
+        total = len(chunks)
+
+        for idx, chunk in enumerate(chunks):
+            try:
+                # Analyze this chunk
+                mentions = self.analyze_chunk(chunk, entity_id)
+                results[chunk.chunk_id] = mentions
+
+                # Progress callback
+                if progress_callback:
+                    progress_callback(idx + 1, total)
+
+                logger.info(f"Batch progress: {idx + 1}/{total} chunks analyzed")
+
+            except Exception as e:
+                logger.error(f"Error analyzing chunk {chunk.chunk_id}: {e}")
+                results[chunk.chunk_id] = []  # Empty list for failed chunks
+
+        total_mentions = sum(len(mentions) for mentions in results.values())
+        logger.info(f"Batch analysis complete: {total_mentions} total mentions found across {total} chunks")
+
+        return results
+
     def _analyze_chunk_with_llm(
         self,
         chunk: DocumentChunk,

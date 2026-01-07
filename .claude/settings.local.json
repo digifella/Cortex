@@ -92,7 +92,9 @@
       "Bash(tail:*)",
       "Bash(streamlit run:*)",
       "Bash(git ls-tree:*)",
-      "Bash(git config:*)"
+      "Bash(git config:*)",
+      "Bash(address\" in personnel section.\n\n**After**: Document split into ~4000 char chunks, personnel sections \nclassified and filtered out, each chunk gets full LLM analysis with no \nsampling, personnel fields never get wrong suggestions.\n\n## Documentation\n- **CHUNK_REVIEW_IMPLEMENTATION.md**: Comprehensive implementation docs\n- **PHASE_2_COMPLETE.md**: Phase completion summary\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(pkill:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",
