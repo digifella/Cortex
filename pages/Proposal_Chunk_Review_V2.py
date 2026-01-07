@@ -431,7 +431,7 @@ elif workspace.metadata.analysis_status == "complete":
         st.markdown(f"**{len(pending_mentions)} mentions to review:**")
 
         for idx, mention in enumerate(pending_mentions):
-            # Mention card
+            # Mention card with context
             st.markdown(f"""
             <div class="mention-card">
                 <div class="mention-header">
@@ -443,6 +443,34 @@ elif workspace.metadata.analysis_status == "complete":
                 </div>
             </div>
             """, unsafe_allow_html=True)
+
+            # Extract context from chunk content
+            content_lines = current_chunk.content.split('\n')
+
+            # Find the mention in the content
+            context_lines = []
+            found = False
+
+            for line_idx, line in enumerate(content_lines):
+                if mention.mention_text in line or mention.field_path.split('.')[-1] in line.lower():
+                    # Found the mention - show 3 lines before and after
+                    start_idx = max(0, line_idx - 3)
+                    end_idx = min(len(content_lines), line_idx + 4)
+
+                    for i in range(start_idx, end_idx):
+                        prefix = ">>> " if i == line_idx else "    "
+                        context_lines.append(f"{prefix}{content_lines[i]}")
+                    found = True
+                    break
+
+            if not found:
+                # Fallback: show first 10 lines of chunk
+                context_lines = content_lines[:10]
+
+            # Context preview expander (collapsed by default, can click to expand)
+            with st.expander("👁️ Show Context", expanded=False):
+                st.code("\n".join(context_lines), language="text")
+                st.caption(">>> indicates the line containing this mention")
 
             # Action buttons
             col1, col2, col3 = st.columns([1, 1, 2])
