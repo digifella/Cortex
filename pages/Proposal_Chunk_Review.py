@@ -523,7 +523,7 @@ with col_jump:
         st.rerun()
 
 with col_nav:
-    col_prev, col_next, col_complete = st.columns([1, 1, 1])
+    col_prev, col_next, col_jump_mentions, col_complete = st.columns([1, 1, 1, 1])
 
     with col_prev:
         if st.button("⬅️ Previous", disabled=(current_chunk_id == 1), use_container_width=True):
@@ -535,6 +535,19 @@ with col_nav:
         if st.button("Next ➡️", disabled=(current_chunk_id == workspace.metadata.total_chunks), use_container_width=True):
             # Just navigate to next chunk (marking as reviewed happens automatically above)
             workspace.metadata.current_chunk_id = current_chunk_id + 1
+            workspace_manager._save_workspace(workspace)
+            st.rerun()
+
+    with col_jump_mentions:
+        # Find next chunk with mentions
+        next_chunk_with_mentions = None
+        for cp in workspace.chunks:
+            if cp.chunk_id > current_chunk_id and cp.mentions_found > 0 and cp.status != "reviewed":
+                next_chunk_with_mentions = cp.chunk_id
+                break
+
+        if st.button("⏭️ Jump", disabled=(next_chunk_with_mentions is None), use_container_width=True, help="Jump to next chunk with mentions"):
+            workspace.metadata.current_chunk_id = next_chunk_with_mentions
             workspace_manager._save_workspace(workspace)
             st.rerun()
 
