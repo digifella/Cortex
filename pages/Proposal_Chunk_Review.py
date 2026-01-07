@@ -539,15 +539,15 @@ with col_nav:
             st.rerun()
 
     with col_jump_mentions:
-        # Find next chunk with mentions
-        next_chunk_with_mentions = None
+        # Find next unreviewed chunk (skip empty reviewed chunks)
+        next_unreviewed = None
         for cp in workspace.chunks:
-            if cp.chunk_id > current_chunk_id and cp.mentions_found > 0 and cp.status != "reviewed":
-                next_chunk_with_mentions = cp.chunk_id
+            if cp.chunk_id > current_chunk_id and cp.status != "reviewed":
+                next_unreviewed = cp.chunk_id
                 break
 
-        if st.button("⏭️ Jump", disabled=(next_chunk_with_mentions is None), use_container_width=True, help="Jump to next chunk with mentions"):
-            workspace.metadata.current_chunk_id = next_chunk_with_mentions
+        if st.button("⏭️ Jump", disabled=(next_unreviewed is None), use_container_width=True, help="Jump to next unreviewed chunk"):
+            workspace.metadata.current_chunk_id = next_unreviewed
             workspace_manager._save_workspace(workspace)
             st.rerun()
 
