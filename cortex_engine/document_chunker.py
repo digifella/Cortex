@@ -55,8 +55,12 @@ class DocumentChunker:
         # Section heading patterns
         self.section_patterns = [
             r'^\s*#{1,3}\s+(.+)$',  # Markdown headers
-            r'^\s*SECTION\s+\d+[:.]\s*(.+)$',  # "SECTION 4: Title"
-            r'^\s*PART\s+[A-Z0-9]+[:.]\s*(.+)$',  # "PART A: Title"
+            r'^\s*SECTION\s+\d+[:.]\s*(.+?)(?:\t.*)?$',  # "SECTION 4: Title" (optionally followed by tab + page number)
+            r'^\s*PART\s+[A-Z0-9]+[:.]\s*(.+?)(?:\t.*)?$',  # "PART A: Title"
+            r'^\s*SCHEDULE\s+\d+[:.]\s*(.+?)(?:\t.*)?$',  # "SCHEDULE 3: Title"
+            r'^\s*ATTACHMENT\s+\d+[:.]\s*(.+?)(?:\t.*)?$',  # "ATTACHMENT 1: Title"
+            r'^\s*Schedule\s+\d+\s+(.+?)(?:\t.*)?$',  # "Schedule 3 Title" (title case)
+            r'^\s*Attachment\s+\d+:\s*(.+?)(?:\t.*)?$',  # "Attachment 1: Title" (title case)
             r'^\s*\d+\.\s+([A-Z][^.]+)$',  # "4. TITLE" (all caps)
             r'^\s*\d+\.\d+\s+([A-Z][^.]+)$',  # "4.1 TITLE"
         ]
@@ -65,7 +69,7 @@ class DocumentChunker:
         self.personnel_keywords = [
             'personnel', 'team member', 'staff', 'key personnel',
             'specified personnel', 'nominated personnel', 'cv', 'resume',
-            'qualifications', 'experience', 'individual', 'person'
+            'individual person', 'employee details'
         ]
 
         # Company section keywords
