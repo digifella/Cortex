@@ -97,7 +97,11 @@ from llama_index.readers.file import (
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from cortex_engine.config import INGESTION_LOG_PATH, STAGING_INGESTION_FILE, INGESTED_FILES_LOG, COLLECTION_NAME, EMBED_MODEL
+from cortex_engine.config import (
+    INGESTION_LOG_PATH, STAGING_INGESTION_FILE, INGESTED_FILES_LOG,
+    COLLECTION_NAME, EMBED_MODEL,
+    TABLE_AWARE_CHUNKING, TABLE_SPECIFIC_EMBEDDINGS, FIGURE_ENTITY_LINKING
+)
 from cortex_engine.utils.file_utils import get_file_hash
 from cortex_engine.utils.logging_utils import get_logger
 from cortex_engine.utils.smart_ollama_llm import create_smart_ollama_llm
@@ -117,6 +121,15 @@ from cortex_engine.embedding_adapters import EmbeddingServiceAdapter
 from cortex_engine.entity_extractor import EntityExtractor, ExtractedEntity, ExtractedRelationship
 from cortex_engine.graph_manager import EnhancedGraphManager
 from cortex_engine.batch_manager import BatchState
+
+# Phase 2 Enhancements: Table-aware chunking and figure entity linking
+try:
+    from cortex_engine.table_chunking_enhancer import create_table_aware_chunker
+    from cortex_engine.figure_entity_linker import create_figure_entity_linker, load_knowledge_graph_for_linking
+    PHASE2_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Phase 2 enhancements not available: {e}")
+    PHASE2_AVAILABLE = False
 
 LOG_FILE = INGESTION_LOG_PATH
 # STAGING_FILE will be set dynamically based on runtime db_path
@@ -601,8 +614,8 @@ def _legacy_manual_load_documents(file_paths: List[str], args=None) -> List[Docu
 
     # Process images in batch (parallel with timeout)
     if image_files:
-        # Respect conservative pacing for image processing
-        image_workers = getattr(args, 'image_workers', 1) if hasattr(args, 'image_workers') else 1
+        # Phase 1 Enhancement: Increased parallel workers for RTX 8000 (48GB VRAM)
+        image_workers = getattr(args, 'image_workers', 4) if hasattr(args, 'image_workers') else 4
         image_docs = _process_images_batch(image_files, skip_images, max_workers=image_workers)
         documents.extend(image_docs)
 
@@ -1318,15 +1331,87 @@ def finalize_ingestion(db_path: str, args=None):
             doc_meta = metadata_map[path_key]
             doc.doc_id = doc_meta.doc_id
             flat_metadata = {
-                "doc_id": doc_meta.doc_id, 
-                "file_name": doc_meta.file_name, 
-                "doc_posix_path": doc_meta.doc_posix_path, 
+                "doc_id": doc_meta.doc_id,
+                "file_name": doc_meta.file_name,
+                "doc_posix_path": doc_meta.doc_posix_path,
                 "last_modified_date": doc_meta.last_modified_date
             }
             if doc_meta.rich_metadata:
                 flat_metadata.update(doc_meta.rich_metadata.model_dump())
                 flat_metadata['thematic_tags'] = ', '.join(flat_metadata.get('thematic_tags', []))
+
+            # Phase 1 Enhancement: Preserve complex Docling metadata
+            # ChromaDB requires flat metadata, so serialize complex structures as JSON
+            if 'docling_provenance' in doc.metadata:
+                flat_metadata['docling_provenance'] = json.dumps(doc.metadata['docling_provenance'])
+            if 'docling_figures' in doc.metadata:
+                flat_metadata['docling_figures'] = json.dumps(doc.metadata['docling_figures'])
+            if 'docling_structure' in doc.metadata:
+                flat_metadata['docling_structure'] = json.dumps(doc.metadata['docling_structure'])
+
             doc.metadata = flat_metadata
+
+    # Phase 2 Enhancement: Apply table-aware chunking and figure entity linking
+    if PHASE2_AVAILABLE and (TABLE_AWARE_CHUNKING or FIGURE_ENTITY_LINKING):
+        logging.info("🚀 Applying Phase 2 enhancements to documents...")
+
+        enhanced_documents = []
+
+        # Apply figure entity linking first (operates on full documents)
+        if FIGURE_ENTITY_LINKING:
+            try:
+                # Load knowledge graph for entity linking
+                graph_path = args.graph_path if args and hasattr(args, 'graph_path') else None
+                if not graph_path:
+                    from cortex_engine.config import GRAPH_FILE_PATH
+                    graph_path = GRAPH_FILE_PATH
+
+                knowledge_graph = load_knowledge_graph_for_linking(graph_path)
+                entity_linker = create_figure_entity_linker(knowledge_graph)
+
+                logging.info(f"📎 Linking figures to knowledge graph entities...")
+                documents_for_indexing = entity_linker.link_batch_documents(
+                    documents_for_indexing,
+                    knowledge_graph
+                )
+
+                # Serialize figure_entities metadata for ChromaDB
+                for doc in documents_for_indexing:
+                    if 'figure_entities' in doc.metadata:
+                        doc.metadata['figure_entities'] = json.dumps(doc.metadata['figure_entities'])
+
+                logging.info(f"✅ Figure entity linking complete")
+
+            except Exception as e:
+                logging.warning(f"Figure entity linking failed (non-critical): {e}")
+
+        # Apply table-aware chunking (expands documents into chunks)
+        if TABLE_AWARE_CHUNKING:
+            try:
+                chunker = create_table_aware_chunker(
+                    chunk_size=1024,
+                    chunk_overlap=200,
+                    table_context_sentences=2
+                )
+
+                logging.info(f"📊 Applying table-aware chunking to {len(documents_for_indexing)} documents...")
+
+                for doc in documents_for_indexing:
+                    # Chunk document while preserving tables
+                    chunks = chunker.process_document(doc)
+                    enhanced_documents.extend(chunks)
+
+                original_count = len(documents_for_indexing)
+                documents_for_indexing = enhanced_documents
+
+                logging.info(
+                    f"✅ Table-aware chunking complete: "
+                    f"{original_count} docs → {len(documents_for_indexing)} chunks"
+                )
+
+            except Exception as e:
+                logging.warning(f"Table-aware chunking failed (non-critical), using original documents: {e}")
+                # Keep original documents if chunking fails
 
     # Validate embedding model compatibility before ingestion
     from cortex_engine.utils.embedding_validator import (
@@ -1475,8 +1560,8 @@ def main():
                        help="After this many documents, sleep for cooldown period")
     parser.add_argument("--cooldown-seconds", type=float, default=20.0,
                        help="Cooldown duration (seconds) to prevent thermal throttling")
-    parser.add_argument("--image-workers", type=int, default=1,
-                       help="Max concurrent image VLM workers (default 1 for low heat)")
+    parser.add_argument("--image-workers", type=int, default=4,
+                       help="Max concurrent image VLM workers (default 4, optimized for RTX 8000)")
     parser.add_argument("--index-batch-cooldown", type=float, default=1.0,
                        help="Sleep (s) between indexing batches to reduce sustained load")
     parser.add_argument("--llm-timeout", type=float, default=120.0,

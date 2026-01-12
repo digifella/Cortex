@@ -41,8 +41,9 @@ def _get_image_executor():
     if _image_executor is None:
         with _executor_lock:
             if _image_executor is None:
+                # Phase 1 Enhancement: Increased workers for RTX 8000 (48GB VRAM)
                 _image_executor = ThreadPoolExecutor(
-                    max_workers=3,
+                    max_workers=6,
                     thread_name_prefix="vlm_image"
                 )
     return _image_executor

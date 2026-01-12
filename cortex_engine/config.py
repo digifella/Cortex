@@ -65,6 +65,29 @@ if not EMBED_MODEL:
 # or "moondream" (smaller, faster alternative)
 VLM_MODEL = "llava:7b"  # Vision language model for image processing - upgraded to 7B parameter model
 
+# --- Docling VLM Processing Configuration ---
+# Phase 1: Enhanced figure processing with VLM descriptions
+DOCLING_VLM_ENABLED = os.getenv("DOCLING_VLM_ENABLED", "true").lower() == "true"
+DOCLING_VLM_MAX_WORKERS = int(os.getenv("DOCLING_VLM_MAX_WORKERS", "4"))  # Optimized for RTX 8000
+DOCLING_VLM_TIMEOUT = int(os.getenv("DOCLING_VLM_TIMEOUT", "30"))  # Seconds per figure
+DOCLING_PROVENANCE_ENABLED = os.getenv("DOCLING_PROVENANCE_ENABLED", "true").lower() == "true"
+
+# Phase 2: Table-aware processing configuration
+TABLE_AWARE_CHUNKING = os.getenv("TABLE_AWARE_CHUNKING", "true").lower() == "true"
+TABLE_SPECIFIC_EMBEDDINGS = os.getenv("TABLE_SPECIFIC_EMBEDDINGS", "true").lower() == "true"
+FIGURE_ENTITY_LINKING = os.getenv("FIGURE_ENTITY_LINKING", "true").lower() == "true"
+
+# Phase 3: Multi-modal and advanced features
+MULTIMODAL_ENABLED = os.getenv("MULTIMODAL_ENABLED", "false").lower() == "true"  # Off by default until Phase 3
+MULTIMODAL_WEIGHT_TEXT = float(os.getenv("MULTIMODAL_WEIGHT_TEXT", "0.5"))
+MULTIMODAL_WEIGHT_TABLES = float(os.getenv("MULTIMODAL_WEIGHT_TABLES", "0.3"))
+MULTIMODAL_WEIGHT_IMAGES = float(os.getenv("MULTIMODAL_WEIGHT_IMAGES", "0.2"))
+MCP_SERVER_ENABLED = os.getenv("MCP_SERVER_ENABLED", "false").lower() == "true"
+MCP_SERVER_HOST = os.getenv("MCP_SERVER_HOST", "0.0.0.0")
+MCP_SERVER_PORT = int(os.getenv("MCP_SERVER_PORT", "8001"))
+MCP_SERVER_API_KEY = os.getenv("MCP_SERVER_API_KEY", "")
+SCHEMA_EXTRACTION_ENABLED = os.getenv("SCHEMA_EXTRACTION_ENABLED", "false").lower() == "true"  # Off by default
+
 # --- Task-Specific Model Configuration ---
 # Dynamic Model Selection Based on System Resources
 # Import smart model selector for intelligent model selection
@@ -124,13 +147,13 @@ def get_cortex_config() -> Dict[str, Any]:
         "graph_file_path": GRAPH_FILE_PATH,
         "image_store_path": IMAGE_STORE_PATH,
         "model_registry_file": MODEL_REGISTRY_FILE,
-        
+
         # Model Configuration
         "model_distribution_strategy": MODEL_DISTRIBUTION_STRATEGY,
         "deployment_environment": DEPLOYMENT_ENVIRONMENT,
         "docker_model_registry": DOCKER_MODEL_REGISTRY,
         "ollama_base_url": OLLAMA_BASE_URL,
-        
+
         # Model Assignments
         "embed_model": EMBED_MODEL,
         "vlm_model": VLM_MODEL,
@@ -138,7 +161,26 @@ def get_cortex_config() -> Dict[str, Any]:
         "kb_llm_model": KB_LLM_MODEL,
         "research_local_model": RESEARCH_LOCAL_MODEL,
         "research_cloud_model": RESEARCH_CLOUD_MODEL,
-        
+
+        # Docling Enhancements
+        "docling_vlm_enabled": DOCLING_VLM_ENABLED,
+        "docling_vlm_max_workers": DOCLING_VLM_MAX_WORKERS,
+        "docling_vlm_timeout": DOCLING_VLM_TIMEOUT,
+        "docling_provenance_enabled": DOCLING_PROVENANCE_ENABLED,
+        "table_aware_chunking": TABLE_AWARE_CHUNKING,
+        "table_specific_embeddings": TABLE_SPECIFIC_EMBEDDINGS,
+        "figure_entity_linking": FIGURE_ENTITY_LINKING,
+        "multimodal_enabled": MULTIMODAL_ENABLED,
+        "multimodal_weights": {
+            "text": MULTIMODAL_WEIGHT_TEXT,
+            "tables": MULTIMODAL_WEIGHT_TABLES,
+            "images": MULTIMODAL_WEIGHT_IMAGES
+        },
+        "mcp_server_enabled": MCP_SERVER_ENABLED,
+        "mcp_server_host": MCP_SERVER_HOST,
+        "mcp_server_port": MCP_SERVER_PORT,
+        "schema_extraction_enabled": SCHEMA_EXTRACTION_ENABLED,
+
         # Environment
         "environment": DEPLOYMENT_ENVIRONMENT,
         "project_root": str(PROJECT_ROOT),
