@@ -371,6 +371,11 @@ class GraphQueryEngine:
         # First, do standard vector search
         vector_results = self.vector_index.as_retriever(similarity_top_k=candidate_count).retrieve(query)
 
+        logger.info(f"Vector search returned {len(vector_results)} results")
+        if vector_results and len(vector_results) > 0:
+            first = vector_results[0]
+            logger.info(f"First vector result has text: {hasattr(first, 'text')}, metadata keys: {list(first.metadata.keys()) if hasattr(first, 'metadata') and first.metadata else 'None'}")
+
         if not use_graph_context:
             return vector_results
 
@@ -837,11 +842,15 @@ class GraphQueryEngine:
         
         for doc_id, score in scored_candidates[:max_results]:
             # Create a mock result object for discovered documents
+            # Note: These are graph-discovered docs without full text content
             mock_result = type('MockResult', (), {
+                'text': f"[Graph-discovered document: {doc_id}] - Full content not available via graph traversal. Use Traditional search for full document text.",
                 'score': score * 0.5,  # Lower than vector results
                 'metadata': {
                     'doc_id': doc_id,
                     'file_name': doc_id,
+                    'file_path': f'graph://{doc_id}',
+                    'document_type': 'Graph Discovery',
                     'discovery_method': 'graph_traversal',
                     'combined_score': score * 0.5
                 }
