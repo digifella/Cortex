@@ -1,7 +1,8 @@
 # ## File: config.py
-# Version: 3.1.0 (Cross-Platform Path Fix)
-# Date: 2025-08-20
+# Version: 3.2.0 (Qwen3-VL Integration)
+# Date: 2026-01-17
 # Purpose: Central configuration file for Project Cortex with hybrid model support.
+#          - CHANGE (v3.2.0): Added Qwen3-VL multimodal embedding and reranking configuration
 #          - CHANGE (v3.0.0): Added hybrid model distribution configuration
 #          - Support for both Docker Model Runner and Ollama backends
 #          - Environment-aware model selection strategy
@@ -87,6 +88,40 @@ MCP_SERVER_HOST = os.getenv("MCP_SERVER_HOST", "0.0.0.0")
 MCP_SERVER_PORT = int(os.getenv("MCP_SERVER_PORT", "8001"))
 MCP_SERVER_API_KEY = os.getenv("MCP_SERVER_API_KEY", "")
 SCHEMA_EXTRACTION_ENABLED = os.getenv("SCHEMA_EXTRACTION_ENABLED", "false").lower() == "true"  # Off by default
+
+# --- Qwen3-VL Multimodal Embedding Configuration ---
+# Unified multimodal embeddings for text, images, and video in same vector space
+# Enables cross-modal search (e.g., text query finding relevant images/charts)
+QWEN3_VL_ENABLED = os.getenv("QWEN3_VL_ENABLED", "false").lower() == "true"  # Enable Qwen3-VL embedding
+
+# Model size selection: "auto", "2B", "8B"
+# - auto: Selects based on available VRAM (8B if >=20GB free, else 2B)
+# - 2B: Qwen3-VL-Embedding-2B (~5GB VRAM, 2048 dimensions)
+# - 8B: Qwen3-VL-Embedding-8B (~16GB VRAM, 4096 dimensions)
+QWEN3_VL_MODEL_SIZE = os.getenv("QWEN3_VL_MODEL_SIZE", "auto")
+
+# Matryoshka Representation Learning (MRL) dimension reduction
+# Set to reduce embedding dimensions for storage efficiency while maintaining quality
+# Options: None (full dims), 64, 128, 256, 512, 1024, 2048
+# e.g., QWEN3_VL_MRL_DIM=1024 reduces 4096D to 1024D (75% storage savings, ~2% quality loss)
+QWEN3_VL_MRL_DIM = os.getenv("QWEN3_VL_MRL_DIM")
+if QWEN3_VL_MRL_DIM:
+    QWEN3_VL_MRL_DIM = int(QWEN3_VL_MRL_DIM)
+else:
+    QWEN3_VL_MRL_DIM = None
+
+# Reranker configuration
+QWEN3_VL_RERANKER_ENABLED = os.getenv("QWEN3_VL_RERANKER_ENABLED", "false").lower() == "true"
+QWEN3_VL_RERANKER_SIZE = os.getenv("QWEN3_VL_RERANKER_SIZE", "auto")  # auto, 2B, 8B
+QWEN3_VL_RERANKER_TOP_K = int(os.getenv("QWEN3_VL_RERANKER_TOP_K", "5"))  # Results after reranking
+QWEN3_VL_RERANKER_CANDIDATES = int(os.getenv("QWEN3_VL_RERANKER_CANDIDATES", "20"))  # Candidates before reranking
+
+# Flash Attention 2 (recommended for memory efficiency)
+QWEN3_VL_USE_FLASH_ATTENTION = os.getenv("QWEN3_VL_USE_FLASH_ATTENTION", "true").lower() == "true"
+
+# Batch processing limits (adjust based on your GPU memory)
+QWEN3_VL_EMBED_BATCH_SIZE = int(os.getenv("QWEN3_VL_EMBED_BATCH_SIZE", "8"))
+QWEN3_VL_RERANK_BATCH_SIZE = int(os.getenv("QWEN3_VL_RERANK_BATCH_SIZE", "4"))
 
 # --- Task-Specific Model Configuration ---
 # Dynamic Model Selection Based on System Resources
@@ -181,6 +216,18 @@ def get_cortex_config() -> Dict[str, Any]:
         "mcp_server_port": MCP_SERVER_PORT,
         "schema_extraction_enabled": SCHEMA_EXTRACTION_ENABLED,
 
+        # Qwen3-VL Configuration
+        "qwen3_vl_enabled": QWEN3_VL_ENABLED,
+        "qwen3_vl_model_size": QWEN3_VL_MODEL_SIZE,
+        "qwen3_vl_mrl_dim": QWEN3_VL_MRL_DIM,
+        "qwen3_vl_reranker_enabled": QWEN3_VL_RERANKER_ENABLED,
+        "qwen3_vl_reranker_size": QWEN3_VL_RERANKER_SIZE,
+        "qwen3_vl_reranker_top_k": QWEN3_VL_RERANKER_TOP_K,
+        "qwen3_vl_reranker_candidates": QWEN3_VL_RERANKER_CANDIDATES,
+        "qwen3_vl_use_flash_attention": QWEN3_VL_USE_FLASH_ATTENTION,
+        "qwen3_vl_embed_batch_size": QWEN3_VL_EMBED_BATCH_SIZE,
+        "qwen3_vl_rerank_batch_size": QWEN3_VL_RERANK_BATCH_SIZE,
+
         # Environment
         "environment": DEPLOYMENT_ENVIRONMENT,
         "project_root": str(PROJECT_ROOT),
@@ -215,6 +262,21 @@ def get_model_config_for_task(task_type: str) -> Dict[str, str]:
             "model": VLM_MODEL,
             "backend_preference": "local_preferred",
             "performance_tier": "standard"
+        },
+        "multimodal_embeddings": {
+            "enabled": QWEN3_VL_ENABLED,
+            "model_size": QWEN3_VL_MODEL_SIZE,
+            "mrl_dim": QWEN3_VL_MRL_DIM,
+            "backend_preference": "local_only",
+            "performance_tier": "premium"
+        },
+        "reranking": {
+            "enabled": QWEN3_VL_RERANKER_ENABLED,
+            "model_size": QWEN3_VL_RERANKER_SIZE,
+            "top_k": QWEN3_VL_RERANKER_TOP_K,
+            "candidates": QWEN3_VL_RERANKER_CANDIDATES,
+            "backend_preference": "local_only",
+            "performance_tier": "premium"
         }
     }
     

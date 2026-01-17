@@ -1,0 +1,55 @@
+# Qwen3-VL Multimodal Embedding & Reranking Requirements
+# ========================================================
+# Install with: pip install -r requirements-qwen3-vl.txt
+#
+# These dependencies enable Qwen3-VL multimodal embeddings and reranking
+# for the Cortex Suite knowledge management system.
+
+# Core transformers (minimum version for Qwen3-VL support)
+transformers>=4.57.0
+
+# Qwen VL utilities for image/video processing
+qwen-vl-utils>=0.0.14
+
+# PyTorch with CUDA support (adjust for your CUDA version)
+# For CUDA 12.1:
+torch>=2.8.0
+# For CUDA 11.8, use: pip install torch --index-url https://download.pytorch.org/whl/cu118
+
+# Flash Attention 2 for memory optimization (optional but recommended)
+# Requires: CUDA >= 11.6, PyTorch >= 2.0
+# Install separately: pip install flash-attn --no-build-isolation
+# flash-attn>=2.5.0
+
+# Additional utilities
+numpy>=1.24.0
+pillow>=10.0.0  # For image processing
+
+# vLLM for high-performance inference (optional)
+# vllm>=0.14.0
+
+# SGLang for alternative inference backend (optional)
+# sglang>=0.2.0
+
+# Notes:
+# ------
+# 1. Qwen3-VL-Embedding-2B: ~5GB VRAM, 2048 dimensions
+# 2. Qwen3-VL-Embedding-8B: ~16GB VRAM, 4096 dimensions
+# 3. Qwen3-VL-Reranker-2B: ~5GB VRAM
+# 4. Qwen3-VL-Reranker-8B: ~16GB VRAM
+#
+# For your RTX 8000 (48GB), you can run both 8B models simultaneously.
+#
+# Installation:
+# -------------
+# pip install -r requirements-qwen3-vl.txt
+#
+# For Flash Attention 2 (recommended):
+# pip install flash-attn --no-build-isolation
+#
+# Enable in Cortex Suite:
+# -----------------------
+# Set environment variables:
+#   QWEN3_VL_ENABLED=true
+#   QWEN3_VL_RERANKER_ENABLED=true
+#   QWEN3_VL_MODEL_SIZE=8B  # or 2B or auto

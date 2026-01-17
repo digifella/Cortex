@@ -152,6 +152,19 @@ MODEL_MEMORY_REQUIREMENTS = {
     "nomic-embed-text": 0.7,
     "BAAI/bge-base-en-v1.5": 0.5,  # Standard BGE model
     "nvidia/NV-Embed-v2": 1.2,  # Latest NVIDIA Nemotron embedding model (optimized for NVIDIA GPUs)
+
+    # Qwen3-VL Multimodal Embedding models
+    "Qwen/Qwen3-VL-Embedding-2B": 5.0,  # 2048 dimensions
+    "Qwen/Qwen3-VL-Embedding-8B": 16.0,  # 4096 dimensions
+
+    # Qwen3-VL Reranker models
+    "Qwen/Qwen3-VL-Reranker-2B": 5.0,
+    "Qwen/Qwen3-VL-Reranker-8B": 16.0,
+
+    # Qwen3 Text Embedding models
+    "Qwen/Qwen3-Embedding-0.6B": 1.5,
+    "Qwen/Qwen3-Embedding-4B": 8.0,
+    "Qwen/Qwen3-Embedding-8B": 16.0,
 }
 
 # Model capability tiers
@@ -339,3 +352,143 @@ def get_optimal_embedding_model() -> str:
     else:
         logger.info("💻 No NVIDIA GPU detected - using standard BGE embedding model")
         return "BAAI/bge-base-en-v1.5"  # Standard high-quality embedding model
+
+
+def get_optimal_qwen3_vl_config() -> Dict[str, Any]:
+    """
+    Get optimal Qwen3-VL model configuration based on available GPU memory.
+
+    Returns configuration for both embedding and reranker models that will
+    fit comfortably in available VRAM.
+
+    Returns:
+        Dict with optimal model configuration:
+        {
+            "embedding_model": str,  # Model name
+            "embedding_dim": int,    # Full embedding dimension
+            "reranker_model": str,   # Model name
+            "can_run_both": bool,    # Whether both can run simultaneously
+            "recommended_mrl_dim": int or None,  # Suggested MRL dimension for storage efficiency
+            "notes": str
+        }
+    """
+    has_nvidia, gpu_info = detect_nvidia_gpu()
+
+    result = {
+        "embedding_model": None,
+        "embedding_dim": None,
+        "reranker_model": None,
+        "can_run_both": False,
+        "recommended_mrl_dim": None,
+        "notes": ""
+    }
+
+    if not has_nvidia:
+        result["notes"] = "No NVIDIA GPU detected - Qwen3-VL requires CUDA GPU"
+        logger.warning("⚠️ Qwen3-VL requires NVIDIA GPU with CUDA support")
+        return result
+
+    # Get available VRAM
+    available_gb = gpu_info.get("memory_total_gb", 0)
+    if available_gb == 0:
+        # Try to parse from memory_info string
+        memory_info = gpu_info.get("memory_info", "")
+        if "MiB" in memory_info:
+            try:
+                available_gb = float(memory_info.replace("MiB", "").strip()) / 1024
+            except ValueError:
+                available_gb = 0
+
+    logger.info(f"🎮 GPU: {gpu_info.get('device_name', 'Unknown')} with {available_gb:.1f}GB VRAM")
+
+    # Reserve ~20% for other operations (LLM, etc.)
+    usable_gb = available_gb * 0.8
+
+    # Configuration matrix based on available memory
+    if usable_gb >= 40:
+        # RTX 8000 / A100 class - run both 8B models with room to spare
+        result.update({
+            "embedding_model": "Qwen/Qwen3-VL-Embedding-8B",
+            "embedding_dim": 4096,
+            "reranker_model": "Qwen/Qwen3-VL-Reranker-8B",
+            "can_run_both": True,
+            "recommended_mrl_dim": None,  # Use full dimensions
+            "notes": f"Premium config: 8B embedding + 8B reranker ({usable_gb:.0f}GB available)"
+        })
+        logger.info("🚀 Premium Qwen3-VL config: 8B embedding + 8B reranker")
+
+    elif usable_gb >= 24:
+        # RTX 4090 / A6000 class - run 8B embedding, 2B reranker
+        result.update({
+            "embedding_model": "Qwen/Qwen3-VL-Embedding-8B",
+            "embedding_dim": 4096,
+            "reranker_model": "Qwen/Qwen3-VL-Reranker-2B",
+            "can_run_both": True,
+            "recommended_mrl_dim": 2048,  # Reduce for efficiency
+            "notes": f"High config: 8B embedding + 2B reranker ({usable_gb:.0f}GB available)"
+        })
+        logger.info("📦 High Qwen3-VL config: 8B embedding + 2B reranker")
+
+    elif usable_gb >= 16:
+        # RTX 3090/4080 class - 8B embedding OR 2B both, load reranker on-demand
+        result.update({
+            "embedding_model": "Qwen/Qwen3-VL-Embedding-8B",
+            "embedding_dim": 4096,
+            "reranker_model": "Qwen/Qwen3-VL-Reranker-2B",
+            "can_run_both": False,  # Load reranker on-demand
+            "recommended_mrl_dim": 1024,  # Reduce for storage
+            "notes": f"Standard config: 8B embedding, 2B reranker on-demand ({usable_gb:.0f}GB available)"
+        })
+        logger.info("📦 Standard Qwen3-VL config: 8B embedding, reranker on-demand")
+
+    elif usable_gb >= 10:
+        # RTX 3080/4070 class - 2B models
+        result.update({
+            "embedding_model": "Qwen/Qwen3-VL-Embedding-2B",
+            "embedding_dim": 2048,
+            "reranker_model": "Qwen/Qwen3-VL-Reranker-2B",
+            "can_run_both": True,
+            "recommended_mrl_dim": None,  # 2B is already efficient
+            "notes": f"Efficient config: 2B embedding + 2B reranker ({usable_gb:.0f}GB available)"
+        })
+        logger.info("💡 Efficient Qwen3-VL config: 2B models")
+
+    elif usable_gb >= 6:
+        # RTX 3060/4060 class - 2B embedding only
+        result.update({
+            "embedding_model": "Qwen/Qwen3-VL-Embedding-2B",
+            "embedding_dim": 2048,
+            "reranker_model": None,
+            "can_run_both": False,
+            "recommended_mrl_dim": 512,  # Aggressive reduction
+            "notes": f"Minimal config: 2B embedding only ({usable_gb:.0f}GB available)"
+        })
+        logger.info("⚡ Minimal Qwen3-VL config: 2B embedding only")
+
+    else:
+        result["notes"] = f"Insufficient VRAM ({usable_gb:.1f}GB) for Qwen3-VL models"
+        logger.warning(f"⚠️ Qwen3-VL requires at least 6GB VRAM, have {usable_gb:.1f}GB")
+
+    return result
+
+
+def get_optimal_qwen3_vl_embedding_model() -> str:
+    """
+    Get the optimal Qwen3-VL embedding model for current hardware.
+
+    Returns:
+        Model name string, or None if hardware is insufficient
+    """
+    config = get_optimal_qwen3_vl_config()
+    return config.get("embedding_model")
+
+
+def get_optimal_qwen3_vl_reranker_model() -> str:
+    """
+    Get the optimal Qwen3-VL reranker model for current hardware.
+
+    Returns:
+        Model name string, or None if hardware is insufficient
+    """
+    config = get_optimal_qwen3_vl_config()
+    return config.get("reranker_model")
