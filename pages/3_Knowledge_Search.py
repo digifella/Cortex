@@ -1022,24 +1022,27 @@ class ChromaRetriever:
         import sys
         retrieved_results = []
 
+        def debug_print(msg):
+            print(f"[ChromaRetriever] {msg}", file=sys.stderr, flush=True)
+
         # Strategy 1: Try embedding-based vector search
         try:
-            print(f"[ChromaRetriever] Attempting embedding-based search for '{query[:30]}...'", file=sys.stderr)
+            debug_print(f"Attempting embedding-based search for '{query[:30]}...'")
             query_embedding = embed_query(query)
 
             if query_embedding and len(query_embedding) > 0:
-                print(f"[ChromaRetriever] Embedding has {len(query_embedding)} dimensions", file=sys.stderr)
+                debug_print(f"Embedding has {len(query_embedding)} dimensions")
 
                 # Check collection's expected dimensions
                 try:
                     peek = self.collection.peek(limit=1)
                     if peek.get('embeddings') and len(peek['embeddings']) > 0:
                         stored_dim = len(peek['embeddings'][0])
-                        print(f"[ChromaRetriever] Collection has {stored_dim}-dim embeddings stored", file=sys.stderr)
+                        debug_print(f"Collection has {stored_dim}-dim embeddings stored")
                         if stored_dim != len(query_embedding):
-                            print(f"[ChromaRetriever] DIMENSION MISMATCH! Query={len(query_embedding)}, Stored={stored_dim}", file=sys.stderr)
+                            debug_print(f"DIMENSION MISMATCH! Query={len(query_embedding)}, Stored={stored_dim}")
                 except Exception as peek_e:
-                    print(f"[ChromaRetriever] Could not peek collection: {peek_e}", file=sys.stderr)
+                    debug_print(f"Could not peek collection: {peek_e}")
 
                 results = self.collection.query(
                     query_embeddings=[query_embedding],
@@ -1051,7 +1054,7 @@ class ChromaRetriever:
                     metadatas = results['metadatas'][0] if results['metadatas'] else []
                     distances = results['distances'][0] if results['distances'] else []
 
-                    print(f"[ChromaRetriever] Vector search SUCCESS: {len(documents)} results", file=sys.stderr)
+                    debug_print(f"Vector search SUCCESS: {len(documents)} results")
 
                     for doc, metadata, distance in zip(documents, metadatas, distances):
                         result = type('RetrievalResult', (), {
@@ -1062,18 +1065,19 @@ class ChromaRetriever:
                         retrieved_results.append(result)
                     return retrieved_results
                 else:
-                    print("[ChromaRetriever] Vector search returned no documents", file=sys.stderr)
+                    debug_print("Vector search returned no documents")
             else:
-                print("[ChromaRetriever] embed_query returned empty embedding", file=sys.stderr)
+                debug_print("embed_query returned empty embedding")
 
         except Exception as e:
-            print(f"[ChromaRetriever] Vector search FAILED: {e}", file=sys.stderr)
+            debug_print(f"Vector search FAILED: {e}")
 
         # Strategy 2: Text-based fallback (like direct_chromadb_search)
-        logger.info("ChromaRetriever: Falling back to text-based search")
+        debug_print("Falling back to text-based search...")
         try:
             all_results = self.collection.get(limit=min(2000, self.top_k * 20))
             query_terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 2]
+            debug_print(f"Loaded {len(all_results.get('documents', []))} docs, searching for terms: {query_terms}")
 
             documents = all_results.get('documents', [])
             metadatas = all_results.get('metadatas', [])
@@ -1097,10 +1101,10 @@ class ChromaRetriever:
                 })()
                 retrieved_results.append(result)
 
-            logger.info(f"ChromaRetriever: Text-based fallback returned {len(retrieved_results)} results")
+            debug_print(f"Text-based fallback returned {len(retrieved_results)} results")
 
         except Exception as e:
-            logger.error(f"ChromaRetriever: Text-based fallback also failed: {e}")
+            debug_print(f"Text-based fallback FAILED: {e}")
 
         return retrieved_results
 
