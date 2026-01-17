@@ -1,20 +1,23 @@
 """
 Embedding service
-Centralized, cached access to the sentence-transformers embedding model used across
-ingest and search so we never drift between pipelines.
+Centralized, cached access to embedding models used across ingest and search
+so we never drift between pipelines.
 
-Uses the model configured in cortex_engine.config.EMBED_MODEL.
+Supports two embedding backends:
+1. SentenceTransformer (BGE/NV-Embed) - Default, text-only
+2. Qwen3-VL - Multimodal (text, images, video) when QWEN3_VL_ENABLED=true
+
+Uses the model configured in cortex_engine.config.EMBED_MODEL (or Qwen3-VL if enabled).
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Union
+from pathlib import Path
 import threading
 import os
 
-from sentence_transformers import SentenceTransformer
-
-from .config import EMBED_MODEL
+from .config import EMBED_MODEL, QWEN3_VL_ENABLED, QWEN3_VL_MODEL_SIZE
 from .utils.logging_utils import get_logger
 from .utils.performance_monitor import measure
 from .utils.gpu_monitor import get_optimal_batch_size, log_gpu_status
@@ -26,14 +29,56 @@ logger = get_logger(__name__)
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
+# ============================================================================
+# Backend Selection
+# ============================================================================
+
+def _using_qwen3_vl() -> bool:
+    """Check if Qwen3-VL embedding is enabled."""
+    return QWEN3_VL_ENABLED
+
 
 _model_lock = threading.Lock()
-_model: Optional[SentenceTransformer] = None
+_model = None  # SentenceTransformer or None
+_qwen3_service = None  # Qwen3VLEmbeddingService or None
 _optimal_batch_size: Optional[int] = None  # Cached optimal batch size
 
 
-def _load_model() -> SentenceTransformer:
+def _load_qwen3_vl_service():
+    """Load Qwen3-VL embedding service (lazy import to avoid loading if not used)."""
+    global _qwen3_service
+    if _qwen3_service is not None:
+        return _qwen3_service
+
+    with _model_lock:
+        if _qwen3_service is None:
+            from .qwen3_vl_embedding_service import (
+                Qwen3VLEmbeddingService,
+                Qwen3VLConfig,
+                Qwen3VLModelSize,
+            )
+
+            # Determine model size from config
+            if QWEN3_VL_MODEL_SIZE == "2B":
+                config = Qwen3VLConfig.for_model_size(Qwen3VLModelSize.SMALL)
+            elif QWEN3_VL_MODEL_SIZE == "8B":
+                config = Qwen3VLConfig.for_model_size(Qwen3VLModelSize.LARGE)
+            else:  # auto
+                config = Qwen3VLConfig.auto_select()
+
+            _qwen3_service = Qwen3VLEmbeddingService(config)
+            logger.info(f"✅ Qwen3-VL embedding service initialized: {config.model_name}")
+
+    return _qwen3_service
+
+
+def _load_sentence_transformer_model():
+    """Load SentenceTransformer model (BGE/NV-Embed)."""
     global _model, _optimal_batch_size
+
+    # Lazy import to avoid loading if using Qwen3-VL
+    from sentence_transformers import SentenceTransformer
+
     if _model is not None:
         return _model
     with _model_lock:
@@ -105,8 +150,16 @@ def get_recommended_batch_size() -> int:
 
 
 def embed_query(text: str) -> List[float]:
-    """Return a single embedding vector for a query string."""
-    model = _load_model()
+    """
+    Return a single embedding vector for a query string.
+
+    Uses Qwen3-VL if enabled, otherwise SentenceTransformer (BGE/NV-Embed).
+    """
+    if _using_qwen3_vl():
+        service = _load_qwen3_vl_service()
+        return service.embed_query(text)
+
+    model = _load_sentence_transformer_model()
     # BGE models benefit from normalization
     vec = model.encode(text, normalize_embeddings=True)
     return vec.tolist() if hasattr(vec, 'tolist') else list(vec)
@@ -115,17 +168,22 @@ def embed_query(text: str) -> List[float]:
 def embed_texts(texts: List[str]) -> List[List[float]]:
     """
     Return embedding vectors for multiple texts.
-    Now uses optimized batch processing for efficiency.
+
+    Uses Qwen3-VL if enabled, otherwise SentenceTransformer with batch processing.
     """
     if not texts:
         return []
+
+    if _using_qwen3_vl():
+        service = _load_qwen3_vl_service()
+        return service.embed_texts(texts)
 
     # Use batch processing if more than 1 text
     if len(texts) > 1:
         return embed_texts_batch(texts, batch_size=16)
 
     # Single text - use direct encoding
-    model = _load_model()
+    model = _load_sentence_transformer_model()
     vecs = model.encode(texts, normalize_embeddings=True, batch_size=1)
     if hasattr(vecs, 'tolist'):
         return vecs.tolist()
@@ -154,9 +212,14 @@ def embed_texts_batch(texts: List[str], batch_size: int = 32) -> List[List[float
     if not texts:
         return []
 
+    # Qwen3-VL has its own batch processing
+    if _using_qwen3_vl():
+        service = _load_qwen3_vl_service()
+        return service.embed_texts(texts)
+
     # Track performance metrics for the entire batch operation
     with measure("embedding_batch", batch_size=batch_size, doc_count=len(texts)):
-        model = _load_model()
+        model = _load_sentence_transformer_model()
         all_embeddings = []
         total_batches = (len(texts) + batch_size - 1) // batch_size
 
@@ -219,4 +282,139 @@ def embed_documents_efficient(documents: List[str]) -> List[List[float]]:
     # Use adaptive batch sizing
     optimal_batch = get_recommended_batch_size()
     return embed_texts_batch(documents, batch_size=optimal_batch)
+
+
+# ============================================================================
+# Multimodal Embedding Functions (Qwen3-VL only)
+# ============================================================================
+
+def embed_image(image_path: Union[str, Path]) -> List[float]:
+    """
+    Generate embedding for an image file.
+
+    Only available when Qwen3-VL is enabled. Returns vectors in the same
+    space as text embeddings, enabling cross-modal search.
+
+    Args:
+        image_path: Path to image file (PNG, JPG, etc.)
+
+    Returns:
+        Embedding vector as list of floats
+
+    Raises:
+        RuntimeError: If Qwen3-VL is not enabled
+    """
+    if not _using_qwen3_vl():
+        raise RuntimeError(
+            "Image embedding requires Qwen3-VL. "
+            "Enable with QWEN3_VL_ENABLED=true environment variable."
+        )
+
+    service = _load_qwen3_vl_service()
+    return service.embed_image(image_path)
+
+
+def embed_multimodal(
+    text: Optional[str] = None,
+    image_path: Optional[Union[str, Path]] = None
+) -> List[float]:
+    """
+    Generate embedding for mixed text + image content.
+
+    Combines text and visual information into a single embedding vector,
+    useful for document pages with both text and figures.
+
+    Args:
+        text: Optional text content
+        image_path: Optional path to image file
+
+    Returns:
+        Embedding vector as list of floats
+
+    Raises:
+        RuntimeError: If Qwen3-VL is not enabled
+    """
+    if not _using_qwen3_vl():
+        raise RuntimeError(
+            "Multimodal embedding requires Qwen3-VL. "
+            "Enable with QWEN3_VL_ENABLED=true environment variable."
+        )
+
+    from .qwen3_vl_embedding_service import embed_multimodal as qwen_embed_multimodal
+    return qwen_embed_multimodal(text=text, image=image_path)
+
+
+def embed_images_batch(image_paths: List[Union[str, Path]]) -> List[List[float]]:
+    """
+    Generate embeddings for multiple images.
+
+    Args:
+        image_paths: List of paths to image files
+
+    Returns:
+        List of embedding vectors
+
+    Raises:
+        RuntimeError: If Qwen3-VL is not enabled
+    """
+    if not _using_qwen3_vl():
+        raise RuntimeError(
+            "Image embedding requires Qwen3-VL. "
+            "Enable with QWEN3_VL_ENABLED=true environment variable."
+        )
+
+    service = _load_qwen3_vl_service()
+    return service.embed_images(image_paths)
+
+
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
+def get_embedding_info() -> dict:
+    """
+    Get information about the current embedding backend.
+
+    Returns:
+        Dict with embedding service info including model name, dimensions, etc.
+    """
+    if _using_qwen3_vl():
+        service = _load_qwen3_vl_service()
+        info = service.get_info()
+        info["backend"] = "qwen3_vl"
+        info["multimodal"] = True
+        return info
+
+    return {
+        "backend": "sentence_transformers",
+        "model_name": EMBED_MODEL,
+        "multimodal": False,
+        "device": "auto-detected on load",
+    }
+
+
+def is_multimodal_enabled() -> bool:
+    """Check if multimodal (image) embedding is available."""
+    return _using_qwen3_vl()
+
+
+def get_embedding_dimension() -> int:
+    """
+    Get the embedding dimension for the current model.
+
+    Returns:
+        Embedding dimension (e.g., 768, 1536, 2048, 4096)
+    """
+    if _using_qwen3_vl():
+        service = _load_qwen3_vl_service()
+        return service.embedding_dimension
+
+    # For SentenceTransformer models, use known dimensions or probe
+    from .utils.embedding_validator import KNOWN_MODEL_DIMENSIONS
+    if EMBED_MODEL in KNOWN_MODEL_DIMENSIONS:
+        return KNOWN_MODEL_DIMENSIONS[EMBED_MODEL]
+
+    # Fallback: generate a test embedding to get dimension
+    test_vec = embed_query("test")
+    return len(test_vec)
 

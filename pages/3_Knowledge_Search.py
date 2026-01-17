@@ -1,7 +1,9 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v5.0.0
-# Date: 2025-12-27
+# Version: v5.1.0
+# Date: 2026-01-17
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
+#          - FEATURE (v5.1.0): Added optional Qwen3-VL neural reranking for precision boost.
+#            Two-stage retrieval: fast recall (embedding) + precision (reranker).
 #          - FEATURE (v4.11.0): Added embedding model validation before queries with
 #            user-friendly warnings and solutions for embedding model mismatches
 #          - GRAPHRAG INTEGRATION (v4.2.1): Re-enabled GraphRAG search modes with radio button
@@ -47,7 +49,10 @@ warnings.filterwarnings("ignore", message=".*Failed to send telemetry.*")
 # LlamaIndex imports moved to functions where actually needed to avoid numpy.iterable issues
 
 # Import project modules
-from cortex_engine.config import EMBED_MODEL, COLLECTION_NAME, KB_LLM_MODEL
+from cortex_engine.config import (
+    EMBED_MODEL, COLLECTION_NAME, KB_LLM_MODEL,
+    QWEN3_VL_RERANKER_ENABLED, QWEN3_VL_RERANKER_TOP_K, QWEN3_VL_RERANKER_CANDIDATES
+)
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.utils import (
@@ -961,14 +966,34 @@ class ChromaRetriever:
             return []
 
 
-def direct_chromadb_search(db_path, query, filters, top_k=20):
+def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None):
     """
-    Perform direct ChromaDB search bypassing LlamaIndex entirely
-    This resolves the ChromaDB where clause issues
+    Perform direct ChromaDB search bypassing LlamaIndex entirely.
+
+    Supports optional Qwen3-VL neural reranking for improved precision.
+    This resolves the ChromaDB where clause issues.
+
+    Args:
+        db_path: Path to the database
+        query: Search query text
+        filters: Filter options dict
+        top_k: Number of results to return
+        use_reranker: Enable neural reranking (default from config)
+
+    Returns:
+        List of search result dicts
     """
     import time
     import concurrent.futures
-    
+
+    # Determine reranking behavior from config if not specified
+    if use_reranker is None:
+        use_reranker = QWEN3_VL_RERANKER_ENABLED
+
+    # Get more candidates if reranking is enabled
+    candidate_count = QWEN3_VL_RERANKER_CANDIDATES if use_reranker else top_k
+    final_top_k = QWEN3_VL_RERANKER_TOP_K if use_reranker else top_k
+
     def search_with_timeout():
         try:
             logger.info(f"Starting ChromaDB search for query: '{query}'")
@@ -1038,7 +1063,7 @@ def direct_chromadb_search(db_path, query, filters, top_k=20):
                 q_emb = embed_query(query)
                 results = collection.query(
                     query_embeddings=[q_emb],
-                    n_results=top_k
+                    n_results=candidate_count
                 )
                 logger.info("ChromaDB vector query completed successfully (embeddings)")
                 
@@ -1169,8 +1194,34 @@ def direct_chromadb_search(db_path, query, filters, top_k=20):
                 logger.warning("No documents returned from ChromaDB query")
             
             logger.info(f"Direct ChromaDB search returned {len(formatted_results)} formatted results")
+
+            # Apply neural reranking for precision boost
+            if use_reranker and QWEN3_VL_RERANKER_ENABLED and formatted_results:
+                try:
+                    from cortex_engine.graph_query import rerank_search_results
+
+                    logger.info(f"Applying Qwen3-VL neural reranking (top_k={final_top_k})")
+                    reranked_results = rerank_search_results(
+                        query=query,
+                        results=formatted_results,
+                        top_k=final_top_k,
+                        text_key="text"
+                    )
+
+                    # Update ranks after reranking
+                    for i, result in enumerate(reranked_results):
+                        result['rank'] = i + 1
+
+                    logger.info(f"Neural reranking complete: {len(reranked_results)} results")
+                    return reranked_results
+
+                except ImportError as e:
+                    logger.warning(f"Qwen3-VL reranker not available: {e}")
+                except Exception as e:
+                    logger.error(f"Reranking failed, returning original results: {e}")
+
             return formatted_results
-            
+
         except Exception as e:
             logger.error(f"Direct ChromaDB search failed: {e}", exc_info=True)
             return []

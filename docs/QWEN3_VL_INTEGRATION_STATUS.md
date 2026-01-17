@@ -1,6 +1,6 @@
 # Qwen3-VL Multimodal Embedding & Reranking Integration
 
-**Status:** In Progress
+**Status:** Phase 2 Complete (Pipeline Integration)
 **Started:** 2026-01-17
 **Last Updated:** 2026-01-17
 
@@ -44,13 +44,15 @@ Allows truncating embedding vectors (e.g., 4096 → 1024) for storage efficiency
 | Model Selector | `cortex_engine/utils/smart_model_selector.py` | ✅ Done | Auto-selects model based on VRAM |
 | Embedding Validator | `cortex_engine/utils/embedding_validator.py` | ✅ Done | Added Qwen3-VL dimensions |
 
-### Phase 2: Pipeline Integration 🚧 PENDING
+### Phase 2: Pipeline Integration ✅ COMPLETE
 
 | Component | File | Status | Description |
 |-----------|------|--------|-------------|
-| Knowledge Ingest | `pages/3_Knowledge_Ingest.py` | ⏳ Pending | Wire Qwen3-VL for document/image embedding |
-| Knowledge Search | `pages/4_Knowledge_Search.py` | ⏳ Pending | Add reranker to search results |
-| Hybrid Search | `cortex_engine/graph_query.py` | ⏳ Pending | Integrate reranking into hybrid search |
+| Embedding Service | `cortex_engine/embedding_service.py` | ✅ Done | Switchable backend (BGE/NV-Embed ↔ Qwen3-VL) |
+| Embedding Adapters | `cortex_engine/embedding_adapters.py` | ✅ Done | LlamaIndex multimodal support |
+| Knowledge Search | `pages/3_Knowledge_Search.py` | ✅ Done | Optional neural reranking in direct search |
+| Hybrid Search | `cortex_engine/graph_query.py` | ✅ Done | Three-stage retrieval with reranking |
+| Knowledge Ingest | `pages/2_Knowledge_Ingest.py` | ⏳ Pending | UI controls for Qwen3-VL mode |
 | Collection Manager | `pages/5_Collection_Management.py` | ⏳ Pending | Support mixed-modality collections |
 
 ### Phase 3: Testing & Validation 🚧 PENDING
