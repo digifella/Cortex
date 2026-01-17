@@ -996,9 +996,16 @@ def display_database_maintenance():
                                 # Get sample to check dimensions
                                 if count > 0:
                                     sample = collection.peek(limit=1)
-                                    embeddings = sample.get('embeddings', [[]])
+                                    embeddings = sample.get('embeddings', None)
 
-                                    if embeddings and embeddings[0]:
+                                    # Handle numpy array comparison properly
+                                    has_embeddings = (
+                                        embeddings is not None and
+                                        len(embeddings) > 0 and
+                                        len(embeddings[0]) > 0
+                                    )
+
+                                    if has_embeddings:
                                         stored_dim = len(embeddings[0])
 
                                         st.success(f"✅ Database connected: {count:,} documents")
