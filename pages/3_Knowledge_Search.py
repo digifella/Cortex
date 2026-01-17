@@ -729,10 +729,12 @@ def graphrag_enhanced_search(db_path, query, filters, top_k=20):
             # Debug logging for GraphRAG results
             logger.info(f"GraphRAG raw_results count: {len(raw_results) if raw_results else 0}")
             if not raw_results:
-                logger.warning("GraphRAG enhanced_search returned no results - falling back to direct vector search")
-                # Fallback to direct vector search if GraphRAG returns nothing
-                raw_results = vector_index.as_retriever(similarity_top_k=top_k).retrieve(query)
-                logger.info(f"Vector fallback returned {len(raw_results)} results")
+                logger.warning("GraphRAG enhanced_search returned no results - falling back to direct search")
+                # Fallback to direct_chromadb_search which has text-based fallback
+                fallback_results = direct_chromadb_search(db_path, query, filters, top_k)
+                logger.info(f"Direct search fallback returned {len(fallback_results)} results")
+                # Return the fallback results directly (already formatted)
+                return fallback_results
             
             # Format results for display
             formatted_results = []
@@ -966,20 +968,29 @@ class ChromaRetriever:
         """Retrieve documents for GraphRAG"""
         try:
             # Generate embeddings using centralized embedding service
+            logger.debug(f"ChromaRetriever: Generating embedding for query: {query[:50]}...")
             query_embedding = embed_query(query)
-            
+
+            if not query_embedding or len(query_embedding) == 0:
+                logger.error("ChromaRetriever: embed_query returned empty embedding")
+                return []
+
+            logger.debug(f"ChromaRetriever: Embedding generated with {len(query_embedding)} dimensions")
+
             results = self.collection.query(
-                query_embeddings=[query_embedding],  # Use pre-generated embeddings
+                query_embeddings=[query_embedding],
                 n_results=self.top_k
             )
-            
+
             # Convert to GraphRAG expected format
             retrieved_results = []
             if results and results.get('documents'):
                 documents = results['documents'][0] if results['documents'] else []
                 metadatas = results['metadatas'][0] if results['metadatas'] else []
                 distances = results['distances'][0] if results['distances'] else []
-                
+
+                logger.info(f"ChromaRetriever: Found {len(documents)} results")
+
                 for doc, metadata, distance in zip(documents, metadatas, distances):
                     # Create a simple result object
                     result = type('RetrievalResult', (), {
@@ -988,11 +999,13 @@ class ChromaRetriever:
                         'score': 1.0 - distance
                     })()
                     retrieved_results.append(result)
-            
+            else:
+                logger.warning("ChromaRetriever: collection.query returned no documents")
+
             return retrieved_results
-            
+
         except Exception as e:
-            logger.error(f"ChromaRetriever.retrieve failed: {e}")
+            logger.error(f"ChromaRetriever.retrieve failed: {e}", exc_info=True)
             return []
 
 
