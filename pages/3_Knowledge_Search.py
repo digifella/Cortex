@@ -648,8 +648,26 @@ def render_sidebar():
     }
 
 
+def add_search_debug(message: str):
+    """Add a message to the search debug log in session state."""
+    if 'search_debug_log' not in st.session_state:
+        st.session_state.search_debug_log = []
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    st.session_state.search_debug_log.append(f"[{timestamp}] {message}")
+    logger.info(message)  # Also log to standard logger
+
+
+def clear_search_debug():
+    """Clear the search debug log."""
+    st.session_state.search_debug_log = []
+
+
 def perform_search(base_index, query, filters, search_mode="Traditional Vector Search"):
     """Perform search - supports Traditional, GraphRAG Enhanced, and Hybrid modes"""
+    clear_search_debug()  # Start fresh for each search
+    add_search_debug(f"Starting search: mode='{search_mode}', query='{query[:50]}...'")
+
     try:
         if not query.strip():
             st.warning("⚠️ Please enter a search query")
@@ -678,17 +696,25 @@ def perform_search(base_index, query, filters, search_mode="Traditional Vector S
             st.error("❌ Database path not configured")
             return []
         
+        add_search_debug(f"Database path resolved: {db_path}")
+
         # Choose search strategy based on mode
         if search_mode == "GraphRAG Enhanced":
-            logger.info(f"Using GraphRAG Enhanced search for query: {query[:50]}...")
-            return graphrag_enhanced_search(db_path, query, filters)
+            add_search_debug("Executing GraphRAG Enhanced search...")
+            results = graphrag_enhanced_search(db_path, query, filters)
+            add_search_debug(f"GraphRAG search returned {len(results)} results")
+            return results
         elif search_mode == "Hybrid Search":
-            logger.info(f"Using Hybrid (Vector + GraphRAG) search for query: {query[:50]}...")
-            return hybrid_search(db_path, query, filters)
+            add_search_debug("Executing Hybrid (Vector + GraphRAG) search...")
+            results = hybrid_search(db_path, query, filters)
+            add_search_debug(f"Hybrid search returned {len(results)} results")
+            return results
         else:
             # Traditional Vector Search (default)
-            logger.info(f"Using Traditional Vector search for query: {query[:50]}...")
-            return direct_chromadb_search(db_path, query, filters)
+            add_search_debug("Executing Traditional Vector search...")
+            results = direct_chromadb_search(db_path, query, filters)
+            add_search_debug(f"Traditional search returned {len(results)} results")
+            return results
             
     except Exception as e:
         st.error(f"❌ Search failed: {e}")
@@ -699,42 +725,57 @@ def perform_search(base_index, query, filters, search_mode="Traditional Vector S
 def graphrag_enhanced_search(db_path, query, filters, top_k=20):
     """GraphRAG enhanced search using knowledge graph context"""
     import concurrent.futures
-    
+
     def graphrag_search_with_timeout():
         try:
+            add_search_debug("Importing GraphRAG integration...")
             from cortex_engine.graphrag_integration import get_graphrag_integration
-            
+
             # Initialize GraphRAG integration
+            add_search_debug(f"Initializing GraphRAG with db_path: {db_path}")
             graphrag = get_graphrag_integration(db_path)
-            
+
             # Initialize vector index for GraphRAG (needed for enhanced search)
             wsl_db_path = convert_windows_to_wsl_path(db_path)
             chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
-            
+            add_search_debug(f"ChromaDB path: {chroma_db_path}")
+
             if not os.path.isdir(chroma_db_path):
+                add_search_debug(f"ERROR: Database not found at {chroma_db_path}")
                 st.error(f"Database not found: {chroma_db_path}")
                 return []
-            
+
             # Create a simple vector index interface for GraphRAG
+            add_search_debug("Creating ChromaVectorIndex...")
             vector_index = ChromaVectorIndex(chroma_db_path)
-            
+
             # Use GraphRAG enhanced search
+            add_search_debug("Calling graphrag.enhanced_search()...")
             raw_results = graphrag.enhanced_search(
-                query=query, 
+                query=query,
                 vector_index=vector_index,
                 use_graph_context=True,
                 max_hops=2
             )
-            
+
             # Debug logging for GraphRAG results
-            logger.info(f"GraphRAG raw_results count: {len(raw_results) if raw_results else 0}")
+            result_count = len(raw_results) if raw_results else 0
+            add_search_debug(f"GraphRAG enhanced_search returned {result_count} raw results")
+
             if not raw_results:
-                logger.warning("GraphRAG enhanced_search returned no results - falling back to direct search")
-                # Fallback to direct_chromadb_search which has text-based fallback
+                add_search_debug("No raw results - falling back to direct_chromadb_search")
                 fallback_results = direct_chromadb_search(db_path, query, filters, top_k)
-                logger.info(f"Direct search fallback returned {len(fallback_results)} results")
-                # Return the fallback results directly (already formatted)
+                add_search_debug(f"Fallback returned {len(fallback_results)} results")
                 return fallback_results
+
+            # Log first result structure for debugging
+            if raw_results:
+                first = raw_results[0]
+                add_search_debug(f"First result type: {type(first).__name__}")
+                if hasattr(first, 'metadata'):
+                    add_search_debug(f"First result metadata keys: {list(first.metadata.keys()) if first.metadata else 'None'}")
+                if hasattr(first, 'text'):
+                    add_search_debug(f"First result text length: {len(first.text) if first.text else 0}")
             
             # Format results for display
             formatted_results = []
@@ -968,15 +1009,16 @@ class ChromaRetriever:
         """Retrieve documents for GraphRAG"""
         try:
             # Generate embeddings using centralized embedding service
-            logger.debug(f"ChromaRetriever: Generating embedding for query: {query[:50]}...")
+            add_search_debug(f"ChromaRetriever: Generating embedding for query...")
             query_embedding = embed_query(query)
 
             if not query_embedding or len(query_embedding) == 0:
-                logger.error("ChromaRetriever: embed_query returned empty embedding")
+                add_search_debug("ChromaRetriever: ERROR - embed_query returned empty embedding")
                 return []
 
-            logger.debug(f"ChromaRetriever: Embedding generated with {len(query_embedding)} dimensions")
+            add_search_debug(f"ChromaRetriever: Embedding has {len(query_embedding)} dimensions")
 
+            add_search_debug(f"ChromaRetriever: Querying collection for top {self.top_k} results...")
             results = self.collection.query(
                 query_embeddings=[query_embedding],
                 n_results=self.top_k
@@ -989,7 +1031,12 @@ class ChromaRetriever:
                 metadatas = results['metadatas'][0] if results['metadatas'] else []
                 distances = results['distances'][0] if results['distances'] else []
 
-                logger.info(f"ChromaRetriever: Found {len(documents)} results")
+                add_search_debug(f"ChromaRetriever: Query returned {len(documents)} documents")
+
+                # Log first result metadata for debugging
+                if metadatas and len(metadatas) > 0:
+                    first_meta = metadatas[0]
+                    add_search_debug(f"ChromaRetriever: First result metadata keys: {list(first_meta.keys()) if first_meta else 'None'}")
 
                 for doc, metadata, distance in zip(documents, metadatas, distances):
                     # Create a simple result object
@@ -1000,11 +1047,12 @@ class ChromaRetriever:
                     })()
                     retrieved_results.append(result)
             else:
-                logger.warning("ChromaRetriever: collection.query returned no documents")
+                add_search_debug("ChromaRetriever: WARNING - collection.query returned no documents")
 
             return retrieved_results
 
         except Exception as e:
+            add_search_debug(f"ChromaRetriever: ERROR - {str(e)}")
             logger.error(f"ChromaRetriever.retrieve failed: {e}", exc_info=True)
             return []
 
@@ -1809,6 +1857,11 @@ def main():
             
             # Display results
             render_search_results(results, config)
+
+            # Show search debug log
+            if st.session_state.get('search_debug_log'):
+                with st.expander("🔍 Search Debug Log", expanded=False):
+                    st.code('\n'.join(st.session_state.search_debug_log), language=None)
         # Query validation handled above
         pass
     
