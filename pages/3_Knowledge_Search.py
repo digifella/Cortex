@@ -1016,57 +1016,80 @@ class ChromaRetriever:
     def __init__(self, collection, top_k=10):
         self.collection = collection
         self.top_k = top_k
-    
+
     def retrieve(self, query):
-        """Retrieve documents for GraphRAG"""
+        """Retrieve documents for GraphRAG with text-based fallback"""
+        retrieved_results = []
+
+        # Strategy 1: Try embedding-based vector search
         try:
-            # Generate embeddings using centralized embedding service
-            add_search_debug(f"ChromaRetriever: Generating embedding for query...")
+            logger.info(f"ChromaRetriever: Attempting embedding-based search for '{query[:30]}...'")
             query_embedding = embed_query(query)
 
-            if not query_embedding or len(query_embedding) == 0:
-                add_search_debug("ChromaRetriever: ERROR - embed_query returned empty embedding")
-                return []
+            if query_embedding and len(query_embedding) > 0:
+                logger.info(f"ChromaRetriever: Embedding has {len(query_embedding)} dimensions")
+                results = self.collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=self.top_k
+                )
 
-            add_search_debug(f"ChromaRetriever: Embedding has {len(query_embedding)} dimensions")
+                if results and results.get('documents') and results['documents'][0]:
+                    documents = results['documents'][0]
+                    metadatas = results['metadatas'][0] if results['metadatas'] else []
+                    distances = results['distances'][0] if results['distances'] else []
 
-            add_search_debug(f"ChromaRetriever: Querying collection for top {self.top_k} results...")
-            results = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=self.top_k
-            )
+                    logger.info(f"ChromaRetriever: Vector search returned {len(documents)} results")
 
-            # Convert to GraphRAG expected format
-            retrieved_results = []
-            if results and results.get('documents'):
-                documents = results['documents'][0] if results['documents'] else []
-                metadatas = results['metadatas'][0] if results['metadatas'] else []
-                distances = results['distances'][0] if results['distances'] else []
-
-                add_search_debug(f"ChromaRetriever: Query returned {len(documents)} documents")
-
-                # Log first result metadata for debugging
-                if metadatas and len(metadatas) > 0:
-                    first_meta = metadatas[0]
-                    add_search_debug(f"ChromaRetriever: First result metadata keys: {list(first_meta.keys()) if first_meta else 'None'}")
-
-                for doc, metadata, distance in zip(documents, metadatas, distances):
-                    # Create a simple result object
-                    result = type('RetrievalResult', (), {
-                        'text': doc,
-                        'metadata': metadata,
-                        'score': 1.0 - distance
-                    })()
-                    retrieved_results.append(result)
+                    for doc, metadata, distance in zip(documents, metadatas, distances):
+                        result = type('RetrievalResult', (), {
+                            'text': doc,
+                            'metadata': metadata,
+                            'score': 1.0 - distance
+                        })()
+                        retrieved_results.append(result)
+                    return retrieved_results
+                else:
+                    logger.warning("ChromaRetriever: Vector search returned no documents")
             else:
-                add_search_debug("ChromaRetriever: WARNING - collection.query returned no documents")
-
-            return retrieved_results
+                logger.warning("ChromaRetriever: embed_query returned empty embedding")
 
         except Exception as e:
-            add_search_debug(f"ChromaRetriever: ERROR - {str(e)}")
-            logger.error(f"ChromaRetriever.retrieve failed: {e}", exc_info=True)
-            return []
+            logger.warning(f"ChromaRetriever: Vector search failed: {e}")
+
+        # Strategy 2: Text-based fallback (like direct_chromadb_search)
+        logger.info("ChromaRetriever: Falling back to text-based search")
+        try:
+            all_results = self.collection.get(limit=min(2000, self.top_k * 20))
+            query_terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 2]
+
+            documents = all_results.get('documents', [])
+            metadatas = all_results.get('metadatas', [])
+
+            matching_docs = []
+            for doc, metadata in zip(documents, metadatas):
+                doc_lower = doc.lower()
+                matches = sum(1 for term in query_terms if term in doc_lower)
+                if matches > 0:
+                    score = matches / len(query_terms) if query_terms else 0.5
+                    matching_docs.append((doc, metadata, score, matches))
+
+            # Sort by matches and score
+            matching_docs.sort(key=lambda x: (x[3], x[2]), reverse=True)
+
+            for doc, metadata, score, _ in matching_docs[:self.top_k]:
+                result = type('RetrievalResult', (), {
+                    'text': doc,
+                    'metadata': metadata,
+                    'score': score
+                })()
+                retrieved_results.append(result)
+
+            logger.info(f"ChromaRetriever: Text-based fallback returned {len(retrieved_results)} results")
+
+        except Exception as e:
+            logger.error(f"ChromaRetriever: Text-based fallback also failed: {e}")
+
+        return retrieved_results
 
 
 def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None):
