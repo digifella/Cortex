@@ -1019,15 +1019,28 @@ class ChromaRetriever:
 
     def retrieve(self, query):
         """Retrieve documents for GraphRAG with text-based fallback"""
+        import sys
         retrieved_results = []
 
         # Strategy 1: Try embedding-based vector search
         try:
-            logger.info(f"ChromaRetriever: Attempting embedding-based search for '{query[:30]}...'")
+            print(f"[ChromaRetriever] Attempting embedding-based search for '{query[:30]}...'", file=sys.stderr)
             query_embedding = embed_query(query)
 
             if query_embedding and len(query_embedding) > 0:
-                logger.info(f"ChromaRetriever: Embedding has {len(query_embedding)} dimensions")
+                print(f"[ChromaRetriever] Embedding has {len(query_embedding)} dimensions", file=sys.stderr)
+
+                # Check collection's expected dimensions
+                try:
+                    peek = self.collection.peek(limit=1)
+                    if peek.get('embeddings') and len(peek['embeddings']) > 0:
+                        stored_dim = len(peek['embeddings'][0])
+                        print(f"[ChromaRetriever] Collection has {stored_dim}-dim embeddings stored", file=sys.stderr)
+                        if stored_dim != len(query_embedding):
+                            print(f"[ChromaRetriever] DIMENSION MISMATCH! Query={len(query_embedding)}, Stored={stored_dim}", file=sys.stderr)
+                except Exception as peek_e:
+                    print(f"[ChromaRetriever] Could not peek collection: {peek_e}", file=sys.stderr)
+
                 results = self.collection.query(
                     query_embeddings=[query_embedding],
                     n_results=self.top_k
@@ -1038,7 +1051,7 @@ class ChromaRetriever:
                     metadatas = results['metadatas'][0] if results['metadatas'] else []
                     distances = results['distances'][0] if results['distances'] else []
 
-                    logger.info(f"ChromaRetriever: Vector search returned {len(documents)} results")
+                    print(f"[ChromaRetriever] Vector search SUCCESS: {len(documents)} results", file=sys.stderr)
 
                     for doc, metadata, distance in zip(documents, metadatas, distances):
                         result = type('RetrievalResult', (), {
@@ -1049,12 +1062,12 @@ class ChromaRetriever:
                         retrieved_results.append(result)
                     return retrieved_results
                 else:
-                    logger.warning("ChromaRetriever: Vector search returned no documents")
+                    print("[ChromaRetriever] Vector search returned no documents", file=sys.stderr)
             else:
-                logger.warning("ChromaRetriever: embed_query returned empty embedding")
+                print("[ChromaRetriever] embed_query returned empty embedding", file=sys.stderr)
 
         except Exception as e:
-            logger.warning(f"ChromaRetriever: Vector search failed: {e}")
+            print(f"[ChromaRetriever] Vector search FAILED: {e}", file=sys.stderr)
 
         # Strategy 2: Text-based fallback (like direct_chromadb_search)
         logger.info("ChromaRetriever: Falling back to text-based search")
