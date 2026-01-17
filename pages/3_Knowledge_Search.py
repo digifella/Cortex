@@ -607,6 +607,36 @@ def render_sidebar():
     resolved_db_value = resolve_db_root_path(db_path_value)
     normalized_db_value = str(resolved_db_value) if resolved_db_value else db_path_value
 
+    # Embedding & Reranker Info Section
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🧠 Search Engine")
+
+    # Show current embedding info
+    try:
+        from cortex_engine.embedding_service import get_embedding_info, is_multimodal_enabled
+
+        embed_info = get_embedding_info()
+        is_multimodal = is_multimodal_enabled()
+
+        if is_multimodal:
+            st.sidebar.success("🔮 **Qwen3-VL Active**")
+            st.sidebar.caption(f"Model: {embed_info.get('model_name', 'Unknown').split('/')[-1]}")
+            st.sidebar.caption(f"Dimensions: {embed_info.get('embedding_dimension', 'Unknown')}")
+        else:
+            model_name = embed_info.get('model_name', EMBED_MODEL)
+            short_name = model_name.split('/')[-1] if '/' in model_name else model_name
+            st.sidebar.info(f"📊 **{short_name}**")
+
+        # Reranker status
+        if QWEN3_VL_RERANKER_ENABLED:
+            st.sidebar.caption(f"🎯 **Reranker**: Active (top-{QWEN3_VL_RERANKER_TOP_K})")
+        else:
+            st.sidebar.caption("🎯 **Reranker**: Disabled")
+
+    except Exception as e:
+        logger.debug(f"Could not get embedding info: {e}")
+        st.sidebar.caption(f"📊 Model: {EMBED_MODEL.split('/')[-1]}")
+
     return {
         'db_path': normalized_db_value,
         'doc_type_filter': st.session_state.doc_type_filter,

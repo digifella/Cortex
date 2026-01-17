@@ -1,6 +1,6 @@
 # Qwen3-VL Multimodal Embedding & Reranking Integration
 
-**Status:** Phase 2 Complete (Pipeline Integration)
+**Status:** Phase 3 In Progress (UI Integration)
 **Started:** 2026-01-17
 **Last Updated:** 2026-01-17
 
@@ -55,7 +55,16 @@ Allows truncating embedding vectors (e.g., 4096 → 1024) for storage efficiency
 | Knowledge Ingest | `pages/2_Knowledge_Ingest.py` | ⏳ Pending | UI controls for Qwen3-VL mode |
 | Collection Manager | `pages/5_Collection_Management.py` | ⏳ Pending | Support mixed-modality collections |
 
-### Phase 3: Testing & Validation 🚧 PENDING
+### Phase 3: UI Integration 🚧 IN PROGRESS
+
+| Component | File | Status | Description |
+|-----------|------|--------|-------------|
+| Ingest Sidebar | `pages/2_Knowledge_Ingest.py` | ✅ Done | Qwen3-VL status, model info, setup instructions |
+| Search Sidebar | `pages/3_Knowledge_Search.py` | ✅ Done | Embedding info, reranker status display |
+| Settings Page | `pages/Settings.py` | ⏳ Pending | Qwen3-VL enable/disable toggle |
+| Main App | `Cortex_Suite.py` | ⏳ Pending | Global Qwen3-VL status indicator |
+
+### Phase 4: Testing & Validation 🚧 PENDING
 
 | Task | Status |
 |------|--------|

@@ -1,7 +1,10 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v5.0.0
-# Date: 2025-12-28
+# Version: v5.1.0
+# Date: 2026-01-17
 # Purpose: GUI for knowledge base ingestion.
+#          - FEATURE (v5.1.0): Added Qwen3-VL multimodal embedding status and
+#            configuration display in sidebar. Shows model size, reranker status,
+#            and setup instructions when disabled.
 #          - UX FIX (v4.11.0): Fixed confusing status display during finalization.
 #            Now clearly shows "Finalization in Progress" instead of "Analysis Complete!"
 #            while embedding documents. Added FINALIZE_START event handler.
@@ -2140,6 +2143,66 @@ def render_sidebar_model_config():
                                 st.rerun()
                             else:
                                 st.sidebar.error(message)
+
+    # Qwen3-VL Multimodal Section
+    st.sidebar.markdown("### Multimodal (Qwen3-VL)")
+
+    # Import Qwen3-VL config
+    from cortex_engine.config import (
+        QWEN3_VL_ENABLED,
+        QWEN3_VL_MODEL_SIZE,
+        QWEN3_VL_RERANKER_ENABLED,
+        QWEN3_VL_RERANKER_TOP_K,
+    )
+
+    if QWEN3_VL_ENABLED:
+        st.sidebar.success("✅ **Enabled**")
+
+        # Show model size
+        size_label = {
+            "auto": "Auto (based on VRAM)",
+            "2B": "2B (5GB VRAM, 2048 dims)",
+            "8B": "8B (16GB VRAM, 4096 dims)",
+        }.get(QWEN3_VL_MODEL_SIZE, QWEN3_VL_MODEL_SIZE)
+        st.sidebar.caption(f"📊 **Model**: {size_label}")
+
+        # Reranker status
+        if QWEN3_VL_RERANKER_ENABLED:
+            st.sidebar.caption(f"🔄 **Reranker**: Enabled (top-{QWEN3_VL_RERANKER_TOP_K})")
+        else:
+            st.sidebar.caption("🔄 **Reranker**: Disabled")
+
+        # Info about capabilities
+        with st.sidebar.expander("ℹ️ Capabilities"):
+            st.markdown("""
+            **Qwen3-VL enables:**
+            - 🖼️ Image embedding (charts, diagrams)
+            - 📄 Visual document search
+            - 🔍 Cross-modal search (text→image)
+            - 🎯 Neural reranking for precision
+            """)
+    else:
+        st.sidebar.info("⏸️ **Disabled**")
+        st.sidebar.caption("Text-only embeddings active")
+
+        with st.sidebar.expander("ℹ️ Enable Qwen3-VL"):
+            st.markdown("""
+            **To enable multimodal embeddings:**
+
+            ```bash
+            # Install dependencies
+            pip install -r requirements-qwen3-vl.txt
+
+            # Set environment variables
+            export QWEN3_VL_ENABLED=true
+            export QWEN3_VL_RERANKER_ENABLED=true
+            ```
+
+            **Requirements:**
+            - NVIDIA GPU (6GB+ VRAM)
+            - ~5GB for 2B model
+            - ~16GB for 8B model
+            """)
 
     # LLM Models Info
     st.sidebar.markdown("### LLM Models")
