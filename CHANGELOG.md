@@ -7,6 +7,30 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+
+## v5.1.0 - 2026-01-17
+
+### Qwen3-VL Multimodal Intelligence
+
+Major retrieval upgrade with Qwen3-VL multimodal embeddings and neural reranking. Enables cross-modal search (text queries finding images/charts), visual document search, and two-stage retrieval with ~95% precision neural reranking.
+
+### ✨ New Features
+- Qwen3-VL Multimodal Embeddings: Unified vector space for text, images, and video
+- Neural Reranking: Two-stage retrieval (fast recall + precision reranking) using Qwen3-VL-Reranker
+- Cross-Modal Search: Use text queries to find relevant images, charts, and diagrams
+- Matryoshka Representation Learning (MRL): Dimension reduction for storage efficiency
+- Database Embedding Inspector: Analyze stored embeddings and check model compatibility
+- Auto-selection: Automatically selects optimal Qwen3-VL model size based on VRAM
+- LlamaIndex Integration: Drop-in Qwen3VLEmbedding and Qwen3VLReranker adapters
+
+### 🚀 Improvements
+- Switchable embedding backend: Seamlessly switch between BGE/NV-Embed and Qwen3-VL
+- Three-stage retrieval pipeline: Vector search → Graph enhancement → Neural reranking
+- UI status displays: Qwen3-VL status shown in Ingest and Search sidebars
+- Compatibility matrix: Shows which embedding models work with your database
+- Backward compatible: Existing databases continue working with default settings
+- Reranker works with any embedding: No re-ingest needed to use neural reranking
+
 ## v4.11.0 - 2025-12-28
 
 ### Embedding Model Safeguards & BGE Stability

@@ -31,7 +31,7 @@ echo.
 echo ===============================================
 
 
-echo    CORTEX SUITE v5.0.0 (Docker Path Auto-Detection Hotfix)
+echo    CORTEX SUITE v5.1.0 (Docker Path Auto-Detection Hotfix)
 
 
 echo    Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64
