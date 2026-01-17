@@ -827,6 +827,18 @@ def graphrag_enhanced_search(db_path, query, filters, top_k=20):
             future = executor.submit(graphrag_search_with_timeout)
             try:
                 results = future.result(timeout=45)  # 45 second timeout for GraphRAG
+
+                # Debug logging AFTER thread completes (session_state safe here)
+                add_search_debug(f"GraphRAG thread returned {len(results) if results else 0} results")
+                if results and len(results) > 0:
+                    first = results[0]
+                    add_search_debug(f"First result keys: {list(first.keys()) if isinstance(first, dict) else 'not a dict'}")
+                    if isinstance(first, dict):
+                        add_search_debug(f"First result file_name: {first.get('file_name', 'MISSING')}")
+                        add_search_debug(f"First result file_path: {first.get('file_path', 'MISSING')}")
+                        text_preview = first.get('text', '')[:100] if first.get('text') else 'NO TEXT'
+                        add_search_debug(f"First result text preview: {text_preview}...")
+
                 return results
             except concurrent.futures.TimeoutError:
                 logger.error("GraphRAG search timed out after 45 seconds")
@@ -1861,7 +1873,7 @@ def main():
             # Show search debug log
             if st.session_state.get('search_debug_log'):
                 with st.expander("🔍 Search Debug Log", expanded=False):
-                    st.code('\n'.join(st.session_state.search_debug_log), language=None)
+                    st.text('\n'.join(st.session_state.search_debug_log))
         # Query validation handled above
         pass
     
