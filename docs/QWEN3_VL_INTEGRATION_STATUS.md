@@ -1,6 +1,6 @@
 # Qwen3-VL Multimodal Embedding & Reranking Integration
 
-**Status:** Phase 3 In Progress (UI Integration)
+**Status:** Phase 3 Complete - Testing & Debugging
 **Started:** 2026-01-17
 **Last Updated:** 2026-01-17
 
@@ -225,14 +225,115 @@ query_engine = index.as_query_engine(
 
 ---
 
-## Next Steps
+## Troubleshooting
 
-1. **Complete pip installations** after WSL recovery
-2. **Integrate into Knowledge Ingest** page for document embedding
-3. **Integrate into Knowledge Search** page for reranked results
-4. **Add UI controls** for enabling/configuring Qwen3-VL
-5. **Test cross-modal search** with real documents and images
-6. **Benchmark performance** against current embedding model
+### Common Issues & Solutions
+
+#### 1. Embedding Model Not Loading (HuggingFace Offline Mode)
+
+**Symptoms:**
+- Search returns no results with vector search
+- Logs show "Failed to load embedding model"
+- `HF_HUB_OFFLINE` environment variable set to "1"
+
+**Solution:**
+```bash
+# Temporarily disable offline mode to download models
+HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python -c "
+from sentence_transformers import SentenceTransformer
+model = SentenceTransformer('BAAI/bge-base-en-v1.5')
+print('Model downloaded successfully')
+"
+```
+
+#### 2. Torch/Torchvision Version Mismatch
+
+**Symptoms:**
+- `RuntimeError: CUDA error` or version compatibility warnings
+- torch 2.9.x with torchvision 0.18.x causes issues
+
+**Solution:**
+```bash
+pip install torchvision==0.20.1  # Match torch 2.9.1
+```
+
+#### 3. Numpy Array Comparison Error
+
+**Symptoms:**
+- "ValueError: truth value of an array with more than one element is ambiguous"
+- Occurs in Database Embedding Inspector
+
+**Solution:**
+Fixed in code - use explicit length checks instead of boolean evaluation:
+```python
+# Wrong
+if embeddings and embeddings[0]:
+
+# Correct
+has_embeddings = (embeddings is not None and len(embeddings) > 0 and len(embeddings[0]) > 0)
+```
+
+#### 4. ChromaDB Database Lock
+
+**Symptoms:**
+- "database is locked" errors
+- Cannot access collections
+
+**Solution:**
+```bash
+# Find and kill processes using the database
+lsof +D /path/to/ai_databases/knowledge_hub_db/
+
+# Remove stale lock files if necessary
+rm /path/to/ai_databases/knowledge_hub_db/*.lock
+```
+
+#### 5. Qwen3-VL Reranker Missing Dependencies
+
+**Symptoms:**
+- "Could not import module 'AutoProcessor'"
+- Reranker shows as disabled in UI
+
+**Solution:**
+```bash
+pip install -r requirements-qwen3-vl.txt
+```
+
+### Database Compatibility
+
+Use the **Database Embedding Inspector** in the Maintenance tab to check:
+- Stored embedding dimensions
+- Compatible models for your database
+- Migration requirements for Qwen3-VL
+
+| Stored Dimension | Original Model | Qwen3-VL Compatible? |
+|------------------|----------------|----------------------|
+| 768 | bge-base-en-v1.5 | Reranker only (no re-embed needed) |
+| 1024 | bge-large-en-v1.5 | Reranker only (no re-embed needed) |
+| 2048 | Qwen3-VL-2B | Full multimodal support |
+| 4096 | Qwen3-VL-8B or NV-Embed-v2 | Check source model |
+
+---
+
+## Current Status (2026-01-17)
+
+### What's Working
+- Traditional Vector Search with BGE embeddings
+- UI displays for Qwen3-VL status in Ingest and Search pages
+- Database Embedding Inspector utility
+- Reranker integration (ready to use with existing embeddings)
+
+### Known Issues
+- GraphRAG search missing methods (`entity_index`, `get_graph_stats` in EnhancedGraphManager)
+- Qwen3-VL reranker needs `requirements-qwen3-vl.txt` installed
+
+### Next Steps
+1. Fix GraphRAG missing methods in `cortex_engine/graph_manager.py`
+2. Install Qwen3-VL dependencies: `pip install -r requirements-qwen3-vl.txt`
+3. Test reranker end-to-end with real queries
+4. Add UI controls for enabling/configuring Qwen3-VL
+5. Test cross-modal search with real documents and images
+6. Benchmark performance against current embedding model
 
 ---
 
