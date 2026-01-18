@@ -8,7 +8,7 @@ import psutil
 import subprocess
 import logging
 import os
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
