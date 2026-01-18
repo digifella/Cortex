@@ -315,15 +315,17 @@ Use the **Database Embedding Inspector** in the Maintenance tab to check:
 
 ---
 
-## Current Status (2026-01-18)
+## Current Status (2026-01-18 - Updated)
 
 ### What's Working
 - **Traditional Vector Search**: Returns proper results with similarity scores (e.g., 0.358)
 - **Hybrid Search**: Combines vector + GraphRAG, returns 13+ results with real scores
-- **GraphRAG Enhanced Search**: Now returns real documents (via text-based fallback)
+- **GraphRAG Enhanced Search**: Now uses direct_chromadb_search + graph context enhancement
+- **Qwen3-VL-Reranker-8B**: Model downloaded and cached (16GB, uses ~47GB GPU)
 - **UI displays**: Qwen3-VL status in Ingest and Search sidebars
 - **Database Embedding Inspector**: Utility in Maintenance tab
 - **Search Debug Log**: Expandable panel showing search execution details
+- **Embedding Model**: BAAI/bge-base-en-v1.5 working on CUDA (768 dimensions)
 
 ### Fixed Issues (2026-01-18 Session)
 1. **EnhancedGraphManager missing methods** - Added `entity_index` property and `get_graph_stats()` method to `cortex_engine/graph_manager.py`
@@ -350,12 +352,12 @@ Use the **Database Embedding Inspector** in the Maintenance tab to check:
 | GraphRAG Enhanced | ~4-15s | Text match (0.8) | 10 results |
 
 ### Next Steps
-1. **Fix ChromaRetriever vector search** - Investigate why it fails while `direct_chromadb_search` works
-2. **Install Qwen3-VL dependencies**: `pip install -r requirements-qwen3-vl.txt`
-3. **Test reranker end-to-end** with real queries
-4. **Enable Qwen3-VL embeddings** - Re-ingest documents with multimodal embeddings
-5. **Test cross-modal search** with documents and images
-6. **Benchmark performance** against current BGE embedding model
+1. **Test reranker end-to-end** - Verify Qwen3-VL-Reranker-8B improves search precision
+2. **Download Qwen3-VL-Embedding model** - For multimodal document embeddings
+3. **Re-ingest documents** with Qwen3-VL embeddings (2048 or 4096 dimensions)
+4. **Test cross-modal search** - Text queries finding images/charts
+5. **Benchmark performance** - Compare BGE vs Qwen3-VL embeddings
+6. **Add UI controls** for enabling/disabling Qwen3-VL features
 
 ---
 
