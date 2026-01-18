@@ -723,104 +723,77 @@ def perform_search(base_index, query, filters, search_mode="Traditional Vector S
 
 
 def graphrag_enhanced_search(db_path, query, filters, top_k=20):
-    """GraphRAG enhanced search using knowledge graph context"""
+    """GraphRAG enhanced search using knowledge graph context.
+
+    Strategy: Use direct_chromadb_search for vector retrieval (reliable),
+    then enhance results with GraphRAG entity/relationship context.
+    """
     import concurrent.futures
 
     def graphrag_search_with_timeout():
         try:
-            add_search_debug("Importing GraphRAG integration...")
-            from cortex_engine.graphrag_integration import get_graphrag_integration
+            add_search_debug("Starting GraphRAG Enhanced search...")
 
-            # Initialize GraphRAG integration
-            add_search_debug(f"Initializing GraphRAG with db_path: {db_path}")
-            graphrag = get_graphrag_integration(db_path)
+            # Step 1: Get vector results using direct_chromadb_search (reliable)
+            add_search_debug("Step 1: Getting vector results via direct_chromadb_search...")
+            vector_results = direct_chromadb_search(db_path, query, filters, top_k)
+            add_search_debug(f"Vector search returned {len(vector_results)} results")
 
-            # Initialize vector index for GraphRAG (needed for enhanced search)
-            wsl_db_path = convert_windows_to_wsl_path(db_path)
-            chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
-            add_search_debug(f"ChromaDB path: {chroma_db_path}")
-
-            if not os.path.isdir(chroma_db_path):
-                add_search_debug(f"ERROR: Database not found at {chroma_db_path}")
-                st.error(f"Database not found: {chroma_db_path}")
+            if not vector_results:
+                add_search_debug("No vector results found")
                 return []
 
-            # Create a simple vector index interface for GraphRAG
-            add_search_debug("Creating ChromaVectorIndex...")
-            vector_index = ChromaVectorIndex(chroma_db_path)
+            # Step 2: Initialize GraphRAG for context enhancement
+            add_search_debug("Step 2: Initializing GraphRAG for context enhancement...")
+            try:
+                from cortex_engine.graphrag_integration import get_graphrag_integration
+                graphrag = get_graphrag_integration(db_path)
 
-            # Use GraphRAG enhanced search
-            add_search_debug("Calling graphrag.enhanced_search()...")
-            raw_results = graphrag.enhanced_search(
-                query=query,
-                vector_index=vector_index,
-                use_graph_context=True,
-                max_hops=2
-            )
+                # Get graph statistics
+                health = graphrag.health_check()
+                add_search_debug(f"GraphRAG health: {health.get('graph_nodes', 0)} nodes, {health.get('graph_edges', 0)} edges")
 
-            # Debug logging for GraphRAG results
-            result_count = len(raw_results) if raw_results else 0
-            add_search_debug(f"GraphRAG enhanced_search returned {result_count} raw results")
+            except Exception as e:
+                add_search_debug(f"GraphRAG init failed: {e} - returning vector results only")
+                for result in vector_results:
+                    result['graph_context'] = 'GraphRAG unavailable'
+                return vector_results
 
-            if not raw_results:
-                add_search_debug("No raw results - falling back to direct_chromadb_search")
-                fallback_results = direct_chromadb_search(db_path, query, filters, top_k)
-                add_search_debug(f"Fallback returned {len(fallback_results)} results")
-                return fallback_results
+            # Step 3: Enhance each result with graph context
+            add_search_debug("Step 3: Enhancing results with graph context...")
+            enhanced_results = []
 
-            # Log first result structure for debugging
-            if raw_results:
-                first = raw_results[0]
-                add_search_debug(f"First result type: {type(first).__name__}")
-                if hasattr(first, 'metadata'):
-                    add_search_debug(f"First result metadata keys: {list(first.metadata.keys()) if first.metadata else 'None'}")
-                if hasattr(first, 'text'):
-                    add_search_debug(f"First result text length: {len(first.text) if first.text else 0}")
-            
-            # Format results for display
-            formatted_results = []
-            for i, result in enumerate(raw_results[:top_k]):
-                # Extract content and metadata
-                if hasattr(result, 'text'):
-                    content = result.text
-                    metadata = getattr(result, 'metadata', {})
-                elif isinstance(result, dict):
-                    content = result.get('content', result.get('text', ''))
-                    metadata = result.get('metadata', {})
-                else:
-                    content = str(result)
-                    metadata = {}
-                
-                formatted_result = {
-                    'rank': i + 1,
-                    'score': metadata.get('score', 0.8),  # GraphRAG default score
-                    'text': content,
-                    'file_path': metadata.get('file_path', 'Unknown'),
-                    'file_name': metadata.get('file_name', 'Unknown'),
-                    'document_type': metadata.get('document_type', 'Unknown'),
-                    'proposal_outcome': metadata.get('proposal_outcome', 'N/A'),
-                    'thematic_tags': metadata.get('thematic_tags', metadata.get('tags', [])),
-                    'chunk_id': metadata.get('chunk_id', f'chunk_{i}'),
-                    'doc_id': metadata.get('doc_id', f'doc_{i}'),
-                    'graph_context': metadata.get('graph_context', 'Enhanced with entity relationships')
-                }
-                
-                # Apply post-search filtering
-                if apply_post_search_filters(formatted_result, filters):
-                    formatted_results.append(formatted_result)
-            
-            logger.info(f"GraphRAG enhanced search returned {len(formatted_results)} results")
-            return formatted_results
-            
-        except ImportError as e:
-            logger.warning(f"GraphRAG not available: {e}")
-            st.warning("⚠️ GraphRAG not available, falling back to traditional search")
-            return direct_chromadb_search(db_path, query, filters, top_k)
+            for result in vector_results:
+                doc_id = result.get('doc_id', result.get('file_name', ''))
+
+                # Try to get graph context for this document
+                try:
+                    # Get related entities and relationships
+                    related_docs = graphrag.find_related_documents(doc_id, max_results=3)
+
+                    if related_docs:
+                        related_names = [d.get('file_name', d.get('doc_id', ''))[:30] for d in related_docs[:3]]
+                        result['graph_context'] = f"Related: {', '.join(related_names)}"
+                        result['graph_related_count'] = len(related_docs)
+                    else:
+                        result['graph_context'] = 'No graph relationships found'
+                        result['graph_related_count'] = 0
+
+                except Exception as e:
+                    result['graph_context'] = 'Graph lookup failed'
+                    result['graph_related_count'] = 0
+
+                result['search_source'] = 'GraphRAG Enhanced'
+                enhanced_results.append(result)
+
+            add_search_debug(f"Enhanced {len(enhanced_results)} results with graph context")
+            return enhanced_results
+
         except Exception as e:
             logger.error(f"GraphRAG search failed: {e}")
-            st.warning(f"⚠️ GraphRAG search failed: {e}. Falling back to traditional search.")
+            add_search_debug(f"ERROR: {e} - falling back to traditional search")
             return direct_chromadb_search(db_path, query, filters, top_k)
-    
+
     # Run GraphRAG search with timeout protection
     try:
         with concurrent.futures.ThreadPoolExecutor() as executor:
