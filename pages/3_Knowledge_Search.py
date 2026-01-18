@@ -1,7 +1,9 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v5.1.0
-# Date: 2026-01-17
+# Version: v5.2.0
+# Date: 2026-01-18
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
+#          - FEATURE (v5.2.0): Added UI toggle for neural reranking in sidebar. Dynamic timeout
+#            (300s when reranker enabled for first model load, 30s otherwise). No env vars needed.
 #          - FEATURE (v5.1.0): Added optional Qwen3-VL neural reranking for precision boost.
 #            Two-stage retrieval: fast recall (embedding) + precision (reranker).
 #          - FEATURE (v4.11.0): Added embedding model validation before queries with
@@ -375,6 +377,9 @@ def initialize_search_state():
         st.session_state.search_scope = "Entire Knowledge Base"
     if 'selected_collection' not in st.session_state:
         st.session_state.selected_collection = "default"
+    # Reranker toggle - defaults to config value
+    if 'reranker_enabled' not in st.session_state:
+        st.session_state.reranker_enabled = QWEN3_VL_RERANKER_ENABLED
 
 
 def render_sidebar():
@@ -627,11 +632,22 @@ def render_sidebar():
             short_name = model_name.split('/')[-1] if '/' in model_name else model_name
             st.sidebar.info(f"📊 **{short_name}**")
 
-        # Reranker status
-        if QWEN3_VL_RERANKER_ENABLED:
-            st.sidebar.caption(f"🎯 **Reranker**: Active (top-{QWEN3_VL_RERANKER_TOP_K})")
+        # Reranker toggle control
+        st.sidebar.markdown("---")
+        reranker_toggle = st.sidebar.checkbox(
+            "🎯 Neural Reranking",
+            value=st.session_state.reranker_enabled,
+            key="reranker_toggle",
+            help="Enable Qwen3-VL neural reranking for improved search precision. "
+                 "First search takes 2-4 minutes to load the model."
+        )
+        st.session_state.reranker_enabled = reranker_toggle
+
+        if reranker_toggle:
+            st.sidebar.caption(f"✅ Active (top-{QWEN3_VL_RERANKER_TOP_K} from {QWEN3_VL_RERANKER_CANDIDATES} candidates)")
+            st.sidebar.caption("⚠️ First search loads model (~3 min)")
         else:
-            st.sidebar.caption("🎯 **Reranker**: Disabled")
+            st.sidebar.caption("📊 Standard embedding search")
 
     except Exception as e:
         logger.debug(f"Could not get embedding info: {e}")
@@ -644,7 +660,8 @@ def render_sidebar():
         'thematic_tag_filter': st.session_state.thematic_tag_filter,
         'filter_operator': st.session_state.filter_operator,
         'search_scope': st.session_state.search_scope,
-        'selected_collection': st.session_state.selected_collection
+        'selected_collection': st.session_state.selected_collection,
+        'reranker_enabled': st.session_state.reranker_enabled
     }
 
 
@@ -1102,9 +1119,10 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
     import time
     import concurrent.futures
 
-    # Determine reranking behavior from config if not specified
+    # Determine reranking behavior: UI toggle > explicit param > config default
     if use_reranker is None:
-        use_reranker = QWEN3_VL_RERANKER_ENABLED
+        # Check session state (UI toggle) first, fall back to config
+        use_reranker = st.session_state.get('reranker_enabled', QWEN3_VL_RERANKER_ENABLED)
 
     # Get more candidates if reranking is enabled
     candidate_count = QWEN3_VL_RERANKER_CANDIDATES if use_reranker else top_k
@@ -1344,14 +1362,19 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
     
     try:
         # Run search with timeout to prevent hanging
+        # Longer timeout when reranker enabled (first model load takes 3-4 minutes)
+        search_timeout = 300 if use_reranker else 30
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(search_with_timeout)
             try:
-                results = future.result(timeout=30)  # 30 second timeout
+                results = future.result(timeout=search_timeout)
                 return results
             except concurrent.futures.TimeoutError:
-                logger.error("Search timed out after 30 seconds")
-                st.error("Search timed out. The database may be large or there may be connectivity issues.")
+                logger.error(f"Search timed out after {search_timeout} seconds")
+                if use_reranker:
+                    st.error("Search timed out. The reranker model may still be loading - try again in a moment.")
+                else:
+                    st.error("Search timed out. The database may be large or there may be connectivity issues.")
                 return []
                 
     except Exception as e:

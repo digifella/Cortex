@@ -1,8 +1,8 @@
 # Qwen3-VL Multimodal Embedding & Reranking Integration
 
-**Status:** Phase 3 Complete - Testing & Debugging
+**Status:** Phase 3 Complete - UI Toggle Added
 **Started:** 2026-01-17
-**Last Updated:** 2026-01-17
+**Last Updated:** 2026-01-18
 
 ## Overview
 
@@ -55,14 +55,14 @@ Allows truncating embedding vectors (e.g., 4096 → 1024) for storage efficiency
 | Knowledge Ingest | `pages/2_Knowledge_Ingest.py` | ⏳ Pending | UI controls for Qwen3-VL mode |
 | Collection Manager | `pages/5_Collection_Management.py` | ⏳ Pending | Support mixed-modality collections |
 
-### Phase 3: UI Integration 🚧 IN PROGRESS
+### Phase 3: UI Integration ✅ COMPLETE
 
 | Component | File | Status | Description |
 |-----------|------|--------|-------------|
 | Ingest Sidebar | `pages/2_Knowledge_Ingest.py` | ✅ Done | Qwen3-VL status, model info, setup instructions |
-| Search Sidebar | `pages/3_Knowledge_Search.py` | ✅ Done | Embedding info, reranker status display |
-| Settings Page | `pages/Settings.py` | ⏳ Pending | Qwen3-VL enable/disable toggle |
-| Main App | `Cortex_Suite.py` | ⏳ Pending | Global Qwen3-VL status indicator |
+| Search Sidebar | `pages/3_Knowledge_Search.py` | ✅ Done | **UI toggle** for reranker, dynamic timeout (300s for first load) |
+| Settings Page | `pages/Settings.py` | ⏳ Optional | Global Qwen3-VL toggle (can use sidebar toggle instead) |
+| Main App | `Cortex_Suite.py` | ⏳ Optional | Global status indicator (sidebar shows status) |
 
 ### Phase 4: Testing & Validation 🚧 PENDING
 
@@ -107,12 +107,19 @@ For memory optimization on supported GPUs:
 pip install flash-attn --no-build-isolation
 ```
 
-### Step 4: Enable Qwen3-VL
+### Step 4: Enable Qwen3-VL Reranker
 
-Set environment variables or update `cortex_config.json`:
+**Option A: UI Toggle (Recommended)**
+1. Start Cortex Suite: `streamlit run Cortex_Suite.py`
+2. Navigate to Knowledge Search page
+3. In sidebar under "Search Engine", check **"Neural Reranking"** checkbox
+4. First search will take 2-4 minutes to load the model
+5. Subsequent searches use cached model (~2s overhead)
+
+**Option B: Environment Variables**
+Set before starting Streamlit:
 
 ```bash
-export QWEN3_VL_ENABLED=true
 export QWEN3_VL_RERANKER_ENABLED=true
 export QWEN3_VL_MODEL_SIZE=auto  # or "2B" or "8B"
 ```
