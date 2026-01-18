@@ -113,8 +113,8 @@ else:
 # Reranker configuration
 QWEN3_VL_RERANKER_ENABLED = os.getenv("QWEN3_VL_RERANKER_ENABLED", "false").lower() == "true"
 QWEN3_VL_RERANKER_SIZE = os.getenv("QWEN3_VL_RERANKER_SIZE", "auto")  # auto, 2B, 8B
-QWEN3_VL_RERANKER_TOP_K = int(os.getenv("QWEN3_VL_RERANKER_TOP_K", "5"))  # Results after reranking
-QWEN3_VL_RERANKER_CANDIDATES = int(os.getenv("QWEN3_VL_RERANKER_CANDIDATES", "20"))  # Candidates before reranking
+QWEN3_VL_RERANKER_TOP_K = int(os.getenv("QWEN3_VL_RERANKER_TOP_K", "20"))  # Results after reranking
+QWEN3_VL_RERANKER_CANDIDATES = int(os.getenv("QWEN3_VL_RERANKER_CANDIDATES", "50"))  # Candidates before reranking
 
 # Flash Attention 2 (recommended for memory efficiency)
 QWEN3_VL_USE_FLASH_ATTENTION = os.getenv("QWEN3_VL_USE_FLASH_ATTENTION", "true").lower() == "true"

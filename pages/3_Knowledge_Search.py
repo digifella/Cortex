@@ -380,6 +380,8 @@ def initialize_search_state():
     # Reranker toggle - defaults to config value
     if 'reranker_enabled' not in st.session_state:
         st.session_state.reranker_enabled = QWEN3_VL_RERANKER_ENABLED
+    if 'reranker_top_k' not in st.session_state:
+        st.session_state.reranker_top_k = QWEN3_VL_RERANKER_TOP_K
 
 
 def render_sidebar():
@@ -644,7 +646,18 @@ def render_sidebar():
         st.session_state.reranker_enabled = reranker_toggle
 
         if reranker_toggle:
-            st.sidebar.caption(f"✅ Active (top-{QWEN3_VL_RERANKER_TOP_K} from {QWEN3_VL_RERANKER_CANDIDATES} candidates)")
+            # Add slider for controlling number of results
+            reranker_top_k = st.sidebar.slider(
+                "Results to return:",
+                min_value=5,
+                max_value=50,
+                value=st.session_state.reranker_top_k,
+                step=5,
+                key="reranker_top_k_slider",
+                help="Number of top results after neural reranking"
+            )
+            st.session_state.reranker_top_k = reranker_top_k
+            st.sidebar.caption(f"✅ Active (top-{reranker_top_k} from {QWEN3_VL_RERANKER_CANDIDATES} candidates)")
             st.sidebar.caption("⚠️ First search loads model (~3 min)")
         else:
             st.sidebar.caption("📊 Standard embedding search")
@@ -661,7 +674,8 @@ def render_sidebar():
         'filter_operator': st.session_state.filter_operator,
         'search_scope': st.session_state.search_scope,
         'selected_collection': st.session_state.selected_collection,
-        'reranker_enabled': st.session_state.reranker_enabled
+        'reranker_enabled': st.session_state.reranker_enabled,
+        'reranker_top_k': st.session_state.get('reranker_top_k', QWEN3_VL_RERANKER_TOP_K)
     }
 
 
@@ -1136,9 +1150,12 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
         # Check session state (UI toggle) first, fall back to config
         use_reranker = st.session_state.get('reranker_enabled', QWEN3_VL_RERANKER_ENABLED)
 
+    # Get reranker settings from session state (UI slider) or config
+    reranker_top_k = st.session_state.get('reranker_top_k', QWEN3_VL_RERANKER_TOP_K)
+
     # Get more candidates if reranking is enabled
     candidate_count = QWEN3_VL_RERANKER_CANDIDATES if use_reranker else top_k
-    final_top_k = QWEN3_VL_RERANKER_TOP_K if use_reranker else top_k
+    final_top_k = reranker_top_k if use_reranker else top_k
 
     def search_with_timeout():
         try:
@@ -1342,7 +1359,7 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
             logger.info(f"Direct ChromaDB search returned {len(formatted_results)} formatted results")
 
             # Apply neural reranking for precision boost
-            if use_reranker and QWEN3_VL_RERANKER_ENABLED and formatted_results:
+            if use_reranker and formatted_results:
                 try:
                     from cortex_engine.graph_query import rerank_search_results
 
