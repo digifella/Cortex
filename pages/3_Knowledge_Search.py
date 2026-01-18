@@ -812,11 +812,14 @@ def graphrag_enhanced_search(db_path, query, filters, top_k=20):
             return direct_chromadb_search(db_path, query, filters, top_k)
 
     # Run GraphRAG search with timeout protection
+    # Longer timeout when reranker enabled (first model load takes 3-4 minutes)
+    use_reranker = st.session_state.get('reranker_enabled', QWEN3_VL_RERANKER_ENABLED)
+    graphrag_timeout = 300 if use_reranker else 45
     try:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(graphrag_search_with_timeout)
             try:
-                results = future.result(timeout=45)  # 45 second timeout for GraphRAG
+                results = future.result(timeout=graphrag_timeout)
 
                 # Debug logging AFTER thread completes (session_state safe here)
                 add_search_debug(f"GraphRAG thread returned {len(results) if results else 0} results")
@@ -831,8 +834,11 @@ def graphrag_enhanced_search(db_path, query, filters, top_k=20):
 
                 return results
             except concurrent.futures.TimeoutError:
-                logger.error("GraphRAG search timed out after 45 seconds")
-                st.error("⏱️ GraphRAG search timed out. Falling back to traditional search.")
+                logger.error(f"GraphRAG search timed out after {graphrag_timeout} seconds")
+                if use_reranker:
+                    st.error("⏱️ GraphRAG search timed out. The reranker model may still be loading - try again.")
+                else:
+                    st.error("⏱️ GraphRAG search timed out. Falling back to traditional search.")
                 return direct_chromadb_search(db_path, query, filters, top_k)
     except Exception as e:
         logger.error(f"GraphRAG search wrapper failed: {e}")
@@ -926,15 +932,21 @@ def hybrid_search(db_path, query, filters, top_k=20):
             return direct_chromadb_search(db_path, query, filters, top_k)
     
     # Run hybrid search with timeout protection
+    # Longer timeout when reranker enabled (first model load takes 3-4 minutes)
+    use_reranker = st.session_state.get('reranker_enabled', QWEN3_VL_RERANKER_ENABLED)
+    hybrid_timeout = 300 if use_reranker else 60
     try:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(hybrid_search_with_timeout)
             try:
-                results = future.result(timeout=60)  # 60 second timeout for hybrid search
+                results = future.result(timeout=hybrid_timeout)
                 return results
             except concurrent.futures.TimeoutError:
-                logger.error("Hybrid search timed out after 60 seconds")
-                st.error("⏱️ Hybrid search timed out. Falling back to traditional search.")
+                logger.error(f"Hybrid search timed out after {hybrid_timeout} seconds")
+                if use_reranker:
+                    st.error("⏱️ Hybrid search timed out. The reranker model may still be loading - try again.")
+                else:
+                    st.error("⏱️ Hybrid search timed out. Falling back to traditional search.")
                 return direct_chromadb_search(db_path, query, filters, top_k)
     except Exception as e:
         logger.error(f"Hybrid search wrapper failed: {e}")
