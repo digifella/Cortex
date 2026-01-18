@@ -315,25 +315,47 @@ Use the **Database Embedding Inspector** in the Maintenance tab to check:
 
 ---
 
-## Current Status (2026-01-17)
+## Current Status (2026-01-18)
 
 ### What's Working
-- Traditional Vector Search with BGE embeddings
-- UI displays for Qwen3-VL status in Ingest and Search pages
-- Database Embedding Inspector utility
-- Reranker integration (ready to use with existing embeddings)
+- **Traditional Vector Search**: Returns proper results with similarity scores (e.g., 0.358)
+- **Hybrid Search**: Combines vector + GraphRAG, returns 13+ results with real scores
+- **GraphRAG Enhanced Search**: Now returns real documents (via text-based fallback)
+- **UI displays**: Qwen3-VL status in Ingest and Search sidebars
+- **Database Embedding Inspector**: Utility in Maintenance tab
+- **Search Debug Log**: Expandable panel showing search execution details
 
-### Known Issues
-- GraphRAG search missing methods (`entity_index`, `get_graph_stats` in EnhancedGraphManager)
-- Qwen3-VL reranker needs `requirements-qwen3-vl.txt` installed
+### Fixed Issues (2026-01-18 Session)
+1. **EnhancedGraphManager missing methods** - Added `entity_index` property and `get_graph_stats()` method to `cortex_engine/graph_manager.py`
+2. **GraphRAG returning only graph entities** - Added text-based fallback to `ChromaRetriever` class
+3. **MockResult missing text attribute** - Graph-discovered documents now have proper text content
+4. **Session state debug in threads** - Moved debug logging outside ThreadPoolExecutor
+
+### Known Issues (To Investigate)
+1. **ChromaRetriever vector search failing silently**:
+   - Hybrid search uses `direct_chromadb_search` which works (returns real similarity scores)
+   - GraphRAG uses `ChromaRetriever` which falls back to text search (returns 0.800 scores)
+   - Debug print statements inside ChromaRetriever don't appear in terminal (even with flush=True)
+   - Likely cause: Thread output being swallowed or ChromaDB client issue in thread context
+
+2. **Numpy circular import**: Intermittently requires `pip install --force-reinstall numpy==1.26.4`
+
+3. **Qwen3-VL not yet tested**: Dependencies need installation (`pip install -r requirements-qwen3-vl.txt`)
+
+### Performance Observations
+| Search Mode | Speed | Score Type | Results |
+|-------------|-------|------------|---------|
+| Traditional | ~0.6s | Real similarity (0.3-0.4) | 20 results |
+| Hybrid | ~1.5s | Real similarity (0.3-0.4) | 13 results |
+| GraphRAG Enhanced | ~4-15s | Text match (0.8) | 10 results |
 
 ### Next Steps
-1. Fix GraphRAG missing methods in `cortex_engine/graph_manager.py`
-2. Install Qwen3-VL dependencies: `pip install -r requirements-qwen3-vl.txt`
-3. Test reranker end-to-end with real queries
-4. Add UI controls for enabling/configuring Qwen3-VL
-5. Test cross-modal search with real documents and images
-6. Benchmark performance against current embedding model
+1. **Fix ChromaRetriever vector search** - Investigate why it fails while `direct_chromadb_search` works
+2. **Install Qwen3-VL dependencies**: `pip install -r requirements-qwen3-vl.txt`
+3. **Test reranker end-to-end** with real queries
+4. **Enable Qwen3-VL embeddings** - Re-ingest documents with multimodal embeddings
+5. **Test cross-modal search** with documents and images
+6. **Benchmark performance** against current BGE embedding model
 
 ---
 
