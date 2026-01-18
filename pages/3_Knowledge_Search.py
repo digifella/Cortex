@@ -1,7 +1,9 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v5.2.0
+# Version: v5.3.0
 # Date: 2026-01-18
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
+#          - FEATURE (v5.3.0): Background preload of reranker model when page opens. Model loads
+#            while user types query, ready by first search. Added result count slider (5-50).
 #          - FEATURE (v5.2.0): Added UI toggle for neural reranking in sidebar. Dynamic timeout
 #            (300s when reranker enabled for first model load, 30s otherwise). No env vars needed.
 #          - FEATURE (v5.1.0): Added optional Qwen3-VL neural reranking for precision boost.
@@ -37,6 +39,7 @@ import os
 import pandas as pd
 from pathlib import Path
 import re
+import threading
 from typing import Optional
 
 # Import only ChromaDB components needed for direct search
@@ -78,6 +81,37 @@ st.set_page_config(page_title="Knowledge Search", layout="wide")
 
 # Apply refined editorial theme
 apply_theme()
+
+
+# =============================================================================
+# Reranker Background Preload
+# =============================================================================
+def _preload_reranker_model():
+    """Background task to preload the Qwen3-VL reranker model into GPU memory."""
+    try:
+        from cortex_engine.qwen3_vl_reranker_service import _load_reranker, Qwen3VLRerankerConfig
+
+        logger.info("🔄 Background preload: Loading Qwen3-VL reranker model...")
+        config = Qwen3VLRerankerConfig.auto_select()
+        _load_reranker(config)
+        logger.info("✅ Background preload: Reranker model ready")
+
+        # Update session state to indicate model is ready
+        # Note: This won't trigger UI update, but search will find cached model
+    except Exception as e:
+        logger.warning(f"Background preload failed (will load on first search): {e}")
+
+
+def start_reranker_preload():
+    """Start background preload of reranker model if enabled and not already loading."""
+    # Check if reranker is enabled (from session state or config default)
+    reranker_enabled = st.session_state.get('reranker_enabled', QWEN3_VL_RERANKER_ENABLED)
+
+    if reranker_enabled and 'reranker_preload_started' not in st.session_state:
+        st.session_state.reranker_preload_started = True
+        thread = threading.Thread(target=_preload_reranker_model, daemon=True)
+        thread.start()
+        logger.info("🚀 Started background reranker model preload")
 
 
 def get_candidate_db_paths(db_path: str):
@@ -658,7 +692,18 @@ def render_sidebar():
             )
             st.session_state.reranker_top_k = reranker_top_k
             st.sidebar.caption(f"✅ Active (top-{reranker_top_k} from {QWEN3_VL_RERANKER_CANDIDATES} candidates)")
-            st.sidebar.caption("⚠️ First search loads model (~3 min)")
+
+            # Check if model is already loaded
+            try:
+                from cortex_engine.qwen3_vl_reranker_service import _reranker_model
+                if _reranker_model is not None:
+                    st.sidebar.caption("🟢 Model ready")
+                elif st.session_state.get('reranker_preload_started'):
+                    st.sidebar.caption("🔄 Model loading in background...")
+                else:
+                    st.sidebar.caption("⚠️ First search loads model (~3 min)")
+            except ImportError:
+                st.sidebar.caption("⚠️ First search loads model (~3 min)")
         else:
             st.sidebar.caption("📊 Standard embedding search")
 
@@ -1692,7 +1737,10 @@ def main():
     
     # Initialize session state first
     initialize_search_state()
-    
+
+    # Start background preload of reranker model (if enabled)
+    start_reranker_preload()
+
     # Render sidebar and get config early
     config = render_sidebar()
     
