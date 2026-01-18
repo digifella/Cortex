@@ -1,7 +1,9 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v5.3.0
-# Date: 2026-01-18
+# Version: v5.4.0
+# Date: 2026-01-19
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
+#          - FEATURE (v5.4.0): Streamlined "Save to Collection" UI with dropdown showing existing
+#            collections + "Create New Collection" option. Works for bulk and individual adds.
 #          - FEATURE (v5.3.0): Background preload of reranker model when page opens. Model loads
 #            while user types query, ready by first search. Added result count slider (5-50).
 #          - FEATURE (v5.2.0): Added UI toggle for neural reranking in sidebar. Dynamic timeout
@@ -1555,96 +1557,73 @@ def render_search_results(results, filters):
     
     # Bulk collection actions
     if len(results) > 1:
-        st.subheader("📋 Bulk Actions")
-        col1, col2, col3 = st.columns(3)
-        
+        st.subheader("📋 Save to Collection")
+
+        col1, col2 = st.columns([3, 1])
+
         with col1:
-            if st.button("➕ Add All to Collection", help="Add all search results to a collection"):
-                st.session_state.show_bulk_add = True
-        
+            try:
+                collection_mgr = WorkingCollectionManager()
+                collection_names = collection_mgr.get_collection_names()
+
+                # Add "+ Create New Collection" as first option
+                collection_options = ["+ Create New Collection"] + collection_names
+
+                selected_option = st.selectbox(
+                    "Save all results to:",
+                    collection_options,
+                    key="bulk_collection_target",
+                    help="Select an existing collection or create a new one"
+                )
+
+                # Show new collection name input if creating new
+                if selected_option == "+ Create New Collection":
+                    new_name = st.text_input(
+                        "New collection name:",
+                        placeholder="e.g., Strategy Workshop Research",
+                        key="new_collection_name_bulk"
+                    )
+                else:
+                    new_name = None
+
+            except Exception as e:
+                st.error(f"Collections not available: {e}")
+                selected_option = None
+                new_name = None
+
         with col2:
-            if st.button("💾 Save Results", help="Create a new collection with these results"):
-                st.session_state.show_save_collection = True
-        
-        with col3:
-            if st.button("🆑 Clear Results", help="Clear current search results"):
-                st.session_state.last_search_results = []
-                st.session_state.last_search_query = ""
-                st.rerun()
-        
-        # Bulk action modals - Docker-safe
-        if st.session_state.get('show_bulk_add', False):
-            with st.expander("➕ Add All Results to Collection", expanded=True):
-                try:
-                    collection_mgr = WorkingCollectionManager()
-                    collection_names = collection_mgr.get_collection_names()
-                    
-                    if collection_names:
-                        target_collection = st.selectbox("Select target collection:", collection_names)
-                        
-                        col_a, col_b = st.columns(2)
-                        with col_a:
-                            if st.button("Add to Collection", type="primary"):
-                                doc_ids = [result['doc_id'] for result in results]
-                                try:
-                                    collection_mgr.add_docs_by_id_to_collection(target_collection, doc_ids)
-                                    st.success(f"✅ Added {len(doc_ids)} documents to '{target_collection}'!")
-                                    st.session_state.show_bulk_add = False
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"❌ Failed to add documents: {e}")
-                        
-                        with col_b:
-                            if st.button("Cancel"):
-                                st.session_state.show_bulk_add = False
-                                st.rerun()
-                    else:
-                        st.info("No collections available. Please set up collections first.")
-                        if st.button("Close"):
-                            st.session_state.show_bulk_add = False
-                            st.rerun()
-                except Exception as e:
-                    st.error(f"Collections not available in this environment: {e}")
-                    st.info("Collection features require a fully initialized system.")
-                    if st.button("Close", key="close_bulk_error"):
-                        st.session_state.show_bulk_add = False
-                        st.rerun()
-        
-        if st.session_state.get('show_save_collection', False):
-            with st.expander("💾 Save as New Collection", expanded=True):
-                try:
-                    new_collection_name = st.text_input("Collection name:", placeholder="e.g., AI Research Papers")
-                    
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        if st.button("Create Collection", type="primary"):
-                            if new_collection_name.strip():
-                                try:
-                                    collection_mgr = WorkingCollectionManager()
-                                    if collection_mgr.create_collection(new_collection_name.strip()):
-                                        doc_ids = [result['doc_id'] for result in results]
-                                        collection_mgr.add_docs_by_id_to_collection(new_collection_name.strip(), doc_ids)
-                                        st.success(f"✅ Created '{new_collection_name}' with {len(doc_ids)} documents!")
-                                        st.session_state.show_save_collection = False
-                                        st.rerun()
-                                    else:
-                                        st.error(f"Collection '{new_collection_name}' already exists!")
-                                except Exception as e:
-                                    st.error(f"❌ Failed to create collection: {e}")
+            st.write("")  # Spacing
+            st.write("")  # Align with selectbox
+            if st.button("💾 Save Results", type="primary", use_container_width=True):
+                if selected_option:
+                    try:
+                        collection_mgr = WorkingCollectionManager()
+                        doc_ids = [result['doc_id'] for result in results]
+
+                        if selected_option == "+ Create New Collection":
+                            if new_name and new_name.strip():
+                                # Create new collection and add docs
+                                if collection_mgr.create_collection(new_name.strip()):
+                                    collection_mgr.add_docs_by_id_to_collection(new_name.strip(), doc_ids)
+                                    st.success(f"✅ Created '{new_name}' with {len(doc_ids)} documents!")
+                                    st.balloons()
+                                else:
+                                    st.error(f"Collection '{new_name}' already exists!")
                             else:
-                                st.warning("Please enter a collection name")
-                    
-                    with col_b:
-                        if st.button("Cancel", key="cancel_save"):
-                            st.session_state.show_save_collection = False
-                            st.rerun()
-                except Exception as e:
-                    st.error(f"Collections not available in this environment: {e}")
-                    st.info("Collection features require a fully initialized system.")
-                    if st.button("Close", key="close_save_error"):
-                        st.session_state.show_save_collection = False
-                        st.rerun()
-        
+                                st.warning("Please enter a name for the new collection")
+                        else:
+                            # Add to existing collection
+                            collection_mgr.add_docs_by_id_to_collection(selected_option, doc_ids)
+                            st.success(f"✅ Added {len(doc_ids)} documents to '{selected_option}'!")
+                    except Exception as e:
+                        st.error(f"❌ Failed to save: {e}")
+
+        # Clear results button
+        if st.button("🆑 Clear Results", help="Clear current search results"):
+            st.session_state.last_search_results = []
+            st.session_state.last_search_query = ""
+            st.rerun()
+
         st.divider()
     
     # Individual results display
@@ -1678,28 +1657,51 @@ def render_search_results(results, filters):
                 try:
                     collection_mgr = WorkingCollectionManager()
                     collection_names = collection_mgr.get_collection_names()
-                    
-                    if collection_names:
-                        target_collection = st.selectbox(f"Add to collection:", collection_names, key=f"target_add_{i}")
-                        
-                        col_x, col_y = st.columns(2)
-                        with col_x:
-                            if st.button("Add", key=f"confirm_add_{i}", type="primary"):
-                                try:
-                                    collection_mgr.add_docs_by_id_to_collection(target_collection, [result['doc_id']])
-                                    st.success(f"✅ Added to '{target_collection}'!")
+
+                    # Add "+ Create New Collection" as first option
+                    collection_options = ["+ Create New Collection"] + collection_names
+
+                    target_option = st.selectbox(
+                        "Add to collection:",
+                        collection_options,
+                        key=f"target_add_{i}"
+                    )
+
+                    # Show new collection name input if creating new
+                    if target_option == "+ Create New Collection":
+                        new_coll_name = st.text_input(
+                            "New collection name:",
+                            key=f"new_coll_name_{i}",
+                            placeholder="e.g., Strategy Documents"
+                        )
+                    else:
+                        new_coll_name = None
+
+                    col_x, col_y = st.columns(2)
+                    with col_x:
+                        if st.button("Add", key=f"confirm_add_{i}", type="primary"):
+                            try:
+                                if target_option == "+ Create New Collection":
+                                    if new_coll_name and new_coll_name.strip():
+                                        if collection_mgr.create_collection(new_coll_name.strip()):
+                                            collection_mgr.add_docs_by_id_to_collection(new_coll_name.strip(), [result['doc_id']])
+                                            st.success(f"✅ Created '{new_coll_name}' and added document!")
+                                            st.session_state[f'show_add_{i}'] = False
+                                            st.rerun()
+                                        else:
+                                            st.error(f"Collection '{new_coll_name}' already exists!")
+                                    else:
+                                        st.warning("Please enter a collection name")
+                                else:
+                                    collection_mgr.add_docs_by_id_to_collection(target_option, [result['doc_id']])
+                                    st.success(f"✅ Added to '{target_option}'!")
                                     st.session_state[f'show_add_{i}'] = False
                                     st.rerun()
-                                except Exception as e:
-                                    st.error(f"❌ Failed to add: {e}")
-                        
-                        with col_y:
-                            if st.button("Cancel", key=f"cancel_add_{i}"):
-                                st.session_state[f'show_add_{i}'] = False
-                                st.rerun()
-                    else:
-                        st.info("No collections available")
-                        if st.button("Close", key=f"close_add_{i}"):
+                            except Exception as e:
+                                st.error(f"❌ Failed to add: {e}")
+
+                    with col_y:
+                        if st.button("Cancel", key=f"cancel_add_{i}"):
                             st.session_state[f'show_add_{i}'] = False
                             st.rerun()
                 except Exception as e:

@@ -645,7 +645,7 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
                         label_visibility="collapsed"
                     )
                     if selected_collection and st.button("📥", key=f"add_{doc_id}_to_{selected_collection}", help=f"Add '{file_name}' to '{selected_collection}'"):
-                        collection_mgr.add_to_collection(selected_collection, [doc_id])
+                        collection_mgr.add_docs_by_id_to_collection(selected_collection, [doc_id])
                         st.toast(f"Added '{file_name}' to '{selected_collection}'.")
                         st.rerun()
             
@@ -680,7 +680,7 @@ def display_enhanced_document_list(unique_docs, collection_name, collection_mgr)
                     bulk_target = st.session_state.get(f"bulk_add_to_collection_{collection_name}", "")
                     if bulk_target and st.button(f"📥 Add Visible ({len(page_docs)}) to '{bulk_target}'", key=f"execute_bulk_add_{collection_name}", use_container_width=True):
                         doc_ids_to_add = [doc_id for doc_id, meta in page_docs]
-                        collection_mgr.add_to_collection(bulk_target, doc_ids_to_add)
+                        collection_mgr.add_docs_by_id_to_collection(bulk_target, doc_ids_to_add)
                         st.toast(f"Added {len(doc_ids_to_add)} documents to '{bulk_target}'.")
                         st.rerun()
         
