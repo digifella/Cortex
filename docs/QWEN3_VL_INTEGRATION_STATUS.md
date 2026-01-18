@@ -328,26 +328,32 @@ Use the **Database Embedding Inspector** in the Maintenance tab to check:
 - **Embedding Model**: BAAI/bge-base-en-v1.5 working on CUDA (768 dimensions)
 - **Flash Attention 2 fallback**: Gracefully handles missing flash_attn package
 
-### Qwen3-VL Reranker Status (2026-01-18)
+### Qwen3-VL Reranker Status (2026-01-18) ✅ WORKING
 
 **Test Script**: `scripts/test_reranker_integration.py`
 
 | Test | Status | Notes |
 |------|--------|-------|
-| Model Loading | ✅ PASS | Loads on CUDA, ~15GB VRAM used |
+| Model Loading | ✅ PASS | Uses Qwen3VLForConditionalGeneration |
+| Binary Scoring | ✅ PASS | yes/no token difference scoring |
+| Relevance Ranking | ✅ PASS | Properly differentiates documents |
 | Pipeline Integration | ✅ PASS | Integrates with graph_query.py |
-| Relevance Scoring | ❌ BLOCKED | Requires official Qwen3VLReranker wrapper |
 
-**Current Limitation**: The Qwen3-VL-Reranker model produces uniform scores (1.0) for all documents.
+**Implementation**: Uses official Qwen3-VL-Reranker scoring method:
+1. Loads `Qwen3VLForConditionalGeneration` model
+2. Creates `score_linear` layer from `lm_head.weight[yes] - lm_head.weight[no]`
+3. Scores = `sigmoid(score_linear(last_hidden_state[:, -1]))`
 
-**Root Cause**: The HuggingFace `AutoModel` API loads the base Qwen3VLModel but the reranker requires:
-1. A specific `Qwen3VLReranker` wrapper class with `.process()` method
-2. Custom input formatting per the model's documentation
-3. The model card shows: `from scripts.qwen3_vl_reranker import Qwen3VLReranker`
+**Test Results** (query: "How do I configure the database connection?"):
+| Rank | Score | Document |
+|------|-------|----------|
+| 1 | 0.287 | Database configuration in config/database.yml |
+| 2 | 0.072 | Connection pooling settings in config file |
+| 3 | 0.006 | Run migrations command |
+| 4 | 0.004 | PostgreSQL for data storage |
+| 5 | 0.001 | React frontend (correctly ranked last) |
 
-**The reranker is NOT recommended for use until proper scoring is implemented.**
-
-**To Enable (for testing only)**:
+**To Enable**:
 ```bash
 export QWEN3_VL_RERANKER_ENABLED=true
 streamlit run Cortex_Suite.py
@@ -362,13 +368,11 @@ streamlit run Cortex_Suite.py
 6. **Cross-encoder scoring** - Implemented yes/no token probability approach (scores still uniform)
 
 ### Known Issues
-1. **Reranker uniform scores**: All documents score 1.0
-   - The official Qwen3-VL-Reranker uses a proprietary wrapper not available via standard HuggingFace
-   - Need to either: (a) implement wrapper from model repo, or (b) use different reranker model
+1. **Model initialization warning**: "Some weights were not initialized" - expected for VL models, does not affect scoring
 
-2. **Model initialization warning**: "Some weights were not initialized" - expected for base VL models
+2. **Numpy circular import**: Intermittently requires `pip install --force-reinstall numpy==1.26.4`
 
-3. **Numpy circular import**: Intermittently requires `pip install --force-reinstall numpy==1.26.4`
+3. **First query slow**: Model loading takes ~3-4 minutes, subsequent queries fast (~2s per 5 docs)
 
 ### Performance Observations
 | Search Mode | Speed | Score Type | Results |
@@ -376,14 +380,11 @@ streamlit run Cortex_Suite.py
 | Traditional | ~0.6s | Real similarity (0.3-0.4) | 20 results |
 | Hybrid | ~1.5s | Real similarity (0.3-0.4) | 13 results |
 | GraphRAG Enhanced | ~4-15s | Graph context (0.3-0.4) | 10 results |
+| + Reranker | +2s per 5 docs | Cross-attention (0.0-0.3) | top_k results |
 
 ### Next Steps (Priority Order)
-1. **Option A: Use alternative reranker** - BGE-Reranker-v2, ms-marco-MiniLM, or Cohere rerank API
-   - These have simpler APIs and proven HuggingFace integration
-
-2. **Option B: Implement Qwen3VLReranker wrapper** - Port the official wrapper from model repo
-   - More complex but enables multimodal reranking (text + images)
-
+1. ✅ ~~Implement proper reranker scoring~~ - DONE (uses official yes/no binary scoring)
+2. **Test reranker in Streamlit UI** - Enable and verify in Knowledge Search
 3. **Download Qwen3-VL-Embedding model** - For multimodal document embeddings
 4. **Re-ingest documents** with Qwen3-VL embeddings (2048 or 4096 dimensions)
 5. **Test cross-modal search** - Text queries finding images/charts

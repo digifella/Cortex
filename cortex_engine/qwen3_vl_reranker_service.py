@@ -153,12 +153,13 @@ class RerankedResult:
 
 
 # ============================================================================
-# Model Loading
+# Model Loading (Official Qwen3-VL-Reranker Implementation)
 # ============================================================================
 
 _model_lock = threading.Lock()
 _reranker_model: Optional[Any] = None
 _reranker_processor: Optional[Any] = None
+_score_linear: Optional[Any] = None  # Linear layer for yes/no scoring
 _current_config: Optional[Qwen3VLRerankerConfig] = None
 
 
@@ -171,14 +172,49 @@ def _get_device() -> str:
     return "cpu"
 
 
+def _create_score_linear(lm_model, tokenizer) -> torch.nn.Linear:
+    """
+    Create binary scoring linear layer from lm_head weights.
+
+    This is the key to proper reranking - it computes the difference
+    between "yes" and "no" logits to determine relevance.
+    """
+    # Get token IDs for yes/no
+    vocab = tokenizer.get_vocab()
+    token_yes_id = vocab.get("yes", vocab.get("Yes", None))
+    token_no_id = vocab.get("no", vocab.get("No", None))
+
+    if token_yes_id is None or token_no_id is None:
+        # Fallback: encode the tokens
+        token_yes_id = tokenizer.encode("yes", add_special_tokens=False)[0]
+        token_no_id = tokenizer.encode("no", add_special_tokens=False)[0]
+
+    logger.info(f"Token IDs - yes: {token_yes_id}, no: {token_no_id}")
+
+    # Get lm_head weights
+    lm_head_weights = lm_model.lm_head.weight.data
+    weight_yes = lm_head_weights[token_yes_id]
+    weight_no = lm_head_weights[token_no_id]
+
+    # Create linear layer: score = (weight_yes - weight_no) @ hidden_state
+    D = weight_yes.size()[0]
+    linear_layer = torch.nn.Linear(D, 1, bias=False)
+    with torch.no_grad():
+        linear_layer.weight[0] = weight_yes - weight_no
+
+    return linear_layer
+
+
 def _load_reranker(config: Optional[Qwen3VLRerankerConfig] = None) -> tuple:
     """
-    Load Qwen3-VL reranker model.
+    Load Qwen3-VL reranker model using official implementation.
+
+    Uses Qwen3VLForConditionalGeneration and creates proper scoring layer.
 
     Returns:
         Tuple of (model, processor, config)
     """
-    global _reranker_model, _reranker_processor, _current_config
+    global _reranker_model, _reranker_processor, _score_linear, _current_config
 
     if config is None:
         config = Qwen3VLRerankerConfig.auto_select()
@@ -194,14 +230,16 @@ def _load_reranker(config: Optional[Qwen3VLRerankerConfig] = None) -> tuple:
         logger.info(f"Loading Qwen3-VL reranker: {config.model_name}")
 
         try:
-            from transformers import AutoModel, AutoProcessor
+            from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 
             device = config.device or _get_device()
             dtype = torch.bfloat16 if config.torch_dtype == "bfloat16" else torch.float16
 
+            # Load processor with left padding (required for batch processing)
             _reranker_processor = AutoProcessor.from_pretrained(
                 config.model_name,
-                trust_remote_code=config.trust_remote_code
+                trust_remote_code=config.trust_remote_code,
+                padding_side='left'
             )
 
             model_kwargs = {
@@ -218,10 +256,20 @@ def _load_reranker(config: Optional[Qwen3VLRerankerConfig] = None) -> tuple:
                 except ImportError:
                     logger.info("📝 Flash Attention 2 not installed - using default attention")
 
-            _reranker_model = AutoModel.from_pretrained(
+            # Load full model (need lm_head for scoring)
+            full_model = Qwen3VLForConditionalGeneration.from_pretrained(
                 config.model_name,
                 **model_kwargs
-            ).to(device).eval()
+            ).to(device)
+
+            # Create scoring linear layer from lm_head weights
+            _score_linear = _create_score_linear(full_model, _reranker_processor.tokenizer)
+            _score_linear.eval()
+            _score_linear.to(device).to(dtype)
+
+            # Store the inner model for inference
+            _reranker_model = full_model.model
+            _reranker_model.eval()
 
             _current_config = config
 
@@ -239,7 +287,7 @@ def _load_reranker(config: Optional[Qwen3VLRerankerConfig] = None) -> tuple:
 
 def unload_reranker():
     """Unload reranker to free GPU memory."""
-    global _reranker_model, _reranker_processor, _current_config
+    global _reranker_model, _reranker_processor, _score_linear, _current_config
 
     with _model_lock:
         if _reranker_model is not None:
@@ -248,6 +296,9 @@ def unload_reranker():
         if _reranker_processor is not None:
             del _reranker_processor
             _reranker_processor = None
+        if _score_linear is not None:
+            del _score_linear
+            _score_linear = None
         _current_config = None
 
         clear_gpu_cache()
@@ -258,34 +309,33 @@ def unload_reranker():
 # Reranking Functions
 # ============================================================================
 
-def _get_yes_no_token_ids(processor) -> Tuple[List[int], List[int]]:
-    """Get token IDs for yes/no variations to compute relevance scores."""
-    tokenizer = processor.tokenizer if hasattr(processor, 'tokenizer') else processor
+def _format_reranker_message(
+    query_text: str,
+    doc_text: str,
+    instruction: str = "Given a search query, retrieve relevant candidates that answer the query."
+) -> List[Dict]:
+    """
+    Format query-document pair as chat message for reranker.
 
-    # Common yes/no token variations
-    yes_tokens = ["Yes", "yes", "YES", "True", "true", "relevant", "Relevant"]
-    no_tokens = ["No", "no", "NO", "False", "false", "irrelevant", "Irrelevant"]
-
-    yes_ids = []
-    no_ids = []
-
-    for token in yes_tokens:
-        try:
-            ids = tokenizer.encode(token, add_special_tokens=False)
-            if ids:
-                yes_ids.append(ids[0])
-        except Exception:
-            pass
-
-    for token in no_tokens:
-        try:
-            ids = tokenizer.encode(token, add_special_tokens=False)
-            if ids:
-                no_ids.append(ids[0])
-        except Exception:
-            pass
-
-    return yes_ids, no_ids
+    Uses the official Qwen3-VL-Reranker message format.
+    """
+    return [
+        {
+            "role": "system",
+            "content": [{
+                "type": "text",
+                "text": 'Judge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".'
+            }]
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"<Instruct>: {instruction}"},
+                {"type": "text", "text": f"<Query>: {query_text}"},
+                {"type": "text", "text": f"\n<Document>: {doc_text}"}
+            ]
+        }
+    ]
 
 
 def _compute_rerank_scores(
@@ -296,103 +346,75 @@ def _compute_rerank_scores(
     config: Qwen3VLRerankerConfig
 ) -> List[float]:
     """
-    Compute reranking scores for query-document pairs using cross-encoder approach.
+    Compute reranking scores using official Qwen3-VL-Reranker method.
 
-    Uses a relevance classification prompt and compares probabilities of
-    "Yes" vs "No" tokens to determine document relevance scores.
+    Uses the yes/no binary classification approach with the score_linear layer
+    created from lm_head weights: score = sigmoid((w_yes - w_no) @ hidden_state)
 
     Args:
         query: Query in dict format (e.g., {"text": "..."})
         documents: List of documents in dict format
-        model: Loaded reranker model
+        model: Loaded reranker model (inner model, not full lm)
         processor: Reranker processor
         config: Configuration
 
     Returns:
         List of relevance scores (0.0 to 1.0, higher = more relevant)
     """
+    global _score_linear
+
     device = next(model.parameters()).device
     scores = []
 
-    # Get yes/no token IDs for scoring
-    yes_ids, no_ids = _get_yes_no_token_ids(processor)
-
-    if not yes_ids or not no_ids:
-        logger.warning("Could not find yes/no token IDs, using fallback scoring")
-        yes_ids = [9642]  # Common "Yes" token ID
-        no_ids = [2822]   # Common "No" token ID
+    instruction = "Given a search query, retrieve relevant candidates that answer the query."
 
     with torch.no_grad():
-        for i in range(0, len(documents), config.max_batch_size):
-            batch_docs = documents[i:i+config.max_batch_size]
+        for doc in documents:
+            try:
+                query_text = query.get("text", "")
+                doc_text = doc.get("text", "")
 
-            for doc in batch_docs:
-                try:
-                    query_text = query.get("text", "")
-                    doc_text = doc.get("text", "")
+                # Truncate long documents
+                max_doc_len = 2000
+                if len(doc_text) > max_doc_len:
+                    doc_text = doc_text[:max_doc_len] + "..."
 
-                    # Truncate long documents to fit context
-                    max_doc_len = 1500
-                    if len(doc_text) > max_doc_len:
-                        doc_text = doc_text[:max_doc_len] + "..."
+                # Format as official reranker message
+                messages = _format_reranker_message(query_text, doc_text, instruction)
 
-                    # Cross-encoder style relevance prompt
-                    # This format asks the model to evaluate if the document answers the query
-                    prompt = f"""Given a query and a document, determine if the document is relevant to answering the query.
+                # Apply chat template
+                text = processor.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True
+                )
 
-Query: {query_text}
+                # Tokenize
+                inputs = processor(
+                    text=[text],
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=config.max_batch_size * 512  # Reasonable context
+                ).to(device)
 
-Document: {doc_text}
+                # Get last hidden state
+                outputs = model(**inputs)
+                last_hidden = outputs.last_hidden_state[:, -1, :]  # [batch, hidden_dim]
 
-Is this document relevant to the query? Answer with Yes or No."""
+                # Apply score linear layer (yes - no difference)
+                if _score_linear is not None:
+                    score_logit = _score_linear(last_hidden)
+                    score = torch.sigmoid(score_logit).squeeze().cpu().item()
+                else:
+                    # Fallback if score_linear not available
+                    score = 0.5
 
-                    # Process through processor
-                    inputs = processor(
-                        text=[prompt],
-                        return_tensors="pt",
-                        padding=True,
-                        truncation=True,
-                        max_length=2048
-                    ).to(device)
+                scores.append(score)
 
-                    outputs = model(**inputs)
-
-                    # Compute relevance score from logits
-                    if hasattr(outputs, 'logits'):
-                        logits = outputs.logits[:, -1, :]  # Last position logits
-                        probs = torch.softmax(logits, dim=-1)
-
-                        # Sum probabilities for yes tokens vs no tokens
-                        yes_prob = sum(probs[0, tid].item() for tid in yes_ids if tid < probs.shape[-1])
-                        no_prob = sum(probs[0, tid].item() for tid in no_ids if tid < probs.shape[-1])
-
-                        # Normalize to get relevance score
-                        total = yes_prob + no_prob
-                        if total > 0:
-                            score = yes_prob / total
-                        else:
-                            # Fallback: use entropy-based scoring
-                            # Lower entropy = more confident = higher score
-                            entropy = -torch.sum(probs * torch.log(probs + 1e-10)).item()
-                            max_entropy = np.log(probs.shape[-1])
-                            score = 1.0 - (entropy / max_entropy)
-
-                    elif hasattr(outputs, 'last_hidden_state'):
-                        # Embedding-based fallback: use cosine similarity approach
-                        hidden = outputs.last_hidden_state[:, -1, :]
-                        # Normalize and use L2 norm as confidence proxy
-                        norm = torch.norm(hidden, dim=-1).item()
-                        score = min(1.0, norm / 50.0)  # Normalize to 0-1 range
-                    else:
-                        score = 0.5
-
-                    # Clamp to valid range
-                    score = max(0.0, min(1.0, score))
-                    scores.append(score)
-
-                except Exception as e:
-                    logger.warning(f"Failed to score document: {e}")
-                    scores.append(0.5)
+            except Exception as e:
+                logger.warning(f"Failed to score document: {e}")
+                scores.append(0.5)
 
     return scores
 
