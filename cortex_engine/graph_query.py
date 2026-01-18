@@ -543,12 +543,13 @@ class GraphQueryEngine:
                     related[neighbor] = depth + 1
                     queue.append((neighbor, depth + 1))
             
-            # Explore predecessors
-            for predecessor in self.graph.graph.predecessors(current_entity):
-                if predecessor not in visited and not predecessor.endswith('.pdf'):
-                    visited.add(predecessor)
-                    related[predecessor] = depth + 1
-                    queue.append((predecessor, depth + 1))
+            # Explore predecessors (only for directed graphs - undirected already covered by neighbors)
+            if self.graph.graph.is_directed():
+                for predecessor in self.graph.graph.predecessors(current_entity):
+                    if predecessor not in visited and not predecessor.endswith('.pdf'):
+                        visited.add(predecessor)
+                        related[predecessor] = depth + 1
+                        queue.append((predecessor, depth + 1))
         
         return related
     
@@ -732,12 +733,13 @@ class GraphQueryEngine:
                     # Track graph distances
                     context['graph_distance'][neighbor] = depth + 1
             
-            # Also check incoming edges
-            for predecessor in self.graph.graph.predecessors(current_node):
-                if predecessor not in visited:
-                    visited.add(predecessor)
-                    queue.append((predecessor, depth + 1))
-                    context['graph_distance'][predecessor] = depth + 1
+            # Also check incoming edges (only for directed graphs - undirected already covered by neighbors)
+            if self.graph.graph.is_directed():
+                for predecessor in self.graph.graph.predecessors(current_node):
+                    if predecessor not in visited:
+                        visited.add(predecessor)
+                        queue.append((predecessor, depth + 1))
+                        context['graph_distance'][predecessor] = depth + 1
         
         # Find related documents through shared entities
         for author in context['direct_entities']['authors']:
