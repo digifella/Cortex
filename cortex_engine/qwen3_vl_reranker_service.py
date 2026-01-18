@@ -209,12 +209,14 @@ def _load_reranker(config: Optional[Qwen3VLRerankerConfig] = None) -> tuple:
                 "torch_dtype": dtype,
             }
 
+            # Only enable Flash Attention 2 if the package is actually installed
             if config.use_flash_attention:
                 try:
+                    import flash_attn  # noqa: F401
                     model_kwargs["attn_implementation"] = "flash_attention_2"
                     logger.info("⚡ Using Flash Attention 2")
-                except Exception:
-                    pass
+                except ImportError:
+                    logger.info("📝 Flash Attention 2 not installed - using default attention")
 
             _reranker_model = AutoModel.from_pretrained(
                 config.model_name,
@@ -256,6 +258,36 @@ def unload_reranker():
 # Reranking Functions
 # ============================================================================
 
+def _get_yes_no_token_ids(processor) -> Tuple[List[int], List[int]]:
+    """Get token IDs for yes/no variations to compute relevance scores."""
+    tokenizer = processor.tokenizer if hasattr(processor, 'tokenizer') else processor
+
+    # Common yes/no token variations
+    yes_tokens = ["Yes", "yes", "YES", "True", "true", "relevant", "Relevant"]
+    no_tokens = ["No", "no", "NO", "False", "false", "irrelevant", "Irrelevant"]
+
+    yes_ids = []
+    no_ids = []
+
+    for token in yes_tokens:
+        try:
+            ids = tokenizer.encode(token, add_special_tokens=False)
+            if ids:
+                yes_ids.append(ids[0])
+        except Exception:
+            pass
+
+    for token in no_tokens:
+        try:
+            ids = tokenizer.encode(token, add_special_tokens=False)
+            if ids:
+                no_ids.append(ids[0])
+        except Exception:
+            pass
+
+    return yes_ids, no_ids
+
+
 def _compute_rerank_scores(
     query: Dict[str, Any],
     documents: List[Dict[str, Any]],
@@ -264,49 +296,103 @@ def _compute_rerank_scores(
     config: Qwen3VLRerankerConfig
 ) -> List[float]:
     """
-    Compute reranking scores for query-document pairs.
+    Compute reranking scores for query-document pairs using cross-encoder approach.
+
+    Uses a relevance classification prompt and compares probabilities of
+    "Yes" vs "No" tokens to determine document relevance scores.
 
     Args:
-        query: Query in dict format
+        query: Query in dict format (e.g., {"text": "..."})
         documents: List of documents in dict format
         model: Loaded reranker model
         processor: Reranker processor
         config: Configuration
 
     Returns:
-        List of relevance scores
+        List of relevance scores (0.0 to 1.0, higher = more relevant)
     """
     device = next(model.parameters()).device
     scores = []
+
+    # Get yes/no token IDs for scoring
+    yes_ids, no_ids = _get_yes_no_token_ids(processor)
+
+    if not yes_ids or not no_ids:
+        logger.warning("Could not find yes/no token IDs, using fallback scoring")
+        yes_ids = [9642]  # Common "Yes" token ID
+        no_ids = [2822]   # Common "No" token ID
 
     with torch.no_grad():
         for i in range(0, len(documents), config.max_batch_size):
             batch_docs = documents[i:i+config.max_batch_size]
 
-            # Format as query-document pairs for reranker
-            inputs = {
-                "query": query,
-                "documents": batch_docs,
-                "fps": config.video_fps,
-                "max_frames": config.max_video_frames
-            }
+            for doc in batch_docs:
+                try:
+                    query_text = query.get("text", "")
+                    doc_text = doc.get("text", "")
 
-            # Process through model
-            processed = processor(
-                inputs,
-                return_tensors="pt"
-            ).to(device)
+                    # Truncate long documents to fit context
+                    max_doc_len = 1500
+                    if len(doc_text) > max_doc_len:
+                        doc_text = doc_text[:max_doc_len] + "..."
 
-            outputs = model(**processed)
+                    # Cross-encoder style relevance prompt
+                    # This format asks the model to evaluate if the document answers the query
+                    prompt = f"""Given a query and a document, determine if the document is relevant to answering the query.
 
-            # Extract relevance scores
-            # Reranker outputs logits, we use softmax or sigmoid
-            batch_scores = torch.sigmoid(outputs.logits).squeeze(-1)
+Query: {query_text}
 
-            if batch_scores.dim() == 0:
-                scores.append(batch_scores.item())
-            else:
-                scores.extend(batch_scores.cpu().tolist())
+Document: {doc_text}
+
+Is this document relevant to the query? Answer with Yes or No."""
+
+                    # Process through processor
+                    inputs = processor(
+                        text=[prompt],
+                        return_tensors="pt",
+                        padding=True,
+                        truncation=True,
+                        max_length=2048
+                    ).to(device)
+
+                    outputs = model(**inputs)
+
+                    # Compute relevance score from logits
+                    if hasattr(outputs, 'logits'):
+                        logits = outputs.logits[:, -1, :]  # Last position logits
+                        probs = torch.softmax(logits, dim=-1)
+
+                        # Sum probabilities for yes tokens vs no tokens
+                        yes_prob = sum(probs[0, tid].item() for tid in yes_ids if tid < probs.shape[-1])
+                        no_prob = sum(probs[0, tid].item() for tid in no_ids if tid < probs.shape[-1])
+
+                        # Normalize to get relevance score
+                        total = yes_prob + no_prob
+                        if total > 0:
+                            score = yes_prob / total
+                        else:
+                            # Fallback: use entropy-based scoring
+                            # Lower entropy = more confident = higher score
+                            entropy = -torch.sum(probs * torch.log(probs + 1e-10)).item()
+                            max_entropy = np.log(probs.shape[-1])
+                            score = 1.0 - (entropy / max_entropy)
+
+                    elif hasattr(outputs, 'last_hidden_state'):
+                        # Embedding-based fallback: use cosine similarity approach
+                        hidden = outputs.last_hidden_state[:, -1, :]
+                        # Normalize and use L2 norm as confidence proxy
+                        norm = torch.norm(hidden, dim=-1).item()
+                        score = min(1.0, norm / 50.0)  # Normalize to 0-1 range
+                    else:
+                        score = 0.5
+
+                    # Clamp to valid range
+                    score = max(0.0, min(1.0, score))
+                    scores.append(score)
+
+                except Exception as e:
+                    logger.warning(f"Failed to score document: {e}")
+                    scores.append(0.5)
 
     return scores
 

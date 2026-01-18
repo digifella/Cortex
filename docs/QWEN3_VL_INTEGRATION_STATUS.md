@@ -315,48 +315,78 @@ Use the **Database Embedding Inspector** in the Maintenance tab to check:
 
 ---
 
-## Current Status (2026-01-18 - Updated)
+## Current Status (2026-01-18 - Session 2)
 
 ### What's Working
 - **Traditional Vector Search**: Returns proper results with similarity scores (e.g., 0.358)
 - **Hybrid Search**: Combines vector + GraphRAG, returns 13+ results with real scores
 - **GraphRAG Enhanced Search**: Now uses direct_chromadb_search + graph context enhancement
-- **Qwen3-VL-Reranker-8B**: Model downloaded and cached (16GB, uses ~47GB GPU)
+- **Qwen3-VL-Reranker-8B**: Model downloaded (~16GB) and loads on CUDA
 - **UI displays**: Qwen3-VL status in Ingest and Search sidebars
 - **Database Embedding Inspector**: Utility in Maintenance tab
 - **Search Debug Log**: Expandable panel showing search execution details
 - **Embedding Model**: BAAI/bge-base-en-v1.5 working on CUDA (768 dimensions)
+- **Flash Attention 2 fallback**: Gracefully handles missing flash_attn package
+
+### Qwen3-VL Reranker Status (2026-01-18)
+
+**Test Script**: `scripts/test_reranker_integration.py`
+
+| Test | Status | Notes |
+|------|--------|-------|
+| Model Loading | ✅ PASS | Loads on CUDA, ~15GB VRAM used |
+| Pipeline Integration | ✅ PASS | Integrates with graph_query.py |
+| Relevance Scoring | ❌ BLOCKED | Requires official Qwen3VLReranker wrapper |
+
+**Current Limitation**: The Qwen3-VL-Reranker model produces uniform scores (1.0) for all documents.
+
+**Root Cause**: The HuggingFace `AutoModel` API loads the base Qwen3VLModel but the reranker requires:
+1. A specific `Qwen3VLReranker` wrapper class with `.process()` method
+2. Custom input formatting per the model's documentation
+3. The model card shows: `from scripts.qwen3_vl_reranker import Qwen3VLReranker`
+
+**The reranker is NOT recommended for use until proper scoring is implemented.**
+
+**To Enable (for testing only)**:
+```bash
+export QWEN3_VL_RERANKER_ENABLED=true
+streamlit run Cortex_Suite.py
+```
 
 ### Fixed Issues (2026-01-18 Session)
-1. **EnhancedGraphManager missing methods** - Added `entity_index` property and `get_graph_stats()` method to `cortex_engine/graph_manager.py`
-2. **GraphRAG returning only graph entities** - Added text-based fallback to `ChromaRetriever` class
+1. **EnhancedGraphManager missing methods** - Added `entity_index` property and `get_graph_stats()` method
+2. **GraphRAG returning only graph entities** - Rewrote to use direct_chromadb_search for vector retrieval
 3. **MockResult missing text attribute** - Graph-discovered documents now have proper text content
 4. **Session state debug in threads** - Moved debug logging outside ThreadPoolExecutor
+5. **Flash Attention 2 error** - Added import check before enabling (graceful fallback)
+6. **Cross-encoder scoring** - Implemented yes/no token probability approach (scores still uniform)
 
-### Known Issues (To Investigate)
-1. **ChromaRetriever vector search failing silently**:
-   - Hybrid search uses `direct_chromadb_search` which works (returns real similarity scores)
-   - GraphRAG uses `ChromaRetriever` which falls back to text search (returns 0.800 scores)
-   - Debug print statements inside ChromaRetriever don't appear in terminal (even with flush=True)
-   - Likely cause: Thread output being swallowed or ChromaDB client issue in thread context
+### Known Issues
+1. **Reranker uniform scores**: All documents score 1.0
+   - The official Qwen3-VL-Reranker uses a proprietary wrapper not available via standard HuggingFace
+   - Need to either: (a) implement wrapper from model repo, or (b) use different reranker model
 
-2. **Numpy circular import**: Intermittently requires `pip install --force-reinstall numpy==1.26.4`
+2. **Model initialization warning**: "Some weights were not initialized" - expected for base VL models
 
-3. **Qwen3-VL not yet tested**: Dependencies need installation (`pip install -r requirements-qwen3-vl.txt`)
+3. **Numpy circular import**: Intermittently requires `pip install --force-reinstall numpy==1.26.4`
 
 ### Performance Observations
 | Search Mode | Speed | Score Type | Results |
 |-------------|-------|------------|---------|
 | Traditional | ~0.6s | Real similarity (0.3-0.4) | 20 results |
 | Hybrid | ~1.5s | Real similarity (0.3-0.4) | 13 results |
-| GraphRAG Enhanced | ~4-15s | Text match (0.8) | 10 results |
+| GraphRAG Enhanced | ~4-15s | Graph context (0.3-0.4) | 10 results |
 
-### Next Steps
-1. **Test reranker end-to-end** - Verify Qwen3-VL-Reranker-8B improves search precision
-2. **Download Qwen3-VL-Embedding model** - For multimodal document embeddings
-3. **Re-ingest documents** with Qwen3-VL embeddings (2048 or 4096 dimensions)
-4. **Test cross-modal search** - Text queries finding images/charts
-5. **Benchmark performance** - Compare BGE vs Qwen3-VL embeddings
+### Next Steps (Priority Order)
+1. **Option A: Use alternative reranker** - BGE-Reranker-v2, ms-marco-MiniLM, or Cohere rerank API
+   - These have simpler APIs and proven HuggingFace integration
+
+2. **Option B: Implement Qwen3VLReranker wrapper** - Port the official wrapper from model repo
+   - More complex but enables multimodal reranking (text + images)
+
+3. **Download Qwen3-VL-Embedding model** - For multimodal document embeddings
+4. **Re-ingest documents** with Qwen3-VL embeddings (2048 or 4096 dimensions)
+5. **Test cross-modal search** - Text queries finding images/charts
 6. **Add UI controls** for enabling/disabling Qwen3-VL features
 
 ---

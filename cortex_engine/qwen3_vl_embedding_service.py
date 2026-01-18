@@ -187,10 +187,11 @@ def _load_model(config: Optional[Qwen3VLConfig] = None) -> tuple:
             # Add Flash Attention 2 if available and requested
             if config.use_flash_attention:
                 try:
+                    import flash_attn  # noqa: F401
                     model_kwargs["attn_implementation"] = "flash_attention_2"
                     logger.info("⚡ Using Flash Attention 2 for memory optimization")
-                except Exception:
-                    logger.info("Flash Attention 2 not available, using default attention")
+                except ImportError:
+                    logger.info("📝 Flash Attention 2 not installed - using default attention")
 
             _embedding_model = AutoModel.from_pretrained(
                 config.model_name,
