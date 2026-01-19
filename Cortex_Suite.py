@@ -185,17 +185,27 @@ Please select a tool from the sidebar on the left to begin your workflow:
 
 -   **📚 Collection Management:** View the contents of, rename, export, or delete your Working Collections.
 
--   **📝 Proposal Step 1 Prep:** (Formerly Template Editor) Create and modify `.docx` templates with interactive Cortex instructions.
+-   **📊 Knowledge Analytics:** Comprehensive analytics dashboard providing insights into knowledge base usage, entity relationships, knowledge gaps, and optimization opportunities.
 
--   **🗂️ Proposal Step 2 Make:** (Formerly Proposal Management) Create new proposals or load, manage, and delete existing ones.
+---
 
--   **📊 Knowledge Analytics:** NEW! Comprehensive analytics dashboard providing insights into knowledge base usage, entity relationships, knowledge gaps, and optimization opportunities.
+### Proposal Development Tools
 
--   **📝 Document Anonymizer:** NEW! Replace identifying information in documents with generic placeholders (Person A, Company 1, etc.) for privacy protection.
+-   **📝 Proposal Workspace:** Create and manage tender response workspaces. Upload tender documents and bind entity profiles.
 
--   **💡 Idea Generator:** NEW! Transform your knowledge into innovative concepts using the Double Diamond methodology (Discover, Define, Develop, Deliver) for structured ideation.
+-   **📋 Chunk Review:** Review extracted sections from tender documents with enhanced navigation by section type.
 
--   **📄 Document Summarizer:** NEW! Generate intelligent summaries from any document with multiple detail levels (Highlights, Summary, Detailed Analysis). Perfect for extracting key insights from lengthy reports, research papers, and proposals.
+-   **🧠 Intelligent Completion:** Interactive human-in-the-loop completion of substantive questions with evidence from your knowledge collections.
+
+-   **👤 Entity Profile Manager:** Create and manage entity profiles (company details, capabilities, personnel) for proposal auto-completion.
+
+---
+
+### Document Tools
+
+-   **📝 Document Anonymizer:** Replace identifying information in documents with generic placeholders (Person A, Company 1, etc.) for privacy protection.
+
+-   **📄 Document Summarizer:** Generate intelligent summaries from any document with multiple detail levels (Highlights, Summary, Detailed Analysis).
 
 This unified interface provides a seamless workflow from initial research to final document generation.
 """)
@@ -335,32 +345,30 @@ else:
     with st.expander("🚀 Quick Start Guide"):
         st.markdown("""
         ### New to Cortex Suite? Follow these steps:
-        
-        **1. 📚 Start with Knowledge Ingest**
-        - Add your first documents to build your knowledge base
-        - Try **Batch Mode** for large document collections
-        - **Standard Mode** for careful curation of smaller sets
-        
-        **2. 🔍 Explore with Knowledge Search**
-        - Search your documents using natural language
-        - Try different search modes (Semantic, GraphRAG, Hybrid)
-        - Create collections to organize useful findings
-        
-        **3. 🗂️ Organize with Collections**
-        - Group related documents by project, client, or topic
-        - Use collections as input for proposal generation
-        
-        **4. 📝 Generate Proposals**
-        - Prepare templates in Step 1
-        - Create proposals using your knowledge base in Step 2
-        - Use Proposal Copilot for interactive assistance
-        
+
+        **1. 📚 Build Your Knowledge Base**
+        - Use **Knowledge Ingest** to add your documents (case studies, CVs, policies, past proposals)
+        - **Batch Mode** for large collections, **Standard Mode** for careful curation
+
+        **2. 🔍 Organize with Collections**
+        - Use **Knowledge Search** to explore your documents
+        - Create **Working Collections** to group relevant evidence for proposals
+        - Use **Collection Management** to curate and export collections
+
+        **3. 👤 Set Up Entity Profiles**
+        - Create profiles in **Entity Profile Manager** with company details
+        - Include ABN, addresses, contact info for auto-completion
+
+        **4. 📝 Create Proposals**
+        - Start in **Proposal Workspace** - upload tender document, bind entity profile
+        - Use **Chunk Review** to review extracted sections
+        - Use **Intelligent Completion** for substantive questions with knowledge evidence
+
         **5. 📊 Monitor with Analytics**
-        - Understand your knowledge patterns
-        - Identify gaps and opportunities
-        - Track system usage and effectiveness
-        
-        **💡 Pro Tip**: Start small with a focused set of documents, then expand as you become comfortable with the system!
+        - Track knowledge patterns and identify gaps
+        - Understand system effectiveness
+
+        **💡 Pro Tip**: Build a good knowledge collection FIRST - the quality of your proposals depends on the evidence available!
         """)
 
 st.info("To get started, click on one of the pages in the navigation sidebar.")
