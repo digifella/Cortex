@@ -314,24 +314,31 @@ class SmartModelSelector:
             "description": recommendations["description"]
         }
 
-# Global instance for easy importing
-smart_selector = SmartModelSelector()
+# Lazy-loaded global instance to avoid slow startup
+_smart_selector_instance = None
+
+def get_smart_selector() -> SmartModelSelector:
+    """Get or create the SmartModelSelector instance (lazy-loaded)."""
+    global _smart_selector_instance
+    if _smart_selector_instance is None:
+        _smart_selector_instance = SmartModelSelector()
+    return _smart_selector_instance
 
 def get_smart_model_recommendations() -> Dict[str, str]:
     """Convenience function to get model recommendations"""
-    return smart_selector.get_recommended_models()
+    return get_smart_selector().get_recommended_models()
 
 def can_system_run_model(model_name: str) -> Tuple[bool, str]:
     """Convenience function to check if system can run a model"""
-    return smart_selector.can_run_model(model_name)
+    return get_smart_selector().can_run_model(model_name)
 
 def get_recommended_text_model() -> str:
     """Get the recommended text model for this system"""
-    return smart_selector.get_recommended_models()["text_model"]
+    return get_smart_selector().get_recommended_models()["text_model"]
 
 def get_system_resource_summary() -> Dict:
     """Get comprehensive system resource summary"""
-    return smart_selector.get_system_summary()
+    return get_smart_selector().get_system_summary()
 
 
 def get_optimal_embedding_model() -> str:

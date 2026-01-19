@@ -19,7 +19,7 @@ from enum import Enum
 
 from .model_services.ollama_model_service import OllamaModelService
 from .model_services.interfaces import ModelInfo
-from .utils.smart_model_selector import detect_nvidia_gpu, smart_selector
+from .utils.smart_model_selector import detect_nvidia_gpu, get_smart_selector
 from .utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -483,7 +483,7 @@ class AdaptiveModelManager:
         Returns:
             Dictionary with system capabilities and available models
         """
-        system_info = smart_selector.get_system_summary()
+        system_info = get_smart_selector().get_system_summary()
 
         summary = {
             **system_info,

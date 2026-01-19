@@ -53,13 +53,32 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 # --- Core Local Models (Required) ---
 # Intelligent Embedding Model Selection (NVIDIA Nemotron when GPU available)
 # Environment variable CORTEX_EMBED_MODEL can override auto-detection
-EMBED_MODEL = os.getenv("CORTEX_EMBED_MODEL")
-if not EMBED_MODEL:
+# NOTE: Use get_embed_model() function for lazy-loaded value to avoid slow startup
+_EMBED_MODEL_CACHE = None
+
+def get_embed_model() -> str:
+    """Get the optimal embedding model (lazy-loaded to avoid slow startup)."""
+    global _EMBED_MODEL_CACHE
+    if _EMBED_MODEL_CACHE is not None:
+        return _EMBED_MODEL_CACHE
+
+    # Check environment override first
+    env_model = os.getenv("CORTEX_EMBED_MODEL")
+    if env_model:
+        _EMBED_MODEL_CACHE = env_model
+        return _EMBED_MODEL_CACHE
+
+    # Auto-detect optimal model (this is slow - involves GPU detection)
     try:
         from cortex_engine.utils.smart_model_selector import get_optimal_embedding_model
-        EMBED_MODEL = get_optimal_embedding_model()  # Auto-selects nvidia/NV-Embed-v2 on NVIDIA GPUs
+        _EMBED_MODEL_CACHE = get_optimal_embedding_model()
     except Exception:
-        EMBED_MODEL = "BAAI/bge-base-en-v1.5"  # Fallback to standard BGE model
+        _EMBED_MODEL_CACHE = "BAAI/bge-base-en-v1.5"  # Fallback to standard BGE model
+
+    return _EMBED_MODEL_CACHE
+
+# For backwards compatibility - but prefer get_embed_model() for lazy loading
+EMBED_MODEL = os.getenv("CORTEX_EMBED_MODEL", "BAAI/bge-base-en-v1.5")  # Fast default, actual detection is lazy
 
 # Vision Language Model Configuration
 # Options: "llava:7b", "llava:13b", "llava:34b" (newer, more capable models)
