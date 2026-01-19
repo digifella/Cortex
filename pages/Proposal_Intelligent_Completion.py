@@ -1,24 +1,26 @@
 """
 Proposal Intelligent Completion
-Version: 1.0.0
-Date: 2026-01-19
+Version: 2.0.0
+Date: 2026-01-20
 
-Purpose: Two-tier intelligent proposal completion workflow.
+Purpose: Interactive two-tier intelligent proposal completion workflow.
 - Tier 1: Auto-complete simple fields from entity profile
-- Tier 2: Generate substantive responses using knowledge collection + LLM
+- Tier 2: Interactive human-in-the-loop responses for substantive questions
 
 Key Features:
-- Field classification (auto-complete vs intelligent)
-- Knowledge collection selection for evidence
-- Draft response generation with evidence panel
-- Confidence scoring and regeneration support
+- Strict field extraction to focus on real substantive questions
+- Questions grouped by type for organized review
+- Per-question actions: Skip / Auto-fill / Generate / Manual
+- Evidence panel with knowledge collection search
 """
 
 import streamlit as st
 import sys
+import re
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
+from collections import defaultdict
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -37,9 +39,7 @@ from cortex_engine.field_classifier import (
     FieldClassifier, FieldTier, QuestionType, ClassifiedField
 )
 from cortex_engine.evidence_retriever import EvidenceRetriever, Evidence
-from cortex_engine.response_generator import (
-    ResponseGenerator, DraftResponse, BatchResponseGenerator
-)
+from cortex_engine.response_generator import ResponseGenerator, DraftResponse
 
 st.set_page_config(
     page_title="Intelligent Completion - Cortex Suite",
@@ -58,6 +58,31 @@ collection_manager = WorkingCollectionManager()
 field_classifier = FieldClassifier()
 llm = LLMInterface(model="qwen2.5:72b-instruct-q4_K_M")
 chunker = DocumentChunker(target_chunk_size=4000, max_chunk_size=6000)
+
+# Question type icons and colors
+QTYPE_ICONS = {
+    QuestionType.CAPABILITY: "💪",
+    QuestionType.METHODOLOGY: "📋",
+    QuestionType.VALUE_PROPOSITION: "💎",
+    QuestionType.COMPLIANCE: "✅",
+    QuestionType.INNOVATION: "💡",
+    QuestionType.RISK: "⚠️",
+    QuestionType.PERSONNEL: "👥",
+    QuestionType.PRICING: "💰",
+    QuestionType.GENERAL: "📝",
+}
+
+QTYPE_DISPLAY = {
+    QuestionType.CAPABILITY: "Capability & Experience",
+    QuestionType.METHODOLOGY: "Methodology & Approach",
+    QuestionType.VALUE_PROPOSITION: "Value Proposition",
+    QuestionType.COMPLIANCE: "Compliance & Standards",
+    QuestionType.INNOVATION: "Innovation",
+    QuestionType.RISK: "Risk Management",
+    QuestionType.PERSONNEL: "Personnel & Team",
+    QuestionType.PRICING: "Pricing",
+    QuestionType.GENERAL: "General Questions",
+}
 
 # Professional CSS
 st.markdown("""
@@ -88,17 +113,9 @@ st.markdown("""
         color: #1565C0;
     }
 
-    .confidence-high {
-        color: #2E7D32;
-    }
-
-    .confidence-medium {
-        color: #F57C00;
-    }
-
-    .confidence-low {
-        color: #C62828;
-    }
+    .confidence-high { color: #2E7D32; }
+    .confidence-medium { color: #F57C00; }
+    .confidence-low { color: #C62828; }
 
     .evidence-card {
         background: #FAFAFA;
@@ -108,21 +125,13 @@ st.markdown("""
         font-size: 0.9rem;
     }
 
-    .auto-field-row {
-        display: flex;
-        padding: 0.5rem 0;
-        border-bottom: 1px solid #E0E0E0;
-    }
-
-    .field-label {
-        font-weight: 500;
-        color: #555;
-        min-width: 200px;
-    }
-
-    .field-value {
-        color: #2D5F4F;
-        font-family: monospace;
+    .question-type-header {
+        font-size: 1.2rem;
+        font-weight: 600;
+        color: #1565C0;
+        padding: 0.75rem 0;
+        border-bottom: 2px solid #E3F2FD;
+        margin-bottom: 1rem;
     }
 
     .question-type-badge {
@@ -138,13 +147,42 @@ st.markdown("""
     .qtype-methodology { background: #FFF3E0; color: #EF6C00; }
     .qtype-value { background: #E8F5E9; color: #388E3C; }
     .qtype-compliance { background: #FFEBEE; color: #C62828; }
+    .qtype-innovation { background: #F3E5F5; color: #7B1FA2; }
+    .qtype-risk { background: #FFF8E1; color: #FF8F00; }
+    .qtype-personnel { background: #E0F7FA; color: #00838F; }
+    .qtype-pricing { background: #FCE4EC; color: #C2185B; }
     .qtype-general { background: #ECEFF1; color: #546E7A; }
+
+    .question-status {
+        display: inline-block;
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        font-weight: 600;
+    }
+    .status-pending { background: #ECEFF1; color: #546E7A; }
+    .status-skipped { background: #FFEBEE; color: #C62828; }
+    .status-completed { background: #E8F5E9; color: #2E7D32; }
+    .status-manual { background: #E3F2FD; color: #1565C0; }
 </style>
 """, unsafe_allow_html=True)
 
 # Title
 st.markdown('<div class="main-header">🧠 Intelligent Proposal Completion</div>', unsafe_allow_html=True)
-st.caption("Two-tier processing: auto-complete simple fields, generate intelligent responses for substantive questions")
+st.caption("Interactive human-in-the-loop workflow: review each substantive question with evidence support")
+
+# ============================
+# SESSION STATE INITIALIZATION
+# ============================
+
+if 'ic_classified_fields' not in st.session_state:
+    st.session_state.ic_classified_fields = None
+    st.session_state.ic_auto_complete_fields = []
+    st.session_state.ic_intelligent_fields = []
+    st.session_state.ic_questions_by_type = {}
+    st.session_state.ic_question_status = {}  # {field_text: {'status': 'pending'|'skipped'|'completed'|'manual', 'response': str}}
+    st.session_state.ic_current_question_idx = 0
+    st.session_state.ic_evidence_cache = {}  # Cache evidence lookups
 
 # ============================
 # SIDEBAR: Configuration
@@ -174,18 +212,18 @@ with st.sidebar:
 
     # Check entity is bound
     if not workspace.metadata.entity_id:
-        st.error("❌ No entity bound to workspace")
+        st.error("No entity bound to workspace")
         st.stop()
 
     # Show entity info
     entity = entity_manager.get_entity_profile(workspace.metadata.entity_id)
     if entity:
-        st.success(f"✅ Entity: {getattr(entity, 'company_name', workspace.metadata.entity_id)}")
+        st.success(f"Entity: {getattr(entity, 'company_name', workspace.metadata.entity_id)}")
 
     st.divider()
 
     # Knowledge collection selection
-    st.subheader("📚 Knowledge Collection")
+    st.subheader("Knowledge Collection")
     st.caption("Select collection for evidence search")
 
     collections = collection_manager.get_collection_names()
@@ -202,12 +240,12 @@ with st.sidebar:
 
         if selected_collection:
             doc_count = len(collection_manager.get_doc_ids_by_name(selected_collection))
-            st.caption(f"📄 {doc_count} documents in collection")
+            st.caption(f"{doc_count} documents in collection")
 
     st.divider()
 
     # Processing options
-    st.subheader("⚙️ Options")
+    st.subheader("Options")
     use_reranker = st.checkbox(
         "Use Neural Reranker",
         value=True,
@@ -220,6 +258,12 @@ with st.sidebar:
         max_value=10,
         value=5,
         help="Number of evidence passages to retrieve"
+    )
+
+    use_strict_filter = st.checkbox(
+        "Strict Question Filtering",
+        value=True,
+        help="Only extract questions matching substantive patterns (reduces noise)"
     )
 
 # ============================
@@ -240,7 +284,7 @@ else:
         doc_path = txt_files[0]
 
 if not doc_path:
-    st.error("❌ No document file found in workspace")
+    st.error("No document file found in workspace")
     st.stop()
 
 # Load document
@@ -248,33 +292,26 @@ try:
     with open(doc_path, 'r', encoding='utf-8') as f:
         document_text = f.read()
 except Exception as e:
-    st.error(f"❌ Error reading document: {str(e)}")
+    st.error(f"Error reading document: {str(e)}")
     st.stop()
 
 # ============================
 # STEP 1: Field Extraction & Classification
 # ============================
 
-if 'ic_classified_fields' not in st.session_state:
-    st.session_state.ic_classified_fields = None
-    st.session_state.ic_auto_complete_fields = []
-    st.session_state.ic_intelligent_fields = []
-    st.session_state.ic_draft_responses = []
-
-# Extract fields button
 st.subheader("Step 1: Extract & Classify Fields")
 
 col1, col2 = st.columns([3, 1])
 
 with col1:
     st.info("""
-    This will scan the document for fillable fields and classify them:
-    - **Auto-Complete**: Simple fields (name, ABN, address) filled from entity profile
-    - **Intelligent**: Substantive questions requiring evidence-based responses
+    Scan document for fillable fields. Questions grouped by type for organized review.
+    - **Auto-Complete**: Simple fields filled from entity profile
+    - **Substantive Questions**: Review interactively with evidence support
     """)
 
 with col2:
-    if st.button("🔍 Extract Fields", type="primary", use_container_width=True):
+    if st.button("Extract Fields", type="primary", use_container_width=True):
         with st.spinner("Extracting and classifying fields..."):
             # Extract fields using document chunker to find completable sections
             chunks = chunker.create_chunks(document_text)
@@ -284,19 +321,18 @@ with col2:
             classified_fields = []
 
             for chunk in completable_chunks:
-                # Look for field patterns in chunk content
-                import re
-
                 # Patterns that indicate fillable fields
                 field_patterns = [
                     # Label: [blank] patterns
-                    r'^([A-Za-z][A-Za-z\s\(\)]+):\s*$',
+                    r'^([A-Za-z][A-Za-z\s\(\)\']+):\s*$',
                     # Question patterns
                     r'^([A-Z][^?]+\?)\s*$',
-                    # "Please provide" patterns
-                    r'((?:Please\s+)?(?:provide|describe|detail|outline|explain)[^.]+\.)',
+                    # "Please provide" patterns (with substance)
+                    r'((?:Please\s+)?(?:provide|describe|detail|outline|explain)\s+[^.]{20,}\.)',
+                    # "How will you" patterns
+                    r'(How\s+(?:will|would|do|can)\s+you\s+[^?]+\?)',
                     # Field with placeholder
-                    r'^([A-Za-z][A-Za-z\s]+):\s*[\[\<\_]',
+                    r'^([A-Za-z][A-Za-z\s\']+):\s*[\[\<\_]',
                 ]
 
                 lines = chunk.content.split('\n')
@@ -312,7 +348,8 @@ with col2:
                             if len(field_text) > 5:
                                 classified = field_classifier.classify(
                                     field_text,
-                                    context=chunk.title
+                                    context=chunk.title,
+                                    strict_filter=use_strict_filter
                                 )
                                 # Avoid duplicates
                                 if not any(cf.field_text == classified.field_text for cf in classified_fields):
@@ -323,21 +360,45 @@ with col2:
             auto_fields = [f for f in classified_fields if f.tier == FieldTier.AUTO_COMPLETE]
             intel_fields = [f for f in classified_fields if f.tier == FieldTier.INTELLIGENT]
 
+            # Group intelligent fields by question type
+            questions_by_type = defaultdict(list)
+            for field in intel_fields:
+                qtype = field.question_type or QuestionType.GENERAL
+                questions_by_type[qtype].append(field)
+
+            # Initialize status for each question
+            question_status = {}
+            for field in intel_fields:
+                question_status[field.field_text] = {
+                    'status': 'pending',
+                    'response': '',
+                    'evidence': []
+                }
+
             st.session_state.ic_classified_fields = classified_fields
             st.session_state.ic_auto_complete_fields = auto_fields
             st.session_state.ic_intelligent_fields = intel_fields
+            st.session_state.ic_questions_by_type = dict(questions_by_type)
+            st.session_state.ic_question_status = question_status
+            st.session_state.ic_evidence_cache = {}
 
             st.rerun()
 
-# Show classification results
+# ============================
+# Show Classification Results
+# ============================
+
 if st.session_state.ic_classified_fields:
     auto_fields = st.session_state.ic_auto_complete_fields
     intel_fields = st.session_state.ic_intelligent_fields
+    questions_by_type = st.session_state.ic_questions_by_type
+    question_status = st.session_state.ic_question_status
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Fields", len(st.session_state.ic_classified_fields))
-    col2.metric("Auto-Complete", len(auto_fields), help="Simple fields from entity profile")
-    col3.metric("Intelligent", len(intel_fields), help="Need evidence-based responses")
+    col2.metric("Auto-Complete", len(auto_fields))
+    col3.metric("Substantive", len(intel_fields))
+    col4.metric("Question Types", len(questions_by_type))
 
     st.divider()
 
@@ -348,204 +409,246 @@ if st.session_state.ic_classified_fields:
     st.subheader("Step 2: Auto-Complete Fields")
 
     if auto_fields:
-        st.success(f"✅ {len(auto_fields)} fields can be auto-completed from entity profile")
+        known_fields = [f for f in auto_fields if f.auto_complete_mapping]
+        unknown_fields = [f for f in auto_fields if not f.auto_complete_mapping]
 
-        with st.expander("📋 Review Auto-Completed Fields", expanded=True):
-            # Build a table of auto-completed values
-            for field in auto_fields:
-                col1, col2, col3 = st.columns([2, 3, 1])
+        if known_fields:
+            st.success(f"{len(known_fields)} fields can be auto-completed from entity profile")
 
-                with col1:
-                    st.markdown(f"**{field.field_text}**")
+            with st.expander("Review Auto-Completed Fields", expanded=False):
+                for field in known_fields:
+                    col1, col2, col3 = st.columns([2, 3, 1])
 
-                with col2:
-                    # Get value from entity profile
-                    profile_field = field.auto_complete_mapping
-                    value = "—"
+                    with col1:
+                        st.markdown(f"**{field.field_text}**")
 
-                    if entity and profile_field:
-                        # Try to get the value from entity
-                        value = getattr(entity, profile_field, None)
-                        if value is None and hasattr(entity, 'data'):
-                            value = entity.data.get(profile_field)
-                        if value is None:
-                            value = f"[Not set: {profile_field}]"
+                    with col2:
+                        profile_field = field.auto_complete_mapping
+                        value = "Not set"
 
-                    st.code(str(value) if value else "—", language=None)
+                        if entity and profile_field:
+                            value = getattr(entity, profile_field, None)
+                            if value is None and hasattr(entity, 'data'):
+                                value = entity.data.get(profile_field)
+                            if value is None:
+                                value = f"[Not set: {profile_field}]"
 
-                with col3:
-                    st.caption(f"→ {profile_field}")
+                        st.code(str(value) if value else "Not set", language=None)
 
+                    with col3:
+                        st.caption(f"-> {profile_field}")
+
+        if unknown_fields:
+            st.warning(f"{len(unknown_fields)} fields need manual entry (not recognized as substantive)")
+            with st.expander("Fields Needing Manual Entry", expanded=False):
+                for field in unknown_fields:
+                    st.text(f"- {field.field_text}")
     else:
         st.info("No auto-complete fields found")
 
     st.divider()
 
     # ============================
-    # STEP 3: Intelligent Response Generation
+    # STEP 3: Interactive Substantive Questions
     # ============================
 
-    st.subheader("Step 3: Generate Intelligent Responses")
+    st.subheader("Step 3: Substantive Questions (by Type)")
 
     if not intel_fields:
-        st.info("No substantive questions found requiring intelligent completion")
+        st.info("No substantive questions found")
     elif not selected_collection:
-        st.warning("⚠️ Select a knowledge collection in the sidebar to generate responses")
+        st.warning("Select a knowledge collection in the sidebar to enable evidence search")
     else:
-        st.info(f"""
-        **{len(intel_fields)} substantive questions** will be answered using:
-        - Evidence from collection: **{selected_collection}**
-        - LLM: qwen2.5:72b-instruct-q4_K_M
-        """)
+        # Progress summary
+        total_questions = len(intel_fields)
+        completed_count = sum(1 for s in question_status.values() if s['status'] in ['completed', 'skipped', 'manual'])
+        pending_count = total_questions - completed_count
 
-        # Generate button
-        if st.button("🚀 Generate Draft Responses", type="primary", use_container_width=True):
-            # Initialize evidence retriever
-            evidence_retriever = EvidenceRetriever(db_path)
-            response_generator = ResponseGenerator(llm, entity_manager)
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Pending", pending_count)
+        col2.metric("Completed", sum(1 for s in question_status.values() if s['status'] == 'completed'))
+        col3.metric("Skipped/Manual", sum(1 for s in question_status.values() if s['status'] in ['skipped', 'manual']))
 
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+        st.divider()
 
-            draft_responses = []
-            total = len(intel_fields)
+        # Initialize evidence retriever and response generator
+        evidence_retriever = EvidenceRetriever(db_path)
+        response_generator = ResponseGenerator(llm, entity_manager)
 
-            for i, field in enumerate(intel_fields):
-                progress = (i + 1) / total
-                progress_bar.progress(progress)
-                status_text.markdown(f"**Processing {i+1}/{total}:** {field.field_text[:50]}...")
+        # Display questions grouped by type
+        for qtype in QuestionType:
+            if qtype not in questions_by_type or not questions_by_type[qtype]:
+                continue
 
-                try:
-                    # Retrieve evidence
-                    evidence_result = evidence_retriever.find_evidence(
-                        question=field.field_text,
-                        question_type=field.question_type or QuestionType.GENERAL,
-                        collection_name=selected_collection,
-                        max_results=max_evidence,
-                        use_reranker=use_reranker
-                    )
+            type_questions = questions_by_type[qtype]
+            icon = QTYPE_ICONS.get(qtype, "📝")
+            display_name = QTYPE_DISPLAY.get(qtype, qtype.value.title())
 
-                    # Generate response
-                    response = response_generator.generate(
-                        classified_field=field,
-                        evidence=evidence_result.evidence,
-                        entity_id=workspace.metadata.entity_id
-                    )
+            # Count status for this type
+            type_pending = sum(1 for q in type_questions if question_status.get(q.field_text, {}).get('status') == 'pending')
+            type_done = len(type_questions) - type_pending
 
-                    draft_responses.append(response)
+            st.markdown(f"""
+            <div class="question-type-header">
+                {icon} {display_name} ({type_done}/{len(type_questions)} done)
+            </div>
+            """, unsafe_allow_html=True)
 
-                except Exception as e:
-                    st.error(f"Failed on field: {field.field_text[:50]}... - {str(e)}")
-                    # Create placeholder response
-                    draft_responses.append(DraftResponse(
-                        question=field.field_text,
-                        question_type=field.question_type or QuestionType.GENERAL,
-                        text=f"[Generation failed: {str(e)}]",
-                        evidence_used=[],
-                        confidence=0.0,
-                        word_count=0,
-                        needs_review=True,
-                        placeholders=["[Generation failed]"],
-                        generation_time=0,
-                        metadata={}
-                    ))
+            for q_idx, field in enumerate(type_questions):
+                field_key = field.field_text
+                status_data = question_status.get(field_key, {'status': 'pending', 'response': '', 'evidence': []})
+                current_status = status_data['status']
 
-            progress_bar.progress(1.0)
-            status_text.markdown("**✅ Generation complete!**")
-
-            st.session_state.ic_draft_responses = draft_responses
-            st.rerun()
-
-        # Show generated responses
-        if st.session_state.ic_draft_responses:
-            st.divider()
-            st.subheader("📝 Draft Responses")
-
-            responses = st.session_state.ic_draft_responses
-
-            # Summary metrics
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Responses", len(responses))
-            col2.metric("High Confidence", sum(1 for r in responses if r.confidence >= 0.7))
-            col3.metric("Needs Review", sum(1 for r in responses if r.needs_review))
-            col4.metric("With Placeholders", sum(1 for r in responses if r.placeholders))
-
-            st.divider()
-
-            # Individual response cards
-            for idx, response in enumerate(responses):
-                # Determine confidence color
-                if response.confidence >= 0.7:
-                    conf_class = "confidence-high"
-                    conf_icon = "🟢"
-                elif response.confidence >= 0.4:
-                    conf_class = "confidence-medium"
-                    conf_icon = "🟡"
-                else:
-                    conf_class = "confidence-low"
-                    conf_icon = "🔴"
-
-                # Question type badge
-                qtype = response.question_type.value if response.question_type else "general"
-                qtype_class = f"qtype-{qtype}" if qtype in ['capability', 'methodology', 'value', 'compliance'] else "qtype-general"
+                # Status badge
+                status_badge_class = f"status-{current_status}"
+                status_label = current_status.upper()
 
                 with st.container(border=True):
-                    # Header row
+                    # Header row with question and status
                     col1, col2 = st.columns([4, 1])
 
                     with col1:
-                        st.markdown(f"""
-                        <span class="question-type-badge {qtype_class}">{qtype.upper()}</span>
-                        **{response.question[:80]}{'...' if len(response.question) > 80 else ''}**
-                        """, unsafe_allow_html=True)
+                        st.markdown(f"**Q{q_idx + 1}:** {field.field_text}")
+                        if field.word_limit:
+                            st.caption(f"Word limit: {field.word_limit}")
 
                     with col2:
-                        st.markdown(f"{conf_icon} **{response.confidence:.0%}** confidence")
+                        st.markdown(f'<span class="question-status {status_badge_class}">{status_label}</span>', unsafe_allow_html=True)
 
-                    # Response text (editable)
-                    edited_text = st.text_area(
-                        "Draft Response",
-                        value=response.text,
-                        height=200,
-                        key=f"response_text_{idx}",
-                        label_visibility="collapsed"
-                    )
+                    # Action buttons
+                    col1, col2, col3, col4 = st.columns(4)
 
-                    # Placeholders warning
-                    if response.placeholders:
-                        st.warning(f"⚠️ Placeholders found: {', '.join(response.placeholders)}")
+                    with col1:
+                        if st.button("Skip", key=f"skip_{qtype.value}_{q_idx}", use_container_width=True,
+                                     disabled=current_status in ['completed', 'skipped']):
+                            question_status[field_key]['status'] = 'skipped'
+                            st.session_state.ic_question_status = question_status
+                            st.rerun()
 
-                    # Evidence panel
-                    if response.evidence_used:
-                        with st.expander(f"📚 Evidence Sources ({len(response.evidence_used)})", expanded=False):
-                            for ev_idx, evidence in enumerate(response.evidence_used):
+                    with col2:
+                        if st.button("Auto-fill", key=f"autofill_{qtype.value}_{q_idx}", use_container_width=True,
+                                     disabled=current_status in ['completed'],
+                                     help="Quick auto-fill without LLM generation"):
+                            # Just fetch evidence and let user review
+                            with st.spinner("Fetching evidence..."):
+                                try:
+                                    evidence_result = evidence_retriever.find_evidence(
+                                        question=field.field_text,
+                                        question_type=field.question_type or QuestionType.GENERAL,
+                                        collection_name=selected_collection,
+                                        max_results=max_evidence,
+                                        use_reranker=use_reranker
+                                    )
+                                    st.session_state.ic_evidence_cache[field_key] = evidence_result.evidence
+                                except Exception as e:
+                                    st.error(f"Evidence search failed: {e}")
+                            st.rerun()
+
+                    with col3:
+                        if st.button("Generate", key=f"gen_{qtype.value}_{q_idx}", type="primary",
+                                     use_container_width=True, disabled=current_status == 'completed',
+                                     help="Generate response with LLM using evidence"):
+                            with st.spinner("Generating response..."):
+                                try:
+                                    # Fetch evidence if not cached
+                                    if field_key not in st.session_state.ic_evidence_cache:
+                                        evidence_result = evidence_retriever.find_evidence(
+                                            question=field.field_text,
+                                            question_type=field.question_type or QuestionType.GENERAL,
+                                            collection_name=selected_collection,
+                                            max_results=max_evidence,
+                                            use_reranker=use_reranker
+                                        )
+                                        st.session_state.ic_evidence_cache[field_key] = evidence_result.evidence
+
+                                    evidence = st.session_state.ic_evidence_cache.get(field_key, [])
+
+                                    # Generate response
+                                    response = response_generator.generate(
+                                        classified_field=field,
+                                        evidence=evidence,
+                                        entity_id=workspace.metadata.entity_id
+                                    )
+
+                                    question_status[field_key]['status'] = 'completed'
+                                    question_status[field_key]['response'] = response.text
+                                    question_status[field_key]['evidence'] = evidence
+                                    st.session_state.ic_question_status = question_status
+                                except Exception as e:
+                                    st.error(f"Generation failed: {e}")
+                            st.rerun()
+
+                    with col4:
+                        if st.button("Manual", key=f"manual_{qtype.value}_{q_idx}", use_container_width=True,
+                                     disabled=current_status in ['completed', 'manual'],
+                                     help="Mark for manual entry"):
+                            question_status[field_key]['status'] = 'manual'
+                            st.session_state.ic_question_status = question_status
+                            st.rerun()
+
+                    # Show evidence if cached
+                    cached_evidence = st.session_state.ic_evidence_cache.get(field_key, [])
+                    if cached_evidence:
+                        with st.expander(f"Evidence ({len(cached_evidence)} sources)", expanded=False):
+                            for ev_idx, evidence in enumerate(cached_evidence[:3]):
                                 st.markdown(f"""
                                 <div class="evidence-card">
                                     <strong>{evidence.source_doc}</strong>
                                     <span style="float:right; color:#888;">Relevance: {evidence.relevance_score:.0%}</span>
                                     <br><br>
-                                    {evidence.text[:500]}{'...' if len(evidence.text) > 500 else ''}
+                                    {evidence.text[:400]}{'...' if len(evidence.text) > 400 else ''}
                                 </div>
                                 """, unsafe_allow_html=True)
-                    else:
-                        st.caption("No evidence used - response may be generic")
 
-                    # Action buttons
-                    col1, col2, col3 = st.columns([1, 1, 2])
+                    # Show/edit response if completed or manual
+                    if current_status in ['completed', 'manual']:
+                        response_text = st.text_area(
+                            "Response",
+                            value=status_data.get('response', ''),
+                            height=150,
+                            key=f"response_{qtype.value}_{q_idx}",
+                            label_visibility="collapsed"
+                        )
 
-                    with col1:
-                        if st.button("✅ Approve", key=f"approve_{idx}", use_container_width=True):
-                            st.success("Approved!")
+                        # Update if changed
+                        if response_text != status_data.get('response', ''):
+                            question_status[field_key]['response'] = response_text
+                            st.session_state.ic_question_status = question_status
 
-                    with col2:
-                        if st.button("🔄 Regenerate", key=f"regen_{idx}", use_container_width=True):
-                            st.info("Regeneration not yet implemented")
+            st.divider()
 
-                    with col3:
-                        st.caption(f"📊 {response.word_count} words • ⏱️ {response.generation_time:.1f}s")
+    # ============================
+    # Export / Summary
+    # ============================
 
-                    st.divider()
+    if intel_fields:
+        st.subheader("Export")
+
+        completed_responses = {k: v for k, v in question_status.items()
+                              if v['status'] in ['completed', 'manual'] and v.get('response')}
+
+        if completed_responses:
+            st.success(f"{len(completed_responses)} responses ready for export")
+
+            if st.button("Export to Text", use_container_width=True):
+                export_text = f"# Intelligent Completion Export\n"
+                export_text += f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+                export_text += f"# Workspace: {selected_workspace_name}\n\n"
+
+                for field_text, data in completed_responses.items():
+                    export_text += f"## {field_text}\n\n"
+                    export_text += f"{data['response']}\n\n"
+                    export_text += "---\n\n"
+
+                st.download_button(
+                    "Download Export",
+                    data=export_text,
+                    file_name=f"intelligent_completion_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                    mime="text/plain"
+                )
+        else:
+            st.info("Complete some questions to enable export")
 
 # Footer
 st.divider()
-st.caption("🧠 Intelligent Proposal Completion • Evidence-backed responses from your knowledge collection")
+st.caption("v2.0.0 | Interactive human-in-the-loop workflow with evidence-backed responses")

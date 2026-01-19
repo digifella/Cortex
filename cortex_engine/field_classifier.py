@@ -75,6 +75,45 @@ class FieldClassifier:
     - Mappings stored in JSON for easy editing
     """
 
+    # Patterns that indicate a REAL substantive question (strict mode)
+    SUBSTANTIVE_QUESTION_PATTERNS = [
+        # Explicit request patterns
+        r"^(?:please\s+)?(?:provide|describe|detail|outline|explain)\s+.{20,}",
+        r"^(?:please\s+)?(?:demonstrate|evidence|show)\s+.{15,}",
+        # Question patterns
+        r"^how\s+(?:will|would|do|can)\s+you\s+.{15,}",
+        r"^what\s+(?:is|are|will)\s+your\s+.{15,}",
+        r"^describe\s+(?:your|the)\s+.{15,}",
+        # Specific tender question patterns
+        r"capability\s+and\s+capacity",
+        r"proposed\s+methodology",
+        r"previous\s+(?:experience|projects)",
+        r"track\s+record",
+        r"(?:economic|social)\s+benefit",
+        r"positive\s+impact",
+        r"value\s+(?:for|to)\s+(?:money|the)",
+        r"risk\s+(?:management|mitigation)",
+        r"key\s+personnel",
+        r"team\s+(?:composition|structure)",
+        r"quality\s+(?:assurance|management)",
+        r"how\s+many\s+.{10,}",
+        r"will\s+you\s+(?:source|use|engage)",
+    ]
+
+    # Patterns that should NOT be extracted as substantive questions
+    EXCLUDE_PATTERNS = [
+        r"^(?:name|abn|acn|address|email|phone|fax|website)\s*:",
+        r"^(?:date|time|signature|witness)\s*:",
+        r"^(?:section|part|attachment|schedule)\s+\d",
+        r"^table\s+\d",
+        r"^\d+\.\d+\s+[A-Z]",  # Section numbers like "1.1 TITLE"
+        r"^[A-Z\s]{3,20}:?\s*$",  # ALL CAPS short headers
+        r"^\*",  # Footnotes
+        r"^note:",
+        r"^important:",
+        r"^warning:",
+    ]
+
     # Built-in auto-complete patterns (can be extended)
     DEFAULT_AUTO_COMPLETE_MAPPINGS = [
         # Company identification
@@ -344,13 +383,77 @@ class FieldClassifier:
             json.dump(data, f, indent=2)
         logger.info(f"Saved {len(self.auto_complete_mappings)} mappings to {path}")
 
-    def classify(self, field_text: str, context: str = "") -> ClassifiedField:
+    def is_substantive_question(self, text: str, strict: bool = True) -> bool:
+        """
+        Determine if text represents a substantive question requiring intelligent response.
+
+        Args:
+            text: The text to check
+            strict: If True, requires matching substantive patterns; if False, more permissive
+
+        Returns:
+            True if this looks like a substantive question
+        """
+        text_lower = text.lower().strip()
+
+        # Check exclusion patterns first - these are never substantive
+        for pattern in self.EXCLUDE_PATTERNS:
+            try:
+                if re.search(pattern, text_lower, re.IGNORECASE):
+                    return False
+            except re.error:
+                pass
+
+        # Too short to be substantive
+        if len(text_lower) < 25:
+            return False
+
+        # Pure numbers, dates, or codes
+        if re.match(r'^[\d\s\.\-\/]+$', text_lower):
+            return False
+
+        # Just a label ending with colon or just punctuation
+        if re.match(r'^[^:]+:\s*$', text) or len(text.replace(' ', '')) < 10:
+            return False
+
+        if strict:
+            # Must match at least one substantive pattern
+            for pattern in self.SUBSTANTIVE_QUESTION_PATTERNS:
+                try:
+                    if re.search(pattern, text_lower, re.IGNORECASE):
+                        return True
+                except re.error:
+                    pass
+
+            # Also check substantive indicators
+            for pattern, _ in self.SUBSTANTIVE_INDICATORS:
+                try:
+                    if re.search(pattern, text_lower, re.IGNORECASE):
+                        return True
+                except re.error:
+                    pass
+
+            return False
+        else:
+            # Permissive mode - consider it substantive if it has question-like structure
+            question_starters = [
+                r'^(?:please\s+)?(?:provide|describe|detail|outline|explain)',
+                r'^(?:how|what|when|where|why|which)',
+                r'^(?:demonstrate|evidence|show)',
+            ]
+            for pattern in question_starters:
+                if re.search(pattern, text_lower):
+                    return True
+            return False
+
+    def classify(self, field_text: str, context: str = "", strict_filter: bool = True) -> ClassifiedField:
         """
         Classify a single field.
 
         Args:
             field_text: The field label/question text
             context: Surrounding context (e.g., section heading)
+            strict_filter: If True, only substantive patterns pass; reduces false positives
 
         Returns:
             ClassifiedField with tier, type, and mapping info
@@ -386,7 +489,20 @@ class FieldClassifier:
             except re.error as e:
                 logger.warning(f"Invalid regex pattern '{mapping.pattern}': {e}")
 
-        # Second pass: Classify as substantive question
+        # Second pass: Check if this is actually a substantive question
+        if strict_filter and not self.is_substantive_question(field_text, strict=True):
+            # Not substantive enough - mark as auto-complete with unknown mapping
+            return ClassifiedField(
+                field_text=field_text,
+                tier=FieldTier.AUTO_COMPLETE,
+                question_type=None,
+                auto_complete_mapping=None,  # Unknown - needs manual entry
+                confidence=0.5,
+                word_limit=None,
+                context_hint="Not recognized as substantive question"
+            )
+
+        # Third pass: Classify as substantive question
         question_type = self._classify_question_type(field_lower, context_lower)
         word_limit = self._extract_word_limit(field_text, context)
 
@@ -443,12 +559,17 @@ class FieldClassifier:
 
         return None
 
-    def classify_batch(self, fields: List[Dict[str, str]]) -> List[ClassifiedField]:
+    def classify_batch(
+        self,
+        fields: List[Dict[str, str]],
+        strict_filter: bool = True
+    ) -> List[ClassifiedField]:
         """
         Classify multiple fields.
 
         Args:
             fields: List of dicts with 'text' and optional 'context' keys
+            strict_filter: If True, only substantive patterns pass; reduces false positives
 
         Returns:
             List of ClassifiedField objects
@@ -457,7 +578,7 @@ class FieldClassifier:
         for field in fields:
             text = field.get('text', '')
             context = field.get('context', '')
-            results.append(self.classify(text, context))
+            results.append(self.classify(text, context, strict_filter=strict_filter))
         return results
 
     def get_auto_complete_summary(self) -> List[Dict[str, str]]:
