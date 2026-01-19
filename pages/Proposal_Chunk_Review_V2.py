@@ -1,14 +1,21 @@
 """
 Proposal Chunk Review V2
-Version: 2.0.0
-Date: 2026-01-07
+Version: 2.1.0
+Date: 2026-01-19
 
 Purpose: Professional batch-and-review workflow for tender document completion.
 Key Features:
 - Automatic batch analysis of all chunks
+- Enhanced navigation with section jumping and page up/down
 - Clean, compact navigation
 - Inline mention editing
 - Multi-session support
+
+Changes v2.1.0:
+- Added Page Up/Down navigation (jump 5 chunks at a time)
+- Added section-based quick jump buttons (Company/Personnel/Project/Other)
+- Section icons in chunk dropdown for easier identification
+- First/Last chunk buttons for quick navigation
 """
 
 import streamlit as st
@@ -379,39 +386,114 @@ elif workspace.metadata.analysis_status == "complete":
         st.error("Chunk not found")
         st.stop()
 
-    # Navigation controls
-    col_prev, col_jump, col_next = st.columns([1, 3, 1])
+    # ============================
+    # ENHANCED NAVIGATION
+    # ============================
 
-    with col_prev:
-        if st.button("← Prev", disabled=(current_chunk_id == 1), use_container_width=True):
+    # Build section index for quick jumping
+    section_index = {"company": [], "personnel": [], "project": [], "other": []}
+    for idx, chunk in enumerate(chunks):
+        section_type = chunk.section_types[0] if chunk.section_types else "other"
+        section_index[section_type].append(idx + 1)  # 1-indexed chunk_id
+
+    # Row 1: Page navigation (jump multiple chunks)
+    st.markdown("**Quick Navigation:**")
+    page_cols = st.columns([1, 1, 1, 1, 1, 1])
+    page_size = 5  # Jump 5 chunks at a time
+
+    with page_cols[0]:
+        if st.button("⏮ First", disabled=(current_chunk_id == 1), use_container_width=True, key="nav_first"):
+            workspace.metadata.current_chunk_id = 1
+            workspace_manager._save_workspace(workspace)
+            st.rerun()
+
+    with page_cols[1]:
+        if st.button(f"⏪ -{page_size}", disabled=(current_chunk_id <= page_size), use_container_width=True, key="nav_pgup"):
+            workspace.metadata.current_chunk_id = max(1, current_chunk_id - page_size)
+            workspace_manager._save_workspace(workspace)
+            st.rerun()
+
+    with page_cols[2]:
+        if st.button("← Prev", disabled=(current_chunk_id == 1), use_container_width=True, key="nav_prev"):
             workspace.metadata.current_chunk_id = current_chunk_id - 1
             workspace_manager._save_workspace(workspace)
             st.rerun()
 
-    with col_jump:
-        chunk_options = []
-        for cp in workspace.chunks:
-            status = "✅" if cp.status == "reviewed" else "⏳"
-            chunk_options.append(f"{status} Chunk {cp.chunk_id}: {cp.title[:40]}...")
-
-        selected_idx = st.selectbox(
-            "Jump to chunk",
-            range(len(chunk_options)),
-            index=current_chunk_id - 1,
-            format_func=lambda i: chunk_options[i],
-            label_visibility="collapsed"
-        )
-
-        if selected_idx + 1 != current_chunk_id:
-            workspace.metadata.current_chunk_id = selected_idx + 1
-            workspace_manager._save_workspace(workspace)
-            st.rerun()
-
-    with col_next:
-        if st.button("Next →", disabled=(current_chunk_id == workspace.metadata.total_chunks), use_container_width=True):
+    with page_cols[3]:
+        if st.button("Next →", disabled=(current_chunk_id == workspace.metadata.total_chunks), use_container_width=True, key="nav_next"):
             workspace.metadata.current_chunk_id = current_chunk_id + 1
             workspace_manager._save_workspace(workspace)
             st.rerun()
+
+    with page_cols[4]:
+        if st.button(f"+{page_size} ⏩", disabled=(current_chunk_id > workspace.metadata.total_chunks - page_size), use_container_width=True, key="nav_pgdn"):
+            workspace.metadata.current_chunk_id = min(workspace.metadata.total_chunks, current_chunk_id + page_size)
+            workspace_manager._save_workspace(workspace)
+            st.rerun()
+
+    with page_cols[5]:
+        if st.button("Last ⏭", disabled=(current_chunk_id == workspace.metadata.total_chunks), use_container_width=True, key="nav_last"):
+            workspace.metadata.current_chunk_id = workspace.metadata.total_chunks
+            workspace_manager._save_workspace(workspace)
+            st.rerun()
+
+    # Row 2: Section jump buttons
+    st.markdown("**Jump to Section:**")
+    section_cols = st.columns(4)
+
+    section_labels = {
+        "company": ("🏢 Company", "Company/Entity sections"),
+        "personnel": ("👤 Personnel", "Team/Staff sections"),
+        "project": ("📋 Project", "Approach/Methodology"),
+        "other": ("📄 Other", "Remaining sections")
+    }
+
+    for idx, (section_type, (label, help_text)) in enumerate(section_labels.items()):
+        with section_cols[idx]:
+            section_chunks = section_index[section_type]
+            # Find next unreviewed chunk in this section, or first chunk
+            next_in_section = None
+            for cid in section_chunks:
+                cp = next((c for c in workspace.chunks if c.chunk_id == cid), None)
+                if cp and cp.status != "reviewed":
+                    next_in_section = cid
+                    break
+            if next_in_section is None and section_chunks:
+                next_in_section = section_chunks[0]
+
+            count = len(section_chunks)
+            reviewed = sum(1 for cid in section_chunks
+                         if any(c.status == "reviewed" for c in workspace.chunks if c.chunk_id == cid))
+
+            btn_label = f"{label} ({reviewed}/{count})"
+            if st.button(btn_label, disabled=(not section_chunks), use_container_width=True,
+                        key=f"section_{section_type}", help=help_text):
+                if next_in_section:
+                    workspace.metadata.current_chunk_id = next_in_section
+                    workspace_manager._save_workspace(workspace)
+                    st.rerun()
+
+    # Row 3: Direct chunk dropdown
+    chunk_options = []
+    for cp in workspace.chunks:
+        chunk = next((c for c in chunks if c.chunk_id == cp.chunk_id), None)
+        section_type = chunk.section_types[0] if chunk and chunk.section_types else "other"
+        section_icon = {"company": "🏢", "personnel": "👤", "project": "📋", "other": "📄"}.get(section_type, "📄")
+        status = "✅" if cp.status == "reviewed" else "⏳"
+        chunk_options.append(f"{status} {section_icon} Chunk {cp.chunk_id}: {cp.title[:35]}...")
+
+    selected_idx = st.selectbox(
+        "Jump to specific chunk",
+        range(len(chunk_options)),
+        index=current_chunk_id - 1,
+        format_func=lambda i: chunk_options[i],
+        key="chunk_dropdown"
+    )
+
+    if selected_idx + 1 != current_chunk_id:
+        workspace.metadata.current_chunk_id = selected_idx + 1
+        workspace_manager._save_workspace(workspace)
+        st.rerun()
 
     st.divider()
 
