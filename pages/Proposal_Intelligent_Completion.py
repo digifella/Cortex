@@ -365,11 +365,11 @@ with col2:
             auto_fields = [f for f in classified_fields if f.tier == FieldTier.AUTO_COMPLETE]
             intel_fields = [f for f in classified_fields if f.tier == FieldTier.INTELLIGENT]
 
-            # Group intelligent fields by question type
+            # Group intelligent fields by question type (use string keys for session state compatibility)
             questions_by_type = defaultdict(list)
             for field in intel_fields:
                 qtype = field.question_type or QuestionType.GENERAL
-                questions_by_type[qtype].append(field)
+                questions_by_type[qtype.value].append(field)  # Use .value for string key
 
             # Initialize status for each question
             question_status = {}
@@ -480,10 +480,11 @@ if st.session_state.ic_classified_fields:
 
         # Display questions grouped by type
         for qtype in QuestionType:
-            if qtype not in questions_by_type or not questions_by_type[qtype]:
+            qtype_key = qtype.value  # Use string key for session state compatibility
+            if qtype_key not in questions_by_type or not questions_by_type[qtype_key]:
                 continue
 
-            type_questions = questions_by_type[qtype]
+            type_questions = questions_by_type[qtype_key]
             icon = QTYPE_ICONS.get(qtype, "📝")
             display_name = QTYPE_DISPLAY.get(qtype, qtype.value.title())
 
