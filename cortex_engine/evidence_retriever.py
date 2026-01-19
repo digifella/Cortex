@@ -111,44 +111,53 @@ class EvidenceRetriever:
         self,
         question: str,
         question_type: QuestionType,
-        collection_name: str,
+        collection_name: Optional[str],
         max_results: int = 5,
         use_reranker: bool = True
     ) -> EvidenceSearchResult:
         """
-        Find relevant evidence from the nominated collection.
+        Find relevant evidence from a collection or the entire knowledge base.
 
         Args:
             question: The question to find evidence for
             question_type: Type of question (affects query reformulation)
-            collection_name: Name of the collection to search
+            collection_name: Name of the collection to search, or None for entire KB
             max_results: Maximum evidence pieces to return
             use_reranker: Whether to use Qwen3-VL reranker for precision
 
         Returns:
             EvidenceSearchResult with ranked evidence
         """
-        logger.info(f"Searching collection '{collection_name}' for evidence on: {question[:50]}...")
+        # Determine if searching entire KB or specific collection
+        search_entire_kb = collection_name is None or collection_name == ""
+        display_name = "Entire Knowledge Base" if search_entire_kb else collection_name
 
-        # Get document IDs from the collection
-        collection_mgr = self._get_collection_manager()
-        doc_ids = collection_mgr.get_doc_ids_by_name(collection_name)
+        logger.info(f"Searching '{display_name}' for evidence on: {question[:50]}...")
 
-        if not doc_ids:
-            logger.warning(f"Collection '{collection_name}' is empty or doesn't exist")
-            return EvidenceSearchResult(
-                question=question,
-                question_type=question_type,
-                evidence=[],
-                collection_name=collection_name,
-                total_candidates=0,
-                search_query=question
-            )
+        # Get document IDs (None means no filter = entire KB)
+        doc_ids = None
+        total_candidates = 0
+
+        if not search_entire_kb:
+            collection_mgr = self._get_collection_manager()
+            doc_ids = collection_mgr.get_doc_ids_by_name(collection_name)
+
+            if not doc_ids:
+                logger.warning(f"Collection '{collection_name}' is empty or doesn't exist")
+                return EvidenceSearchResult(
+                    question=question,
+                    question_type=question_type,
+                    evidence=[],
+                    collection_name=collection_name,
+                    total_candidates=0,
+                    search_query=question
+                )
+            total_candidates = len(doc_ids)
 
         # Reformulate query for better search
         search_query = self._build_search_query(question, question_type)
 
-        # Search with collection filter
+        # Search with optional collection filter
         search_engine = self._get_search_engine()
 
         try:
@@ -156,10 +165,11 @@ class EvidenceRetriever:
             candidates = max_results * 3  # Over-fetch for filtering
 
             # Use hybrid search with optional reranker
+            # Pass doc_id_filter only if we have a collection filter
             results = search_engine.hybrid_search(
                 query=search_query,
                 top_k=candidates,
-                doc_id_filter=set(doc_ids),  # Filter to collection docs only
+                doc_id_filter=set(doc_ids) if doc_ids else None,
                 use_reranker=use_reranker
             )
 
@@ -174,8 +184,8 @@ class EvidenceRetriever:
                 question=question,
                 question_type=question_type,
                 evidence=scored_evidence[:max_results],
-                collection_name=collection_name,
-                total_candidates=len(doc_ids),
+                collection_name=display_name,
+                total_candidates=total_candidates if doc_ids else len(results),
                 search_query=search_query
             )
 
@@ -325,8 +335,8 @@ class EvidenceRetriever:
         self,
         question: str,
         question_type: QuestionType,
-        collection_name: str,
-        doc_ids: List[str],
+        collection_name: Optional[str],
+        doc_ids: Optional[List[str]],
         max_results: int
     ) -> EvidenceSearchResult:
         """
@@ -335,6 +345,7 @@ class EvidenceRetriever:
         Uses simpler direct ChromaDB search.
         """
         logger.info("Using fallback search method")
+        display_name = collection_name or "Entire Knowledge Base"
 
         try:
             import chromadb
@@ -349,7 +360,7 @@ class EvidenceRetriever:
 
             collection = client.get_collection(COLLECTION_NAME)
 
-            # Simple query
+            # Simple query - no filter if searching entire KB
             results = collection.query(
                 query_texts=[question],
                 n_results=max_results * 2,
@@ -376,8 +387,8 @@ class EvidenceRetriever:
                 question=question,
                 question_type=question_type,
                 evidence=evidence_list[:max_results],
-                collection_name=collection_name,
-                total_candidates=len(doc_ids),
+                collection_name=display_name,
+                total_candidates=len(doc_ids) if doc_ids else len(evidence_list),
                 search_query=question
             )
 
@@ -387,7 +398,7 @@ class EvidenceRetriever:
                 question=question,
                 question_type=question_type,
                 evidence=[],
-                collection_name=collection_name,
+                collection_name=display_name,
                 total_candidates=0,
                 search_query=question
             )

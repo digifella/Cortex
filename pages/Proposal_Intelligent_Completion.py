@@ -1,6 +1,6 @@
 """
 Proposal Intelligent Completion
-Version: 2.0.0
+Version: 2.1.0
 Date: 2026-01-20
 
 Purpose: Interactive two-tier intelligent proposal completion workflow.
@@ -227,20 +227,25 @@ with st.sidebar:
     st.caption("Select collection for evidence search")
 
     collections = collection_manager.get_collection_names()
-    if not collections:
-        st.warning("No collections available. Create one in Collection Management.")
-        selected_collection = None
-    else:
-        selected_collection = st.selectbox(
-            "Evidence Source",
-            options=collections,
-            key="ic_collection_select",
-            help="Substantive responses will search this collection for evidence"
-        )
 
-        if selected_collection:
-            doc_count = len(collection_manager.get_doc_ids_by_name(selected_collection))
-            st.caption(f"{doc_count} documents in collection")
+    # Build options list with "Entire Knowledge Base" first
+    collection_options = ["-- Entire Knowledge Base --"] + (collections if collections else [])
+
+    selected_option = st.selectbox(
+        "Evidence Source",
+        options=collection_options,
+        key="ic_collection_select",
+        help="Select a specific collection or search the entire knowledge base"
+    )
+
+    # Convert selection to collection name (None for entire KB)
+    if selected_option == "-- Entire Knowledge Base --":
+        selected_collection = None
+        st.caption("Searching entire knowledge base")
+    else:
+        selected_collection = selected_option
+        doc_count = len(collection_manager.get_doc_ids_by_name(selected_collection))
+        st.caption(f"{doc_count} documents in collection")
 
     st.divider()
 
@@ -456,8 +461,6 @@ if st.session_state.ic_classified_fields:
 
     if not intel_fields:
         st.info("No substantive questions found")
-    elif not selected_collection:
-        st.warning("Select a knowledge collection in the sidebar to enable evidence search")
     else:
         # Progress summary
         total_questions = len(intel_fields)
@@ -651,4 +654,4 @@ if st.session_state.ic_classified_fields:
 
 # Footer
 st.divider()
-st.caption("v2.0.0 | Interactive human-in-the-loop workflow with evidence-backed responses")
+st.caption("v2.1.0 | Interactive human-in-the-loop workflow with evidence-backed responses")
