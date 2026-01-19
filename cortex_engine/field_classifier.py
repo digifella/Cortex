@@ -79,10 +79,16 @@ class FieldClassifier:
     DEFAULT_AUTO_COMPLETE_MAPPINGS = [
         # Company identification
         AutoCompleteMapping(
-            pattern=r"(?:company|business|supplier|tenderer|organisation|organization)[\s\-]*(?:legal\s+)?name",
+            pattern=r"(?:company|business|supplier|tenderer|organisation|organization)[\'\s\-]*(?:s\s+)?(?:legal\s+)?name",
             profile_field="company_name",
             description="Company legal name",
             priority=10
+        ),
+        AutoCompleteMapping(
+            pattern=r"^name\s*:",
+            profile_field="company_name",
+            description="Name field (company)",
+            priority=9
         ),
         AutoCompleteMapping(
             pattern=r"(?:trading|trade)\s*(?:as|name)",
@@ -218,8 +224,10 @@ class FieldClassifier:
 
     # Patterns that indicate substantive questions (Tier 2)
     SUBSTANTIVE_INDICATORS = [
-        # Question words with substance
-        (r"(?:please\s+)?(?:describe|detail|explain|outline|provide\s+details)", QuestionType.GENERAL),
+        # Question words with substance - assign to likely types
+        (r"(?:please\s+)?provide\s+details\s+of\s+(?:your\s+)?(?:capability|capacity)", QuestionType.CAPABILITY),
+        (r"(?:please\s+)?(?:describe|detail|explain)\s+(?:your\s+)?(?:experience|capability)", QuestionType.CAPABILITY),
+        (r"(?:please\s+)?(?:outline|describe)\s+(?:your\s+)?(?:proposed\s+)?(?:methodology|approach)", QuestionType.METHODOLOGY),
         (r"(?:please\s+)?(?:demonstrate|evidence|show)", QuestionType.CAPABILITY),
 
         # Capability indicators
@@ -228,6 +236,7 @@ class FieldClassifier:
         (r"(?:qualifications?|expertise|skills?)\s+(?:of|in|relevant)", QuestionType.CAPABILITY),
         (r"capability\s+(?:and\s+)?capacity", QuestionType.CAPABILITY),
         (r"proven\s+(?:ability|track\s+record)", QuestionType.CAPABILITY),
+        (r"deliver(?:ing|ed)?\s+(?:the\s+)?(?:required\s+)?services?", QuestionType.CAPABILITY),
 
         # Methodology indicators
         (r"(?:proposed\s+)?(?:methodology|approach|method)", QuestionType.METHODOLOGY),
@@ -235,6 +244,7 @@ class FieldClassifier:
         (r"(?:outline|describe)\s+(?:your\s+)?(?:approach|process|steps)", QuestionType.METHODOLOGY),
         (r"(?:key\s+)?(?:steps|phases|stages)", QuestionType.METHODOLOGY),
         (r"(?:indicative\s+)?(?:timeline|schedule|milestones)", QuestionType.METHODOLOGY),
+        (r"conducting\s+the\s+review", QuestionType.METHODOLOGY),
 
         # Value proposition indicators
         (r"(?:benefit|value|impact)\s+(?:to|for|on)", QuestionType.VALUE_PROPOSITION),
