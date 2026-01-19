@@ -94,7 +94,14 @@
       "Bash(git ls-tree:*)",
       "Bash(git config:*)",
       "Bash(address\" in personnel section.\n\n**After**: Document split into ~4000 char chunks, personnel sections \nclassified and filtered out, each chunk gets full LLM analysis with no \nsampling, personnel fields never get wrong suggestions.\n\n## Documentation\n- **CHUNK_REVIEW_IMPLEMENTATION.md**: Comprehensive implementation docs\n- **PHASE_2_COMPLETE.md**: Phase completion summary\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(\" marker\n  - Fallback to first 10 lines if mention not found\n  - Helps reviewers verify mention placement accuracy\n\n## Implementation Summary\n\n**Chunk Review V2 Status**: Production Ready ✅\n\n### Key Achievements\n1. ✅ One-click batch analysis \\(28 chunks → 1 click = 96% reduction\\)\n2. ✅ Real-time progress tracking with live logs\n3. ✅ Compact navigation \\(prev/next/jump with status indicators\\)\n4. ✅ Inline editing \\(mention_text, field_path, resolved_value\\)\n5. ✅ Multi-session support \\(resume anytime\\)\n6. ✅ Professional UX \\(client-ready design\\)\n\n### Performance Impact\n- Manual effort: 28 clicks → 1 click \\(96% reduction\\)\n- Analysis time: 5-10 min → ~1 min \\(80% faster\\)\n- Navigation: Instant \\(<100ms\\)\n- Multi-session: Resume from last reviewed chunk\n\n### Files Modified\n- pages/Proposal_Chunk_Review_V2.py \\(v2.0.0\\) - Added context preview\n- CHUNK_REVIEW_V2_COMPLETE.md \\(new\\) - Implementation docs\n- CHUNK_REVIEW_V2_TEST_CHECKLIST.md \\(new\\) - Testing guide\n\n**Ready for professional tender response workflows** 🚀\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "WebFetch(domain:docling-project.github.io)",
+      "WebFetch(domain:github.com)",
+      "Bash(HF_HUB_OFFLINE=0 python:*)",
+      "WebFetch(domain:qwenlm.github.io)",
+      "WebFetch(domain:qwen.ai)",
+      "Bash(HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",
