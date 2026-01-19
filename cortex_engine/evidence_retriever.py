@@ -88,17 +88,26 @@ class EvidenceRetriever:
             db_path: Path to the knowledge database
         """
         self.db_path = db_path
-        self._search_engine = None
+        self._chroma_client = None
+        self._chroma_collection = None
         self._collection_manager = None
 
         logger.info(f"EvidenceRetriever initialized for {db_path}")
 
-    def _get_search_engine(self):
-        """Lazy-load the search engine to avoid circular imports."""
-        if self._search_engine is None:
-            from .graph_query import GraphQueryEngine
-            self._search_engine = GraphQueryEngine(self.db_path)
-        return self._search_engine
+    def _get_chroma_collection(self):
+        """Lazy-load the ChromaDB collection."""
+        if self._chroma_collection is None:
+            import chromadb
+            from chromadb.config import Settings as ChromaSettings
+            from .config import COLLECTION_NAME
+
+            chroma_path = Path(self.db_path) / "knowledge_hub_db"
+            self._chroma_client = chromadb.PersistentClient(
+                path=str(chroma_path),
+                settings=ChromaSettings(anonymized_telemetry=False)
+            )
+            self._chroma_collection = self._chroma_client.get_collection(COLLECTION_NAME)
+        return self._chroma_collection
 
     def _get_collection_manager(self):
         """Lazy-load the collection manager."""
@@ -157,24 +166,40 @@ class EvidenceRetriever:
         # Reformulate query for better search
         search_query = self._build_search_query(question, question_type)
 
-        # Search with optional collection filter
-        search_engine = self._get_search_engine()
-
         try:
-            # Determine search parameters
+            # Use direct ChromaDB search
+            collection = self._get_chroma_collection()
             candidates = max_results * 3  # Over-fetch for filtering
 
-            # Use hybrid search with optional reranker
-            # Pass doc_id_filter only if we have a collection filter
-            results = search_engine.hybrid_search(
-                query=search_query,
-                top_k=candidates,
-                doc_id_filter=set(doc_ids) if doc_ids else None,
-                use_reranker=use_reranker
+            # Build where clause for collection filter
+            where_clause = None
+            if doc_ids:
+                where_clause = {"doc_id": {"$in": list(doc_ids)}}
+
+            # Query ChromaDB
+            results = collection.query(
+                query_texts=[search_query],
+                n_results=candidates,
+                where=where_clause,
+                include=['documents', 'metadatas', 'distances']
             )
 
-            # Convert to Evidence objects
-            evidence_list = self._convert_to_evidence(results, question_type)
+            # Convert ChromaDB results to Evidence objects
+            evidence_list = []
+            if results and results['documents'] and results['documents'][0]:
+                for i, doc in enumerate(results['documents'][0]):
+                    metadata = results['metadatas'][0][i] if results['metadatas'] else {}
+                    distance = results['distances'][0][i] if results['distances'] else 0.5
+
+                    evidence = Evidence(
+                        text=doc[:2000],
+                        source_doc=metadata.get('source', metadata.get('filename', 'Unknown')),
+                        source_chunk_id=str(results['ids'][0][i]) if results['ids'] else 'unknown',
+                        relevance_score=max(0, 1 - (distance / 2)),  # Convert distance to similarity
+                        doc_type=self._infer_doc_type(metadata, doc),
+                        metadata=metadata
+                    )
+                    evidence_list.append(evidence)
 
             # Score and rank evidence
             scored_evidence = self._score_evidence(evidence_list, question, question_type)
@@ -185,7 +210,7 @@ class EvidenceRetriever:
                 question_type=question_type,
                 evidence=scored_evidence[:max_results],
                 collection_name=display_name,
-                total_candidates=total_candidates if doc_ids else len(results),
+                total_candidates=total_candidates if doc_ids else len(evidence_list),
                 search_query=search_query
             )
 
