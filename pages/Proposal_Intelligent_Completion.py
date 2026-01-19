@@ -1,6 +1,6 @@
 """
 Proposal Intelligent Completion
-Version: 2.1.0
+Version: 2.2.0
 Date: 2026-01-20
 
 Purpose: Interactive two-tier intelligent proposal completion workflow.
@@ -12,6 +12,7 @@ Key Features:
 - Questions grouped by type for organized review
 - Per-question actions: Skip / Auto-fill / Generate / Manual
 - Evidence panel with knowledge collection search
+- Human-in-the-loop regeneration with hints to refine responses
 """
 
 import streamlit as st
@@ -617,6 +618,68 @@ if st.session_state.ic_classified_fields:
                             question_status[field_key]['response'] = response_text
                             st.session_state.ic_question_status = question_status
 
+                        # Regeneration with hint
+                        st.markdown("**Refine Response:**")
+                        hint_text = st.text_area(
+                            "Refinement Guidance",
+                            placeholder="Enter guidance to steer the regeneration, e.g.:\n• Focus more on project X outcomes\n• Emphasize our ISO certification\n• Include specific metrics from the 2024 report\n• Make it more concise\n• Add more detail about our methodology",
+                            key=f"hint_{qtype.value}_{q_idx}",
+                            height=100,
+                            help="Add guidance to steer the regeneration. Leave blank for general improvement."
+                        )
+
+                        if st.button("🔄 Regenerate with Guidance", key=f"regen_{qtype.value}_{q_idx}",
+                                    use_container_width=True, type="secondary"):
+                                with st.spinner("Regenerating with guidance..."):
+                                    try:
+                                        # Get evidence (from cache or fetch new)
+                                        evidence = st.session_state.ic_evidence_cache.get(field_key, [])
+                                        if not evidence:
+                                            evidence_result = evidence_retriever.find_evidence(
+                                                question=field.field_text,
+                                                question_type=field.question_type or QuestionType.GENERAL,
+                                                collection_name=selected_collection,
+                                                max_results=max_evidence,
+                                                use_reranker=use_reranker
+                                            )
+                                            evidence = evidence_result.evidence
+                                            st.session_state.ic_evidence_cache[field_key] = evidence
+
+                                        # Build DraftResponse from stored data for regeneration
+                                        previous_response = DraftResponse(
+                                            question=field.field_text,
+                                            question_type=field.question_type or QuestionType.GENERAL,
+                                            text=status_data.get('response', ''),
+                                            evidence_used=evidence,
+                                            confidence=0.5,
+                                            word_count=len(status_data.get('response', '').split()),
+                                            needs_review=True,
+                                            placeholders=[],
+                                            generation_time=0,
+                                            metadata={
+                                                'entity_id': workspace.metadata.entity_id,
+                                                'word_limit': field.word_limit
+                                            }
+                                        )
+
+                                        # Regenerate with hint
+                                        guidance = hint_text if hint_text else "Please improve the response with more specific details from the evidence."
+                                        new_response = response_generator.regenerate(
+                                            previous_response=previous_response,
+                                            entity_id=workspace.metadata.entity_id,
+                                            additional_guidance=guidance,
+                                            new_evidence=evidence
+                                        )
+
+                                        # Update stored response
+                                        question_status[field_key]['response'] = new_response.text
+                                        question_status[field_key]['confidence'] = new_response.confidence
+                                        st.session_state.ic_question_status = question_status
+                                        st.success(f"Regenerated! Confidence: {new_response.confidence:.0%}")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Regeneration failed: {e}")
+
             st.divider()
 
     # ============================
@@ -653,4 +716,4 @@ if st.session_state.ic_classified_fields:
 
 # Footer
 st.divider()
-st.caption("v2.1.0 | Interactive human-in-the-loop workflow with evidence-backed responses")
+st.caption("v2.2.0 | Interactive human-in-the-loop workflow with evidence-backed responses and regeneration hints")
