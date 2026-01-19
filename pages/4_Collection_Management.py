@@ -1,8 +1,10 @@
 # ## File: pages/4_Collection_Management.py
-# Version: v5.1.0
-# Date: 2025-08-28
+# Version: v5.2.0
+# Date: 2026-01-19
 # Purpose: A UI for managing Working Collections only.
 #          Knowledge base maintenance functions moved to Maintenance page (page 13).
+#          - FEATURE (v5.2.0): Enhanced tag management with three tabs: Tag Selected, Tag All
+#            (entire collection), and Rename Tag (find/replace tags across collection).
 #          - REFACTOR (v4.0.0): Removed knowledge maintenance functions, now collections only.
 
 import streamlit as st
@@ -1018,42 +1020,145 @@ for collection in page_collections:
                         # Tag management controls
                         if unique_docs:
                             with st.expander("🏷️ Tag Management (thematic_tags)", expanded=False):
-                                options = []
+                                # Collect all existing tags in this collection for reference
+                                all_tags_in_collection = set()
                                 for doc_id, meta in unique_docs.items():
-                                    label = f"{meta.get('file_name', meta.get('doc_posix_path', doc_id))} ({doc_id})"
-                                    options.append((label, doc_id))
-                                options.sort(key=lambda x: x[0].lower())
-                                labels = [opt[0] for opt in options]
-                                label_to_id = {opt[0]: opt[1] for opt in options}
-                                selected_labels = st.multiselect("Select documents", labels, key=f"tag_select_{name}")
-                                selected_ids = [label_to_id[lbl] for lbl in selected_labels]
+                                    tags = _normalize_tags(meta.get("thematic_tags"))
+                                    all_tags_in_collection.update(tags)
 
-                                c1, c2 = st.columns(2)
-                                with c1:
-                                    add_tags = st.text_input("Add tags (comma-separated)", key=f"add_tags_{name}")
-                                with c2:
-                                    remove_tags = st.text_input("Remove tags (comma-separated)", key=f"remove_tags_{name}")
+                                if all_tags_in_collection:
+                                    st.caption(f"**Existing tags:** {', '.join(sorted(all_tags_in_collection))}")
+                                else:
+                                    st.caption("**No tags yet** - add tags to organize this collection")
 
-                                if st.button("Apply Tag Updates", key=f"apply_tags_{name}", disabled=not selected_ids):
-                                    add_list = [t.strip() for t in add_tags.split(",") if t.strip()]
-                                    remove_list = [t.strip() for t in remove_tags.split(",") if t.strip()]
-                                    updated = 0
-                                    for doc_id in selected_ids:
-                                        meta = dict(unique_docs.get(doc_id, {}))
-                                        existing = set(_normalize_tags(meta.get("thematic_tags")))
-                                        if add_list:
-                                            existing.update(add_list)
-                                        if remove_list:
-                                            existing.difference_update(remove_list)
-                                        meta["thematic_tags"] = ", ".join(sorted(existing))
-                                        try:
-                                            vector_collection.update(ids=[doc_id], metadatas=[meta])
-                                            updated += 1
-                                        except Exception as e:
-                                            logger.warning(f"Failed to update tags for {doc_id}: {e}")
-                                    st.success(f"Updated tags for {updated} document(s).")
-                                    if updated:
-                                        st.experimental_rerun()
+                                st.markdown("---")
+
+                                # Tab-based organization for tag operations
+                                tag_tab1, tag_tab2, tag_tab3 = st.tabs(["📄 Tag Selected", "📚 Tag All", "🔄 Rename Tag"])
+
+                                with tag_tab1:
+                                    st.markdown("**Add/remove tags from selected documents**")
+                                    options = []
+                                    for doc_id, meta in unique_docs.items():
+                                        label = f"{meta.get('file_name', meta.get('doc_posix_path', doc_id))} ({doc_id})"
+                                        options.append((label, doc_id))
+                                    options.sort(key=lambda x: x[0].lower())
+                                    labels = [opt[0] for opt in options]
+                                    label_to_id = {opt[0]: opt[1] for opt in options}
+                                    selected_labels = st.multiselect("Select documents", labels, key=f"tag_select_{name}")
+                                    selected_ids = [label_to_id[lbl] for lbl in selected_labels]
+
+                                    c1, c2 = st.columns(2)
+                                    with c1:
+                                        add_tags = st.text_input("Add tags (comma-separated)", key=f"add_tags_{name}")
+                                    with c2:
+                                        remove_tags = st.text_input("Remove tags (comma-separated)", key=f"remove_tags_{name}")
+
+                                    if st.button("Apply to Selected", key=f"apply_tags_{name}", disabled=not selected_ids):
+                                        add_list = [t.strip() for t in add_tags.split(",") if t.strip()]
+                                        remove_list = [t.strip() for t in remove_tags.split(",") if t.strip()]
+                                        updated = 0
+                                        for doc_id in selected_ids:
+                                            meta = dict(unique_docs.get(doc_id, {}))
+                                            existing = set(_normalize_tags(meta.get("thematic_tags")))
+                                            if add_list:
+                                                existing.update(add_list)
+                                            if remove_list:
+                                                existing.difference_update(remove_list)
+                                            meta["thematic_tags"] = ", ".join(sorted(existing))
+                                            try:
+                                                vector_collection.update(ids=[doc_id], metadatas=[meta])
+                                                updated += 1
+                                            except Exception as e:
+                                                logger.warning(f"Failed to update tags for {doc_id}: {e}")
+                                        st.success(f"Updated tags for {updated} document(s).")
+                                        if updated:
+                                            st.rerun()
+
+                                with tag_tab2:
+                                    st.markdown("**Apply tags to ALL documents in this collection**")
+                                    st.caption(f"This will affect all {len(unique_docs)} documents")
+
+                                    c1, c2 = st.columns(2)
+                                    with c1:
+                                        add_all_tags = st.text_input("Add tags to all (comma-separated)", key=f"add_all_tags_{name}",
+                                                                     placeholder="e.g., proposal-research, 2026")
+                                    with c2:
+                                        remove_all_tags = st.text_input("Remove tags from all (comma-separated)", key=f"remove_all_tags_{name}")
+
+                                    if st.button("🏷️ Apply to All Documents", key=f"apply_all_tags_{name}", type="primary"):
+                                        add_list = [t.strip() for t in add_all_tags.split(",") if t.strip()]
+                                        remove_list = [t.strip() for t in remove_all_tags.split(",") if t.strip()]
+                                        if add_list or remove_list:
+                                            updated = 0
+                                            for doc_id, meta in unique_docs.items():
+                                                meta = dict(meta)
+                                                existing = set(_normalize_tags(meta.get("thematic_tags")))
+                                                if add_list:
+                                                    existing.update(add_list)
+                                                if remove_list:
+                                                    existing.difference_update(remove_list)
+                                                meta["thematic_tags"] = ", ".join(sorted(existing))
+                                                try:
+                                                    vector_collection.update(ids=[doc_id], metadatas=[meta])
+                                                    updated += 1
+                                                except Exception as e:
+                                                    logger.warning(f"Failed to update tags for {doc_id}: {e}")
+                                            st.success(f"✅ Updated tags for {updated}/{len(unique_docs)} documents!")
+                                            if updated:
+                                                st.rerun()
+                                        else:
+                                            st.warning("Please enter tags to add or remove")
+
+                                with tag_tab3:
+                                    st.markdown("**Rename a tag across all documents**")
+                                    st.caption("Find and replace tag names in this collection")
+
+                                    c1, c2 = st.columns(2)
+                                    with c1:
+                                        old_tag = st.text_input("Find tag:", key=f"old_tag_{name}",
+                                                               placeholder="e.g., old-tag-name")
+                                    with c2:
+                                        new_tag = st.text_input("Replace with:", key=f"new_tag_{name}",
+                                                               placeholder="e.g., new-tag-name")
+
+                                    # Show which docs have this tag
+                                    if old_tag and old_tag.strip():
+                                        docs_with_tag = [doc_id for doc_id, meta in unique_docs.items()
+                                                        if old_tag.strip().lower() in [t.lower() for t in _normalize_tags(meta.get("thematic_tags"))]]
+                                        if docs_with_tag:
+                                            st.info(f"Found '{old_tag}' in {len(docs_with_tag)} document(s)")
+                                        else:
+                                            st.warning(f"Tag '{old_tag}' not found in this collection")
+
+                                    if st.button("🔄 Rename Tag", key=f"rename_tag_{name}"):
+                                        if old_tag and old_tag.strip() and new_tag and new_tag.strip():
+                                            old_tag_clean = old_tag.strip()
+                                            new_tag_clean = new_tag.strip()
+                                            updated = 0
+                                            for doc_id, meta in unique_docs.items():
+                                                meta = dict(meta)
+                                                existing = _normalize_tags(meta.get("thematic_tags"))
+                                                # Case-insensitive find and replace
+                                                existing_lower = {t.lower(): t for t in existing}
+                                                if old_tag_clean.lower() in existing_lower:
+                                                    # Remove old tag, add new tag
+                                                    existing_set = set(existing)
+                                                    existing_set.discard(existing_lower[old_tag_clean.lower()])
+                                                    existing_set.add(new_tag_clean)
+                                                    meta["thematic_tags"] = ", ".join(sorted(existing_set))
+                                                    try:
+                                                        vector_collection.update(ids=[doc_id], metadatas=[meta])
+                                                        updated += 1
+                                                    except Exception as e:
+                                                        logger.warning(f"Failed to rename tag for {doc_id}: {e}")
+                                            if updated:
+                                                st.success(f"✅ Renamed '{old_tag_clean}' → '{new_tag_clean}' in {updated} document(s)")
+                                                st.rerun()
+                                            else:
+                                                st.warning(f"Tag '{old_tag_clean}' not found in any documents")
+                                        else:
+                                            st.warning("Please enter both old and new tag names")
 
                         # Enhanced document display with pagination and sorting
                         display_enhanced_document_list(unique_docs, name, collection_mgr)

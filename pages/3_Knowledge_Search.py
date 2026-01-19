@@ -1,7 +1,9 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v5.4.0
+# Version: v5.5.0
 # Date: 2026-01-19
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
+#          - FEATURE (v5.5.0): Added optional tag input when saving to collections. Tags apply
+#            to all saved documents for easier categorization in proposal workflows.
 #          - FEATURE (v5.4.0): Streamlined "Save to Collection" UI with dropdown showing existing
 #            collections + "Create New Collection" option. Works for bulk and individual adds.
 #          - FEATURE (v5.3.0): Background preload of reranker model when page opens. Model loads
@@ -1586,10 +1588,19 @@ def render_search_results(results, filters):
                 else:
                     new_name = None
 
+                # Optional: Tag these results
+                tag_input = st.text_input(
+                    "🏷️ Tag these results (optional):",
+                    placeholder="e.g., strategy, workshop, 2026",
+                    key="bulk_save_tags",
+                    help="Comma-separated tags to add to all saved documents"
+                )
+
             except Exception as e:
                 st.error(f"Collections not available: {e}")
                 selected_option = None
                 new_name = None
+                tag_input = ""
 
         with col2:
             st.write("")  # Spacing
@@ -1600,21 +1611,72 @@ def render_search_results(results, filters):
                         collection_mgr = WorkingCollectionManager()
                         doc_ids = [result['doc_id'] for result in results]
 
+                        # Determine target collection name
                         if selected_option == "+ Create New Collection":
                             if new_name and new_name.strip():
-                                # Create new collection and add docs
-                                if collection_mgr.create_collection(new_name.strip()):
-                                    collection_mgr.add_docs_by_id_to_collection(new_name.strip(), doc_ids)
-                                    st.success(f"✅ Created '{new_name}' with {len(doc_ids)} documents!")
-                                    st.balloons()
-                                else:
-                                    st.error(f"Collection '{new_name}' already exists!")
+                                target_collection = new_name.strip()
+                                if not collection_mgr.create_collection(target_collection):
+                                    st.error(f"Collection '{target_collection}' already exists!")
+                                    target_collection = None
                             else:
                                 st.warning("Please enter a name for the new collection")
+                                target_collection = None
                         else:
-                            # Add to existing collection
-                            collection_mgr.add_docs_by_id_to_collection(selected_option, doc_ids)
-                            st.success(f"✅ Added {len(doc_ids)} documents to '{selected_option}'!")
+                            target_collection = selected_option
+
+                        if target_collection:
+                            # Add docs to collection
+                            collection_mgr.add_docs_by_id_to_collection(target_collection, doc_ids)
+
+                            # Apply tags if provided
+                            tags_applied = 0
+                            if tag_input and tag_input.strip():
+                                new_tags = [t.strip() for t in tag_input.split(",") if t.strip()]
+                                if new_tags:
+                                    try:
+                                        # Get ChromaDB collection to update metadata
+                                        from cortex_engine.config import COLLECTION_NAME
+                                        wsl_db_path = convert_windows_to_wsl_path(
+                                            st.session_state.get('db_path_input', '')
+                                        )
+                                        chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+                                        client = chromadb.PersistentClient(
+                                            path=chroma_db_path,
+                                            settings=ChromaSettings(anonymized_telemetry=False)
+                                        )
+                                        vector_collection = client.get_collection(COLLECTION_NAME)
+
+                                        # Update each document's tags
+                                        for doc_id in doc_ids:
+                                            try:
+                                                result = vector_collection.get(ids=[doc_id], include=["metadatas"])
+                                                if result and result['metadatas']:
+                                                    meta = dict(result['metadatas'][0])
+                                                    existing_tags = meta.get('thematic_tags', '')
+                                                    if isinstance(existing_tags, str):
+                                                        existing_set = set(t.strip() for t in existing_tags.split(',') if t.strip())
+                                                    else:
+                                                        existing_set = set(existing_tags) if existing_tags else set()
+                                                    existing_set.update(new_tags)
+                                                    meta['thematic_tags'] = ', '.join(sorted(existing_set))
+                                                    vector_collection.update(ids=[doc_id], metadatas=[meta])
+                                                    tags_applied += 1
+                                            except Exception as tag_e:
+                                                logger.warning(f"Failed to tag {doc_id}: {tag_e}")
+                                    except Exception as e:
+                                        logger.warning(f"Could not apply tags: {e}")
+
+                            # Success message
+                            if selected_option == "+ Create New Collection":
+                                msg = f"✅ Created '{target_collection}' with {len(doc_ids)} documents"
+                            else:
+                                msg = f"✅ Added {len(doc_ids)} documents to '{target_collection}'"
+                            if tags_applied > 0:
+                                msg += f" (tagged {tags_applied})"
+                            st.success(msg)
+                            if selected_option == "+ Create New Collection":
+                                st.balloons()
+
                     except Exception as e:
                         st.error(f"❌ Failed to save: {e}")
 
