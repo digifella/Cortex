@@ -527,7 +527,6 @@ if st.session_state.ic_classified_fields:
                                      disabled=current_status in ['completed', 'skipped']):
                             question_status[field_key]['status'] = 'skipped'
                             st.session_state.ic_question_status = question_status
-                            st.rerun()
 
                     with col2:
                         if st.button("Auto-fill", key=f"autofill_{qtype.value}_{q_idx}", use_container_width=True,
@@ -544,9 +543,9 @@ if st.session_state.ic_classified_fields:
                                         use_reranker=use_reranker
                                     )
                                     st.session_state.ic_evidence_cache[field_key] = evidence_result.evidence
+                                    st.success("Evidence loaded")
                                 except Exception as e:
                                     st.error(f"Evidence search failed: {e}")
-                            st.rerun()
 
                     with col3:
                         if st.button("Generate", key=f"gen_{qtype.value}_{q_idx}", type="primary",
@@ -578,9 +577,9 @@ if st.session_state.ic_classified_fields:
                                     question_status[field_key]['response'] = response.text
                                     question_status[field_key]['evidence'] = evidence
                                     st.session_state.ic_question_status = question_status
+                                    st.success("Response generated")
                                 except Exception as e:
                                     st.error(f"Generation failed: {e}")
-                            st.rerun()
 
                     with col4:
                         if st.button("Manual", key=f"manual_{qtype.value}_{q_idx}", use_container_width=True,
@@ -588,7 +587,6 @@ if st.session_state.ic_classified_fields:
                                      help="Mark for manual entry"):
                             question_status[field_key]['status'] = 'manual'
                             st.session_state.ic_question_status = question_status
-                            st.rerun()
 
                     # Show evidence if cached
                     cached_evidence = st.session_state.ic_evidence_cache.get(field_key, [])
