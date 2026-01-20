@@ -1,6 +1,6 @@
 """
 Proposal Intelligent Completion
-Version: 2.3.0
+Version: 2.4.0
 Date: 2026-01-20
 
 Purpose: Interactive two-tier intelligent proposal completion workflow.
@@ -164,7 +164,7 @@ st.markdown("""
     .status-pending { background: #ECEFF1; color: #546E7A; }
     .status-skipped { background: #FFEBEE; color: #C62828; }
     .status-completed { background: #E8F5E9; color: #2E7D32; }
-    .status-manual { background: #E3F2FD; color: #1565C0; }
+    .status-editing { background: #FFF3E0; color: #EF6C00; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -465,13 +465,13 @@ if st.session_state.ic_classified_fields:
     else:
         # Progress summary
         total_questions = len(intel_fields)
-        completed_count = sum(1 for s in question_status.values() if s['status'] in ['completed', 'skipped', 'manual'])
+        completed_count = sum(1 for s in question_status.values() if s['status'] in ['completed', 'skipped', 'editing'])
         pending_count = total_questions - completed_count
 
         col1, col2, col3 = st.columns(3)
         col1.metric("Pending", pending_count)
         col2.metric("Completed", sum(1 for s in question_status.values() if s['status'] == 'completed'))
-        col3.metric("Skipped/Manual", sum(1 for s in question_status.values() if s['status'] in ['skipped', 'manual']))
+        col3.metric("Skipped/Editing", sum(1 for s in question_status.values() if s['status'] in ['skipped', 'editing']))
 
         st.divider()
 
@@ -520,38 +520,41 @@ if st.session_state.ic_classified_fields:
                     with col2:
                         st.markdown(f'<span class="question-status {status_badge_class}">{status_label}</span>', unsafe_allow_html=True)
 
-                    # Action buttons
-                    col1, col2, col3, col4 = st.columns(4)
+                    # Action buttons - simplified: Skip | Edit | Auto-Generate
+                    col1, col2, col3 = st.columns(3)
 
                     with col1:
                         if st.button("Skip", key=f"skip_{qtype.value}_{q_idx}", use_container_width=True,
-                                     disabled=current_status in ['completed', 'skipped']):
+                                     disabled=current_status in ['completed', 'editing', 'skipped'],
+                                     help="Defer for later"):
                             question_status[field_key]['status'] = 'skipped'
                             st.session_state.ic_question_status = question_status
 
                     with col2:
-                        if st.button("Auto-fill", key=f"autofill_{qtype.value}_{q_idx}", use_container_width=True,
-                                     disabled=current_status in ['completed'],
-                                     help="Quick auto-fill without LLM generation"):
-                            # Just fetch evidence and let user review
-                            with st.spinner("Fetching evidence..."):
-                                try:
-                                    evidence_result = evidence_retriever.find_evidence(
-                                        question=field.field_text,
-                                        question_type=field.question_type or QuestionType.GENERAL,
-                                        collection_name=selected_collection,
-                                        max_results=max_evidence,
-                                        use_reranker=use_reranker
-                                    )
-                                    st.session_state.ic_evidence_cache[field_key] = evidence_result.evidence
-                                    st.success("Evidence loaded")
-                                except Exception as e:
-                                    st.error(f"Evidence search failed: {e}")
+                        if st.button("✏️ Edit", key=f"edit_{qtype.value}_{q_idx}", use_container_width=True,
+                                     disabled=current_status in ['completed', 'editing'],
+                                     help="Write/paste your own response with evidence support"):
+                            # Open editing interface, fetch evidence in background
+                            question_status[field_key]['status'] = 'editing'
+                            st.session_state.ic_question_status = question_status
+                            # Fetch evidence for reference
+                            try:
+                                evidence_result = evidence_retriever.find_evidence(
+                                    question=field.field_text,
+                                    question_type=field.question_type or QuestionType.GENERAL,
+                                    collection_name=selected_collection,
+                                    max_results=max_evidence,
+                                    use_reranker=use_reranker
+                                )
+                                st.session_state.ic_evidence_cache[field_key] = evidence_result.evidence
+                            except Exception:
+                                pass  # Evidence fetch is optional for manual editing
+                            st.rerun()
 
                     with col3:
-                        if st.button("Generate", key=f"gen_{qtype.value}_{q_idx}", type="primary",
-                                     use_container_width=True, disabled=current_status == 'completed',
-                                     help="Generate response with LLM using evidence"):
+                        if st.button("✨ Auto-Generate", key=f"gen_{qtype.value}_{q_idx}", type="primary",
+                                     use_container_width=True, disabled=current_status in ['completed', 'editing'],
+                                     help="Let AI generate a first draft, then refine"):
                             with st.spinner("Generating response..."):
                                 try:
                                     # Fetch evidence if not cached
@@ -578,16 +581,9 @@ if st.session_state.ic_classified_fields:
                                     question_status[field_key]['response'] = response.text
                                     question_status[field_key]['evidence'] = evidence
                                     st.session_state.ic_question_status = question_status
-                                    st.success("Response generated")
+                                    st.success("Response generated - edit below")
                                 except Exception as e:
                                     st.error(f"Generation failed: {e}")
-
-                    with col4:
-                        if st.button("Manual", key=f"manual_{qtype.value}_{q_idx}", use_container_width=True,
-                                     disabled=current_status in ['completed', 'manual'],
-                                     help="Mark for manual entry"):
-                            question_status[field_key]['status'] = 'manual'
-                            st.session_state.ic_question_status = question_status
 
                     # Show evidence if cached
                     cached_evidence = st.session_state.ic_evidence_cache.get(field_key, [])
@@ -603,8 +599,8 @@ if st.session_state.ic_classified_fields:
                                 </div>
                                 """, unsafe_allow_html=True)
 
-                    # Show/edit response if completed or manual
-                    if current_status in ['completed', 'manual']:
+                    # Show/edit response if completed or editing
+                    if current_status in ['completed', 'editing']:
                         # Header row with label and export button
                         resp_col1, resp_col2 = st.columns([3, 1])
                         with resp_col1:
@@ -713,7 +709,7 @@ if st.session_state.ic_classified_fields:
         st.subheader("Export")
 
         completed_responses = {k: v for k, v in question_status.items()
-                              if v['status'] in ['completed', 'manual'] and v.get('response')}
+                              if v['status'] in ['completed', 'editing'] and v.get('response')}
 
         if completed_responses:
             st.success(f"{len(completed_responses)} responses ready for export")
@@ -739,4 +735,4 @@ if st.session_state.ic_classified_fields:
 
 # Footer
 st.divider()
-st.caption("v2.3.0 | Edit responses directly, export per-field, refine with AI guidance")
+st.caption("v2.4.0 | Simplified workflow: Skip | Edit | Auto-Generate")
