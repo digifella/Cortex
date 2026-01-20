@@ -1,6 +1,6 @@
 """
 Proposal Intelligent Completion
-Version: 2.5.0
+Version: 2.6.0
 Date: 2026-01-20
 
 Purpose: Interactive two-tier intelligent proposal completion workflow.
@@ -52,13 +52,22 @@ st.set_page_config(
 config = ConfigManager().get_config()
 db_path = convert_windows_to_wsl_path(config.get('ai_database_path'))
 
-# Initialize managers
-workspace_manager = WorkspaceManager(Path(db_path) / "workspaces")
-entity_manager = EntityProfileManager(Path(db_path))
+# Initialize managers (use session state for persistence, but reload collection_manager fresh)
+if 'ic_workspace_manager' not in st.session_state:
+    st.session_state.ic_workspace_manager = WorkspaceManager(Path(db_path) / "workspaces")
+    st.session_state.ic_entity_manager = EntityProfileManager(Path(db_path))
+    st.session_state.ic_field_classifier = FieldClassifier()
+    st.session_state.ic_llm = LLMInterface(model="qwen2.5:72b-instruct-q4_K_M")
+    st.session_state.ic_chunker = DocumentChunker(target_chunk_size=4000, max_chunk_size=6000)
+
+workspace_manager = st.session_state.ic_workspace_manager
+entity_manager = st.session_state.ic_entity_manager
+field_classifier = st.session_state.ic_field_classifier
+llm = st.session_state.ic_llm
+chunker = st.session_state.ic_chunker
+
+# Always reload collection_manager to get fresh data (fixes stale collection counts)
 collection_manager = WorkingCollectionManager()
-field_classifier = FieldClassifier()
-llm = LLMInterface(model="qwen2.5:72b-instruct-q4_K_M")
-chunker = DocumentChunker(target_chunk_size=4000, max_chunk_size=6000)
 
 # Question type icons and colors
 QTYPE_ICONS = {
@@ -540,6 +549,42 @@ if st.session_state.ic_classified_fields:
                     with col2:
                         st.markdown(f'<span class="question-status {status_badge_class}">{status_label}</span>', unsafe_allow_html=True)
 
+                    # Per-question settings (only show if not completed/editing)
+                    if current_status == 'pending':
+                        settings_col1, settings_col2 = st.columns(2)
+
+                        with settings_col1:
+                            q_collection = st.selectbox(
+                                "Evidence Source",
+                                options=collection_options,
+                                index=0,  # Default to "Entire Knowledge Base"
+                                key=f"coll_{qtype.value}_{q_idx}",
+                                label_visibility="collapsed"
+                            )
+                            # Store per-question collection choice
+                            if f"q_collection_{field_key}" not in st.session_state:
+                                st.session_state[f"q_collection_{field_key}"] = q_collection
+
+                        with settings_col2:
+                            q_creativity = st.select_slider(
+                                "Creativity",
+                                options=[0, 1, 2],
+                                value=1,
+                                format_func=lambda x: {0: "📊 Factual", 1: "⚖️ Balanced", 2: "💡 Creative"}[x],
+                                key=f"creat_{qtype.value}_{q_idx}",
+                                label_visibility="collapsed"
+                            )
+                            # Store per-question creativity choice
+                            st.session_state[f"q_creativity_{field_key}"] = q_creativity
+                    else:
+                        # Use stored or default values for non-pending questions
+                        q_collection = st.session_state.get(f"q_collection_{field_key}", collection_options[0])
+                        q_creativity = st.session_state.get(f"q_creativity_{field_key}", 1)
+
+                    # Convert selection to collection name (None for entire KB)
+                    q_collection_name = None if q_collection == "-- Entire Knowledge Base --" else q_collection
+                    q_temperature = {0: 0.3, 1: 0.7, 2: 1.0}[q_creativity]
+
                     # Action buttons - simplified: Skip | Edit | Auto-Generate
                     col1, col2, col3 = st.columns(3)
 
@@ -557,12 +602,12 @@ if st.session_state.ic_classified_fields:
                             # Open editing interface, fetch evidence in background
                             question_status[field_key]['status'] = 'editing'
                             st.session_state.ic_question_status = question_status
-                            # Fetch evidence for reference
+                            # Fetch evidence for reference (using per-question collection)
                             try:
                                 evidence_result = evidence_retriever.find_evidence(
                                     question=field.field_text,
                                     question_type=field.question_type or QuestionType.GENERAL,
-                                    collection_name=selected_collection,
+                                    collection_name=q_collection_name,  # Per-question setting
                                     max_results=max_evidence,
                                     use_reranker=use_reranker
                                 )
@@ -577,18 +622,21 @@ if st.session_state.ic_classified_fields:
                                      help="Let AI generate a first draft, then refine"):
                             with st.spinner("Generating response..."):
                                 try:
-                                    # Fetch evidence if not cached
+                                    # Fetch evidence if not cached (using per-question collection)
                                     if field_key not in st.session_state.ic_evidence_cache:
                                         evidence_result = evidence_retriever.find_evidence(
                                             question=field.field_text,
                                             question_type=field.question_type or QuestionType.GENERAL,
-                                            collection_name=selected_collection,
+                                            collection_name=q_collection_name,  # Per-question setting
                                             max_results=max_evidence,
                                             use_reranker=use_reranker
                                         )
                                         st.session_state.ic_evidence_cache[field_key] = evidence_result.evidence
 
                                     evidence = st.session_state.ic_evidence_cache.get(field_key, [])
+
+                                    # Apply per-question creativity/temperature
+                                    llm.temperature = q_temperature
 
                                     # Generate response
                                     response = response_generator.generate(
@@ -659,6 +707,28 @@ if st.session_state.ic_classified_fields:
 
                         # Regeneration with hint
                         with st.expander("🔄 Refine with AI Guidance", expanded=False):
+                            # Settings for regeneration
+                            regen_col1, regen_col2 = st.columns(2)
+                            with regen_col1:
+                                regen_collection = st.selectbox(
+                                    "Evidence Source",
+                                    options=collection_options,
+                                    index=collection_options.index(q_collection) if q_collection in collection_options else 0,
+                                    key=f"regen_coll_{qtype.value}_{q_idx}",
+                                    help="Collection to search for evidence"
+                                )
+                            with regen_col2:
+                                regen_creativity = st.select_slider(
+                                    "Creativity",
+                                    options=[0, 1, 2],
+                                    value=q_creativity,
+                                    format_func=lambda x: {0: "📊 Factual", 1: "⚖️ Balanced", 2: "💡 Creative"}[x],
+                                    key=f"regen_creat_{qtype.value}_{q_idx}"
+                                )
+
+                            regen_collection_name = None if regen_collection == "-- Entire Knowledge Base --" else regen_collection
+                            regen_temperature = {0: 0.3, 1: 0.7, 2: 1.0}[regen_creativity]
+
                             hint_text = st.text_area(
                                 "Refinement Guidance",
                                 placeholder="Enter guidance to steer the regeneration, e.g.:\n• Focus more on project X outcomes\n• Emphasize our ISO certification\n• Include specific metrics from the 2024 report\n• Make it more concise\n• Add more detail about our methodology",
@@ -671,18 +741,16 @@ if st.session_state.ic_classified_fields:
                                         use_container_width=True, type="primary"):
                                 with st.spinner("Regenerating with guidance..."):
                                     try:
-                                        # Get evidence (from cache or fetch new)
-                                        evidence = st.session_state.ic_evidence_cache.get(field_key, [])
-                                        if not evidence:
-                                            evidence_result = evidence_retriever.find_evidence(
-                                                question=field.field_text,
-                                                question_type=field.question_type or QuestionType.GENERAL,
-                                                collection_name=selected_collection,
-                                                max_results=max_evidence,
-                                                use_reranker=use_reranker
-                                            )
-                                            evidence = evidence_result.evidence
-                                            st.session_state.ic_evidence_cache[field_key] = evidence
+                                        # Fetch fresh evidence with selected collection
+                                        evidence_result = evidence_retriever.find_evidence(
+                                            question=field.field_text,
+                                            question_type=field.question_type or QuestionType.GENERAL,
+                                            collection_name=regen_collection_name,
+                                            max_results=max_evidence,
+                                            use_reranker=use_reranker
+                                        )
+                                        evidence = evidence_result.evidence
+                                        st.session_state.ic_evidence_cache[field_key] = evidence
 
                                         # Build DraftResponse from stored data for regeneration
                                         previous_response = DraftResponse(
@@ -700,6 +768,9 @@ if st.session_state.ic_classified_fields:
                                                 'word_limit': field.word_limit
                                             }
                                         )
+
+                                        # Apply regeneration creativity/temperature
+                                        llm.temperature = regen_temperature
 
                                         # Regenerate with hint
                                         guidance = hint_text if hint_text else "Please improve the response with more specific details from the evidence."
@@ -755,4 +826,4 @@ if st.session_state.ic_classified_fields:
 
 # Footer
 st.divider()
-st.caption("v2.5.0 | Creativity slider + simplified workflow: Skip | Edit | Auto-Generate")
+st.caption("v2.6.0 | Per-question evidence source & creativity settings")
