@@ -1,6 +1,6 @@
 """
 Proposal Intelligent Completion
-Version: 2.4.0
+Version: 2.5.0
 Date: 2026-01-20
 
 Purpose: Interactive two-tier intelligent proposal completion workflow.
@@ -250,27 +250,46 @@ with st.sidebar:
 
     st.divider()
 
-    # Processing options
-    st.subheader("Options")
-    use_reranker = st.checkbox(
-        "Use Neural Reranker",
-        value=True,
-        help="Use Qwen3-VL reranker for better evidence precision (slower)"
+    # Generation settings
+    st.subheader("Generation Settings")
+
+    creativity_level = st.select_slider(
+        "Creativity",
+        options=[0, 1, 2],
+        value=1,
+        format_func=lambda x: {0: "📊 Factual", 1: "⚖️ Balanced", 2: "💡 Creative"}[x],
+        help="Controls how creative vs factual the AI responses are"
     )
 
-    max_evidence = st.slider(
-        "Max Evidence per Question",
-        min_value=2,
-        max_value=10,
-        value=5,
-        help="Number of evidence passages to retrieve"
-    )
+    # Map creativity to temperature
+    temperature_map = {0: 0.3, 1: 0.7, 2: 1.0}
+    generation_temperature = temperature_map[creativity_level]
 
-    use_strict_filter = st.checkbox(
-        "Strict Question Filtering",
-        value=True,
-        help="Only extract questions matching substantive patterns (reduces noise)"
-    )
+    st.caption(f"Temperature: {generation_temperature}")
+
+    st.divider()
+
+    # Advanced options in expander
+    with st.expander("⚙️ Advanced Options", expanded=False):
+        max_evidence = st.slider(
+            "Max Evidence per Question",
+            min_value=2,
+            max_value=10,
+            value=5,
+            help="Number of evidence passages to retrieve"
+        )
+
+        use_reranker = st.checkbox(
+            "Use Neural Reranker",
+            value=True,
+            help="Use Qwen3-VL reranker for better evidence precision (slower)"
+        )
+
+        use_strict_filter = st.checkbox(
+            "Strict Question Filtering",
+            value=True,
+            help="Only extract questions matching substantive patterns (reduces noise)"
+        )
 
 # ============================
 # MAIN CONTENT
@@ -477,6 +496,7 @@ if st.session_state.ic_classified_fields:
 
         # Initialize evidence retriever and response generator
         evidence_retriever = EvidenceRetriever(db_path)
+        llm.temperature = generation_temperature  # Apply creativity setting
         response_generator = ResponseGenerator(llm, entity_manager)
 
         # Display questions grouped by type
@@ -735,4 +755,4 @@ if st.session_state.ic_classified_fields:
 
 # Footer
 st.divider()
-st.caption("v2.4.0 | Simplified workflow: Skip | Edit | Auto-Generate")
+st.caption("v2.5.0 | Creativity slider + simplified workflow: Skip | Edit | Auto-Generate")
