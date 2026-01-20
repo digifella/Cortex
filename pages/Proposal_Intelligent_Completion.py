@@ -1,6 +1,6 @@
 """
 Proposal Intelligent Completion
-Version: 2.2.0
+Version: 2.3.0
 Date: 2026-01-20
 
 Purpose: Interactive two-tier intelligent proposal completion workflow.
@@ -605,31 +605,54 @@ if st.session_state.ic_classified_fields:
 
                     # Show/edit response if completed or manual
                     if current_status in ['completed', 'manual']:
+                        # Header row with label and export button
+                        resp_col1, resp_col2 = st.columns([3, 1])
+                        with resp_col1:
+                            st.markdown("**Response** *(edit directly below, or export to edit externally)*")
+                        with resp_col2:
+                            # Per-field download button
+                            field_export = f"# {field.field_text}\n\n{status_data.get('response', '')}"
+                            st.download_button(
+                                "⬇️ Export",
+                                data=field_export,
+                                file_name=f"response_{q_idx + 1}_{qtype.value}.txt",
+                                mime="text/plain",
+                                key=f"export_{qtype.value}_{q_idx}",
+                                use_container_width=True
+                            )
+
+                        # Editable response text area
                         response_text = st.text_area(
                             "Response",
                             value=status_data.get('response', ''),
-                            height=150,
+                            height=200,
                             key=f"response_{qtype.value}_{q_idx}",
-                            label_visibility="collapsed"
+                            label_visibility="collapsed",
+                            help="Edit directly here, or export, edit externally, and paste back"
                         )
 
-                        # Update if changed
+                        # Update if changed (handles paste-back workflow)
                         if response_text != status_data.get('response', ''):
                             question_status[field_key]['response'] = response_text
                             st.session_state.ic_question_status = question_status
 
-                        # Regeneration with hint
-                        st.markdown("**Refine Response:**")
-                        hint_text = st.text_area(
-                            "Refinement Guidance",
-                            placeholder="Enter guidance to steer the regeneration, e.g.:\n• Focus more on project X outcomes\n• Emphasize our ISO certification\n• Include specific metrics from the 2024 report\n• Make it more concise\n• Add more detail about our methodology",
-                            key=f"hint_{qtype.value}_{q_idx}",
-                            height=100,
-                            help="Add guidance to steer the regeneration. Leave blank for general improvement."
-                        )
+                        # Word count indicator
+                        word_count = len(response_text.split()) if response_text else 0
+                        limit_info = f" / {field.word_limit} limit" if field.word_limit else ""
+                        st.caption(f"📝 {word_count} words{limit_info}")
 
-                        if st.button("🔄 Regenerate with Guidance", key=f"regen_{qtype.value}_{q_idx}",
-                                    use_container_width=True, type="secondary"):
+                        # Regeneration with hint
+                        with st.expander("🔄 Refine with AI Guidance", expanded=False):
+                            hint_text = st.text_area(
+                                "Refinement Guidance",
+                                placeholder="Enter guidance to steer the regeneration, e.g.:\n• Focus more on project X outcomes\n• Emphasize our ISO certification\n• Include specific metrics from the 2024 report\n• Make it more concise\n• Add more detail about our methodology",
+                                key=f"hint_{qtype.value}_{q_idx}",
+                                height=100,
+                                help="Add guidance to steer the regeneration. Leave blank for general improvement."
+                            )
+
+                            if st.button("🔄 Regenerate with Guidance", key=f"regen_{qtype.value}_{q_idx}",
+                                        use_container_width=True, type="primary"):
                                 with st.spinner("Regenerating with guidance..."):
                                     try:
                                         # Get evidence (from cache or fetch new)
@@ -716,4 +739,4 @@ if st.session_state.ic_classified_fields:
 
 # Footer
 st.divider()
-st.caption("v2.2.0 | Interactive human-in-the-loop workflow with evidence-backed responses and regeneration hints")
+st.caption("v2.3.0 | Edit responses directly, export per-field, refine with AI guidance")
