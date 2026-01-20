@@ -354,77 +354,77 @@ if not fields_already_extracted:
 
     with col2:
         if st.button("Extract Fields", type="primary", use_container_width=True):
-        with st.spinner("Extracting and classifying fields..."):
-            # Extract fields using document chunker to find completable sections
-            chunks = chunker.create_chunks(document_text)
-            completable_chunks = chunker.filter_completable_chunks(chunks)
+            with st.spinner("Extracting and classifying fields..."):
+                # Extract fields using document chunker to find completable sections
+                chunks = chunker.create_chunks(document_text)
+                completable_chunks = chunker.filter_completable_chunks(chunks)
 
-            # For each chunk, extract field-like content and classify
-            classified_fields = []
+                # For each chunk, extract field-like content and classify
+                classified_fields = []
 
-            for chunk in completable_chunks:
-                # Patterns that indicate fillable fields
-                field_patterns = [
-                    # Label: [blank] patterns
-                    r'^([A-Za-z][A-Za-z\s\(\)\']+):\s*$',
-                    # Question patterns
-                    r'^([A-Z][^?]+\?)\s*$',
-                    # "Please provide" patterns (with substance)
-                    r'((?:Please\s+)?(?:provide|describe|detail|outline|explain)\s+[^.]{20,}\.)',
-                    # "How will you" patterns
-                    r'(How\s+(?:will|would|do|can)\s+you\s+[^?]+\?)',
-                    # Field with placeholder
-                    r'^([A-Za-z][A-Za-z\s\']+):\s*[\[\<\_]',
-                ]
+                for chunk in completable_chunks:
+                    # Patterns that indicate fillable fields
+                    field_patterns = [
+                        # Label: [blank] patterns
+                        r'^([A-Za-z][A-Za-z\s\(\)\']+):\s*$',
+                        # Question patterns
+                        r'^([A-Z][^?]+\?)\s*$',
+                        # "Please provide" patterns (with substance)
+                        r'((?:Please\s+)?(?:provide|describe|detail|outline|explain)\s+[^.]{20,}\.)',
+                        # "How will you" patterns
+                        r'(How\s+(?:will|would|do|can)\s+you\s+[^?]+\?)',
+                        # Field with placeholder
+                        r'^([A-Za-z][A-Za-z\s\']+):\s*[\[\<\_]',
+                    ]
 
-                lines = chunk.content.split('\n')
-                for line in lines:
-                    line = line.strip()
-                    if not line or len(line) < 5:
-                        continue
+                    lines = chunk.content.split('\n')
+                    for line in lines:
+                        line = line.strip()
+                        if not line or len(line) < 5:
+                            continue
 
-                    for pattern in field_patterns:
-                        match = re.match(pattern, line, re.IGNORECASE)
-                        if match:
-                            field_text = match.group(1).strip()
-                            if len(field_text) > 5:
-                                classified = field_classifier.classify(
-                                    field_text,
-                                    context=chunk.title,
-                                    strict_filter=use_strict_filter
-                                )
-                                # Avoid duplicates
-                                if not any(cf.field_text == classified.field_text for cf in classified_fields):
-                                    classified_fields.append(classified)
-                            break
+                        for pattern in field_patterns:
+                            match = re.match(pattern, line, re.IGNORECASE)
+                            if match:
+                                field_text = match.group(1).strip()
+                                if len(field_text) > 5:
+                                    classified = field_classifier.classify(
+                                        field_text,
+                                        context=chunk.title,
+                                        strict_filter=use_strict_filter
+                                    )
+                                    # Avoid duplicates
+                                    if not any(cf.field_text == classified.field_text for cf in classified_fields):
+                                        classified_fields.append(classified)
+                                break
 
-            # Separate by tier
-            auto_fields = [f for f in classified_fields if f.tier == FieldTier.AUTO_COMPLETE]
-            intel_fields = [f for f in classified_fields if f.tier == FieldTier.INTELLIGENT]
+                # Separate by tier
+                auto_fields = [f for f in classified_fields if f.tier == FieldTier.AUTO_COMPLETE]
+                intel_fields = [f for f in classified_fields if f.tier == FieldTier.INTELLIGENT]
 
-            # Group intelligent fields by question type (use string keys for session state compatibility)
-            questions_by_type = defaultdict(list)
-            for field in intel_fields:
-                qtype = field.question_type or QuestionType.GENERAL
-                questions_by_type[qtype.value].append(field)  # Use .value for string key
+                # Group intelligent fields by question type (use string keys for session state compatibility)
+                questions_by_type = defaultdict(list)
+                for field in intel_fields:
+                    qtype = field.question_type or QuestionType.GENERAL
+                    questions_by_type[qtype.value].append(field)  # Use .value for string key
 
-            # Initialize status for each question
-            question_status = {}
-            for field in intel_fields:
-                question_status[field.field_text] = {
-                    'status': 'pending',
-                    'response': '',
-                    'evidence': []
-                }
+                # Initialize status for each question
+                question_status = {}
+                for field in intel_fields:
+                    question_status[field.field_text] = {
+                        'status': 'pending',
+                        'response': '',
+                        'evidence': []
+                    }
 
-            st.session_state.ic_classified_fields = classified_fields
-            st.session_state.ic_auto_complete_fields = auto_fields
-            st.session_state.ic_intelligent_fields = intel_fields
-            st.session_state.ic_questions_by_type = dict(questions_by_type)
-            st.session_state.ic_question_status = question_status
-            st.session_state.ic_evidence_cache = {}
+                st.session_state.ic_classified_fields = classified_fields
+                st.session_state.ic_auto_complete_fields = auto_fields
+                st.session_state.ic_intelligent_fields = intel_fields
+                st.session_state.ic_questions_by_type = dict(questions_by_type)
+                st.session_state.ic_question_status = question_status
+                st.session_state.ic_evidence_cache = {}
 
-            st.rerun()
+                st.rerun()
 
 else:
     # Fields already extracted - show summary and option to re-extract
