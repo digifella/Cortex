@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "5.1.0"
+CORTEX_VERSION = "5.2.0"
 
 # Version details
 VERSION_INFO = {
     "major": 5,
-    "minor": 1,
+    "minor": 2,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -24,36 +24,37 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-01-17",
-    "release_name": "Qwen3-VL Multimodal Intelligence",
-    "description": "Major retrieval upgrade with Qwen3-VL multimodal embeddings and neural reranking. Enables cross-modal search (text queries finding images/charts), visual document search, and two-stage retrieval with ~95% precision neural reranking.",
+    "release_date": "2026-01-20",
+    "release_name": "Intelligent Proposal Completion Overhaul",
+    "description": "Complete redesign of Proposal Intelligent Completion with simplified UX, per-question settings, human-in-the-loop regeneration, and significant performance improvements.",
     "breaking_changes": [],
     "new_features": [
-        "Qwen3-VL Multimodal Embeddings: Unified vector space for text, images, and video",
-        "Neural Reranking: Two-stage retrieval (fast recall + precision reranking) using Qwen3-VL-Reranker",
-        "Cross-Modal Search: Use text queries to find relevant images, charts, and diagrams",
-        "Matryoshka Representation Learning (MRL): Dimension reduction for storage efficiency",
-        "Database Embedding Inspector: Analyze stored embeddings and check model compatibility",
-        "Auto-selection: Automatically selects optimal Qwen3-VL model size based on VRAM",
-        "LlamaIndex Integration: Drop-in Qwen3VLEmbedding and Qwen3VLReranker adapters"
+        "Simplified 3-button workflow: Skip | Edit | Auto-Generate",
+        "Per-question Evidence Source: Each question can search a different collection",
+        "Per-question Creativity slider: Set Factual/Balanced/Creative per question",
+        "Human-in-the-loop Regeneration: Refine responses with guidance hints",
+        "Per-field Export: Download individual responses for external editing",
+        "Entire Knowledge Base search option for evidence retrieval",
+        "Simplified Proposal Workspace with clear navigation"
     ],
     "improvements": [
-        "Switchable embedding backend: Seamlessly switch between BGE/NV-Embed and Qwen3-VL",
-        "Three-stage retrieval pipeline: Vector search → Graph enhancement → Neural reranking",
-        "UI status displays: Qwen3-VL status shown in Ingest and Search sidebars",
-        "Compatibility matrix: Shows which embedding models work with your database",
-        "Backward compatible: Existing databases continue working with default settings",
-        "Reranker works with any embedding: No re-ingest needed to use neural reranking"
+        "Ollama status check cached (60 seconds) - faster UI",
+        "ConfigManager cached - eliminates file reads on interactions",
+        "Recovery analysis cached (120 seconds) - faster Knowledge Ingest page",
+        "Collection manager reloads fresh - fixes stale collection counts",
+        "Response text area enlarged with word count indicator",
+        "Session state persists during page navigation"
     ],
     "bug_fixes": [
-        "Fixed embedding dimension validation for cross-model compatibility checking"
+        "Fixed '0 documents in collection' bug - stale cache issue",
+        "Fixed Generate button infinite loop - enum serialization fix",
+        "Fixed GraphQueryEngine initialization error",
+        "Fixed st.rerun() causing premature page restart"
     ],
     "performance": [
-        "Neural reranking improves search precision from ~85% to ~95%+",
-        "Qwen3-VL-2B: 5GB VRAM, 2048 dimensions - efficient multimodal",
-        "Qwen3-VL-8B: 16GB VRAM, 4096 dimensions - premium quality",
-        "Flash Attention 2 support for memory optimization",
-        "Batch processing with GPU optimization for large document sets"
+        "Knowledge Ingest page now responds instantly to button clicks",
+        "Removed 3 expensive operations from every page interaction",
+        "Cached network calls, file reads, and database analysis"
     ]
 }
 

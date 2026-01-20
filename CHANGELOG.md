@@ -6,7 +6,52 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## v5.2.0 - 2026-01-20
 
+### Intelligent Proposal Completion Overhaul
+
+Complete redesign of the Proposal Intelligent Completion page with simplified UX, per-question settings, and human-in-the-loop regeneration. Plus significant performance improvements across the application.
+
+### ✨ New Features
+
+#### Proposal Intelligent Completion (v2.6.0)
+- **Simplified 3-button workflow**: Skip | Edit | Auto-Generate (removed confusing Auto-fill and Manual buttons)
+- **Per-question Evidence Source**: Each question can search a different collection or the entire knowledge base
+- **Per-question Creativity slider**: Set Factual/Balanced/Creative per question (controls LLM temperature)
+- **Human-in-the-loop Regeneration**: Refine responses with guidance hints to steer the LLM
+- **Per-field Export**: Download individual responses for external editing
+- **Word count indicator**: Shows current word count with limit display
+- **Entire Knowledge Base option**: Search all documents, not just collections
+
+#### Proposal Workspace (v2.0.0)
+- Simplified workspace creation flow
+- Clear navigation to Chunk Review and Intelligent Completion
+- Removed confusing auto-markup workflow
+
+### 🚀 Improvements
+
+#### Performance Optimizations
+- **Ollama status check cached** (60 seconds) - eliminates network calls on every interaction
+- **ConfigManager.get_config() cached** - eliminates file reads on every button click
+- **Recovery analysis cached** (120 seconds) - expensive database analysis no longer runs on every page load
+- **Collection manager reloads fresh** - fixes stale collection counts after Knowledge Ingest
+
+#### UX Improvements
+- Regeneration expander with dedicated collection and creativity settings
+- Response text area enlarged to 200px height
+- Clear labeling showing responses are editable
+- Session state persists during navigation between pages
+
+### 🔧 Bug Fixes
+- Fixed "0 documents in collection" bug - collection manager was caching stale data
+- Fixed Generate button infinite loop - session state enum key serialization issue
+- Fixed GraphQueryEngine initialization error - replaced with direct ChromaDB queries
+- Fixed st.rerun() causing page restart before operations complete
+
+### 📋 Code Cleanup
+- Archived old proposal modules (Proposal_Chunk_Review.py, old Proposal_Workspace.py)
+- Updated main menu to reflect new proposal workflow
+- Removed references to old "Proposal Step 1/Step 2" workflow
 
 ## v5.1.0 - 2026-01-17
 
