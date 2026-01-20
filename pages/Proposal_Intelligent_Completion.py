@@ -1,7 +1,7 @@
 """
 Proposal Intelligent Completion
-Version: 2.6.0
-Date: 2026-01-20
+Version: 2.7.0
+Date: 2026-01-21
 
 Purpose: Interactive two-tier intelligent proposal completion workflow.
 - Tier 1: Auto-complete simple fields from entity profile
@@ -333,19 +333,27 @@ except Exception as e:
 # STEP 1: Field Extraction & Classification
 # ============================
 
-st.subheader("Step 1: Extract & Classify Fields")
+# Check if fields have already been extracted for this workspace
+fields_already_extracted = (
+    st.session_state.ic_classified_fields is not None and
+    len(st.session_state.ic_classified_fields) > 0
+)
 
-col1, col2 = st.columns([3, 1])
+# Only show Step 1 if fields haven't been extracted yet
+if not fields_already_extracted:
+    st.subheader("Step 1: Extract & Classify Fields")
 
-with col1:
-    st.info("""
-    Scan document for fillable fields. Questions grouped by type for organized review.
-    - **Auto-Complete**: Simple fields filled from entity profile
-    - **Substantive Questions**: Review interactively with evidence support
-    """)
+    col1, col2 = st.columns([3, 1])
 
-with col2:
-    if st.button("Extract Fields", type="primary", use_container_width=True):
+    with col1:
+        st.info("""
+        Scan document for fillable fields. Questions grouped by type for organized review.
+        - **Auto-Complete**: Simple fields filled from entity profile
+        - **Substantive Questions**: Review interactively with evidence support
+        """)
+
+    with col2:
+        if st.button("Extract Fields", type="primary", use_container_width=True):
         with st.spinner("Extracting and classifying fields..."):
             # Extract fields using document chunker to find completable sections
             chunks = chunker.create_chunks(document_text)
@@ -416,6 +424,25 @@ with col2:
             st.session_state.ic_question_status = question_status
             st.session_state.ic_evidence_cache = {}
 
+            st.rerun()
+
+else:
+    # Fields already extracted - show summary and option to re-extract
+    with st.expander("📋 Field Extraction (completed)", expanded=False):
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Fields", len(st.session_state.ic_classified_fields))
+        col2.metric("Auto-Complete", len(st.session_state.ic_auto_complete_fields))
+        col3.metric("Substantive", len(st.session_state.ic_intelligent_fields))
+        col4.metric("Question Types", len(st.session_state.ic_questions_by_type))
+
+        if st.button("🔄 Re-extract Fields", help="Start over with fresh field extraction"):
+            # Clear all extraction state
+            st.session_state.ic_classified_fields = None
+            st.session_state.ic_auto_complete_fields = []
+            st.session_state.ic_intelligent_fields = []
+            st.session_state.ic_questions_by_type = {}
+            st.session_state.ic_question_status = {}
+            st.session_state.ic_evidence_cache = {}
             st.rerun()
 
 # ============================
@@ -826,4 +853,4 @@ if st.session_state.ic_classified_fields:
 
 # Footer
 st.divider()
-st.caption("v2.6.0 | Per-question evidence source & creativity settings")
+st.caption("v2.7.0 | Smart state detection - skip to editing if fields already extracted")
