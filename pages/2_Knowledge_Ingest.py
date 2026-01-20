@@ -461,8 +461,11 @@ def show_collection_migration_healthcheck():
         pass
 
 def initialize_state(force_reset: bool = False):
-    config_manager = ConfigManager()
-    config = config_manager.get_config()
+    # Cache config to avoid file reads on every interaction
+    if "cached_config" not in st.session_state or force_reset:
+        config_manager = ConfigManager()
+        st.session_state.cached_config = config_manager.get_config()
+    config = st.session_state.cached_config
 
     if force_reset:
         keys_to_reset = list(st.session_state.keys())
@@ -3601,19 +3604,42 @@ def render_document_type_management():
         st.rerun()
 
 def check_recovery_needed():
-    """Check if recovery is actually needed and return issues found."""
+    """Check if recovery is actually needed and return issues found.
+
+    Results are cached for 120 seconds to avoid expensive database analysis on every interaction.
+    """
+    # Check cache first
+    cache_key = "recovery_check_cache"
+    cache_time_key = "recovery_check_cache_time"
+    cache_ttl_seconds = 120  # Only re-check every 2 minutes
+
+    current_time = time.time()
+    cached_time = st.session_state.get(cache_time_key, 0)
+
+    if current_time - cached_time < cache_ttl_seconds and cache_key in st.session_state:
+        return st.session_state[cache_key]
+
     try:
-        config_manager = ConfigManager()
-        config = config_manager.get_config()
+        # Use cached config if available
+        config = st.session_state.get("cached_config")
+        if not config:
+            config_manager = ConfigManager()
+            config = config_manager.get_config()
         db_path = config.get("ai_database_path", "")
-        
+
         if not db_path:
-            return False, []
-        
+            result = (False, [])
+            st.session_state[cache_key] = result
+            st.session_state[cache_time_key] = current_time
+            return result
+
         # Check if we recently dismissed recovery warnings
         dismiss_key = f"recovery_dismissed_{hash(db_path)}"
         if st.session_state.get(dismiss_key, False):
-            return False, []
+            result = (False, [])
+            st.session_state[cache_key] = result
+            st.session_state[cache_time_key] = current_time
+            return result
         
         recovery_manager = IngestionRecoveryManager(db_path)
         analysis = recovery_manager.analyze_ingestion_state()
@@ -3642,13 +3668,22 @@ def check_recovery_needed():
         # Don't show warnings if there are only minor issues and ChromaDB has documents
         chromadb_count = analysis.get("statistics", {}).get("chromadb_docs_count", 0)
         if len(issues) <= 1 and chromadb_count > 0 and orphaned_count < 50:
-            return False, []
-        
-        return len(issues) > 0, issues
-        
+            result = (False, [])
+            st.session_state[cache_key] = result
+            st.session_state[cache_time_key] = current_time
+            return result
+
+        result = (len(issues) > 0, issues)
+        st.session_state[cache_key] = result
+        st.session_state[cache_time_key] = current_time
+        return result
+
     except Exception as e:
         logger.error(f"Recovery check failed: {e}")
-        return False, []
+        result = (False, [])
+        st.session_state[cache_key] = result
+        st.session_state[cache_time_key] = current_time
+        return result
 
 def render_recovery_section():
     """Render the ingestion recovery and repair section only when needed."""
@@ -3718,11 +3753,27 @@ st.caption(f"Manage the knowledge base by ingesting new documents. App Version: 
 # Add help system
 help_system.show_help_menu()
 
-# Check and display Ollama status prominently
+# Check and display Ollama status (cached for 60 seconds to avoid slow UI)
 try:
     from cortex_engine.utils.ollama_utils import check_ollama_service, get_ollama_status_message, get_ollama_instructions
 
-    is_running, error_msg, resolved_url = check_ollama_service()
+    # Cache Ollama status check to avoid network calls on every interaction
+    ollama_cache_key = "ollama_status_cache"
+    ollama_cache_time_key = "ollama_status_cache_time"
+    cache_ttl_seconds = 60  # Re-check every 60 seconds
+
+    current_time = time.time()
+    cached_time = st.session_state.get(ollama_cache_time_key, 0)
+
+    if current_time - cached_time > cache_ttl_seconds:
+        # Cache expired or first check - do the actual network call
+        is_running, error_msg, resolved_url = check_ollama_service()
+        st.session_state[ollama_cache_key] = (is_running, error_msg, resolved_url)
+        st.session_state[ollama_cache_time_key] = current_time
+    else:
+        # Use cached result
+        is_running, error_msg, resolved_url = st.session_state.get(ollama_cache_key, (False, "Not checked", None))
+
     if not is_running:
         st.warning(f"⚠️ {get_ollama_status_message(is_running, error_msg)}")
         with st.expander("ℹ️ **Important: Limited AI Functionality**", expanded=False):
