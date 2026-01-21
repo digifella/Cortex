@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v5.1.0
+# Version: v5.2.0
 # Date: 2026-01-17
 # Purpose: GUI for knowledge base ingestion.
 #          - FEATURE (v5.1.0): Added Qwen3-VL multimodal embedding status and

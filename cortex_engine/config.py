@@ -51,31 +51,89 @@ DOCKER_MODEL_REGISTRY = os.getenv("DOCKER_MODEL_REGISTRY", "docker.io/ai")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 # --- Core Local Models (Required) ---
-# Intelligent Embedding Model Selection (NVIDIA Nemotron when GPU available)
+# UNIFIED ADAPTIVE EMBEDDING SELECTION
+# =====================================
+# Automatically selects optimal embedding approach based on hardware:
+# - Qwen3-VL (multimodal) for GPUs with 6GB+ VRAM + qwen-vl-utils installed
+# - NV-Embed-v2 (GPU-optimized) for NVIDIA GPUs with 2-6GB VRAM
+# - BGE-base (CPU-friendly) for systems without GPU
+#
 # Environment variable CORTEX_EMBED_MODEL can override auto-detection
-# NOTE: Use get_embed_model() function for lazy-loaded value to avoid slow startup
-_EMBED_MODEL_CACHE = None
+# Environment variable QWEN3_VL_ENABLED can force Qwen3-VL on/off
+
+_EMBED_STRATEGY_CACHE = None
+
+def get_embedding_strategy() -> dict:
+    """
+    Get the optimal embedding strategy for current hardware (lazy-loaded).
+
+    Returns a dict with full strategy details including model, dimensions,
+    multimodal support, and reasoning.
+    """
+    global _EMBED_STRATEGY_CACHE
+    if _EMBED_STRATEGY_CACHE is not None:
+        return _EMBED_STRATEGY_CACHE
+
+    # Check for Qwen3-VL manual override
+    qwen3vl_override = os.getenv("QWEN3_VL_ENABLED", "").lower()
+
+    try:
+        from cortex_engine.utils.smart_model_selector import get_adaptive_embedding_strategy
+
+        strategy = get_adaptive_embedding_strategy()
+
+        # Apply Qwen3-VL override if explicitly set
+        if qwen3vl_override == "true":
+            # Force Qwen3-VL even if auto-selection chose something else
+            from cortex_engine.utils.smart_model_selector import get_optimal_qwen3_vl_config
+            qwen_config = get_optimal_qwen3_vl_config()
+            if qwen_config["embedding_model"]:
+                strategy = {
+                    "approach": "qwen3vl",
+                    "model": qwen_config["embedding_model"],
+                    "dimensions": qwen_config["embedding_dim"],
+                    "multimodal": True,
+                    "reranker": qwen_config["reranker_model"],
+                    "vram_required_gb": 5.0 if "2B" in qwen_config["embedding_model"] else 16.0,
+                    "reason": "Manual override via QWEN3_VL_ENABLED=true",
+                    "config": qwen_config
+                }
+        elif qwen3vl_override == "false":
+            # Force disable Qwen3-VL even if auto-selection chose it
+            if strategy["approach"] == "qwen3vl":
+                from cortex_engine.utils.smart_model_selector import detect_nvidia_gpu
+                has_nvidia, _ = detect_nvidia_gpu()
+                strategy = {
+                    "approach": "nv-embed" if has_nvidia else "bge",
+                    "model": "nvidia/NV-Embed-v2" if has_nvidia else "BAAI/bge-base-en-v1.5",
+                    "dimensions": 4096 if has_nvidia else 768,
+                    "multimodal": False,
+                    "reranker": None,
+                    "vram_required_gb": 1.2 if has_nvidia else 0,
+                    "reason": "Manual override via QWEN3_VL_ENABLED=false",
+                    "config": {}
+                }
+
+        _EMBED_STRATEGY_CACHE = strategy
+    except Exception as e:
+        # Fallback to BGE on any error
+        _EMBED_STRATEGY_CACHE = {
+            "approach": "bge",
+            "model": "BAAI/bge-base-en-v1.5",
+            "dimensions": 768,
+            "multimodal": False,
+            "reranker": None,
+            "vram_required_gb": 0,
+            "reason": f"Error in auto-detection: {e}",
+            "config": {}
+        }
+
+    return _EMBED_STRATEGY_CACHE
 
 def get_embed_model() -> str:
-    """Get the optimal embedding model (lazy-loaded to avoid slow startup)."""
-    global _EMBED_MODEL_CACHE
-    if _EMBED_MODEL_CACHE is not None:
-        return _EMBED_MODEL_CACHE
-
-    # Check environment override first
-    env_model = os.getenv("CORTEX_EMBED_MODEL")
-    if env_model:
-        _EMBED_MODEL_CACHE = env_model
-        return _EMBED_MODEL_CACHE
-
-    # Auto-detect optimal model (this is slow - involves GPU detection)
-    try:
-        from cortex_engine.utils.smart_model_selector import get_optimal_embedding_model
-        _EMBED_MODEL_CACHE = get_optimal_embedding_model()
-    except Exception:
-        _EMBED_MODEL_CACHE = "BAAI/bge-base-en-v1.5"  # Fallback to standard BGE model
-
-    return _EMBED_MODEL_CACHE
+    """Get the optimal embedding model identifier (lazy-loaded)."""
+    strategy = get_embedding_strategy()
+    return strategy["model"]
 
 # For backwards compatibility - but prefer get_embed_model() for lazy loading
 EMBED_MODEL = os.getenv("CORTEX_EMBED_MODEL", "BAAI/bge-base-en-v1.5")  # Fast default, actual detection is lazy
@@ -111,7 +169,23 @@ SCHEMA_EXTRACTION_ENABLED = os.getenv("SCHEMA_EXTRACTION_ENABLED", "false").lowe
 # --- Qwen3-VL Multimodal Embedding Configuration ---
 # Unified multimodal embeddings for text, images, and video in same vector space
 # Enables cross-modal search (e.g., text query finding relevant images/charts)
-QWEN3_VL_ENABLED = os.getenv("QWEN3_VL_ENABLED", "false").lower() == "true"  # Enable Qwen3-VL embedding
+# NOW AUTO-DETECTED: Will use Qwen3-VL if 6GB+ VRAM available and qwen-vl-utils installed
+# Set QWEN3_VL_ENABLED=true to force enable, or =false to force disable
+def _should_use_qwen3vl() -> bool:
+    """Auto-detect if Qwen3-VL should be used based on hardware and dependencies."""
+    override = os.getenv("QWEN3_VL_ENABLED", "").lower()
+    if override == "true":
+        return True
+    elif override == "false":
+        return False
+    # Auto-detect based on embedding strategy
+    try:
+        strategy = get_embedding_strategy()
+        return strategy["approach"] == "qwen3vl"
+    except Exception:
+        return False
+
+QWEN3_VL_ENABLED = _should_use_qwen3vl()
 
 # Model size selection: "auto", "2B", "8B"
 # - auto: Selects based on available VRAM (8B if >=20GB free, else 2B)

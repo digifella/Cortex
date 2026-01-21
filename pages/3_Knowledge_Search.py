@@ -1,5 +1,5 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v5.5.0
+# Version: v5.2.0
 # Date: 2026-01-19
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
 #          - FEATURE (v5.5.0): Added optional tag input when saving to collections. Tags apply
