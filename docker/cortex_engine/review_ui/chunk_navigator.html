@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Chunk Navigator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --color-base: #FAF9F7;
+            --color-surface: #FFFFFF;
+            --color-text: #1A1A1A;
+            --color-text-muted: #6B6B6B;
+            --color-border: #E5E3DF;
+            --color-accent: #C85D3C;
+            --color-accent-hover: #A94A2E;
+            --color-success: #2D5F4F;
+            --color-pending: #B89968;
+            --color-highlight: #FFF4E6;
+
+            --font-display: 'Crimson Pro', serif;
+            --font-body: 'DM Sans', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+
+            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
+            --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+            --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-body);
+            background: var(--color-base);
+            color: var(--color-text);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Header */
+        .header {
+            margin-bottom: 3rem;
+            border-bottom: 2px solid var(--color-border);
+            padding-bottom: 2rem;
+        }
+
+        .header-title {
+            font-family: var(--font-display);
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--color-text);
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.02em;
+        }
+
+        .header-subtitle {
+            font-size: 1rem;
+            color: var(--color-text-muted);
+            font-weight: 400;
+        }
+
+        /* Progress Section */
+        .progress-section {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .progress-label {
+            font-family: var(--font-display);
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .progress-stats {
+            font-size: 0.875rem;
+            color: var(--color-text-muted);
+        }
+
+        .progress-stats strong {
+            color: var(--color-accent);
+            font-weight: 600;
+        }
+
+        /* Progress Bar */
+        .progress-bar-container {
+            height: 8px;
+            background: var(--color-border);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 1.5rem;
+            position: relative;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--color-success) 0%, var(--color-accent) 100%);
+            border-radius: 4px;
+            transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+        }
+
+        .progress-bar-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 40%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3));
+            animation: shimmer 2s infinite;
+        }
+
+        @keyframes shimmer {
+            0%, 100% { opacity: 0; }
+            50% { opacity: 1; }
+        }
+
+        /* Chunk Grid */
+        .chunk-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+            gap: 0.5rem;
+        }
+
+        .chunk-card {
+            aspect-ratio: 1;
+            border: 2px solid var(--color-border);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background: var(--color-surface);
+            position: relative;
+        }
+
+        .chunk-card:hover {
+            border-color: var(--color-accent);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .chunk-card.reviewed {
+            background: var(--color-success);
+            border-color: var(--color-success);
+            color: white;
+        }
+
+        .chunk-card.current {
+            border-color: var(--color-accent);
+            border-width: 3px;
+            box-shadow: 0 0 0 4px rgba(200, 93, 60, 0.1);
+        }
+
+        .chunk-card.pending {
+            border-color: var(--color-pending);
+            border-style: dashed;
+        }
+
+        .chunk-number {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .chunk-status {
+            font-size: 0.625rem;
+            margin-top: 0.25rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Main Content Area */
+        .content-area {
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+
+        /* Document View */
+        .document-view {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: 12px;
+            padding: 3rem;
+            box-shadow: var(--shadow-sm);
+            min-height: 600px;
+        }
+
+        .chunk-header {
+            border-bottom: 2px solid var(--color-border);
+            padding-bottom: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .chunk-title {
+            font-family: var(--font-display);
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .chunk-meta {
+            font-size: 0.875rem;
+            color: var(--color-text-muted);
+        }
+
+        .document-content {
+            font-family: var(--font-body);
+            font-size: 1rem;
+            line-height: 1.8;
+            color: var(--color-text);
+        }
+
+        .document-content p {
+            margin-bottom: 1.5rem;
+        }
+
+        .mention-highlight {
+            background: var(--color-highlight);
+            border-bottom: 2px solid var(--color-accent);
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-family: var(--font-mono);
+            font-size: 0.9em;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .mention-highlight:hover {
+            background: var(--color-accent);
+            color: white;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .sidebar-card {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .sidebar-card-title {
+            font-family: var(--font-display);
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .mention-list {
+            list-style: none;
+        }
+
+        .mention-item {
+            padding: 0.75rem;
+            border-left: 3px solid var(--color-accent);
+            background: var(--color-highlight);
+            margin-bottom: 0.75rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+        }
+
+        .mention-item code {
+            font-family: var(--font-mono);
+            font-weight: 600;
+            color: var(--color-accent);
+        }
+
+        .mention-item-location {
+            display: block;
+            font-size: 0.75rem;
+            color: var(--color-text-muted);
+            margin-top: 0.25rem;
+        }
+
+        /* Navigation */
+        .navigation {
+            display: flex;
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+
+        .nav-button {
+            flex: 1;
+            padding: 1rem 2rem;
+            border: 2px solid var(--color-border);
+            background: var(--color-surface);
+            color: var(--color-text);
+            font-family: var(--font-body);
+            font-size: 1rem;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .nav-button:hover:not(:disabled) {
+            border-color: var(--color-accent);
+            background: var(--color-accent);
+            color: white;
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .nav-button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .nav-button.primary {
+            background: var(--color-accent);
+            border-color: var(--color-accent);
+            color: white;
+        }
+
+        .nav-button.primary:hover:not(:disabled) {
+            background: var(--color-accent-hover);
+            border-color: var(--color-accent-hover);
+        }
+
+        /* Export Button */
+        .export-section {
+            margin-top: 2rem;
+            padding-top: 2rem;
+            border-top: 2px solid var(--color-border);
+        }
+
+        .export-button {
+            width: 100%;
+            padding: 1.25rem;
+            background: var(--color-success);
+            border: none;
+            color: white;
+            font-family: var(--font-body);
+            font-size: 1.125rem;
+            font-weight: 700;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-md);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .export-button:hover {
+            background: #25533F;
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .export-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Keyboard Shortcuts */
+        .shortcuts-hint {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: var(--color-base);
+            border-radius: 6px;
+            font-size: 0.75rem;
+            color: var(--color-text-muted);
+        }
+
+        .shortcuts-hint kbd {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            margin: 0 0.25rem;
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .content-area {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                order: -1;
+            }
+        }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .document-content {
+            animation: fadeIn 0.4s ease-out;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1 class="header-title">Document Review</h1>
+            <p class="header-subtitle">RFT12493 - Digital Health Services Tender</p>
+        </div>
+
+        <!-- Progress Section -->
+        <div class="progress-section">
+            <div class="progress-header">
+                <h2 class="progress-label">Review Progress</h2>
+                <div class="progress-stats">
+                    <strong>3 of 12</strong> chunks reviewed
+                </div>
+            </div>
+
+            <div class="progress-bar-container">
+                <div class="progress-bar-fill" style="width: 25%"></div>
+            </div>
+
+            <div class="chunk-grid">
+                <div class="chunk-card reviewed" data-chunk="1">
+                    <span class="chunk-number">1</span>
+                    <span class="chunk-status">Done</span>
+                </div>
+                <div class="chunk-card reviewed" data-chunk="2">
+                    <span class="chunk-number">2</span>
+                    <span class="chunk-status">Done</span>
+                </div>
+                <div class="chunk-card reviewed" data-chunk="3">
+                    <span class="chunk-number">3</span>
+                    <span class="chunk-status">Done</span>
+                </div>
+                <div class="chunk-card current" data-chunk="4">
+                    <span class="chunk-number">4</span>
+                    <span class="chunk-status">Current</span>
+                </div>
+                <div class="chunk-card pending" data-chunk="5">
+                    <span class="chunk-number">5</span>
+                    <span class="chunk-status">Pending</span>
+                </div>
+                <div class="chunk-card pending" data-chunk="6">
+                    <span class="chunk-number">6</span>
+                    <span class="chunk-status">Pending</span>
+                </div>
+                <div class="chunk-card pending" data-chunk="7">
+                    <span class="chunk-number">7</span>
+                    <span class="chunk-status">Pending</span>
+                </div>
+                <div class="chunk-card pending" data-chunk="8">
+                    <span class="chunk-number">8</span>
+                    <span class="chunk-status">Pending</span>
+                </div>
+                <div class="chunk-card pending" data-chunk="9">
+                    <span class="chunk-number">9</span>
+                    <span class="chunk-status">Pending</span>
+                </div>
+                <div class="chunk-card pending" data-chunk="10">
+                    <span class="chunk-number">10</span>
+                    <span class="chunk-status">Pending</span>
+                </div>
+                <div class="chunk-card pending" data-chunk="11">
+                    <span class="chunk-number">11</span>
+                    <span class="chunk-status">Pending</span>
+                </div>
+                <div class="chunk-card pending" data-chunk="12">
+                    <span class="chunk-number">12</span>
+                    <span class="chunk-status">Pending</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Content Area -->
+        <div class="content-area">
+            <!-- Document View -->
+            <div class="document-view">
+                <div class="chunk-header">
+                    <h2 class="chunk-title">Section 4: Company Information</h2>
+                    <p class="chunk-meta">Lines 250-380 • 3 mentions found</p>
+                </div>
+
+                <div class="document-content">
+                    <p><strong>4.1 Tenderer Details</strong></p>
+
+                    <p>Please provide the following information about your organization:</p>
+
+                    <p>
+                        Legal Entity Name: <span class="mention-highlight">@companyname</span><br>
+                        Australian Business Number (ABN): <span class="mention-highlight">@abn</span><br>
+                        Australian Company Number (ACN): <span class="mention-highlight">@acn</span>
+                    </p>
+
+                    <p><strong>4.2 Contact Information</strong></p>
+
+                    <p>
+                        Registered Office Address:<br>
+                        Street: _________________________<br>
+                        City: _________________________<br>
+                        State: _________________________<br>
+                        Postcode: _________________________
+                    </p>
+
+                    <p>
+                        Primary Contact Details:<br>
+                        Phone: _________________________<br>
+                        Email: _________________________<br>
+                        Website: _________________________
+                    </p>
+                </div>
+
+                <div class="navigation">
+                    <button class="nav-button" id="prevBtn">
+                        ← Previous Chunk
+                    </button>
+                    <button class="nav-button primary" id="nextBtn">
+                        Next Chunk →
+                    </button>
+                </div>
+
+                <div class="shortcuts-hint">
+                    <strong>Keyboard shortcuts:</strong>
+                    <kbd>←</kbd> Previous
+                    <kbd>→</kbd> Next
+                    <kbd>A</kbd> Approve all
+                    <kbd>E</kbd> Export
+                </div>
+            </div>
+
+            <!-- Sidebar -->
+            <div class="sidebar">
+                <div class="sidebar-card">
+                    <h3 class="sidebar-card-title">Mentions in This Chunk</h3>
+                    <ul class="mention-list">
+                        <li class="mention-item">
+                            <code>@companyname</code> → Company legal name
+                            <span class="mention-item-location">Line 255</span>
+                        </li>
+                        <li class="mention-item">
+                            <code>@abn</code> → Australian Business Number
+                            <span class="mention-item-location">Line 256</span>
+                        </li>
+                        <li class="mention-item">
+                            <code>@acn</code> → Australian Company Number
+                            <span class="mention-item-location">Line 257</span>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="sidebar-card export-section">
+                    <h3 class="sidebar-card-title">Ready to Export?</h3>
+                    <button class="export-button" disabled>
+                        📄 Export Final Document
+                    </button>
+                    <p style="font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.75rem;">
+                        Complete all 12 chunks to enable export
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Simple navigation logic
+        let currentChunk = 4;
+        const totalChunks = 12;
+
+        document.getElementById('prevBtn').addEventListener('click', () => {
+            if (currentChunk > 1) {
+                currentChunk--;
+                updateView();
+            }
+        });
+
+        document.getElementById('nextBtn').addEventListener('click', () => {
+            if (currentChunk < totalChunks) {
+                currentChunk++;
+                updateView();
+            }
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft' && currentChunk > 1) {
+                currentChunk--;
+                updateView();
+            } else if (e.key === 'ArrowRight' && currentChunk < totalChunks) {
+                currentChunk++;
+                updateView();
+            }
+        });
+
+        // Chunk card clicks
+        document.querySelectorAll('.chunk-card').forEach(card => {
+            card.addEventListener('click', () => {
+                currentChunk = parseInt(card.dataset.chunk);
+                updateView();
+            });
+        });
+
+        function updateView() {
+            // Update chunk cards
+            document.querySelectorAll('.chunk-card').forEach(card => {
+                const chunkNum = parseInt(card.dataset.chunk);
+                card.classList.remove('current', 'reviewed', 'pending');
+
+                if (chunkNum === currentChunk) {
+                    card.classList.add('current');
+                } else if (chunkNum < currentChunk) {
+                    card.classList.add('reviewed');
+                    card.querySelector('.chunk-status').textContent = 'Done';
+                } else {
+                    card.classList.add('pending');
+                    card.querySelector('.chunk-status').textContent = 'Pending';
+                }
+            });
+
+            // Update progress
+            const progress = ((currentChunk - 1) / totalChunks) * 100;
+            document.querySelector('.progress-bar-fill').style.width = progress + '%';
+            document.querySelector('.progress-stats strong').textContent =
+                `${currentChunk - 1} of ${totalChunks}`;
+
+            // Update buttons
+            document.getElementById('prevBtn').disabled = currentChunk === 1;
+            document.getElementById('nextBtn').disabled = currentChunk === totalChunks;
+
+            // Enable export when all done
+            if (currentChunk === totalChunks) {
+                document.querySelector('.export-button').disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>

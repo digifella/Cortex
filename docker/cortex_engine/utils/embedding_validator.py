@@ -32,12 +32,30 @@ class EmbeddingModelMismatchError(Exception):
 # Known embedding model dimensions
 # This is a lookup table for common models to avoid loading them just to check dimension
 KNOWN_MODEL_DIMENSIONS = {
+    # NVIDIA models
     "nvidia/NV-Embed-v2": 1536,
+
+    # BGE models
     "BAAI/bge-base-en-v1.5": 768,
     "BAAI/bge-large-en-v1.5": 1024,
     "BAAI/bge-small-en-v1.5": 384,
+
+    # Sentence Transformers
     "sentence-transformers/all-MiniLM-L6-v2": 384,
     "sentence-transformers/all-mpnet-base-v2": 768,
+
+    # Qwen3-VL Multimodal Embedding models
+    "Qwen/Qwen3-VL-Embedding-2B": 2048,
+    "Qwen/Qwen3-VL-Embedding-8B": 4096,
+
+    # Qwen3 Text Embedding models
+    "Qwen/Qwen3-Embedding-0.6B": 1024,
+    "Qwen/Qwen3-Embedding-4B": 2560,
+    "Qwen/Qwen3-Embedding-8B": 4096,
+
+    # GTE-Qwen2 models (predecessor)
+    "Alibaba-NLP/gte-Qwen2-1.5B-instruct": 1536,
+    "Alibaba-NLP/gte-Qwen2-7B-instruct": 3584,
 }
 
 

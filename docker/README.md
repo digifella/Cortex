@@ -1,7 +1,7 @@
 # **`README.md`**
 
-**Version:** v4.10.3 (Docling Ingest & Recovery Hardening)
-**Date:** 2025-11-16
+**Version:** v5.2.0 (Intelligent Proposal Completion Overhaul)
+**Date:** 2026-01-20
 
 **Prelim:**
 Please be aware that the system operates in a WSL2 environment, so all paths should support linux and windows.
@@ -202,7 +202,7 @@ For performance enhancement on supported systems:
 ```bash
 # After base installation:
 pip uninstall torch torchvision
-pip install torch==2.3.1 torchvision==0.18.1 --extra-index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.5.1 torchvision==0.20.1 --extra-index-url https://download.pytorch.org/whl/cu121
 ```
 
 **Apple Silicon (Automatic):**

@@ -1,7 +1,17 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v5.0.0
-# Date: 2025-12-27
+# Version: v5.2.0
+# Date: 2026-01-19
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
+#          - FEATURE (v5.5.0): Added optional tag input when saving to collections. Tags apply
+#            to all saved documents for easier categorization in proposal workflows.
+#          - FEATURE (v5.4.0): Streamlined "Save to Collection" UI with dropdown showing existing
+#            collections + "Create New Collection" option. Works for bulk and individual adds.
+#          - FEATURE (v5.3.0): Background preload of reranker model when page opens. Model loads
+#            while user types query, ready by first search. Added result count slider (5-50).
+#          - FEATURE (v5.2.0): Added UI toggle for neural reranking in sidebar. Dynamic timeout
+#            (300s when reranker enabled for first model load, 30s otherwise). No env vars needed.
+#          - FEATURE (v5.1.0): Added optional Qwen3-VL neural reranking for precision boost.
+#            Two-stage retrieval: fast recall (embedding) + precision (reranker).
 #          - FEATURE (v4.11.0): Added embedding model validation before queries with
 #            user-friendly warnings and solutions for embedding model mismatches
 #          - GRAPHRAG INTEGRATION (v4.2.1): Re-enabled GraphRAG search modes with radio button
@@ -33,6 +43,7 @@ import os
 import pandas as pd
 from pathlib import Path
 import re
+import threading
 from typing import Optional
 
 # Import only ChromaDB components needed for direct search
@@ -47,7 +58,10 @@ warnings.filterwarnings("ignore", message=".*Failed to send telemetry.*")
 # LlamaIndex imports moved to functions where actually needed to avoid numpy.iterable issues
 
 # Import project modules
-from cortex_engine.config import EMBED_MODEL, COLLECTION_NAME, KB_LLM_MODEL
+from cortex_engine.config import (
+    EMBED_MODEL, COLLECTION_NAME, KB_LLM_MODEL,
+    QWEN3_VL_RERANKER_ENABLED, QWEN3_VL_RERANKER_TOP_K, QWEN3_VL_RERANKER_CANDIDATES
+)
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.utils import (
@@ -71,6 +85,37 @@ st.set_page_config(page_title="Knowledge Search", layout="wide")
 
 # Apply refined editorial theme
 apply_theme()
+
+
+# =============================================================================
+# Reranker Background Preload
+# =============================================================================
+def _preload_reranker_model():
+    """Background task to preload the Qwen3-VL reranker model into GPU memory."""
+    try:
+        from cortex_engine.qwen3_vl_reranker_service import _load_reranker, Qwen3VLRerankerConfig
+
+        logger.info("🔄 Background preload: Loading Qwen3-VL reranker model...")
+        config = Qwen3VLRerankerConfig.auto_select()
+        _load_reranker(config)
+        logger.info("✅ Background preload: Reranker model ready")
+
+        # Update session state to indicate model is ready
+        # Note: This won't trigger UI update, but search will find cached model
+    except Exception as e:
+        logger.warning(f"Background preload failed (will load on first search): {e}")
+
+
+def start_reranker_preload():
+    """Start background preload of reranker model if enabled and not already loading."""
+    # Check if reranker is enabled (from session state or config default)
+    reranker_enabled = st.session_state.get('reranker_enabled', QWEN3_VL_RERANKER_ENABLED)
+
+    if reranker_enabled and 'reranker_preload_started' not in st.session_state:
+        st.session_state.reranker_preload_started = True
+        thread = threading.Thread(target=_preload_reranker_model, daemon=True)
+        thread.start()
+        logger.info("🚀 Started background reranker model preload")
 
 
 def get_candidate_db_paths(db_path: str):
@@ -370,6 +415,11 @@ def initialize_search_state():
         st.session_state.search_scope = "Entire Knowledge Base"
     if 'selected_collection' not in st.session_state:
         st.session_state.selected_collection = "default"
+    # Reranker toggle - defaults to config value
+    if 'reranker_enabled' not in st.session_state:
+        st.session_state.reranker_enabled = QWEN3_VL_RERANKER_ENABLED
+    if 'reranker_top_k' not in st.session_state:
+        st.session_state.reranker_top_k = QWEN3_VL_RERANKER_TOP_K
 
 
 def render_sidebar():
@@ -602,6 +652,69 @@ def render_sidebar():
     resolved_db_value = resolve_db_root_path(db_path_value)
     normalized_db_value = str(resolved_db_value) if resolved_db_value else db_path_value
 
+    # Embedding & Reranker Info Section
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🧠 Search Engine")
+
+    # Show current embedding info
+    try:
+        from cortex_engine.embedding_service import get_embedding_info, is_multimodal_enabled
+
+        embed_info = get_embedding_info()
+        is_multimodal = is_multimodal_enabled()
+
+        if is_multimodal:
+            st.sidebar.success("🔮 **Qwen3-VL Active**")
+            st.sidebar.caption(f"Model: {embed_info.get('model_name', 'Unknown').split('/')[-1]}")
+            st.sidebar.caption(f"Dimensions: {embed_info.get('embedding_dimension', 'Unknown')}")
+        else:
+            model_name = embed_info.get('model_name', EMBED_MODEL)
+            short_name = model_name.split('/')[-1] if '/' in model_name else model_name
+            st.sidebar.info(f"📊 **{short_name}**")
+
+        # Reranker toggle control
+        st.sidebar.markdown("---")
+        reranker_toggle = st.sidebar.checkbox(
+            "🎯 Neural Reranking",
+            value=st.session_state.reranker_enabled,
+            key="reranker_toggle",
+            help="Enable Qwen3-VL neural reranking for improved search precision. "
+                 "First search takes 2-4 minutes to load the model."
+        )
+        st.session_state.reranker_enabled = reranker_toggle
+
+        if reranker_toggle:
+            # Add slider for controlling number of results
+            reranker_top_k = st.sidebar.slider(
+                "Results to return:",
+                min_value=5,
+                max_value=50,
+                value=st.session_state.reranker_top_k,
+                step=5,
+                key="reranker_top_k_slider",
+                help="Number of top results after neural reranking"
+            )
+            st.session_state.reranker_top_k = reranker_top_k
+            st.sidebar.caption(f"✅ Active (top-{reranker_top_k} from {QWEN3_VL_RERANKER_CANDIDATES} candidates)")
+
+            # Check if model is already loaded
+            try:
+                from cortex_engine.qwen3_vl_reranker_service import _reranker_model
+                if _reranker_model is not None:
+                    st.sidebar.caption("🟢 Model ready")
+                elif st.session_state.get('reranker_preload_started'):
+                    st.sidebar.caption("🔄 Model loading in background...")
+                else:
+                    st.sidebar.caption("⚠️ First search loads model (~3 min)")
+            except ImportError:
+                st.sidebar.caption("⚠️ First search loads model (~3 min)")
+        else:
+            st.sidebar.caption("📊 Standard embedding search")
+
+    except Exception as e:
+        logger.debug(f"Could not get embedding info: {e}")
+        st.sidebar.caption(f"📊 Model: {EMBED_MODEL.split('/')[-1]}")
+
     return {
         'db_path': normalized_db_value,
         'doc_type_filter': st.session_state.doc_type_filter,
@@ -609,12 +722,32 @@ def render_sidebar():
         'thematic_tag_filter': st.session_state.thematic_tag_filter,
         'filter_operator': st.session_state.filter_operator,
         'search_scope': st.session_state.search_scope,
-        'selected_collection': st.session_state.selected_collection
+        'selected_collection': st.session_state.selected_collection,
+        'reranker_enabled': st.session_state.reranker_enabled,
+        'reranker_top_k': st.session_state.get('reranker_top_k', QWEN3_VL_RERANKER_TOP_K)
     }
+
+
+def add_search_debug(message: str):
+    """Add a message to the search debug log in session state."""
+    if 'search_debug_log' not in st.session_state:
+        st.session_state.search_debug_log = []
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    st.session_state.search_debug_log.append(f"[{timestamp}] {message}")
+    logger.info(message)  # Also log to standard logger
+
+
+def clear_search_debug():
+    """Clear the search debug log."""
+    st.session_state.search_debug_log = []
 
 
 def perform_search(base_index, query, filters, search_mode="Traditional Vector Search"):
     """Perform search - supports Traditional, GraphRAG Enhanced, and Hybrid modes"""
+    clear_search_debug()  # Start fresh for each search
+    add_search_debug(f"Starting search: mode='{search_mode}', query='{query[:50]}...'")
+
     try:
         if not query.strip():
             st.warning("⚠️ Please enter a search query")
@@ -643,17 +776,25 @@ def perform_search(base_index, query, filters, search_mode="Traditional Vector S
             st.error("❌ Database path not configured")
             return []
         
+        add_search_debug(f"Database path resolved: {db_path}")
+
         # Choose search strategy based on mode
         if search_mode == "GraphRAG Enhanced":
-            logger.info(f"Using GraphRAG Enhanced search for query: {query[:50]}...")
-            return graphrag_enhanced_search(db_path, query, filters)
+            add_search_debug("Executing GraphRAG Enhanced search...")
+            results = graphrag_enhanced_search(db_path, query, filters)
+            add_search_debug(f"GraphRAG search returned {len(results)} results")
+            return results
         elif search_mode == "Hybrid Search":
-            logger.info(f"Using Hybrid (Vector + GraphRAG) search for query: {query[:50]}...")
-            return hybrid_search(db_path, query, filters)
+            add_search_debug("Executing Hybrid (Vector + GraphRAG) search...")
+            results = hybrid_search(db_path, query, filters)
+            add_search_debug(f"Hybrid search returned {len(results)} results")
+            return results
         else:
             # Traditional Vector Search (default)
-            logger.info(f"Using Traditional Vector search for query: {query[:50]}...")
-            return direct_chromadb_search(db_path, query, filters)
+            add_search_debug("Executing Traditional Vector search...")
+            results = direct_chromadb_search(db_path, query, filters)
+            add_search_debug(f"Traditional search returned {len(results)} results")
+            return results
             
     except Exception as e:
         st.error(f"❌ Search failed: {e}")
@@ -662,97 +803,105 @@ def perform_search(base_index, query, filters, search_mode="Traditional Vector S
 
 
 def graphrag_enhanced_search(db_path, query, filters, top_k=20):
-    """GraphRAG enhanced search using knowledge graph context"""
+    """GraphRAG enhanced search using knowledge graph context.
+
+    Strategy: Use direct_chromadb_search for vector retrieval (reliable),
+    then enhance results with GraphRAG entity/relationship context.
+    """
     import concurrent.futures
-    
+
     def graphrag_search_with_timeout():
         try:
-            from cortex_engine.graphrag_integration import get_graphrag_integration
-            
-            # Initialize GraphRAG integration
-            graphrag = get_graphrag_integration(db_path)
-            
-            # Initialize vector index for GraphRAG (needed for enhanced search)
-            wsl_db_path = convert_windows_to_wsl_path(db_path)
-            chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
-            
-            if not os.path.isdir(chroma_db_path):
-                st.error(f"Database not found: {chroma_db_path}")
+            add_search_debug("Starting GraphRAG Enhanced search...")
+
+            # Step 1: Get vector results using direct_chromadb_search (reliable)
+            add_search_debug("Step 1: Getting vector results via direct_chromadb_search...")
+            vector_results = direct_chromadb_search(db_path, query, filters, top_k)
+            add_search_debug(f"Vector search returned {len(vector_results)} results")
+
+            if not vector_results:
+                add_search_debug("No vector results found")
                 return []
-            
-            # Create a simple vector index interface for GraphRAG
-            vector_index = ChromaVectorIndex(chroma_db_path)
-            
-            # Use GraphRAG enhanced search
-            raw_results = graphrag.enhanced_search(
-                query=query, 
-                vector_index=vector_index,
-                use_graph_context=True,
-                max_hops=2
-            )
-            
-            # Debug logging for GraphRAG results
-            logger.info(f"GraphRAG raw_results count: {len(raw_results) if raw_results else 0}")
-            if not raw_results:
-                logger.warning("GraphRAG enhanced_search returned no results - falling back to direct vector search")
-                # Fallback to direct vector search if GraphRAG returns nothing
-                raw_results = vector_index.as_retriever(similarity_top_k=top_k).retrieve(query)
-                logger.info(f"Vector fallback returned {len(raw_results)} results")
-            
-            # Format results for display
-            formatted_results = []
-            for i, result in enumerate(raw_results[:top_k]):
-                # Extract content and metadata
-                if hasattr(result, 'text'):
-                    content = result.text
-                    metadata = getattr(result, 'metadata', {})
-                elif isinstance(result, dict):
-                    content = result.get('content', result.get('text', ''))
-                    metadata = result.get('metadata', {})
-                else:
-                    content = str(result)
-                    metadata = {}
-                
-                formatted_result = {
-                    'rank': i + 1,
-                    'score': metadata.get('score', 0.8),  # GraphRAG default score
-                    'text': content,
-                    'file_path': metadata.get('file_path', 'Unknown'),
-                    'file_name': metadata.get('file_name', 'Unknown'),
-                    'document_type': metadata.get('document_type', 'Unknown'),
-                    'proposal_outcome': metadata.get('proposal_outcome', 'N/A'),
-                    'thematic_tags': metadata.get('thematic_tags', metadata.get('tags', [])),
-                    'chunk_id': metadata.get('chunk_id', f'chunk_{i}'),
-                    'doc_id': metadata.get('doc_id', f'doc_{i}'),
-                    'graph_context': metadata.get('graph_context', 'Enhanced with entity relationships')
-                }
-                
-                # Apply post-search filtering
-                if apply_post_search_filters(formatted_result, filters):
-                    formatted_results.append(formatted_result)
-            
-            logger.info(f"GraphRAG enhanced search returned {len(formatted_results)} results")
-            return formatted_results
-            
-        except ImportError as e:
-            logger.warning(f"GraphRAG not available: {e}")
-            st.warning("⚠️ GraphRAG not available, falling back to traditional search")
-            return direct_chromadb_search(db_path, query, filters, top_k)
+
+            # Step 2: Initialize GraphRAG for context enhancement
+            add_search_debug("Step 2: Initializing GraphRAG for context enhancement...")
+            try:
+                from cortex_engine.graphrag_integration import get_graphrag_integration
+                graphrag = get_graphrag_integration(db_path)
+
+                # Get graph statistics
+                health = graphrag.health_check()
+                add_search_debug(f"GraphRAG health: {health.get('graph_nodes', 0)} nodes, {health.get('graph_edges', 0)} edges")
+
+            except Exception as e:
+                add_search_debug(f"GraphRAG init failed: {e} - returning vector results only")
+                for result in vector_results:
+                    result['graph_context'] = 'GraphRAG unavailable'
+                return vector_results
+
+            # Step 3: Enhance each result with graph context
+            add_search_debug("Step 3: Enhancing results with graph context...")
+            enhanced_results = []
+
+            for result in vector_results:
+                doc_id = result.get('doc_id', result.get('file_name', ''))
+
+                # Try to get graph context for this document
+                try:
+                    # Get related entities and relationships
+                    related_docs = graphrag.find_related_documents(doc_id, max_results=3)
+
+                    if related_docs:
+                        related_names = [d.get('file_name', d.get('doc_id', ''))[:30] for d in related_docs[:3]]
+                        result['graph_context'] = f"Related: {', '.join(related_names)}"
+                        result['graph_related_count'] = len(related_docs)
+                    else:
+                        result['graph_context'] = 'No graph relationships found'
+                        result['graph_related_count'] = 0
+
+                except Exception as e:
+                    result['graph_context'] = 'Graph lookup failed'
+                    result['graph_related_count'] = 0
+
+                result['search_source'] = 'GraphRAG Enhanced'
+                enhanced_results.append(result)
+
+            add_search_debug(f"Enhanced {len(enhanced_results)} results with graph context")
+            return enhanced_results
+
         except Exception as e:
             logger.error(f"GraphRAG search failed: {e}")
-            st.warning(f"⚠️ GraphRAG search failed: {e}. Falling back to traditional search.")
+            add_search_debug(f"ERROR: {e} - falling back to traditional search")
             return direct_chromadb_search(db_path, query, filters, top_k)
-    
+
     # Run GraphRAG search with timeout protection
+    # Longer timeout when reranker enabled (first model load takes 3-4 minutes)
+    use_reranker = st.session_state.get('reranker_enabled', QWEN3_VL_RERANKER_ENABLED)
+    graphrag_timeout = 300 if use_reranker else 45
     try:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(graphrag_search_with_timeout)
             try:
-                results = future.result(timeout=45)  # 45 second timeout for GraphRAG
+                results = future.result(timeout=graphrag_timeout)
+
+                # Debug logging AFTER thread completes (session_state safe here)
+                add_search_debug(f"GraphRAG thread returned {len(results) if results else 0} results")
+                if results and len(results) > 0:
+                    first = results[0]
+                    add_search_debug(f"First result keys: {list(first.keys()) if isinstance(first, dict) else 'not a dict'}")
+                    if isinstance(first, dict):
+                        add_search_debug(f"First result file_name: {first.get('file_name', 'MISSING')}")
+                        add_search_debug(f"First result file_path: {first.get('file_path', 'MISSING')}")
+                        text_preview = first.get('text', '')[:100] if first.get('text') else 'NO TEXT'
+                        add_search_debug(f"First result text preview: {text_preview}...")
+
                 return results
             except concurrent.futures.TimeoutError:
-                logger.error("GraphRAG search timed out after 45 seconds")
-                st.error("⏱️ GraphRAG search timed out. Falling back to traditional search.")
+                logger.error(f"GraphRAG search timed out after {graphrag_timeout} seconds")
+                if use_reranker:
+                    st.error("⏱️ GraphRAG search timed out. The reranker model may still be loading - try again.")
+                else:
+                    st.error("⏱️ GraphRAG search timed out. Falling back to traditional search.")
                 return direct_chromadb_search(db_path, query, filters, top_k)
     except Exception as e:
         logger.error(f"GraphRAG search wrapper failed: {e}")
@@ -846,15 +995,21 @@ def hybrid_search(db_path, query, filters, top_k=20):
             return direct_chromadb_search(db_path, query, filters, top_k)
     
     # Run hybrid search with timeout protection
+    # Longer timeout when reranker enabled (first model load takes 3-4 minutes)
+    use_reranker = st.session_state.get('reranker_enabled', QWEN3_VL_RERANKER_ENABLED)
+    hybrid_timeout = 300 if use_reranker else 60
     try:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(hybrid_search_with_timeout)
             try:
-                results = future.result(timeout=60)  # 60 second timeout for hybrid search
+                results = future.result(timeout=hybrid_timeout)
                 return results
             except concurrent.futures.TimeoutError:
-                logger.error("Hybrid search timed out after 60 seconds")
-                st.error("⏱️ Hybrid search timed out. Falling back to traditional search.")
+                logger.error(f"Hybrid search timed out after {hybrid_timeout} seconds")
+                if use_reranker:
+                    st.error("⏱️ Hybrid search timed out. The reranker model may still be loading - try again.")
+                else:
+                    st.error("⏱️ Hybrid search timed out. Falling back to traditional search.")
                 return direct_chromadb_search(db_path, query, filters, top_k)
     except Exception as e:
         logger.error(f"Hybrid search wrapper failed: {e}")
@@ -926,49 +1081,131 @@ class ChromaRetriever:
     def __init__(self, collection, top_k=10):
         self.collection = collection
         self.top_k = top_k
-    
+
     def retrieve(self, query):
-        """Retrieve documents for GraphRAG"""
+        """Retrieve documents for GraphRAG with text-based fallback"""
+        import sys
+        retrieved_results = []
+
+        def debug_print(msg):
+            print(f"[ChromaRetriever] {msg}", file=sys.stderr, flush=True)
+
+        # Strategy 1: Try embedding-based vector search
         try:
-            # Generate embeddings using centralized embedding service
+            debug_print(f"Attempting embedding-based search for '{query[:30]}...'")
             query_embedding = embed_query(query)
-            
-            results = self.collection.query(
-                query_embeddings=[query_embedding],  # Use pre-generated embeddings
-                n_results=self.top_k
-            )
-            
-            # Convert to GraphRAG expected format
-            retrieved_results = []
-            if results and results.get('documents'):
-                documents = results['documents'][0] if results['documents'] else []
-                metadatas = results['metadatas'][0] if results['metadatas'] else []
-                distances = results['distances'][0] if results['distances'] else []
-                
-                for doc, metadata, distance in zip(documents, metadatas, distances):
-                    # Create a simple result object
-                    result = type('RetrievalResult', (), {
-                        'text': doc,
-                        'metadata': metadata,
-                        'score': 1.0 - distance
-                    })()
-                    retrieved_results.append(result)
-            
-            return retrieved_results
-            
+
+            if query_embedding and len(query_embedding) > 0:
+                debug_print(f"Embedding has {len(query_embedding)} dimensions")
+
+                # Check collection's expected dimensions
+                try:
+                    peek = self.collection.peek(limit=1)
+                    if peek.get('embeddings') and len(peek['embeddings']) > 0:
+                        stored_dim = len(peek['embeddings'][0])
+                        debug_print(f"Collection has {stored_dim}-dim embeddings stored")
+                        if stored_dim != len(query_embedding):
+                            debug_print(f"DIMENSION MISMATCH! Query={len(query_embedding)}, Stored={stored_dim}")
+                except Exception as peek_e:
+                    debug_print(f"Could not peek collection: {peek_e}")
+
+                results = self.collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=self.top_k
+                )
+
+                if results and results.get('documents') and results['documents'][0]:
+                    documents = results['documents'][0]
+                    metadatas = results['metadatas'][0] if results['metadatas'] else []
+                    distances = results['distances'][0] if results['distances'] else []
+
+                    debug_print(f"Vector search SUCCESS: {len(documents)} results")
+
+                    for doc, metadata, distance in zip(documents, metadatas, distances):
+                        result = type('RetrievalResult', (), {
+                            'text': doc,
+                            'metadata': metadata,
+                            'score': 1.0 - distance
+                        })()
+                        retrieved_results.append(result)
+                    return retrieved_results
+                else:
+                    debug_print("Vector search returned no documents")
+            else:
+                debug_print("embed_query returned empty embedding")
+
         except Exception as e:
-            logger.error(f"ChromaRetriever.retrieve failed: {e}")
-            return []
+            debug_print(f"Vector search FAILED: {e}")
+
+        # Strategy 2: Text-based fallback (like direct_chromadb_search)
+        debug_print("Falling back to text-based search...")
+        try:
+            all_results = self.collection.get(limit=min(2000, self.top_k * 20))
+            query_terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 2]
+            debug_print(f"Loaded {len(all_results.get('documents', []))} docs, searching for terms: {query_terms}")
+
+            documents = all_results.get('documents', [])
+            metadatas = all_results.get('metadatas', [])
+
+            matching_docs = []
+            for doc, metadata in zip(documents, metadatas):
+                doc_lower = doc.lower()
+                matches = sum(1 for term in query_terms if term in doc_lower)
+                if matches > 0:
+                    score = matches / len(query_terms) if query_terms else 0.5
+                    matching_docs.append((doc, metadata, score, matches))
+
+            # Sort by matches and score
+            matching_docs.sort(key=lambda x: (x[3], x[2]), reverse=True)
+
+            for doc, metadata, score, _ in matching_docs[:self.top_k]:
+                result = type('RetrievalResult', (), {
+                    'text': doc,
+                    'metadata': metadata,
+                    'score': score
+                })()
+                retrieved_results.append(result)
+
+            debug_print(f"Text-based fallback returned {len(retrieved_results)} results")
+
+        except Exception as e:
+            debug_print(f"Text-based fallback FAILED: {e}")
+
+        return retrieved_results
 
 
-def direct_chromadb_search(db_path, query, filters, top_k=20):
+def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None):
     """
-    Perform direct ChromaDB search bypassing LlamaIndex entirely
-    This resolves the ChromaDB where clause issues
+    Perform direct ChromaDB search bypassing LlamaIndex entirely.
+
+    Supports optional Qwen3-VL neural reranking for improved precision.
+    This resolves the ChromaDB where clause issues.
+
+    Args:
+        db_path: Path to the database
+        query: Search query text
+        filters: Filter options dict
+        top_k: Number of results to return
+        use_reranker: Enable neural reranking (default from config)
+
+    Returns:
+        List of search result dicts
     """
     import time
     import concurrent.futures
-    
+
+    # Determine reranking behavior: UI toggle > explicit param > config default
+    if use_reranker is None:
+        # Check session state (UI toggle) first, fall back to config
+        use_reranker = st.session_state.get('reranker_enabled', QWEN3_VL_RERANKER_ENABLED)
+
+    # Get reranker settings from session state (UI slider) or config
+    reranker_top_k = st.session_state.get('reranker_top_k', QWEN3_VL_RERANKER_TOP_K)
+
+    # Get more candidates if reranking is enabled
+    candidate_count = QWEN3_VL_RERANKER_CANDIDATES if use_reranker else top_k
+    final_top_k = reranker_top_k if use_reranker else top_k
+
     def search_with_timeout():
         try:
             logger.info(f"Starting ChromaDB search for query: '{query}'")
@@ -1038,7 +1275,7 @@ def direct_chromadb_search(db_path, query, filters, top_k=20):
                 q_emb = embed_query(query)
                 results = collection.query(
                     query_embeddings=[q_emb],
-                    n_results=top_k
+                    n_results=candidate_count
                 )
                 logger.info("ChromaDB vector query completed successfully (embeddings)")
                 
@@ -1169,22 +1406,53 @@ def direct_chromadb_search(db_path, query, filters, top_k=20):
                 logger.warning("No documents returned from ChromaDB query")
             
             logger.info(f"Direct ChromaDB search returned {len(formatted_results)} formatted results")
+
+            # Apply neural reranking for precision boost
+            if use_reranker and formatted_results:
+                try:
+                    from cortex_engine.graph_query import rerank_search_results
+
+                    logger.info(f"Applying Qwen3-VL neural reranking (top_k={final_top_k})")
+                    reranked_results = rerank_search_results(
+                        query=query,
+                        results=formatted_results,
+                        top_k=final_top_k,
+                        text_key="text"
+                    )
+
+                    # Update ranks after reranking
+                    for i, result in enumerate(reranked_results):
+                        result['rank'] = i + 1
+
+                    logger.info(f"Neural reranking complete: {len(reranked_results)} results")
+                    return reranked_results
+
+                except ImportError as e:
+                    logger.warning(f"Qwen3-VL reranker not available: {e}")
+                except Exception as e:
+                    logger.error(f"Reranking failed, returning original results: {e}")
+
             return formatted_results
-            
+
         except Exception as e:
             logger.error(f"Direct ChromaDB search failed: {e}", exc_info=True)
             return []
     
     try:
         # Run search with timeout to prevent hanging
+        # Longer timeout when reranker enabled (first model load takes 3-4 minutes)
+        search_timeout = 300 if use_reranker else 30
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(search_with_timeout)
             try:
-                results = future.result(timeout=30)  # 30 second timeout
+                results = future.result(timeout=search_timeout)
                 return results
             except concurrent.futures.TimeoutError:
-                logger.error("Search timed out after 30 seconds")
-                st.error("Search timed out. The database may be large or there may be connectivity issues.")
+                logger.error(f"Search timed out after {search_timeout} seconds")
+                if use_reranker:
+                    st.error("Search timed out. The reranker model may still be loading - try again in a moment.")
+                else:
+                    st.error("Search timed out. The database may be large or there may be connectivity issues.")
                 return []
                 
     except Exception as e:
@@ -1291,96 +1559,133 @@ def render_search_results(results, filters):
     
     # Bulk collection actions
     if len(results) > 1:
-        st.subheader("📋 Bulk Actions")
-        col1, col2, col3 = st.columns(3)
-        
+        st.subheader("📋 Save to Collection")
+
+        col1, col2 = st.columns([3, 1])
+
         with col1:
-            if st.button("➕ Add All to Collection", help="Add all search results to a collection"):
-                st.session_state.show_bulk_add = True
-        
+            try:
+                collection_mgr = WorkingCollectionManager()
+                collection_names = collection_mgr.get_collection_names()
+
+                # Add "+ Create New Collection" as first option
+                collection_options = ["+ Create New Collection"] + collection_names
+
+                selected_option = st.selectbox(
+                    "Save all results to:",
+                    collection_options,
+                    key="bulk_collection_target",
+                    help="Select an existing collection or create a new one"
+                )
+
+                # Show new collection name input if creating new
+                if selected_option == "+ Create New Collection":
+                    new_name = st.text_input(
+                        "New collection name:",
+                        placeholder="e.g., Strategy Workshop Research",
+                        key="new_collection_name_bulk"
+                    )
+                else:
+                    new_name = None
+
+                # Optional: Tag these results
+                tag_input = st.text_input(
+                    "🏷️ Tag these results (optional):",
+                    placeholder="e.g., strategy, workshop, 2026",
+                    key="bulk_save_tags",
+                    help="Comma-separated tags to add to all saved documents"
+                )
+
+            except Exception as e:
+                st.error(f"Collections not available: {e}")
+                selected_option = None
+                new_name = None
+                tag_input = ""
+
         with col2:
-            if st.button("💾 Save Results", help="Create a new collection with these results"):
-                st.session_state.show_save_collection = True
-        
-        with col3:
-            if st.button("🆑 Clear Results", help="Clear current search results"):
-                st.session_state.last_search_results = []
-                st.session_state.last_search_query = ""
-                st.rerun()
-        
-        # Bulk action modals - Docker-safe
-        if st.session_state.get('show_bulk_add', False):
-            with st.expander("➕ Add All Results to Collection", expanded=True):
-                try:
-                    collection_mgr = WorkingCollectionManager()
-                    collection_names = collection_mgr.get_collection_names()
-                    
-                    if collection_names:
-                        target_collection = st.selectbox("Select target collection:", collection_names)
-                        
-                        col_a, col_b = st.columns(2)
-                        with col_a:
-                            if st.button("Add to Collection", type="primary"):
-                                doc_ids = [result['doc_id'] for result in results]
-                                try:
-                                    collection_mgr.add_docs_by_id_to_collection(target_collection, doc_ids)
-                                    st.success(f"✅ Added {len(doc_ids)} documents to '{target_collection}'!")
-                                    st.session_state.show_bulk_add = False
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"❌ Failed to add documents: {e}")
-                        
-                        with col_b:
-                            if st.button("Cancel"):
-                                st.session_state.show_bulk_add = False
-                                st.rerun()
-                    else:
-                        st.info("No collections available. Please set up collections first.")
-                        if st.button("Close"):
-                            st.session_state.show_bulk_add = False
-                            st.rerun()
-                except Exception as e:
-                    st.error(f"Collections not available in this environment: {e}")
-                    st.info("Collection features require a fully initialized system.")
-                    if st.button("Close", key="close_bulk_error"):
-                        st.session_state.show_bulk_add = False
-                        st.rerun()
-        
-        if st.session_state.get('show_save_collection', False):
-            with st.expander("💾 Save as New Collection", expanded=True):
-                try:
-                    new_collection_name = st.text_input("Collection name:", placeholder="e.g., AI Research Papers")
-                    
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        if st.button("Create Collection", type="primary"):
-                            if new_collection_name.strip():
-                                try:
-                                    collection_mgr = WorkingCollectionManager()
-                                    if collection_mgr.create_collection(new_collection_name.strip()):
-                                        doc_ids = [result['doc_id'] for result in results]
-                                        collection_mgr.add_docs_by_id_to_collection(new_collection_name.strip(), doc_ids)
-                                        st.success(f"✅ Created '{new_collection_name}' with {len(doc_ids)} documents!")
-                                        st.session_state.show_save_collection = False
-                                        st.rerun()
-                                    else:
-                                        st.error(f"Collection '{new_collection_name}' already exists!")
-                                except Exception as e:
-                                    st.error(f"❌ Failed to create collection: {e}")
+            st.write("")  # Spacing
+            st.write("")  # Align with selectbox
+            if st.button("💾 Save Results", type="primary", use_container_width=True):
+                if selected_option:
+                    try:
+                        collection_mgr = WorkingCollectionManager()
+                        doc_ids = [result['doc_id'] for result in results]
+
+                        # Determine target collection name
+                        if selected_option == "+ Create New Collection":
+                            if new_name and new_name.strip():
+                                target_collection = new_name.strip()
+                                if not collection_mgr.create_collection(target_collection):
+                                    st.error(f"Collection '{target_collection}' already exists!")
+                                    target_collection = None
                             else:
-                                st.warning("Please enter a collection name")
-                    
-                    with col_b:
-                        if st.button("Cancel", key="cancel_save"):
-                            st.session_state.show_save_collection = False
-                            st.rerun()
-                except Exception as e:
-                    st.error(f"Collections not available in this environment: {e}")
-                    st.info("Collection features require a fully initialized system.")
-                    if st.button("Close", key="close_save_error"):
-                        st.session_state.show_save_collection = False
-                        st.rerun()
-        
+                                st.warning("Please enter a name for the new collection")
+                                target_collection = None
+                        else:
+                            target_collection = selected_option
+
+                        if target_collection:
+                            # Add docs to collection
+                            collection_mgr.add_docs_by_id_to_collection(target_collection, doc_ids)
+
+                            # Apply tags if provided
+                            tags_applied = 0
+                            if tag_input and tag_input.strip():
+                                new_tags = [t.strip() for t in tag_input.split(",") if t.strip()]
+                                if new_tags:
+                                    try:
+                                        # Get ChromaDB collection to update metadata
+                                        from cortex_engine.config import COLLECTION_NAME
+                                        wsl_db_path = convert_windows_to_wsl_path(
+                                            st.session_state.get('db_path_input', '')
+                                        )
+                                        chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+                                        client = chromadb.PersistentClient(
+                                            path=chroma_db_path,
+                                            settings=ChromaSettings(anonymized_telemetry=False)
+                                        )
+                                        vector_collection = client.get_collection(COLLECTION_NAME)
+
+                                        # Update each document's tags
+                                        for doc_id in doc_ids:
+                                            try:
+                                                result = vector_collection.get(ids=[doc_id], include=["metadatas"])
+                                                if result and result['metadatas']:
+                                                    meta = dict(result['metadatas'][0])
+                                                    existing_tags = meta.get('thematic_tags', '')
+                                                    if isinstance(existing_tags, str):
+                                                        existing_set = set(t.strip() for t in existing_tags.split(',') if t.strip())
+                                                    else:
+                                                        existing_set = set(existing_tags) if existing_tags else set()
+                                                    existing_set.update(new_tags)
+                                                    meta['thematic_tags'] = ', '.join(sorted(existing_set))
+                                                    vector_collection.update(ids=[doc_id], metadatas=[meta])
+                                                    tags_applied += 1
+                                            except Exception as tag_e:
+                                                logger.warning(f"Failed to tag {doc_id}: {tag_e}")
+                                    except Exception as e:
+                                        logger.warning(f"Could not apply tags: {e}")
+
+                            # Success message
+                            if selected_option == "+ Create New Collection":
+                                msg = f"✅ Created '{target_collection}' with {len(doc_ids)} documents"
+                            else:
+                                msg = f"✅ Added {len(doc_ids)} documents to '{target_collection}'"
+                            if tags_applied > 0:
+                                msg += f" (tagged {tags_applied})"
+                            st.success(msg)
+                            if selected_option == "+ Create New Collection":
+                                st.balloons()
+
+                    except Exception as e:
+                        st.error(f"❌ Failed to save: {e}")
+
+        # Clear results button
+        if st.button("🆑 Clear Results", help="Clear current search results"):
+            st.session_state.last_search_results = []
+            st.session_state.last_search_query = ""
+            st.rerun()
+
         st.divider()
     
     # Individual results display
@@ -1414,28 +1719,51 @@ def render_search_results(results, filters):
                 try:
                     collection_mgr = WorkingCollectionManager()
                     collection_names = collection_mgr.get_collection_names()
-                    
-                    if collection_names:
-                        target_collection = st.selectbox(f"Add to collection:", collection_names, key=f"target_add_{i}")
-                        
-                        col_x, col_y = st.columns(2)
-                        with col_x:
-                            if st.button("Add", key=f"confirm_add_{i}", type="primary"):
-                                try:
-                                    collection_mgr.add_docs_by_id_to_collection(target_collection, [result['doc_id']])
-                                    st.success(f"✅ Added to '{target_collection}'!")
+
+                    # Add "+ Create New Collection" as first option
+                    collection_options = ["+ Create New Collection"] + collection_names
+
+                    target_option = st.selectbox(
+                        "Add to collection:",
+                        collection_options,
+                        key=f"target_add_{i}"
+                    )
+
+                    # Show new collection name input if creating new
+                    if target_option == "+ Create New Collection":
+                        new_coll_name = st.text_input(
+                            "New collection name:",
+                            key=f"new_coll_name_{i}",
+                            placeholder="e.g., Strategy Documents"
+                        )
+                    else:
+                        new_coll_name = None
+
+                    col_x, col_y = st.columns(2)
+                    with col_x:
+                        if st.button("Add", key=f"confirm_add_{i}", type="primary"):
+                            try:
+                                if target_option == "+ Create New Collection":
+                                    if new_coll_name and new_coll_name.strip():
+                                        if collection_mgr.create_collection(new_coll_name.strip()):
+                                            collection_mgr.add_docs_by_id_to_collection(new_coll_name.strip(), [result['doc_id']])
+                                            st.success(f"✅ Created '{new_coll_name}' and added document!")
+                                            st.session_state[f'show_add_{i}'] = False
+                                            st.rerun()
+                                        else:
+                                            st.error(f"Collection '{new_coll_name}' already exists!")
+                                    else:
+                                        st.warning("Please enter a collection name")
+                                else:
+                                    collection_mgr.add_docs_by_id_to_collection(target_option, [result['doc_id']])
+                                    st.success(f"✅ Added to '{target_option}'!")
                                     st.session_state[f'show_add_{i}'] = False
                                     st.rerun()
-                                except Exception as e:
-                                    st.error(f"❌ Failed to add: {e}")
-                        
-                        with col_y:
-                            if st.button("Cancel", key=f"cancel_add_{i}"):
-                                st.session_state[f'show_add_{i}'] = False
-                                st.rerun()
-                    else:
-                        st.info("No collections available")
-                        if st.button("Close", key=f"close_add_{i}"):
+                            except Exception as e:
+                                st.error(f"❌ Failed to add: {e}")
+
+                    with col_y:
+                        if st.button("Cancel", key=f"cancel_add_{i}"):
                             st.session_state[f'show_add_{i}'] = False
                             st.rerun()
                 except Exception as e:
@@ -1473,7 +1801,10 @@ def main():
     
     # Initialize session state first
     initialize_search_state()
-    
+
+    # Start background preload of reranker model (if enabled)
+    start_reranker_preload()
+
     # Render sidebar and get config early
     config = render_sidebar()
     
@@ -1715,6 +2046,11 @@ def main():
             
             # Display results
             render_search_results(results, config)
+
+            # Show search debug log
+            if st.session_state.get('search_debug_log'):
+                with st.expander("🔍 Search Debug Log", expanded=False):
+                    st.text('\n'.join(st.session_state.search_debug_log))
         # Query validation handled above
         pass
     

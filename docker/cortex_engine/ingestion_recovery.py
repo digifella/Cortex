@@ -155,12 +155,16 @@ class IngestionRecoveryManager:
             logger.error(f"Failed to get ChromaDB documents: {e}")
             return []
     
-    def _find_orphaned_documents(self, ingested_files: Dict[str, Any], 
+    def _find_orphaned_documents(self, ingested_files: Dict[str, Any],
                                 chroma_docs: List[str]) -> List[Dict[str, Any]]:
-        """Find documents that are in the log but not in ChromaDB."""
+        """Find documents that are in the log but not in ChromaDB.
+
+        Note: Excludes user-excluded files (doc_id starting with 'user_excluded')
+        as these are intentionally not in ChromaDB.
+        """
         orphaned = []
         chroma_doc_set = set(chroma_docs)
-        
+
         for file_path, metadata in ingested_files.items():
             try:
                 # Extract doc_id from metadata
@@ -169,7 +173,15 @@ class IngestionRecoveryManager:
                     doc_id = metadata.get("doc_id")
                 elif isinstance(metadata, str):
                     doc_id = metadata  # Old format
-                
+
+                # Skip user-excluded files - these are intentionally not in ChromaDB
+                if doc_id and doc_id.startswith("user_excluded"):
+                    continue
+
+                # Skip files marked as excluded in metadata
+                if isinstance(metadata, dict) and metadata.get("status") == "excluded":
+                    continue
+
                 if doc_id and doc_id not in chroma_doc_set:
                     orphaned.append({
                         "file_path": file_path,
@@ -179,7 +191,7 @@ class IngestionRecoveryManager:
                     })
             except Exception as e:
                 logger.warning(f"Error processing ingested file entry {file_path}: {e}")
-        
+
         return orphaned
     
     def _check_collection_consistency(self, chroma_docs: List[str]) -> List[Dict[str, Any]]:
@@ -336,7 +348,7 @@ class IngestionRecoveryManager:
             
             logger.info(f"Recovery complete: {len(doc_ids)} documents recovered")
             return recovery_result
-            
+
         except Exception as e:
             logger.error(f"Document recovery failed: {e}")
             return {
@@ -344,7 +356,71 @@ class IngestionRecoveryManager:
                 "error": str(e),
                 "recovered_count": 0
             }
-    
+
+    def cleanup_orphaned_log_entries(self) -> Dict[str, Any]:
+        """
+        Remove orphaned entries from the ingested files log.
+
+        This removes log entries for files that don't have corresponding
+        documents in ChromaDB. Use this when files failed to ingest properly
+        and you want to clear the warnings so they can be re-ingested.
+
+        Returns:
+            Dict containing cleanup results
+        """
+        try:
+            logger.info("Starting orphaned log entry cleanup...")
+
+            # Analyze current state
+            analysis = self.analyze_ingestion_state()
+            orphaned_docs = analysis.get("orphaned_documents", [])
+
+            if not orphaned_docs:
+                return {
+                    "status": "success",
+                    "message": "No orphaned log entries found",
+                    "entries_removed": 0
+                }
+
+            # Load the full log
+            ingested_files = self._load_ingested_files_log()
+            original_count = len(ingested_files)
+
+            # Get file paths to remove
+            orphaned_paths = {doc["file_path"] for doc in orphaned_docs}
+
+            # Remove orphaned entries
+            cleaned_log = {
+                path: metadata
+                for path, metadata in ingested_files.items()
+                if path not in orphaned_paths
+            }
+
+            # Save cleaned log
+            with open(self.ingested_log_path, 'w') as f:
+                json.dump(cleaned_log, f, indent=2)
+
+            entries_removed = original_count - len(cleaned_log)
+
+            result = {
+                "status": "success",
+                "entries_removed": entries_removed,
+                "original_count": original_count,
+                "new_count": len(cleaned_log),
+                "removed_files": [doc["file_name"] for doc in orphaned_docs]
+            }
+
+            logger.info(f"Cleanup complete: removed {entries_removed} orphaned log entries")
+            return result
+
+        except Exception as e:
+            logger.error(f"Log cleanup failed: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "entries_removed": 0
+            }
+
     def auto_repair_collections(self) -> Dict[str, Any]:
         """
         Automatically repair collection inconsistencies.

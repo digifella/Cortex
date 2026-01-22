@@ -3,6 +3,7 @@
 # V2.0 Enhanced GraphRAG with Multi-hop Traversal
 # V2.1 (2025-10-06) Added LRU query result caching for performance
 # V2.2 (2025-10-09) Added persistent SQLite cache for cross-session caching
+# V2.3 (2026-01-17) Added optional Qwen3-VL neural reranking for precision
 from typing import List, Dict, Optional, Set, Tuple
 from collections import defaultdict, deque, OrderedDict
 import networkx as nx
@@ -13,8 +14,72 @@ from cortex_engine.graph_manager import EnhancedGraphManager
 from cortex_engine.utils import get_logger
 from cortex_engine.utils.performance_monitor import record_operation
 from cortex_engine.utils.persistent_cache import get_persistent_cache
+from cortex_engine.config import QWEN3_VL_RERANKER_ENABLED, QWEN3_VL_RERANKER_TOP_K, QWEN3_VL_RERANKER_CANDIDATES
 
 logger = get_logger(__name__)
+
+
+# ============================================================================
+# Qwen3-VL Neural Reranker (v2.3)
+# Two-stage retrieval: fast recall (embedding) + precision (reranker)
+# ============================================================================
+
+def _is_reranker_available() -> bool:
+    """Check if Qwen3-VL reranker is enabled and available."""
+    return QWEN3_VL_RERANKER_ENABLED
+
+
+def rerank_search_results(
+    query: str,
+    results: List[Dict],
+    top_k: Optional[int] = None,
+    text_key: str = "content"
+) -> List[Dict]:
+    """
+    Apply Qwen3-VL neural reranking to search results.
+
+    This is the second stage of a two-stage retrieval pipeline:
+    - Stage 1 (Embedding): Fast recall with ~85% precision
+    - Stage 2 (Reranker): Fine-grained scoring for ~95%+ precision
+
+    Args:
+        query: Search query
+        results: List of result dicts from vector/hybrid search
+        top_k: Number of results to return (default from config)
+        text_key: Key containing text content in result dicts
+
+    Returns:
+        Reranked results with added rerank_score field
+    """
+    if not _is_reranker_available():
+        logger.debug("Reranker not enabled, returning original results")
+        return results
+
+    if not results:
+        return results
+
+    if top_k is None:
+        top_k = QWEN3_VL_RERANKER_TOP_K
+
+    try:
+        from cortex_engine.qwen3_vl_reranker_service import rerank_hybrid_results
+
+        logger.info(f"🔄 Applying Qwen3-VL reranker to {len(results)} results (top_k={top_k})")
+        reranked = rerank_hybrid_results(
+            query=query,
+            results=results,
+            text_key=text_key,
+            top_k=top_k
+        )
+        logger.info(f"✅ Reranking complete: {len(reranked)} results returned")
+        return reranked
+
+    except ImportError as e:
+        logger.warning(f"Qwen3-VL reranker not available: {e}")
+        return results
+    except Exception as e:
+        logger.error(f"Reranking failed: {e}")
+        return results
 
 # Query expansion cache to avoid recomputing expansions for similar queries
 _expansion_cache = {}
@@ -268,14 +333,52 @@ class GraphQueryEngine:
         self._community_cache = {}
         self._expansion_cache = {}
     
-    def hybrid_search(self, query: str, use_graph_context: bool = True, max_hops: int = 2) -> List[Dict]:
-        """Perform enhanced hybrid search with multi-hop graph traversal and ranking."""
+    def hybrid_search(
+        self,
+        query: str,
+        use_graph_context: bool = True,
+        max_hops: int = 2,
+        use_reranker: bool = None,
+        reranker_top_k: int = None
+    ) -> List[Dict]:
+        """
+        Perform enhanced hybrid search with multi-hop graph traversal and optional neural reranking.
+
+        Three-stage retrieval pipeline:
+        1. Vector search (fast recall)
+        2. Graph enhancement (entity/relationship context)
+        3. Neural reranking (optional, precision boost)
+
+        Args:
+            query: Search query text
+            use_graph_context: Enable graph-based enhancement (default True)
+            max_hops: Maximum graph traversal depth (default 2)
+            use_reranker: Enable Qwen3-VL neural reranking (default from config)
+            reranker_top_k: Results after reranking (default from config)
+
+        Returns:
+            List of enhanced search results
+        """
+        # Determine reranking behavior from config if not specified
+        if use_reranker is None:
+            use_reranker = _is_reranker_available()
+        if reranker_top_k is None:
+            reranker_top_k = QWEN3_VL_RERANKER_TOP_K
+
+        # Get more candidates if reranking is enabled
+        candidate_count = QWEN3_VL_RERANKER_CANDIDATES if use_reranker else 15
+
         # First, do standard vector search
-        vector_results = self.vector_index.as_retriever(similarity_top_k=15).retrieve(query)
-        
+        vector_results = self.vector_index.as_retriever(similarity_top_k=candidate_count).retrieve(query)
+
+        logger.info(f"Vector search returned {len(vector_results)} results")
+        if vector_results and len(vector_results) > 0:
+            first = vector_results[0]
+            logger.info(f"First vector result has text: {hasattr(first, 'text')}, metadata keys: {list(first.metadata.keys()) if hasattr(first, 'metadata') and first.metadata else 'None'}")
+
         if not use_graph_context:
             return vector_results
-        
+
         logger.info(f"Enhancing {len(vector_results)} vector results with GraphRAG (max_hops={max_hops})")
         
         # Extract query entities for graph-guided expansion
@@ -319,11 +422,49 @@ class GraphQueryEngine:
         # Add graph-discovered documents that weren't in vector results
         graph_discovered = self._discover_documents_via_graph(query_entities, seen_docs, max_results=5)
         enhanced_results.extend(graph_discovered)
-        
-        # Re-rank by combined score
+
+        # Re-rank by combined score (graph-based)
         enhanced_results.sort(key=lambda x: x.metadata.get('combined_score', x.score), reverse=True)
-        
+
         logger.info(f"GraphRAG enhanced search: {len(enhanced_results)} total results")
+
+        # Stage 3: Optional neural reranking for precision
+        if use_reranker and _is_reranker_available() and enhanced_results:
+            logger.info(f"Applying Qwen3-VL neural reranking (top_k={reranker_top_k})")
+
+            # Convert to dict format for reranker
+            results_as_dicts = []
+            for result in enhanced_results:
+                result_dict = {
+                    'content': result.get_content() if hasattr(result, 'get_content') else str(result),
+                    'score': result.score if hasattr(result, 'score') else 0.0,
+                    **result.metadata
+                }
+                results_as_dicts.append(result_dict)
+
+            # Apply neural reranking
+            reranked_dicts = rerank_search_results(
+                query=query,
+                results=results_as_dicts,
+                top_k=reranker_top_k
+            )
+
+            # Update metadata with rerank scores
+            reranked_ids = {r.get('doc_id', r.get('file_name', '')): r for r in reranked_dicts}
+            final_results = []
+            for result in enhanced_results:
+                doc_id = result.metadata.get('doc_id', result.metadata.get('file_name', ''))
+                if doc_id in reranked_ids:
+                    rerank_info = reranked_ids[doc_id]
+                    result.metadata['rerank_score'] = rerank_info.get('rerank_score', 0)
+                    result.metadata['rank_change'] = rerank_info.get('rank_change', 0)
+                    final_results.append(result)
+
+            # Sort by rerank score
+            final_results.sort(key=lambda x: x.metadata.get('rerank_score', 0), reverse=True)
+            logger.info(f"Neural reranking complete: {len(final_results)} results")
+            return final_results[:reranker_top_k]
+
         return enhanced_results[:15]  # Return top 15
     
     def expand_query_with_graph_context(self, original_query: str, max_expansions: int = 5) -> Dict[str, any]:
@@ -402,12 +543,13 @@ class GraphQueryEngine:
                     related[neighbor] = depth + 1
                     queue.append((neighbor, depth + 1))
             
-            # Explore predecessors
-            for predecessor in self.graph.graph.predecessors(current_entity):
-                if predecessor not in visited and not predecessor.endswith('.pdf'):
-                    visited.add(predecessor)
-                    related[predecessor] = depth + 1
-                    queue.append((predecessor, depth + 1))
+            # Explore predecessors (only for directed graphs - undirected already covered by neighbors)
+            if self.graph.graph.is_directed():
+                for predecessor in self.graph.graph.predecessors(current_entity):
+                    if predecessor not in visited and not predecessor.endswith('.pdf'):
+                        visited.add(predecessor)
+                        related[predecessor] = depth + 1
+                        queue.append((predecessor, depth + 1))
         
         return related
     
@@ -591,12 +733,13 @@ class GraphQueryEngine:
                     # Track graph distances
                     context['graph_distance'][neighbor] = depth + 1
             
-            # Also check incoming edges
-            for predecessor in self.graph.graph.predecessors(current_node):
-                if predecessor not in visited:
-                    visited.add(predecessor)
-                    queue.append((predecessor, depth + 1))
-                    context['graph_distance'][predecessor] = depth + 1
+            # Also check incoming edges (only for directed graphs - undirected already covered by neighbors)
+            if self.graph.graph.is_directed():
+                for predecessor in self.graph.graph.predecessors(current_node):
+                    if predecessor not in visited:
+                        visited.add(predecessor)
+                        queue.append((predecessor, depth + 1))
+                        context['graph_distance'][predecessor] = depth + 1
         
         # Find related documents through shared entities
         for author in context['direct_entities']['authors']:
@@ -701,11 +844,15 @@ class GraphQueryEngine:
         
         for doc_id, score in scored_candidates[:max_results]:
             # Create a mock result object for discovered documents
+            # Note: These are graph-discovered docs without full text content
             mock_result = type('MockResult', (), {
+                'text': f"[Graph-discovered document: {doc_id}] - Full content not available via graph traversal. Use Traditional search for full document text.",
                 'score': score * 0.5,  # Lower than vector results
                 'metadata': {
                     'doc_id': doc_id,
                     'file_name': doc_id,
+                    'file_path': f'graph://{doc_id}',
+                    'document_type': 'Graph Discovery',
                     'discovery_method': 'graph_traversal',
                     'combined_score': score * 0.5
                 }

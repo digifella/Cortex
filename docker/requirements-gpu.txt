@@ -9,8 +9,9 @@
 --extra-index-url https://download.pytorch.org/whl/cu121
 
 # CUDA 12.1 compatible PyTorch (for NVIDIA GPUs)
-torch==2.3.1+cu121
-torchvision==0.18.1+cu121
+# Using PyTorch 2.5.1 (latest stable) for reliable package hashes
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
 
 # Note: sentence-transformers will automatically use CUDA if available
 # No changes needed - it detects GPU via torch.cuda.is_available()

@@ -202,7 +202,7 @@ For performance enhancement on supported systems:
 ```bash
 # After base installation:
 pip uninstall torch torchvision
-pip install torch==2.3.1 torchvision==0.18.1 --extra-index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.5.1 torchvision==0.20.1 --extra-index-url https://download.pytorch.org/whl/cu121
 ```
 
 **Apple Silicon (Automatic):**

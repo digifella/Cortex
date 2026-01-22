@@ -57,9 +57,9 @@ RUN grep -v "^torch" requirements.txt | grep -v "^en-core-web-sm" | grep -v "^ou
 # Install CUDA-enabled PyTorch
 # PyTorch CUDA wheels are VERY large (torch ~780MB, total ~2GB)
 # Increased timeout to 600s (10min) and retries to 10 for slow/unstable networks
-# Don't use cache to avoid hash mismatch errors
+# Using PyTorch 2.5.1 (latest stable) with CUDA 12.1 for stable package hashes
 RUN pip install --no-cache-dir --retries 10 --timeout 600 \
-    torch==2.3.1+cu121 torchvision==0.18.1+cu121 \
+    torch==2.5.1+cu121 torchvision==0.20.1+cu121 \
     --extra-index-url https://download.pytorch.org/whl/cu121
 
 # Verify GPU installation

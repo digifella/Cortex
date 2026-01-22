@@ -1,7 +1,10 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v5.0.0
-# Date: 2025-12-28
+# Version: v5.2.0
+# Date: 2026-01-17
 # Purpose: GUI for knowledge base ingestion.
+#          - FEATURE (v5.1.0): Added Qwen3-VL multimodal embedding status and
+#            configuration display in sidebar. Shows model size, reranker status,
+#            and setup instructions when disabled.
 #          - UX FIX (v4.11.0): Fixed confusing status display during finalization.
 #            Now clearly shows "Finalization in Progress" instead of "Analysis Complete!"
 #            while embedding documents. Added FINALIZE_START event handler.
@@ -427,7 +430,10 @@ def show_collection_migration_healthcheck():
     """Warn if a project-root collections file exists and offer migration to external DB path."""
     try:
         project_collections = (Path(__file__).parent.parent / "working_collections.json")
-        mgr = WorkingCollectionManager()
+        # Cache the manager instance to avoid repeated file I/O
+        if 'collection_mgr_cache' not in st.session_state:
+            st.session_state.collection_mgr_cache = WorkingCollectionManager()
+        mgr = st.session_state.collection_mgr_cache
         external_path = Path(mgr.collections_file)
         # If a project-root collections file exists and is different from external path
         if project_collections.exists() and project_collections.resolve() != external_path.resolve():
@@ -455,8 +461,11 @@ def show_collection_migration_healthcheck():
         pass
 
 def initialize_state(force_reset: bool = False):
-    config_manager = ConfigManager()
-    config = config_manager.get_config()
+    # Cache config to avoid file reads on every interaction
+    if "cached_config" not in st.session_state or force_reset:
+        config_manager = ConfigManager()
+        st.session_state.cached_config = config_manager.get_config()
+    config = st.session_state.cached_config
 
     if force_reset:
         keys_to_reset = list(st.session_state.keys())
@@ -1945,7 +1954,10 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
 
 def render_model_status_bar():
     """Render persistent model configuration status bar at top of page"""
-    model_info = get_model_info_summary()
+    # Use cached model info to avoid repeated system checks
+    if 'model_info_cache' not in st.session_state:
+        st.session_state.model_info_cache = get_model_info_summary()
+    model_info = st.session_state.model_info_cache
     gpu_info = model_info.get('gpu_info', {})
 
     # Custom styled status bar
@@ -2029,8 +2041,14 @@ def render_sidebar_model_config():
     st.sidebar.markdown("---")
     st.sidebar.markdown("## 🤖 Model Configuration")
 
-    model_info = get_model_info_summary()
-    available_models = get_available_embedding_models()
+    # Cache model info to avoid repeated system checks on every rerun
+    if 'model_info_cache' not in st.session_state:
+        st.session_state.model_info_cache = get_model_info_summary()
+    if 'available_models_cache' not in st.session_state:
+        st.session_state.available_models_cache = get_available_embedding_models()
+
+    model_info = st.session_state.model_info_cache
+    available_models = st.session_state.available_models_cache
     gpu_info = model_info.get('gpu_info', {})
 
     # GPU Status Section
@@ -2129,11 +2147,81 @@ def render_sidebar_model_config():
                             else:
                                 st.sidebar.error(message)
 
+    # Qwen3-VL Multimodal Section
+    st.sidebar.markdown("### Multimodal (Qwen3-VL)")
+
+    # Import Qwen3-VL config
+    from cortex_engine.config import (
+        QWEN3_VL_ENABLED,
+        QWEN3_VL_MODEL_SIZE,
+        QWEN3_VL_RERANKER_ENABLED,
+        QWEN3_VL_RERANKER_TOP_K,
+    )
+
+    if QWEN3_VL_ENABLED:
+        st.sidebar.success("✅ **Enabled**")
+
+        # Show model size
+        size_label = {
+            "auto": "Auto (based on VRAM)",
+            "2B": "2B (5GB VRAM, 2048 dims)",
+            "8B": "8B (16GB VRAM, 4096 dims)",
+        }.get(QWEN3_VL_MODEL_SIZE, QWEN3_VL_MODEL_SIZE)
+        st.sidebar.caption(f"📊 **Model**: {size_label}")
+
+        # Reranker status
+        if QWEN3_VL_RERANKER_ENABLED:
+            st.sidebar.caption(f"🔄 **Reranker**: Enabled (top-{QWEN3_VL_RERANKER_TOP_K})")
+        else:
+            st.sidebar.caption("🔄 **Reranker**: Disabled")
+
+        # Info about capabilities
+        with st.sidebar.expander("ℹ️ Capabilities"):
+            st.markdown("""
+            **Qwen3-VL enables:**
+            - 🖼️ Image embedding (charts, diagrams)
+            - 📄 Visual document search
+            - 🔍 Cross-modal search (text→image)
+            - 🎯 Neural reranking for precision
+            """)
+    else:
+        st.sidebar.info("⏸️ **Disabled**")
+        st.sidebar.caption("Text-only embeddings active")
+
+        with st.sidebar.expander("ℹ️ Enable Qwen3-VL"):
+            st.markdown("""
+            **To enable multimodal embeddings:**
+
+            ```bash
+            # Install dependencies
+            pip install -r requirements-qwen3-vl.txt
+
+            # Set environment variables
+            export QWEN3_VL_ENABLED=true
+            export QWEN3_VL_RERANKER_ENABLED=true
+            ```
+
+            **Requirements:**
+            - NVIDIA GPU (6GB+ VRAM)
+            - ~5GB for 2B model
+            - ~16GB for 8B model
+            """)
+
     # LLM Models Info
     st.sidebar.markdown("### LLM Models")
     st.sidebar.caption(f"📝 **Text**: {model_info['llm_model']}")
     st.sidebar.caption(f"👁️ **Vision**: {model_info['vlm_model']}")
     st.sidebar.caption("Managed via Ollama")
+
+    # Add refresh button for cache
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🔄 Refresh Model Info", use_container_width=True, help="Refresh GPU and model status if you've made changes"):
+        # Clear all model-related caches
+        if 'model_info_cache' in st.session_state:
+            del st.session_state.model_info_cache
+        if 'available_models_cache' in st.session_state:
+            del st.session_state.available_models_cache
+        st.rerun()
 
 
 def render_config_and_scan_ui():
@@ -2176,7 +2264,11 @@ def render_config_and_scan_ui():
         current_scan_path_converted = convert_source_path_to_docker_mount(current_display_path)
         current_scan_path_wsl = Path(current_scan_path_converted)
         try:
-            subdirs = sorted([d.name for d in os.scandir(current_scan_path_wsl) if d.is_dir()], key=str.lower)
+            # Cache directory scan results to avoid repeated I/O
+            cache_key = f"dir_scan_{current_display_path}"
+            if cache_key not in st.session_state:
+                st.session_state[cache_key] = sorted([d.name for d in os.scandir(current_scan_path_wsl) if d.is_dir()], key=str.lower)
+            subdirs = st.session_state[cache_key]
             c1, c2, c3 = st.columns(3)
             if c1.button("Select All Visible", use_container_width=True):
                 for d in subdirs: st.session_state.dir_selections[str(Path(current_display_path) / d)] = True
@@ -2186,6 +2278,10 @@ def render_config_and_scan_ui():
                 st.rerun()
             if current_scan_path_wsl != Path(root_wsl_path):
                 if c3.button("⬆️ Go Up One Level", use_container_width=True):
+                    # Clear cache for old directory before navigating
+                    old_cache_key = f"dir_scan_{current_display_path}"
+                    if old_cache_key in st.session_state:
+                        del st.session_state[old_cache_key]
                     st.session_state.directory_scan_path = str(Path(current_display_path).parent)
                     st.rerun()
             st.markdown("---")
@@ -2199,6 +2295,10 @@ def render_config_and_scan_ui():
                         with st.container(border=True):
                             # Top row: Directory name button (left-aligned)
                             if st.button(f"📁 {dirname}", key=f"nav_{full_display_path}", help=f"Navigate into {dirname}", use_container_width=True):
+                                # Clear cache for old directory before navigating
+                                old_cache_key = f"dir_scan_{current_display_path}"
+                                if old_cache_key in st.session_state:
+                                    del st.session_state[old_cache_key]
                                 st.session_state.directory_scan_path = full_display_path
                                 st.rerun()
                             
@@ -2224,10 +2324,12 @@ def render_config_and_scan_ui():
     
     st.markdown("---")
     st.markdown("**5. Collection Assignment**")
-    
-    # Collection assignment section
+
+    # Collection assignment section - use cached manager
     try:
-        collection_mgr = WorkingCollectionManager()
+        if 'collection_mgr_cache' not in st.session_state:
+            st.session_state.collection_mgr_cache = WorkingCollectionManager()
+        collection_mgr = st.session_state.collection_mgr_cache
         existing_collections = collection_mgr.get_collection_names()
     except Exception as e:
         existing_collections = []
@@ -3502,19 +3604,42 @@ def render_document_type_management():
         st.rerun()
 
 def check_recovery_needed():
-    """Check if recovery is actually needed and return issues found."""
+    """Check if recovery is actually needed and return issues found.
+
+    Results are cached for 120 seconds to avoid expensive database analysis on every interaction.
+    """
+    # Check cache first
+    cache_key = "recovery_check_cache"
+    cache_time_key = "recovery_check_cache_time"
+    cache_ttl_seconds = 120  # Only re-check every 2 minutes
+
+    current_time = time.time()
+    cached_time = st.session_state.get(cache_time_key, 0)
+
+    if current_time - cached_time < cache_ttl_seconds and cache_key in st.session_state:
+        return st.session_state[cache_key]
+
     try:
-        config_manager = ConfigManager()
-        config = config_manager.get_config()
+        # Use cached config if available
+        config = st.session_state.get("cached_config")
+        if not config:
+            config_manager = ConfigManager()
+            config = config_manager.get_config()
         db_path = config.get("ai_database_path", "")
-        
+
         if not db_path:
-            return False, []
-        
+            result = (False, [])
+            st.session_state[cache_key] = result
+            st.session_state[cache_time_key] = current_time
+            return result
+
         # Check if we recently dismissed recovery warnings
         dismiss_key = f"recovery_dismissed_{hash(db_path)}"
         if st.session_state.get(dismiss_key, False):
-            return False, []
+            result = (False, [])
+            st.session_state[cache_key] = result
+            st.session_state[cache_time_key] = current_time
+            return result
         
         recovery_manager = IngestionRecoveryManager(db_path)
         analysis = recovery_manager.analyze_ingestion_state()
@@ -3543,13 +3668,22 @@ def check_recovery_needed():
         # Don't show warnings if there are only minor issues and ChromaDB has documents
         chromadb_count = analysis.get("statistics", {}).get("chromadb_docs_count", 0)
         if len(issues) <= 1 and chromadb_count > 0 and orphaned_count < 50:
-            return False, []
-        
-        return len(issues) > 0, issues
-        
+            result = (False, [])
+            st.session_state[cache_key] = result
+            st.session_state[cache_time_key] = current_time
+            return result
+
+        result = (len(issues) > 0, issues)
+        st.session_state[cache_key] = result
+        st.session_state[cache_time_key] = current_time
+        return result
+
     except Exception as e:
         logger.error(f"Recovery check failed: {e}")
-        return False, []
+        result = (False, [])
+        st.session_state[cache_key] = result
+        st.session_state[cache_time_key] = current_time
+        return result
 
 def render_recovery_section():
     """Render the ingestion recovery and repair section only when needed."""
@@ -3619,11 +3753,27 @@ st.caption(f"Manage the knowledge base by ingesting new documents. App Version: 
 # Add help system
 help_system.show_help_menu()
 
-# Check and display Ollama status prominently
+# Check and display Ollama status (cached for 60 seconds to avoid slow UI)
 try:
     from cortex_engine.utils.ollama_utils import check_ollama_service, get_ollama_status_message, get_ollama_instructions
 
-    is_running, error_msg, resolved_url = check_ollama_service()
+    # Cache Ollama status check to avoid network calls on every interaction
+    ollama_cache_key = "ollama_status_cache"
+    ollama_cache_time_key = "ollama_status_cache_time"
+    cache_ttl_seconds = 60  # Re-check every 60 seconds
+
+    current_time = time.time()
+    cached_time = st.session_state.get(ollama_cache_time_key, 0)
+
+    if current_time - cached_time > cache_ttl_seconds:
+        # Cache expired or first check - do the actual network call
+        is_running, error_msg, resolved_url = check_ollama_service()
+        st.session_state[ollama_cache_key] = (is_running, error_msg, resolved_url)
+        st.session_state[ollama_cache_time_key] = current_time
+    else:
+        # Use cached result
+        is_running, error_msg, resolved_url = st.session_state.get(ollama_cache_key, (False, "Not checked", None))
+
     if not is_running:
         st.warning(f"⚠️ {get_ollama_status_message(is_running, error_msg)}")
         with st.expander("ℹ️ **Important: Limited AI Functionality**", expanded=False):

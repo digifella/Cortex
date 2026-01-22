@@ -7,8 +7,11 @@ Date: 2025-08-22
 """
 
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import base64
 from io import BytesIO
@@ -21,10 +24,9 @@ except ImportError:
     DOCLING_AVAILABLE = False
 
 # Import these only when actually needed to avoid version conflicts
+# Docling 1.8.5 simplified API - removed InputFormat/allowed_formats
 DocumentConverter = None
-InputFormat = None
-PdfPipelineOptions = None
-StandardPdfPipeline = None
+PipelineOptions = None
 
 from llama_index.core import Document
 from .utils.logging_utils import get_logger
@@ -45,16 +47,18 @@ class DoclingDocumentReader:
     - High-performance processing
     """
     
-    def __init__(self, ocr_enabled: bool = True, table_structure_recognition: bool = True):
+    def __init__(self, ocr_enabled: bool = True, table_structure_recognition: bool = True, skip_vlm_processing: bool = False):
         """
         Initialize Docling reader.
-        
+
         Args:
             ocr_enabled: Enable OCR for scanned PDFs
             table_structure_recognition: Enable advanced table structure recognition
+            skip_vlm_processing: Skip VLM processing for extracted figures (default: False)
         """
         self.ocr_enabled = ocr_enabled
         self.table_structure_recognition = table_structure_recognition
+        self.skip_vlm_processing = skip_vlm_processing
         self._converter = None
         
         if not DOCLING_AVAILABLE:
@@ -67,34 +71,25 @@ class DoclingDocumentReader:
         """Initialize Docling converter with optimized settings."""
         try:
             # Lazy import to avoid torch conflicts at startup
-            global DocumentConverter, InputFormat, PdfPipelineOptions, StandardPdfPipeline
+            # Docling 1.8.5 simplified API - no InputFormat/allowed_formats
+            global DocumentConverter, PipelineOptions
             from docling.document_converter import DocumentConverter
-            from docling.datamodel.base_models import InputFormat
-            from docling.datamodel.pipeline_options import PdfPipelineOptions
-            from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline
-            
-            # Configure PDF pipeline options for optimal processing
-            pdf_options = PdfPipelineOptions()
-            pdf_options.do_ocr = self.ocr_enabled
-            pdf_options.do_table_structure = self.table_structure_recognition
-            
-            # Create converter with custom pipeline
-            pipeline = StandardPdfPipeline(pdf_options)
-            self._converter = DocumentConverter(
-                allowed_formats=[
-                    InputFormat.PDF,
-                    InputFormat.DOCX, 
-                    InputFormat.PPTX,
-                    InputFormat.XLSX,
-                    InputFormat.IMAGE,
-                    InputFormat.HTML,
-                    InputFormat.MD,
-                    InputFormat.ASCIIDOC
-                ],
-                pdf_pipeline=pipeline
+            from docling.datamodel.base_models import PipelineOptions
+
+            # Configure pipeline options for optimal processing (Docling 1.8.5 API)
+            # Note: Docling 1.8.5 removed format restrictions - converter handles all supported formats
+            pipeline_options = PipelineOptions(
+                do_ocr=self.ocr_enabled,
+                do_table_structure=self.table_structure_recognition
             )
-            
-            logger.info("✅ Docling converter initialized successfully")
+
+            # Create converter with simplified API
+            # Docling 1.8.5 auto-detects format and handles: PDF, DOCX, PPTX, XLSX, Images, HTML, MD, etc.
+            self._converter = DocumentConverter(
+                pipeline_options=pipeline_options
+            )
+
+            logger.info("✅ Docling converter initialized successfully (v1.8.5 API)")
             
         except ImportError as e:
             logger.warning(f"Docling dependency missing: {e}")
@@ -239,8 +234,26 @@ class DoclingDocumentReader:
         except Exception as e:
             logger.warning(f"Could not extract enhanced Docling metadata: {e}")
             metadata['docling_metadata_warning'] = str(e)
-        
+
+        # Phase 1 Enhancement: Extract provenance metadata
+        provenance_data = self._extract_provenance_metadata(docling_metadata)
+        if provenance_data.get('has_provenance'):
+            metadata['docling_provenance'] = provenance_data
+            logger.debug(f"Added provenance for {provenance_data['page_count']} pages")
+
         figures_summary, figure_payloads = self._extract_docling_figures(docling_metadata, conv_result)
+
+        # Phase 1 Enhancement: Generate VLM descriptions for figures
+        if figure_payloads and not self.skip_vlm_processing:
+            vlm_descriptions = self._generate_vlm_descriptions_for_figures(figure_payloads)
+
+            # Enrich figures_summary with VLM descriptions
+            if vlm_descriptions:
+                for figure_entry in figures_summary:
+                    idx = figure_entry.get('index')
+                    if idx in vlm_descriptions:
+                        figure_entry['vlm_description'] = vlm_descriptions[idx]
+                        logger.debug(f"Figure {idx}: Added VLM description to metadata")
 
         if figures_summary:
             metadata['docling_figures'] = figures_summary
@@ -402,7 +415,222 @@ class DoclingDocumentReader:
             caption_map[target_index] = text_content
 
         return caption_map
-    
+
+    def _generate_vlm_descriptions_for_figures(
+        self,
+        figure_payloads: List[Dict[str, Any]]
+    ) -> Dict[int, str]:
+        """
+        Generate VLM descriptions for Docling-extracted figures.
+
+        This method processes figure images extracted by Docling and generates
+        rich AI descriptions using a Vision Language Model (VLM). Figures are
+        processed in parallel for performance.
+
+        Args:
+            figure_payloads: List of figure payload dicts containing:
+                - index: Figure index
+                - image_base64: Base64-encoded PNG image
+                - image_mime_type: MIME type (usually 'image/png')
+                - width: Image width in pixels
+                - height: Image height in pixels
+
+        Returns:
+            Dictionary mapping figure index to VLM description string
+
+        Notes:
+            - Respects DOCLING_VLM_ENABLED config flag
+            - Uses ThreadPoolExecutor for parallel processing
+            - Configurable workers via DOCLING_VLM_MAX_WORKERS
+            - Configurable timeout via DOCLING_VLM_TIMEOUT
+            - Creates temp files for VLM processing, cleans up after
+        """
+        # Import config and VLM function
+        try:
+            from .config import (
+                DOCLING_VLM_ENABLED,
+                DOCLING_VLM_MAX_WORKERS,
+                DOCLING_VLM_TIMEOUT
+            )
+            from .query_cortex import describe_image_with_vlm_async
+        except ImportError as e:
+            logger.warning(f"Could not import VLM dependencies: {e}")
+            return {}
+
+        # Check if VLM processing is enabled
+        if self.skip_vlm_processing or not DOCLING_VLM_ENABLED:
+            logger.debug("VLM processing disabled, skipping figure descriptions")
+            return {}
+
+        if not figure_payloads:
+            return {}
+
+        logger.info(f"🎨 Processing {len(figure_payloads)} Docling figures with VLM (max_workers={DOCLING_VLM_MAX_WORKERS})")
+
+        descriptions = {}
+        temp_files = []  # Track temp files for cleanup
+
+        try:
+            # Create temp files from base64 payloads
+            figure_temp_files = {}
+            for payload in figure_payloads:
+                idx = payload['index']
+                image_base64 = payload.get('image_base64', '')
+
+                if not image_base64:
+                    logger.warning(f"Figure {idx}: No image payload, skipping VLM")
+                    continue
+
+                # Decode base64 to bytes
+                try:
+                    image_bytes = base64.b64decode(image_base64)
+                except Exception as decode_error:
+                    logger.warning(f"Figure {idx}: Failed to decode base64: {decode_error}")
+                    continue
+
+                # Create temp file
+                try:
+                    temp_fd, temp_path = tempfile.mkstemp(suffix='.png', prefix=f'docling_fig_{idx}_')
+                    os.close(temp_fd)  # Close file descriptor
+
+                    # Write image bytes to temp file
+                    with open(temp_path, 'wb') as f:
+                        f.write(image_bytes)
+
+                    figure_temp_files[idx] = temp_path
+                    temp_files.append(temp_path)
+                    logger.debug(f"Figure {idx}: Created temp file {temp_path}")
+
+                except Exception as temp_error:
+                    logger.warning(f"Figure {idx}: Failed to create temp file: {temp_error}")
+                    continue
+
+            # Process figures in parallel with ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=DOCLING_VLM_MAX_WORKERS) as executor:
+                # Submit all tasks
+                future_to_idx = {
+                    executor.submit(
+                        describe_image_with_vlm_async,
+                        temp_path,
+                        timeout=DOCLING_VLM_TIMEOUT
+                    ): idx
+                    for idx, temp_path in figure_temp_files.items()
+                }
+
+                # Collect results as they complete
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        description = future.result()
+                        if description:
+                            descriptions[idx] = description
+                            logger.debug(f"Figure {idx}: VLM description generated ({len(description)} chars)")
+                        else:
+                            logger.warning(f"Figure {idx}: VLM returned no description")
+                    except Exception as vlm_error:
+                        logger.warning(f"Figure {idx}: VLM processing failed: {vlm_error}")
+
+            logger.info(f"✅ Generated {len(descriptions)}/{len(figure_payloads)} figure descriptions with VLM")
+
+        except Exception as e:
+            logger.error(f"Error during VLM figure processing: {e}")
+
+        finally:
+            # Clean up temp files
+            for temp_path in temp_files:
+                try:
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                        logger.debug(f"Cleaned up temp file: {temp_path}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup temp file {temp_path}: {cleanup_error}")
+
+        return descriptions
+
+    def _extract_provenance_metadata(
+        self,
+        docling_metadata: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Extract provenance metadata from Docling output for precise source attribution.
+
+        Provenance includes page numbers, bounding boxes, and element types
+        which enable citation back to specific document locations.
+
+        Args:
+            docling_metadata: Docling's structured metadata dict
+
+        Returns:
+            Dictionary with provenance information:
+                - elements: List of element provenances (page, bbox, type)
+                - page_count: Total number of pages
+                - has_provenance: Whether provenance data is available
+
+        Notes:
+            - Respects DOCLING_PROVENANCE_ENABLED config flag
+            - Extracts from 'main-text' or 'main_text' keys
+            - Handles missing/malformed provenance gracefully
+        """
+        try:
+            from .config import DOCLING_PROVENANCE_ENABLED
+        except ImportError:
+            logger.warning("Could not import provenance config")
+            DOCLING_PROVENANCE_ENABLED = True  # Default to enabled
+
+        if not DOCLING_PROVENANCE_ENABLED:
+            return {
+                'has_provenance': False,
+                'elements': [],
+                'page_count': 0
+            }
+
+        elements_provenance = []
+        pages = set()
+
+        try:
+            # Extract from main-text (or main_text for compatibility)
+            main_text = docling_metadata.get('main-text', []) or docling_metadata.get('main_text', [])
+
+            for idx, item in enumerate(main_text):
+                # Get provenance list
+                prov_list = item.get('prov', []) or item.get('provenance', [])
+
+                if not isinstance(prov_list, list) or not prov_list:
+                    continue
+
+                # Usually first provenance entry
+                prov = prov_list[0]
+
+                if not isinstance(prov, dict):
+                    continue
+
+                # Extract element provenance
+                element_prov = {
+                    'element_index': idx,
+                    'page': prov.get('page'),
+                    'bbox': prov.get('bbox'),  # Bounding box [x1, y1, x2, y2]
+                    'type': prov.get('type') or item.get('type') or item.get('obj_type'),
+                    'text_sample': (item.get('text', '') or '')[:100]  # First 100 chars
+                }
+
+                # Track pages
+                if element_prov['page'] is not None:
+                    pages.add(element_prov['page'])
+
+                elements_provenance.append(element_prov)
+
+            logger.debug(f"Extracted provenance for {len(elements_provenance)} elements across {len(pages)} pages")
+
+        except Exception as e:
+            logger.warning(f"Error extracting provenance metadata: {e}")
+
+        return {
+            'has_provenance': len(elements_provenance) > 0,
+            'elements': elements_provenance,
+            'page_count': len(pages),
+            'pages': sorted(list(pages)) if pages else []
+        }
+
     def get_processing_stats(self) -> Dict[str, Any]:
         """Get processing statistics and capabilities."""
         return {
@@ -418,18 +646,20 @@ class DoclingDocumentReader:
         }
 
 
-def create_docling_reader(ocr_enabled: bool = True, table_structure_recognition: bool = True) -> DoclingDocumentReader:
+def create_docling_reader(ocr_enabled: bool = True, table_structure_recognition: bool = True, skip_vlm_processing: bool = False) -> DoclingDocumentReader:
     """
     Factory function to create Docling reader.
-    
+
     Args:
         ocr_enabled: Enable OCR for scanned documents
         table_structure_recognition: Enable advanced table recognition
-        
+        skip_vlm_processing: Skip VLM processing for extracted figures (default: False)
+
     Returns:
         Configured DoclingDocumentReader instance
     """
     return DoclingDocumentReader(
         ocr_enabled=ocr_enabled,
-        table_structure_recognition=table_structure_recognition
+        table_structure_recognition=table_structure_recognition,
+        skip_vlm_processing=skip_vlm_processing
     )

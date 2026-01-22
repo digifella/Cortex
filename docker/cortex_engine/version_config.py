@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "5.0.0"
+CORTEX_VERSION = "5.2.0"
 
 # Version details
 VERSION_INFO = {
     "major": 5,
-    "minor": 0,
+    "minor": 2,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -24,42 +24,37 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-01-02",
-    "release_name": "Mixture of Experts (MoE) & Adaptive Intelligence",
-    "description": "Major intelligence upgrade with Mixture of Experts synthesis, adaptive model selection, creativity controls, and enhanced source attribution. Universal Knowledge Assistant now runs multiple 70B models in parallel for superior analysis quality.",
+    "release_date": "2026-01-20",
+    "release_name": "Intelligent Proposal Completion Overhaul",
+    "description": "Complete redesign of Proposal Intelligent Completion with simplified UX, per-question settings, human-in-the-loop regeneration, and significant performance improvements.",
     "breaking_changes": [],
     "new_features": [
-        "Mixture of Experts (MoE) mode: Runs 2-3 expert models (qwen2.5:72b, llama3.3:70b) in parallel with meta-synthesis",
-        "Adaptive model selection with reasoning display: System explains WHY each model was chosen for the task",
-        "Creativity slider (0-3 scale): Adjust from factual/conservative to highly experimental outputs",
-        "Enhanced source citations: Shows collection names, file names, and relevance scores with proper fallbacks",
-        "Model selection override: Manual selection of power models when auto-select isn't desired",
-        "Real-time streaming synthesis with async architecture for responsive UI",
-        "Intent classification: Automatic detection of ideation, synthesis, research, or exploration tasks"
+        "Simplified 3-button workflow: Skip | Edit | Auto-Generate",
+        "Per-question Evidence Source: Each question can search a different collection",
+        "Per-question Creativity slider: Set Factual/Balanced/Creative per question",
+        "Human-in-the-loop Regeneration: Refine responses with guidance hints",
+        "Per-field Export: Download individual responses for external editing",
+        "Entire Knowledge Base search option for evidence retrieval",
+        "Simplified Proposal Workspace with clear navigation"
     ],
     "improvements": [
-        "Extended timeout support (600s) for large 70B models to prevent premature timeouts",
-        "Improved ModernOllamaLLM with proper async/await streaming using aiohttp",
-        "Better source metadata extraction: Tries multiple fields (title, file_name, source) with content fallback",
-        "Debug logging for timeout diagnostics in production environments",
-        "Collection-aware search with 'All Collections' global search option",
-        "Temperature mapping: Creativity slider intelligently maps to LLM temperature (0.2-2.0)",
-        "MoE meta-synthesis: Combines expert analyses into superior insights beyond individual outputs",
-        "Collapsible expert outputs: Clean UI with expandable sections for each expert analysis"
+        "Ollama status check cached (60 seconds) - faster UI",
+        "ConfigManager cached - eliminates file reads on interactions",
+        "Recovery analysis cached (120 seconds) - faster Knowledge Ingest page",
+        "Collection manager reloads fresh - fixes stale collection counts",
+        "Response text area enlarged with word count indicator",
+        "Session state persists during page navigation"
     ],
     "bug_fixes": [
-        "Fixed async completion callback validation errors in LlamaIndex integration",
-        "Fixed aiohttp streaming timeout issues by using sock_read instead of total timeout",
-        "Fixed tuple unpacking errors when retrieving model selection with reasoning",
-        "Fixed ChromaVectorStore import path for compatibility with current LlamaIndex version",
-        "Fixed missing list_collections() method in WorkingCollectionManager",
-        "Cleared Python bytecode cache to ensure fresh module loading after updates"
+        "Fixed '0 documents in collection' bug - stale cache issue",
+        "Fixed Generate button infinite loop - enum serialization fix",
+        "Fixed GraphQueryEngine initialization error",
+        "Fixed st.rerun() causing premature page restart"
     ],
     "performance": [
-        "MoE synthesis delivers higher quality analysis by leveraging multiple expert perspectives",
-        "Non-blocking async streaming ensures responsive UI during long synthesis operations",
-        "Proper timeout handling prevents resource waste on stalled requests",
-        "GPU-accelerated embeddings with optimal batch sizing for 48GB Quadro RTX 8000"
+        "Knowledge Ingest page now responds instantly to button clicks",
+        "Removed 3 expensive operations from every page interaction",
+        "Cached network calls, file reads, and database analysis"
     ]
 }
 
