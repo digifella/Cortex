@@ -2011,33 +2011,8 @@ def render_model_status_bar():
 def render_sidebar_model_config():
     """Render comprehensive model configuration in sidebar"""
 
-    # Add custom CSS for better sidebar text visibility
-    st.markdown("""
-    <style>
-    /* Improve sidebar text contrast */
-    [data-testid="stSidebar"] {
-        color: #FFFFFF !important;
-    }
-    [data-testid="stSidebar"] p,
-    [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] .stMarkdown,
-    [data-testid="stSidebar"] h3,
-    [data-testid="stSidebar"] h2 {
-        color: #FFFFFF !important;
-    }
-    [data-testid="stSidebar"] .stMarkdown small,
-    [data-testid="stSidebar"] [class*="caption"] {
-        color: #E3F2FD !important;
-        font-weight: 500 !important;
-    }
-    [data-testid="stSidebar"] code {
-        background-color: #1E2F47 !important;
-        color: #FFD54F !important;
-        font-weight: 600 !important;
-        padding: 8px !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    # Note: Removed dark mode CSS that was forcing white text on light backgrounds
+    # Let Streamlit handle theme colors naturally
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("## 🤖 Model Configuration")
@@ -2152,15 +2127,18 @@ def render_sidebar_model_config():
     # Qwen3-VL Multimodal Section
     st.sidebar.markdown("### Multimodal (Qwen3-VL)")
 
-    # Import Qwen3-VL config
+    # Use dynamic embedding strategy check (not stale module-level constant)
+    embed_strategy = model_info.get('embedding_strategy', {})
+    qwen3vl_active = embed_strategy.get('approach') == 'qwen3vl'
+
+    # Import config values for display
     from cortex_engine.config import (
-        QWEN3_VL_ENABLED,
         QWEN3_VL_MODEL_SIZE,
         QWEN3_VL_RERANKER_ENABLED,
         QWEN3_VL_RERANKER_TOP_K,
     )
 
-    if QWEN3_VL_ENABLED:
+    if qwen3vl_active:
         st.sidebar.success("✅ **Enabled**")
 
         # Show model size
@@ -2181,33 +2159,25 @@ def render_sidebar_model_config():
         with st.sidebar.expander("ℹ️ Capabilities"):
             st.markdown("""
             **Qwen3-VL enables:**
-            - 🖼️ Image embedding (charts, diagrams)
-            - 📄 Visual document search
-            - 🔍 Cross-modal search (text→image)
-            - 🎯 Neural reranking for precision
+            - Image embedding (charts, diagrams)
+            - Visual document search
+            - Cross-modal search (text to image)
+            - Neural reranking for precision
             """)
     else:
-        st.sidebar.info("⏸️ **Disabled**")
-        st.sidebar.caption("Text-only embeddings active")
+        # Show what model is actually being used
+        current_approach = embed_strategy.get('approach', 'unknown')
+        current_model = embed_strategy.get('model', 'unknown')
+        reason = embed_strategy.get('reason', '')
 
-        with st.sidebar.expander("ℹ️ Enable Qwen3-VL"):
-            st.markdown("""
-            **To enable multimodal embeddings:**
+        if current_approach == 'nv-embed':
+            st.sidebar.info(f"**NV-Embed-v2** (GPU-optimized)")
+        elif current_approach == 'bge':
+            st.sidebar.info(f"**BGE** (CPU-friendly)")
+        else:
+            st.sidebar.info(f"**{current_model}**")
 
-            ```bash
-            # Install dependencies
-            pip install -r requirements-qwen3-vl.txt
-
-            # Set environment variables
-            export QWEN3_VL_ENABLED=true
-            export QWEN3_VL_RERANKER_ENABLED=true
-            ```
-
-            **Requirements:**
-            - NVIDIA GPU (6GB+ VRAM)
-            - ~5GB for 2B model
-            - ~16GB for 8B model
-            """)
+        st.sidebar.caption(f"Reason: {reason[:60]}..." if len(reason) > 60 else f"Reason: {reason}")
 
     # LLM Models Info
     st.sidebar.markdown("### LLM Models")
@@ -2218,7 +2188,10 @@ def render_sidebar_model_config():
     # Add refresh button for cache
     st.sidebar.markdown("---")
     if st.sidebar.button("🔄 Refresh Model Info", use_container_width=True, help="Refresh GPU and model status if you've made changes"):
-        # Clear all model-related caches
+        # Clear all model-related caches (session state AND module-level)
+        from cortex_engine.config import invalidate_embedding_cache
+        invalidate_embedding_cache()  # Clear module-level config cache
+
         if 'model_info_cache' in st.session_state:
             del st.session_state.model_info_cache
         if 'available_models_cache' in st.session_state:

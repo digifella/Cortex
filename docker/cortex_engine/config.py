@@ -135,6 +135,23 @@ def get_embed_model() -> str:
     strategy = get_embedding_strategy()
     return strategy["model"]
 
+
+def invalidate_embedding_cache():
+    """
+    Invalidate all embedding-related caches.
+    Call this after making hardware changes or removing env overrides.
+    """
+    global _EMBED_STRATEGY_CACHE
+    _EMBED_STRATEGY_CACHE = None
+
+    # Also invalidate smart_model_selector cache if it exists
+    try:
+        from cortex_engine.utils import smart_model_selector
+        if hasattr(smart_model_selector, '_STRATEGY_CACHE'):
+            smart_model_selector._STRATEGY_CACHE = None
+    except ImportError:
+        pass
+
 # For backwards compatibility - but prefer get_embed_model() for lazy loading
 EMBED_MODEL = os.getenv("CORTEX_EMBED_MODEL", "BAAI/bge-base-en-v1.5")  # Fast default, actual detection is lazy
 
