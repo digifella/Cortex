@@ -903,8 +903,8 @@ else:
 
                 # Action area
                 if current_status == 'pending':
-                    # Compact action buttons
-                    btn_col1, btn_col2, spacer = st.columns([1, 1, 3])
+                    # Compact action buttons with creativity dropdown
+                    btn_col1, creat_col, btn_col2, spacer = st.columns([1, 1.2, 1, 2])
 
                     with btn_col1:
                         if st.button("Edit", key=f"edit_{qtype_key}_{q_idx}", type="secondary"):
@@ -924,6 +924,16 @@ else:
                             save_ic_state_to_workspace(workspace.metadata.workspace_id)
                             st.rerun()
 
+                    with creat_col:
+                        q_creativity = st.selectbox(
+                            "Style",
+                            options=["Factual", "Balanced", "Creative"],
+                            index=1,  # Default to Balanced
+                            key=f"creat_{qtype_key}_{q_idx}",
+                            label_visibility="collapsed"
+                        )
+                        q_temp = {"Factual": 0.3, "Balanced": 0.7, "Creative": 1.0}[q_creativity]
+
                     with btn_col2:
                         if st.button("Generate", key=f"gen_{qtype_key}_{q_idx}", type="primary"):
                             with st.spinner("Generating..."):
@@ -939,6 +949,10 @@ else:
                                         st.session_state.ic_evidence_cache[field_key] = evidence_result.evidence
 
                                     evidence = st.session_state.ic_evidence_cache.get(field_key, [])
+
+                                    # Apply per-question creativity
+                                    llm.temperature = q_temp
+
                                     response = response_generator.generate(
                                         classified_field=field,
                                         evidence=evidence,
@@ -948,6 +962,7 @@ else:
                                     question_status[field_key]['status'] = 'completed'
                                     question_status[field_key]['response'] = response.text
                                     question_status[field_key]['evidence'] = evidence
+                                    question_status[field_key]['creativity_level'] = q_creativity
                                     st.session_state.ic_question_status = question_status
                                     save_ic_state_to_workspace(workspace.metadata.workspace_id)
                                     st.rerun()
