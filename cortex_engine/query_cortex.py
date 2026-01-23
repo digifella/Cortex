@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 import threading
 from typing import Optional
 
-from .config import KB_LLM_MODEL, EMBED_MODEL, VLM_MODEL
+from .config import KB_LLM_MODEL, get_embed_model, VLM_MODEL
 from .utils import get_logger
 from .utils.performance_monitor import measure
 
@@ -121,8 +121,10 @@ def setup_models():
                 request_timeout=300.0,
                 temperature=0.1,  # Very low temperature for factual retrieval
             )
-            logger.info(f"✅ KB models configured (LOCAL): LLM={KB_LLM_MODEL}, Embed={EMBED_MODEL}, Device={device}")
-        
+            # Get adaptive embedding model
+            embed_model_name = get_embed_model()
+            logger.info(f"✅ KB models configured (LOCAL): LLM={KB_LLM_MODEL}, Embed={embed_model_name}, Device={device}")
+
         # Embedding model initialization - prefer centralized embedding via adapter (keeps ingest/search identical)
         import os  # Move os import to be available in function scope
         try:
@@ -130,19 +132,19 @@ def setup_models():
             try:
                 os.environ["TOKENIZERS_PARALLELISM"] = "false"
                 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-                Settings.embed_model = EmbeddingServiceAdapter(model_name=EMBED_MODEL)
+                Settings.embed_model = EmbeddingServiceAdapter(model_name=embed_model_name)
                 test_embedding = Settings.embed_model.get_text_embedding("test")
                 logger.info(f"Query engine: EmbeddingServiceAdapter successful, dimension: {len(test_embedding)}")
                 logger.info("✅ Query engine: Initialized using EmbeddingServiceAdapter")
-                
+
             except Exception as hf_e:
                 logger.warning(f"Query engine: Adapter approach failed: {hf_e}")
-                
+
                 # Method 2: Sentence-transformers with full wrapper (fallback)
                 try:
                     from sentence_transformers import SentenceTransformer
-                    
-                    st_model = SentenceTransformer(EMBED_MODEL, device=device, trust_remote_code=True)
+
+                    st_model = SentenceTransformer(embed_model_name, device=device, trust_remote_code=True)
                     
                     # Test the model
                     test_output = st_model.encode("test", convert_to_tensor=False)
@@ -177,15 +179,15 @@ def setup_models():
                             avg_embedding = np.mean(embeddings, axis=0)
                             return avg_embedding.tolist()
                     
-                    Settings.embed_model = CompleteSentenceTransformerWrapper(st_model, EMBED_MODEL)
+                    Settings.embed_model = CompleteSentenceTransformerWrapper(st_model, embed_model_name)
                     logger.info("✅ Query engine: Successfully initialized using complete sentence-transformers wrapper")
-                    
+
                 except Exception as st_e:
                     logger.warning(f"Query engine: Sentence-transformers approach failed: {st_e}")
-                    
+
                     # Method 3: Basic HuggingFace fallback with simpler config
                     try:
-                        Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL, device=device)
+                        Settings.embed_model = HuggingFaceEmbedding(model_name=embed_model_name, device=device)
                         logger.info("✅ Query engine: Successfully initialized using basic HuggingFaceEmbedding")
                     
                     except Exception as basic_e:

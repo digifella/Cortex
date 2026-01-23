@@ -99,7 +99,7 @@ sys.path.insert(0, str(project_root))
 
 from cortex_engine.config import (
     INGESTION_LOG_PATH, STAGING_INGESTION_FILE, INGESTED_FILES_LOG,
-    COLLECTION_NAME, EMBED_MODEL,
+    COLLECTION_NAME, get_embed_model,
     TABLE_AWARE_CHUNKING, TABLE_SPECIFIC_EMBEDDINGS, FIGURE_ENTITY_LINKING
 )
 from cortex_engine.utils.file_utils import get_file_hash
@@ -234,13 +234,15 @@ def initialize_script():
         logging.info(f"Ollama connected successfully at {resolved_url}")
     
     # Unify embeddings with search/async via adapter around embedding_service (Docker)
+    # Use adaptive model selection
+    embed_model_name = get_embed_model()
     try:
-        Settings.embed_model = EmbeddingServiceAdapter(model_name=EMBED_MODEL)
-        logging.info(f"Models configured via EmbeddingServiceAdapter (Embed: {EMBED_MODEL}).")
+        Settings.embed_model = EmbeddingServiceAdapter(model_name=embed_model_name)
+        logging.info(f"Models configured via EmbeddingServiceAdapter (Embed: {embed_model_name}).")
     except Exception as e:
         logging.warning(f"EmbeddingServiceAdapter failed ({e}); falling back to HuggingFaceEmbedding")
-        Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
-        logging.info(f"Models configured (Embed: {EMBED_MODEL}).")
+        Settings.embed_model = HuggingFaceEmbedding(model_name=embed_model_name)
+        logging.info(f"Models configured (Embed: {embed_model_name}).")
 
     # LLM safety: add a hard-timeout wrapper to prevent hangs during metadata extraction
     # Uses a single worker thread to enforce a wall-clock timeout per LLM call.
@@ -1420,7 +1422,9 @@ def finalize_ingestion(db_path: str, args=None):
         EmbeddingModelMismatchError
     )
     from cortex_engine.collection_manager import WorkingCollectionManager
-    from cortex_engine.config import EMBED_MODEL
+
+    # Get adaptive embedding model
+    current_embed_model = get_embed_model()
 
     # Check if collection already exists and validate compatibility
     db_settings = ChromaSettings(anonymized_telemetry=False)
@@ -1439,10 +1443,10 @@ def finalize_ingestion(db_path: str, args=None):
             try:
                 validation_result = validate_embedding_compatibility(
                     collection_metadata,
-                    current_model=EMBED_MODEL,
+                    current_model=current_embed_model,
                     strict=True
                 )
-                logging.info(f"✅ Embedding model validation passed: {EMBED_MODEL}")
+                logging.info(f"✅ Embedding model validation passed: {current_embed_model}")
             except EmbeddingModelMismatchError as e:
                 logging.error(f"❌ CRITICAL: {e}")
                 logging.error(f"   Current model: {e.current_model}")
@@ -1455,8 +1459,8 @@ def finalize_ingestion(db_path: str, args=None):
                 raise RuntimeError(f"Embedding model mismatch prevents ingestion: {e}")
         else:
             # New collection - store embedding model metadata
-            logging.info(f"Creating new collection with embedding model: {EMBED_MODEL}")
-            embedding_dimension = get_embedding_dimension(EMBED_MODEL)
+            logging.info(f"Creating new collection with embedding model: {current_embed_model}")
+            embedding_dimension = get_embedding_dimension(current_embed_model)
             logging.info(f"Embedding dimension: {embedding_dimension}")
 
     except EmbeddingModelMismatchError:
@@ -1506,21 +1510,23 @@ def finalize_ingestion(db_path: str, args=None):
         logging.info(f"Adding {len(doc_ids_to_add_to_default)} new documents to the '{collection_name}' collection.")
         try:
             from cortex_engine.collection_manager import WorkingCollectionManager
-            from cortex_engine.config import EMBED_MODEL
             from cortex_engine.utils.embedding_validator import get_embedding_dimension
+
+            # Get adaptive embedding model
+            current_embed_model = get_embed_model()
 
             collection_mgr = WorkingCollectionManager()
             collection_mgr.add_docs_by_id_to_collection(collection_name, doc_ids_to_add_to_default)
 
             # Store/update embedding model metadata for this collection
             try:
-                embedding_dimension = get_embedding_dimension(EMBED_MODEL)
+                embedding_dimension = get_embedding_dimension(current_embed_model)
                 collection_mgr.set_embedding_model_metadata(
                     collection_name,
-                    EMBED_MODEL,
+                    current_embed_model,
                     embedding_dimension
                 )
-                logging.info(f"Stored embedding model metadata: {EMBED_MODEL} ({embedding_dimension}D)")
+                logging.info(f"Stored embedding model metadata: {current_embed_model} ({embedding_dimension}D)")
             except Exception as meta_error:
                 logging.warning(f"Could not store embedding metadata (non-critical): {meta_error}")
 

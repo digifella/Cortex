@@ -7,7 +7,8 @@ Supports two embedding backends:
 1. SentenceTransformer (BGE/NV-Embed) - Default, text-only
 2. Qwen3-VL - Multimodal (text, images, video) when QWEN3_VL_ENABLED=true
 
-Uses the model configured in cortex_engine.config.EMBED_MODEL (or Qwen3-VL if enabled).
+Uses adaptive model selection via get_embed_model() which auto-detects
+the best model for available hardware (Qwen3-VL > NV-Embed > BGE).
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from pathlib import Path
 import threading
 import os
 
-from .config import EMBED_MODEL, QWEN3_VL_ENABLED, QWEN3_VL_MODEL_SIZE
+from .config import get_embed_model, QWEN3_VL_ENABLED, QWEN3_VL_MODEL_SIZE
 from .utils.logging_utils import get_logger
 from .utils.performance_monitor import measure
 from .utils.gpu_monitor import get_optimal_batch_size, log_gpu_status
@@ -95,11 +96,13 @@ def _load_sentence_transformer_model():
                 device = "cpu"
                 logger.info(f"💻 Using CPU for embeddings (no GPU detected)")
 
-            logger.info(f"Loading embedding model: {EMBED_MODEL} on {device}")
+            # Get adaptive model selection
+            embed_model = get_embed_model()
+            logger.info(f"Loading embedding model: {embed_model} on {device}")
             # Normalize embeddings improves Chroma recall for BGE models
             try:
                 # Try loading in offline mode first (HF_HUB_OFFLINE env var is set above)
-                _model = SentenceTransformer(EMBED_MODEL, device=device, trust_remote_code=True)
+                _model = SentenceTransformer(embed_model, device=device, trust_remote_code=True)
                 logger.info(f"✅ Embedding model loaded from cache on {device} (offline mode)")
             except Exception as offline_error:
                 # If offline mode fails, temporarily enable online mode and try downloading
@@ -109,7 +112,7 @@ def _load_sentence_transformer_model():
                     # Temporarily disable offline mode for download
                     os.environ["HF_HUB_OFFLINE"] = "0"
                     os.environ["TRANSFORMERS_OFFLINE"] = "0"
-                    _model = SentenceTransformer(EMBED_MODEL, device=device, trust_remote_code=True)
+                    _model = SentenceTransformer(embed_model, device=device, trust_remote_code=True)
                     logger.info(f"✅ Embedding model downloaded and loaded on {device}")
                     # Re-enable offline mode after successful download
                     os.environ["HF_HUB_OFFLINE"] = "1"
@@ -119,13 +122,13 @@ def _load_sentence_transformer_model():
                     logger.error(f"Offline error: {str(offline_error)[:200]}")
                     logger.error(f"Download error: {str(download_error)[:200]}")
                     raise RuntimeError(
-                        f"Cannot load embedding model '{EMBED_MODEL}'. "
+                        f"Cannot load embedding model '{embed_model}'. "
                         f"Model not cached locally and internet unavailable. "
                         f"Please rebuild Docker image with internet access to pre-download the model."
                     ) from download_error
 
             # Calculate optimal batch size for this device
-            _optimal_batch_size = get_optimal_batch_size(model_name=EMBED_MODEL, conservative=True)
+            _optimal_batch_size = get_optimal_batch_size(model_name=embed_model, conservative=True)
             log_gpu_status()
 
     return _model
@@ -387,7 +390,7 @@ def get_embedding_info() -> dict:
 
     return {
         "backend": "sentence_transformers",
-        "model_name": EMBED_MODEL,
+        "model_name": get_embed_model(),
         "multimodal": False,
         "device": "auto-detected on load",
     }
@@ -411,8 +414,9 @@ def get_embedding_dimension() -> int:
 
     # For SentenceTransformer models, use known dimensions or probe
     from .utils.embedding_validator import KNOWN_MODEL_DIMENSIONS
-    if EMBED_MODEL in KNOWN_MODEL_DIMENSIONS:
-        return KNOWN_MODEL_DIMENSIONS[EMBED_MODEL]
+    embed_model = get_embed_model()
+    if embed_model in KNOWN_MODEL_DIMENSIONS:
+        return KNOWN_MODEL_DIMENSIONS[embed_model]
 
     # Fallback: generate a test embedding to get dimension
     test_vec = embed_query("test")

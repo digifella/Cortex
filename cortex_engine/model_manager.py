@@ -196,17 +196,25 @@ def get_model_info_summary() -> Dict:
     """
     Get summary of current model configuration and system capabilities.
 
+    Uses adaptive embedding selection to automatically choose the best model
+    for available hardware (Qwen3-VL > NV-Embed > BGE).
+
     Returns:
         Dictionary with model and system information
     """
-    from .config import EMBED_MODEL, KB_LLM_MODEL, VLM_MODEL
+    from .config import get_embed_model, get_embedding_strategy, KB_LLM_MODEL, VLM_MODEL
 
     has_nvidia, gpu_info = detect_nvidia_gpu()
 
-    embed_cached, embed_path = check_model_cached(EMBED_MODEL)
+    # Get adaptive embedding selection
+    embed_strategy = get_embedding_strategy()
+    embed_model = embed_strategy["model"]
+
+    embed_cached, embed_path = check_model_cached(embed_model)
 
     return {
-        "embedding_model": EMBED_MODEL,
+        "embedding_model": embed_model,
+        "embedding_strategy": embed_strategy,  # Full strategy details
         "embedding_cached": embed_cached,
         "embedding_path": embed_path,
         "llm_model": KB_LLM_MODEL,
