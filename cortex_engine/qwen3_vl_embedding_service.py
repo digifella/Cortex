@@ -167,40 +167,81 @@ def _load_model(config: Optional[Qwen3VLConfig] = None) -> tuple:
 
         try:
             # Import required packages
+            import os
             from transformers import AutoModel, AutoProcessor
 
             device = config.device or _get_device()
             dtype = torch.bfloat16 if config.torch_dtype == "bfloat16" else torch.float16
 
-            # Load processor
-            _processor = AutoProcessor.from_pretrained(
-                config.model_name,
-                trust_remote_code=config.trust_remote_code
-            )
+            # Model loading with offline/online fallback
+            def load_model_and_processor():
+                nonlocal _processor, _embedding_model
 
-            # Load model with optimizations
-            model_kwargs = {
-                "trust_remote_code": config.trust_remote_code,
-                "torch_dtype": dtype,
-            }
+                # Load processor
+                _processor = AutoProcessor.from_pretrained(
+                    config.model_name,
+                    trust_remote_code=config.trust_remote_code
+                )
 
-            # Add Flash Attention 2 if available and requested
-            if config.use_flash_attention:
-                try:
-                    import flash_attn  # noqa: F401
-                    model_kwargs["attn_implementation"] = "flash_attention_2"
-                    logger.info("⚡ Using Flash Attention 2 for memory optimization")
-                except ImportError:
-                    logger.info("📝 Flash Attention 2 not installed - using default attention")
+                # Load model with optimizations
+                model_kwargs = {
+                    "trust_remote_code": config.trust_remote_code,
+                    "torch_dtype": dtype,
+                }
 
-            _embedding_model = AutoModel.from_pretrained(
-                config.model_name,
-                **model_kwargs
-            ).to(device).eval()
+                # Add Flash Attention 2 if available and requested
+                if config.use_flash_attention:
+                    try:
+                        import flash_attn  # noqa: F401
+                        model_kwargs["attn_implementation"] = "flash_attention_2"
+                        logger.info("⚡ Using Flash Attention 2 for memory optimization")
+                    except ImportError:
+                        logger.info("📝 Flash Attention 2 not installed - using default attention")
+
+                _embedding_model = AutoModel.from_pretrained(
+                    config.model_name,
+                    **model_kwargs
+                ).to(device).eval()
+
+            # Try loading in offline mode first (respects HF_HUB_OFFLINE env var)
+            try:
+                load_model_and_processor()
+                logger.info(f"✅ Qwen3-VL loaded from cache on {device}")
+            except Exception as offline_error:
+                # If offline mode fails, temporarily enable online mode for download
+                if "offline" in str(offline_error).lower() or "couldn't connect" in str(offline_error).lower() or "LocalEntryNotFoundError" in str(type(offline_error).__name__):
+                    logger.warning(f"Qwen3-VL not cached locally, attempting download...")
+                    logger.debug(f"Offline error: {offline_error}")
+
+                    # Save current offline settings
+                    old_hf_offline = os.environ.get("HF_HUB_OFFLINE")
+                    old_transformers_offline = os.environ.get("TRANSFORMERS_OFFLINE")
+
+                    try:
+                        # Temporarily enable online mode
+                        os.environ["HF_HUB_OFFLINE"] = "0"
+                        os.environ["TRANSFORMERS_OFFLINE"] = "0"
+
+                        load_model_and_processor()
+                        logger.info(f"✅ Qwen3-VL downloaded and loaded on {device}")
+
+                    finally:
+                        # Restore offline settings
+                        if old_hf_offline is not None:
+                            os.environ["HF_HUB_OFFLINE"] = old_hf_offline
+                        elif "HF_HUB_OFFLINE" in os.environ:
+                            del os.environ["HF_HUB_OFFLINE"]
+
+                        if old_transformers_offline is not None:
+                            os.environ["TRANSFORMERS_OFFLINE"] = old_transformers_offline
+                        elif "TRANSFORMERS_OFFLINE" in os.environ:
+                            del os.environ["TRANSFORMERS_OFFLINE"]
+                else:
+                    # Re-raise if it's not an offline-related error
+                    raise
 
             _current_config = config
-
-            logger.info(f"✅ Qwen3-VL loaded on {device} ({config.embedding_dim}D embeddings)")
+            logger.info(f"✅ Qwen3-VL ready on {device} ({config.embedding_dim}D embeddings)")
 
             return _embedding_model, _processor, _current_config
 
