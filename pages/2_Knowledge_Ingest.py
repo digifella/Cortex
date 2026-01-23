@@ -1,6 +1,6 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v5.2.0
-# Date: 2026-01-17
+# Version: v5.3.0
+# Date: 2026-01-23
 # Purpose: GUI for knowledge base ingestion.
 #          - FEATURE (v5.1.0): Added Qwen3-VL multimodal embedding status and
 #            configuration display in sidebar. Shows model size, reranker status,
@@ -528,7 +528,7 @@ def initialize_state(force_reset: bool = False):
 
 # Path handling now handled by centralized utilities
 
-# Note: delete_knowledge_base function moved to pages/13_Maintenance.py
+# Note: delete_knowledge_base function moved to pages/6_Maintenance.py
 
 @st.cache_data
 def get_full_file_content(file_path_str: str) -> str:
@@ -1950,12 +1950,13 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
         logger.error(f"Auto-resume failed: {e}")
         return False
 
-# Note: clear_ingestion_log_file function moved to pages/13_Maintenance.py
+# Note: clear_ingestion_log_file function moved to pages/6_Maintenance.py
 
 def render_model_status_bar():
     """Render persistent model configuration status bar at top of page"""
     # Use cached model info to avoid repeated system checks
-    if 'model_info_cache' not in st.session_state:
+    # Invalidate cache if it's missing the new embedding_strategy field (old cache format)
+    if 'model_info_cache' not in st.session_state or 'embedding_strategy' not in st.session_state.model_info_cache:
         st.session_state.model_info_cache = get_model_info_summary()
     model_info = st.session_state.model_info_cache
     gpu_info = model_info.get('gpu_info', {})
@@ -2042,7 +2043,8 @@ def render_sidebar_model_config():
     st.sidebar.markdown("## 🤖 Model Configuration")
 
     # Cache model info to avoid repeated system checks on every rerun
-    if 'model_info_cache' not in st.session_state:
+    # Invalidate cache if it's missing the new embedding_strategy field (old cache format)
+    if 'model_info_cache' not in st.session_state or 'embedding_strategy' not in st.session_state.model_info_cache:
         st.session_state.model_info_cache = get_model_info_summary()
     if 'available_models_cache' not in st.session_state:
         st.session_state.available_models_cache = get_available_embedding_models()
@@ -3731,7 +3733,7 @@ def render_recovery_section():
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("🔧 Go to Maintenance", use_container_width=True, type="primary"):
-                    st.switch_page("pages/13_Maintenance.py")
+                    st.switch_page("pages/6_Maintenance.py")
             with col2:
                 if st.button("Dismiss Warning", use_container_width=True):
                     config_manager = ConfigManager()

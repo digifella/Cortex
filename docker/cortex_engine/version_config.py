@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "5.2.0"
+CORTEX_VERSION = "5.3.0"
 
 # Version details
 VERSION_INFO = {
     "major": 5,
-    "minor": 2,
+    "minor": 3,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -24,30 +24,27 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-01-20",
-    "release_name": "Intelligent Proposal Completion Overhaul",
-    "description": "Complete redesign of Proposal Intelligent Completion with simplified UX, per-question settings, human-in-the-loop regeneration, and significant performance improvements.",
+    "release_date": "2026-01-23",
+    "release_name": "Adaptive Embedding & Save As You Go",
+    "description": "Automatic embedding model selection based on hardware (Qwen3-VL/NV-Embed/BGE), IC workflow persistence, and editorial UI redesign.",
     "breaking_changes": [],
     "new_features": [
-        "Simplified 3-button workflow: Skip | Edit | Auto-Generate",
-        "Per-question Evidence Source: Each question can search a different collection",
-        "Per-question Creativity slider: Set Factual/Balanced/Creative per question",
-        "Human-in-the-loop Regeneration: Refine responses with guidance hints",
-        "Per-field Export: Download individual responses for external editing",
-        "Entire Knowledge Base search option for evidence retrieval",
-        "Simplified Proposal Workspace with clear navigation"
+        "Adaptive Embedding Selection: Auto-detects best model (Qwen3-VL > NV-Embed > BGE)",
+        "IC Save As You Go: Progress auto-saved on every action",
+        "IC Editorial UI Redesign: Clean typography, collapsible sections",
+        "Per-question Creativity dropdown next to Generate button",
+        "Collapsible question sections with completion counts"
     ],
     "improvements": [
-        "Ollama status check cached (60 seconds) - faster UI",
-        "ConfigManager cached - eliminates file reads on interactions",
-        "Recovery analysis cached (120 seconds) - faster Knowledge Ingest page",
-        "Collection manager reloads fresh - fixes stale collection counts",
-        "Response text area enlarged with word count indicator",
-        "Session state persists during page navigation"
+        "Embedding model selection uses hardware detection throughout pipeline",
+        "RTX 8000/A100 class GPUs auto-select Qwen3-VL-8B multimodal embedding",
+        "Session state cache invalidation for model info updates",
+        "Removed Skip button from IC (not needed with new UX)",
+        "Compact Edit/Generate buttons instead of giant full-width"
     ],
     "bug_fixes": [
-        "Fixed '0 documents in collection' bug - stale cache issue",
-        "Fixed Generate button infinite loop - enum serialization fix",
+        "Fixed static EMBED_MODEL constant not using adaptive selection",
+        "Fixed model_info_cache showing stale embedding model",
         "Fixed GraphQueryEngine initialization error",
         "Fixed st.rerun() causing premature page restart"
     ],
