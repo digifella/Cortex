@@ -175,7 +175,7 @@ def _load_model(config: Optional[Qwen3VLConfig] = None) -> tuple:
 
             # Model loading with offline/online fallback
             def load_model_and_processor():
-                nonlocal _processor, _embedding_model
+                global _processor, _embedding_model
 
                 # Load processor
                 _processor = AutoProcessor.from_pretrained(
@@ -315,20 +315,73 @@ def _process_inputs(
     Returns:
         Numpy array of embeddings (N x embedding_dim)
     """
+    from PIL import Image
+    import requests
+    from io import BytesIO
+
     device = next(model.parameters()).device
 
-    # Convert inputs to format expected by model
-    input_dicts = [inp.to_dict() for inp in inputs]
+    # Separate text-only inputs from image inputs
+    texts = []
+    images = []
+    input_has_image = []
+
+    for inp in inputs:
+        text = inp.text or ""
+        if inp.instruction:
+            text = f"{inp.instruction}: {text}"
+        texts.append(text)
+
+        # Handle image inputs
+        if inp.image:
+            try:
+                image_path = str(inp.image)
+                if image_path.startswith(('http://', 'https://')):
+                    # URL - fetch image
+                    response = requests.get(image_path, timeout=10)
+                    img = Image.open(BytesIO(response.content)).convert(config.image_format)
+                else:
+                    # Local file path
+                    img = Image.open(image_path).convert(config.image_format)
+
+                # Resize if needed
+                if max(img.size) > config.max_image_size:
+                    ratio = config.max_image_size / max(img.size)
+                    new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                    img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+                images.append(img)
+                input_has_image.append(True)
+            except Exception as e:
+                logger.warning(f"Failed to load image {inp.image}: {e}")
+                images.append(None)
+                input_has_image.append(False)
+        else:
+            images.append(None)
+            input_has_image.append(False)
 
     # Process through model
     with torch.no_grad():
-        # Prepare inputs using processor
-        processed = processor(
-            input_dicts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True
-        ).to(device)
+        # Check if we have any valid images
+        valid_images = [img for img in images if img is not None]
+
+        if valid_images:
+            # Process with images - use processor with text and images
+            processed = processor(
+                text=texts,
+                images=valid_images if valid_images else None,
+                return_tensors="pt",
+                padding=True,
+                truncation=True
+            ).to(device)
+        else:
+            # Text-only processing
+            processed = processor(
+                text=texts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True
+            ).to(device)
 
         # Forward pass
         outputs = model(**processed)
@@ -344,7 +397,8 @@ def _process_inputs(
         if config.mrl_dim and config.mrl_dim < config.embedding_dim:
             embeddings = embeddings[:, :config.mrl_dim]
 
-        return embeddings.cpu().numpy()
+        # Convert to float32 before numpy (bfloat16 not supported by numpy)
+        return embeddings.cpu().float().numpy()
 
 
 def embed_text(

@@ -301,6 +301,7 @@ def load_knowledge_graph_for_linking(graph_path: str) -> Optional[Any]:
     """
     try:
         import networkx as nx
+        import pickle
         from pathlib import Path
 
         path = Path(graph_path)
@@ -308,7 +309,10 @@ def load_knowledge_graph_for_linking(graph_path: str) -> Optional[Any]:
             logger.warning(f"Knowledge graph not found at {graph_path}")
             return None
 
-        graph = nx.read_gpickle(str(path))
+        # Use pickle directly (nx.read_gpickle was removed in NetworkX 3.0+)
+        with open(str(path), 'rb') as f:
+            graph = pickle.load(f)
+
         logger.info(f"✅ Loaded knowledge graph with {graph.number_of_nodes()} nodes for entity linking")
         return graph
 

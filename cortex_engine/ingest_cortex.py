@@ -469,15 +469,19 @@ def manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
 def _process_images_batch(
     image_files: List[str],
     skip_image_processing: bool = False,
-    max_workers: int = 3
+    max_workers: int = 1
 ) -> List[Document]:
     """
-    Process multiple images in parallel with VLM.
+    Process images with VLM (sequential by default to prevent Ollama crashes).
 
-    This function significantly improves image processing performance by:
-    1. Processing up to 3 images concurrently
-    2. Using 30s timeout per image (vs 120s previously)
+    This function processes images reliably by:
+    1. Processing 1 image at a time (llava:7b crashes on concurrent requests)
+    2. Using 30s timeout per image
     3. Graceful fallback on timeout/error
+    4. Retry logic with exponential backoff for transient errors
+
+    NOTE: When Qwen3-VL is enabled, VLM processing is skipped because Qwen3-VL
+    can directly embed images without needing text descriptions from llava.
 
     Args:
         image_files: List of image file paths to process
@@ -490,6 +494,25 @@ def _process_images_batch(
     from pathlib import Path
 
     documents = []
+
+    # Check if Qwen3-VL is enabled - if so, skip llava VLM processing
+    # Qwen3-VL can directly embed images without needing text descriptions
+    try:
+        from cortex_engine.config import QWEN3_VL_ENABLED
+        if QWEN3_VL_ENABLED:
+            logging.info(f"🎨 Qwen3-VL enabled - skipping llava VLM for {len(image_files)} images (will embed directly)")
+            for file_path in image_files:
+                path = Path(file_path)
+                # Create document with image path for direct Qwen3-VL embedding
+                doc = Document(text=f"[Image: {path.name}]")
+                doc.metadata['file_path'] = str(path.as_posix())
+                doc.metadata['file_name'] = path.name
+                doc.metadata['source_type'] = 'image_qwen3vl'
+                doc.metadata['image_path'] = str(path.as_posix())  # For Qwen3-VL to embed
+                documents.append(doc)
+            return documents
+    except ImportError:
+        pass  # Config not available, continue with llava
 
     if skip_image_processing:
         logging.info(f"⚡ Skipping VLM processing for {len(image_files)} images (fast mode)")
@@ -616,8 +639,9 @@ def _legacy_manual_load_documents(file_paths: List[str], args=None) -> List[Docu
 
     # Process images in batch (parallel with timeout)
     if image_files:
-        # Phase 1 Enhancement: Increased parallel workers for RTX 8000 (48GB VRAM)
-        image_workers = getattr(args, 'image_workers', 4) if hasattr(args, 'image_workers') else 4
+        # Sequential processing (1 worker) - llava:7b crashes on concurrent requests
+        # Use --image-workers to increase if your VLM supports concurrency
+        image_workers = getattr(args, 'image_workers', 1) if hasattr(args, 'image_workers') else 1
         image_docs = _process_images_batch(image_files, skip_images, max_workers=image_workers)
         documents.extend(image_docs)
 
@@ -1566,8 +1590,8 @@ def main():
                        help="After this many documents, sleep for cooldown period")
     parser.add_argument("--cooldown-seconds", type=float, default=20.0,
                        help="Cooldown duration (seconds) to prevent thermal throttling")
-    parser.add_argument("--image-workers", type=int, default=4,
-                       help="Max concurrent image VLM workers (default 4, optimized for RTX 8000)")
+    parser.add_argument("--image-workers", type=int, default=1,
+                       help="Max concurrent image VLM workers (default 1, llava crashes on concurrent)")
     parser.add_argument("--index-batch-cooldown", type=float, default=1.0,
                        help="Sleep (s) between indexing batches to reduce sustained load")
     parser.add_argument("--llm-timeout", type=float, default=120.0,

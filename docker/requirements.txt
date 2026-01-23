@@ -1,252 +1,393 @@
-aiofiles==24.1.0
-aiohappyeyeballs==2.6.1
-aiohttp==3.12.14
-aiosignal==1.4.0
-airportsdata==20250706
-altair==5.5.0
-annotated-types==0.7.0
-anyio==4.9.0
-asgiref==3.9.1
-attrs==25.3.0
-backoff==2.2.1
-bcrypt==4.3.0
-beautifulsoup4==4.12.3
-blinker==1.9.0
-blis==0.7.11
-build==1.2.2.post1
-cachetools==5.5.2
-catalogue==2.0.10
-certifi==2025.7.14
-charset-normalizer==3.4.2
-chroma-hnswlib==0.7.6
-chromadb>=0.5.15,<0.6.0
-click==8.2.1
-cloudpathlib==0.21.1
-cloudpickle==3.1.1
-coloredlogs==15.0.1
-confection==0.1.5
-cymem==2.0.11
-dataclasses-json==0.6.7
-Deprecated==1.2.18
-dirtyjson==1.0.8
-diskcache==5.6.3
-distro==1.9.0
-docx2txt==0.8
-durationpy==0.10
-en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
-et_xmlfile==2.0.0
+# ============================================================================
+# CORTEX SUITE REQUIREMENTS
+# ============================================================================
+# Last Updated: 2026-01-24
+# Python Version: 3.11
+#
+# This file reflects the ACTUAL installed packages in the working environment.
+# See UPGRADE_PLAN.md for Qwen3-VL multimodal embedding support upgrade path.
+# ============================================================================
+
+# ============================================================================
+# CORE FRAMEWORK
+# ============================================================================
+streamlit==1.36.0
 fastapi==0.116.1
-filelock==3.18.0
-flatbuffers==25.2.10
-frozenlist==1.7.0
-fsspec==2025.7.0
-genson==1.3.0
-gitdb==4.0.12
-GitPython==3.1.44
+uvicorn==0.35.0
+starlette==0.47.1
+
+# ============================================================================
+# AI/ML CORE - LlamaIndex Stack
+# ============================================================================
+llama-index==0.14.13
+llama-index-core==0.14.13
+llama-index-agent-openai==0.4.12
+llama-index-cli==0.5.3
+llama-index-embeddings-huggingface==0.6.1
+llama-index-embeddings-openai==0.5.1
+llama-index-indices-managed-llama-cloud==0.9.4
+llama-index-instrumentation==0.4.2
+llama-index-legacy==0.9.48.post4
+llama-index-llms-gemini==0.1.10
+llama-index-llms-ollama==0.9.1
+llama-index-llms-openai==0.6.13
+llama-index-multi-modal-llms-openai==0.5.3
+llama-index-program-openai==0.3.2
+llama-index-question-gen-openai==0.3.1
+llama-index-readers-file==0.5.6
+llama-index-readers-llama-parse==0.5.1
+llama-index-vector-stores-chroma==0.5.5
+llama-index-workflows==2.12.2
+llama-cloud==0.1.35
+llama-cloud-services==0.6.54
+llama-parse==0.6.54
+
+# ============================================================================
+# AI/ML - Transformers & Embeddings
+# ============================================================================
+# UPGRADED 2026-01-24: Now supports Qwen3-VL multimodal embeddings
+transformers==4.57.6
+sentence-transformers==5.2.0
+tokenizers==0.22.2
+huggingface-hub==0.36.0
+safetensors==0.5.3
+accelerate==1.10.0
+
+# ============================================================================
+# AI/ML - PyTorch (CUDA 12.1)
+# ============================================================================
+# NOTE: torch 2.5.1 with CUDA 12.1 support
+# For CPU-only: pip install torch torchvision torchaudio
+# For CUDA: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.3.1+cu121
+triton==3.1.0
+
+# NVIDIA CUDA libraries (installed with CUDA torch)
+nvidia-cublas-cu12==12.4.5.8
+nvidia-cuda-cupti-cu12==12.4.127
+nvidia-cuda-nvrtc-cu12==12.4.127
+nvidia-cuda-runtime-cu12==12.4.127
+nvidia-cudnn-cu12==9.1.0.70
+nvidia-cufft-cu12==11.2.1.3
+nvidia-curand-cu12==10.3.5.147
+nvidia-cusolver-cu12==11.6.1.9
+nvidia-cusparse-cu12==12.3.1.170
+nvidia-nvjitlink-cu12==12.4.127
+nvidia-nvtx-cu12==12.4.127
+
+# ============================================================================
+# VECTOR DATABASE & GRAPH
+# ============================================================================
+chromadb==1.4.1
+chroma-hnswlib==0.7.6
+networkx==3.6.1
+
+# ============================================================================
+# NLP & TEXT PROCESSING
+# ============================================================================
+spacy==3.7.5
+spacy-legacy==3.0.12
+spacy-loggers==1.0.5
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+nltk==3.9.2
+tiktoken==0.12.0
+regex==2026.1.15
+langcodes==3.5.0
+language_data==1.3.0
+
+# ============================================================================
+# DOCUMENT PROCESSING
+# ============================================================================
+# Docling for advanced document parsing (optional but installed)
+docling==1.8.5
+docling-core==1.7.2
+docling-ibm-models==1.3.3
+docling-parse==1.6.2
+
+# PDF processing
+PyMuPDF==1.26.1
+pypdf==6.6.0
+pypdfium2==4.30.0
+
+# Office documents
+python-docx==1.2.0
+python-pptx==0.6.23
+openpyxl==3.1.4
+docx2txt==0.8
+xlsxwriter==3.2.5
+striprtf==0.0.26
+
+# Other document formats
+beautifulsoup4==4.14.3
+lxml==6.0.0
+html5lib==1.1
+unstructured==0.18.27
+unstructured-client==0.42.8
+
+# ============================================================================
+# OLLAMA & LOCAL LLM
+# ============================================================================
+ollama==0.6.1
+
+# ============================================================================
+# OPENAI & CLOUD AI
+# ============================================================================
+openai==2.15.0
 google-ai-generativelanguage==0.6.4
+google-generativeai==0.5.4
 google-api-core==2.25.1
 google-api-python-client==2.134.0
 google-auth==2.40.3
 google-auth-httplib2==0.2.0
-google-generativeai==0.5.4
 googleapis-common-protos==1.70.0
+
+# ============================================================================
+# DATA PROCESSING & SCIENCE
+# ============================================================================
+numpy==1.26.4
+pandas==2.3.3
+scipy==1.16.0
+scikit-learn==1.7.0
+pyarrow==20.0.0
+
+# Required for nvidia/NV-Embed-v2 model
+datasets==2.14.4
+einops==0.8.1
+
+# ============================================================================
+# IMAGE PROCESSING
+# ============================================================================
+pillow==10.4.0
+scikit-image==0.25.2
+opencv-python-headless==4.7.0.72
+imageio==2.37.0
+
+# OCR support (for easyocr/docling)
+easyocr==1.7.2
+
+# ============================================================================
+# VISUALIZATION
+# ============================================================================
+altair==5.5.0
+plotly==6.2.0
+matplotlib==3.10.7
+pydeck==0.9.1
 graphviz==0.20.3
-greenlet==3.2.3
-grpcio==1.73.1
-grpcio-status==1.62.3
-h11==0.16.0
-hf-xet==1.1.5
+
+# ============================================================================
+# WEB & HTTP
+# ============================================================================
+aiohttp==3.13.3
+aiofiles==24.1.0
+httpx==0.28.1
 httpcore==1.0.9
-httplib2==0.22.0
-httptools==0.6.4
-httpx==0.27.2
-huggingface-hub==0.33.4
-humanfriendly==10.0
-idna==3.10
-importlib_metadata==8.4.0
-importlib_resources==6.5.2
-interegular==0.3.3
-iso3166==2.1.1
-Jinja2==3.1.6
-joblib==1.5.1
-jsonpath-ng==1.7.0
-jsonschema==4.24.0
-jsonschema-specifications==2025.4.1
-kubernetes==33.1.0
-langcodes==3.5.0
-language_data==1.3.0
-lark==1.2.2
-llama-cloud==0.0.6
-llama-index==0.10.50
-llama-index-agent-openai==0.2.9
-llama-index-cli==0.1.13
-llama-index-core==0.10.50
-llama-index-embeddings-huggingface==0.2.0
-llama-index-embeddings-openai==0.1.11
-llama-index-indices-managed-llama-cloud==0.2.4
-llama-index-legacy==0.9.48.post4
-llama-index-llms-gemini==0.1.10
-llama-index-llms-ollama==0.1.3
-llama-index-llms-openai==0.1.24
-llama-index-multi-modal-llms-openai==0.1.9
-llama-index-program-openai==0.1.6
-llama-index-question-gen-openai==0.1.3
-llama-index-readers-file==0.1.22
-llama-index-readers-llama-parse==0.1.6
-llama-index-vector-stores-chroma==0.1.7
-llama-parse==0.4.9
-lxml==6.0.0
-marisa-trie==1.2.1
-markdown-it-py==3.0.0
-MarkupSafe==3.0.2
-marshmallow==3.26.1
-mdurl==0.1.2
-mmh3==5.1.0
-mpmath==1.3.0
-multidict==6.6.3
-murmurhash==1.0.13
-mypy_extensions==1.1.0
-narwhals==1.47.0
+requests==2.32.5
+urllib3==2.6.3
+websockets==15.0.1
+websocket-client==1.8.0
+
+# ============================================================================
+# ASYNC & CONCURRENCY
+# ============================================================================
+anyio==4.12.1
+asyncio-extensions are built-in
 nest-asyncio==1.6.0
-networkx==3.5
-nltk==3.9.1
-numpy>=1.26.4,<2.0.0
-# NVIDIA CUDA dependencies moved to optional - see architecture-specific installation notes below
+uvloop==0.21.0
+greenlet==3.3.0
+
+# ============================================================================
+# DATA SERIALIZATION
+# ============================================================================
+pydantic==2.12.5
+pydantic_core==2.41.5
+pydantic-settings==2.10.1
+orjson==3.11.0
+PyYAML==6.0.3
+toml==0.10.2
+marshmallow==3.26.2
+dataclasses-json==0.6.7
+dirtyjson==1.0.8
+
+# ============================================================================
+# UTILITIES
+# ============================================================================
+python-dotenv==1.2.1
+click==8.3.1
+typer==0.16.0
+rich==13.9.4
+tqdm==4.67.1
+coloredlogs==15.0.1
+humanfriendly==10.0
+psutil==6.0.0
+filelock==3.18.0
+cachetools==5.5.2
+diskcache==5.6.3
+tenacity==8.5.0
+wrapt==1.17.3
+Deprecated==1.2.18
+
+# ============================================================================
+# SECURITY & AUTH
+# ============================================================================
+cryptography==46.0.3
+bcrypt==4.3.0
+Authlib==1.6.6
 oauthlib==3.3.1
-ollama==0.2.1
-onnxruntime>=1.22.0
-openai==1.35.3
-openpyxl==3.1.4
+requests-oauthlib==2.0.0
+certifi==2026.1.4
+
+# ============================================================================
+# KUBERNETES & DEPLOYMENT
+# ============================================================================
+kubernetes==33.1.0
+
+# ============================================================================
+# TELEMETRY & MONITORING
+# ============================================================================
 opentelemetry-api==1.27.0
+opentelemetry-sdk==1.27.0
+opentelemetry-proto==1.27.0
 opentelemetry-exporter-otlp-proto-common==1.27.0
 opentelemetry-exporter-otlp-proto-grpc==1.27.0
 opentelemetry-instrumentation==0.48b0
 opentelemetry-instrumentation-asgi==0.48b0
 opentelemetry-instrumentation-fastapi==0.48b0
-opentelemetry-proto==1.27.0
-opentelemetry-sdk==1.27.0
 opentelemetry-semantic-conventions==0.48b0
 opentelemetry-util-http==0.48b0
-orjson==3.11.0
-outlines==1.0.3
-outlines_core==0.1.26
-overrides==7.7.0
-packaging==24.2
-pandas==2.2.2
-pillow==10.4.0
-plotly==6.2.0
-ply==3.11
-posthog==6.1.1
-preshed==3.0.10
-propcache==0.3.2
-proto-plus==1.26.1
-protobuf==4.25.8
-psutil>=5.9.0
-pyarrow==20.0.0
-pyasn1==0.6.1
-pyasn1_modules==0.4.2
-pydantic>=2.7.0
-pydantic_core>=2.18.0
-pydeck==0.9.1
-Pygments==2.19.2
-PyMuPDF==1.26.1
-pyparsing==3.2.3
-pypdf==4.3.1
-PyPika==0.48.9
-pyproject_hooks==1.2.0
-python-dateutil==2.9.0.post0
-python-docx==1.2.0
-python-dotenv==1.0.1
-python-multipart==0.0.17
-python-pptx==0.6.23
-pytz==2025.2
-PyYAML==6.0.2
-referencing==0.36.2
-regex==2024.11.6
-requests==2.32.3
-requests-oauthlib==2.0.0
-rich==13.9.4
-rpds-py==0.26.0
-rsa==4.9.1
-safetensors==0.5.3
-scikit-learn==1.7.0
-scipy==1.16.0
-sentence-transformers==2.7.0
-# Required for nvidia/NV-Embed-v2 model (auto-selected when NVIDIA GPU detected)
-datasets>=2.14.0
-einops>=0.7.0
-shellingham==1.5.4
-six==1.17.0
-smart_open==7.3.0.post1
-smmap==5.0.2
-sniffio==1.3.1
-soupsieve==2.7
-spacy==3.7.5
-spacy-legacy==3.0.12
-spacy-loggers==1.0.5
-SQLAlchemy==2.0.41
-srsly==2.5.1
-starlette==0.47.1
-streamlit==1.36.0
-striprtf==0.0.26
-sympy==1.14.0
-tenacity==8.5.0
-thinc==8.2.5
-threadpoolctl==3.6.0
-tiktoken==0.9.0
-tokenizers==0.19.1
-toml==0.10.2
-# PyTorch - CPU version compatible with all architectures (x86_64, ARM64)
-torch>=2.3.1,<2.5.0
-torchvision>=0.18.1,<0.20.0
-tornado==6.5.1
-tqdm==4.67.1
-transformers==4.41.2
-# triton==2.3.1  # GPU-only dependency - removed for ARM64 compatibility
-typer==0.16.0
-typing-inspect==0.9.0
-typing_extensions==4.14.1
-tzdata==2025.2
-uritemplate==4.2.0
-urllib3==2.5.0
-uvicorn==0.35.0
-uvloop==0.21.0
-wasabi==1.1.3
-watchdog==4.0.2
-watchfiles==1.1.0
-weasel==0.4.1
-websocket-client==1.8.0
-websockets==15.0.1
-wrapt==1.17.2
-xlsxwriter==3.2.5
-yarl==1.20.1
-youtube-transcript-api==0.6.2
-zipp==3.23.0
-# Optional: Enhanced document processing with Docling
-# To enable advanced document parsing: pip install "docling>=1.0.0,<1.9.0"
-# System automatically falls back to proven legacy readers if not available
+posthog==5.4.0
 
 # ============================================================================
-# GPU ACCELERATION SETUP
+# GRPC & PROTOBUF
 # ============================================================================
-# By default, CPU-only PyTorch is installed (compatible with all architectures).
-# For NVIDIA GPU acceleration (significantly faster embeddings):
+grpcio==1.73.1
+grpcio-status==1.62.3
+protobuf==4.25.8
+proto-plus==1.26.1
+
+# ============================================================================
+# ONNX RUNTIME
+# ============================================================================
+onnxruntime==1.22.1
+
+# ============================================================================
+# GIT & VERSION CONTROL
+# ============================================================================
+GitPython==3.1.44
+gitdb==4.0.12
+smmap==5.0.2
+
+# ============================================================================
+# YOUTUBE & MEDIA
+# ============================================================================
+youtube-transcript-api==0.6.2
+av==16.1.0
+
+# ============================================================================
+# SCHEMA & VALIDATION
+# ============================================================================
+jsonschema==4.24.0
+jsonschema-specifications==2025.4.1
+referencing==0.36.2
+genson==1.3.0
+jsonpath-ng==1.7.0
+
+# ============================================================================
+# MISC DEPENDENCIES
+# ============================================================================
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+Pygments==2.19.2
+packaging==24.2
+setuptools
+typing_extensions==4.15.0
+typing-inspect==0.9.0
+six==1.17.0
+python-dateutil==2.9.0.post0
+pytz==2025.2
+tzdata==2025.3
+charset-normalizer==3.4.4
+idna==3.11
+attrs==25.4.0
+frozenlist==1.8.0
+multidict==6.7.0
+yarl==1.22.0
+aiosignal==1.4.0
+aiohappyeyeballs==2.6.1
+sniffio==1.3.1
+h11==0.16.0
+httptools==0.6.4
+watchfiles==1.1.0
+watchdog==4.0.2
+starlette==0.47.1
+python-multipart==0.0.17
+blinker==1.9.0
+tornado==6.5.1
+
+# Spacy/thinc dependencies
+blis==0.7.11
+catalogue==2.0.10
+confection==0.1.5
+cymem==2.0.11
+murmurhash==1.0.13
+preshed==3.0.10
+srsly==2.5.1
+thinc==8.2.5
+wasabi==1.1.3
+weasel==0.4.1
+cloudpathlib==0.21.1
+
+# LlamaIndex misc dependencies
+banks==2.3.0
+aiosqlite==0.22.1
+durationpy==0.10
+filetype==1.2.0
+overrides==7.7.0
+SQLAlchemy==2.0.46
+
+# Outlines (structured generation)
+outlines==1.0.3
+outlines_core==0.1.26
+interegular==0.3.3
+lark==1.2.2
+
+# Qwen VL utils (for future Qwen3-VL support)
+qwen-vl-utils==0.0.14
+
+# ============================================================================
+# DEVELOPMENT DEPENDENCIES (Optional)
+# ============================================================================
+# Uncomment for development environment:
+# pytest==8.3.4
+# pytest-asyncio==0.24.0
+# pytest-cov==6.0.0
+# pytest-mock==3.14.0
+# pytest-timeout==2.3.1
+# pytest-xdist==3.6.1
+# pytest-benchmark==5.1.0
+# black==24.10.0
+# flake8==7.1.1
+# mypy==1.13.0
+# isort==5.13.2
+# pylint==3.3.2
+# bandit==1.8.0
+# safety==3.2.11
+# pre_commit==4.0.1
+# ipython==8.30.0
+# ipdb==0.13.13
+
+# ============================================================================
+# UPGRADE HISTORY
+# ============================================================================
 #
-# QUICK SETUP (NVIDIA GPU):
-#   pip uninstall torch torchvision torchaudio -y
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# 2026-01-24: Qwen3-VL Multimodal Embedding Support Upgrade
+# ---------------------------------------------------------
+# - transformers: 4.46.3 → 4.57.6 (Qwen3-VL architecture support)
+# - sentence-transformers: 2.7.0 → 5.2.0 (compatibility + improvements)
+# - chromadb: 0.5.23 → 1.4.1 (tokenizers compatibility)
+# - tokenizers: 0.20.3 → 0.22.2 (required by transformers 4.57+)
 #
-# For detailed GPU setup instructions, see: GPU_SETUP.md
+# See UPGRADE_PLAN.md for details on this upgrade.
 #
-# Architecture Support:
-# - x86_64 with NVIDIA GPU: CUDA 12.1 (see GPU_SETUP.md)
-# - x86_64 CPU-only: Default installation above
-# - ARM64/Apple Silicon: Default installation above (MPS support included)
-# - WSL2 + NVIDIA GPU: Special setup required (see GPU_SETUP.md)
-#
-# Model Selection:
-# - With NVIDIA GPU: nvidia/NV-Embed-v2 (Nemotron) - Best quality & speed
-# - Without GPU: BAAI/bge-base-en-v1.5 (default) - Good balance
-#
-# The system automatically detects GPU and recommends optimal models.
-# Configure models in Knowledge Ingest page → Sidebar → Model Configuration
+# ============================================================================

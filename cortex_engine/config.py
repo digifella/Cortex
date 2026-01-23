@@ -10,6 +10,11 @@
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+# Load .env file BEFORE any os.getenv() calls
+from dotenv import load_dotenv
+load_dotenv()
+
 from .utils.default_paths import get_default_ai_database_path
 
 # --- Core Paths ---
