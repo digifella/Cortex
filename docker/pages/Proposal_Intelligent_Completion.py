@@ -897,16 +897,9 @@ else:
                     card_class = "editing"
 
                 # Question card
-                st.markdown(f"""
-                <div class="question-card {card_class}">
-                    <div class="question-number">Question {q_idx + 1}</div>
-                    <div class="question-text">{field.field_text}</div>
-                    <div class="question-meta">
-                        {f'Word limit: {field.word_limit}' if field.word_limit else ''}
-                        <span class="status-badge status-{current_status}" style="float:right;">{current_status.upper()}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                word_limit_text = f'Word limit: {field.word_limit}' if field.word_limit else ''
+                card_html = f'<div class="question-card {card_class}"><div class="question-number">Question {q_idx + 1}</div><div class="question-text">{field.field_text}</div><div class="question-meta">{word_limit_text}<span class="status-badge status-{current_status}" style="float:right;">{current_status.upper()}</span></div></div>'
+                st.markdown(card_html, unsafe_allow_html=True)
 
                 # Action area
                 if current_status == 'pending':
@@ -1021,15 +1014,9 @@ else:
                         st.markdown("---")
                         st.caption(f"**Evidence** ({len(cached_evidence)} sources)")
                         for ev in cached_evidence[:3]:
-                            st.markdown(f"""
-                            <div class="evidence-card">
-                                <div class="evidence-source">
-                                    {ev.source_doc}
-                                    <span class="evidence-score">{ev.relevance_score:.0%} relevant</span>
-                                </div>
-                                {ev.text[:350]}{'...' if len(ev.text) > 350 else ''}
-                            </div>
-                            """, unsafe_allow_html=True)
+                            ev_text = ev.text[:350] + ('...' if len(ev.text) > 350 else '')
+                            ev_html = f'<div class="evidence-card"><div class="evidence-source">{ev.source_doc}<span class="evidence-score">{ev.relevance_score:.0%} relevant</span></div>{ev_text}</div>'
+                            st.markdown(ev_html, unsafe_allow_html=True)
 
                     # Refinement panel (conditionally shown)
                     if st.session_state[show_refine_key]:
