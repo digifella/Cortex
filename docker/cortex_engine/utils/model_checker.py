@@ -45,10 +45,20 @@ class ModelAvailabilityChecker:
         """Get list of available Ollama models"""
         if not self.client:
             return []
-        
+
         try:
-            models = self.client.list()
-            return [model['name'] for model in models.get('models', [])]
+            response = self.client.list()
+            # Handle both old dict-style API and new Pydantic-style API (ollama>=0.4)
+            if hasattr(response, 'models'):
+                # New Pydantic API - models is a list of Model objects with .model attribute
+                model_list = response.models
+                return [getattr(m, 'model', getattr(m, 'name', str(m))) for m in model_list]
+            elif isinstance(response, dict):
+                # Old dict-style API
+                return [model['name'] for model in response.get('models', [])]
+            else:
+                logger.warning(f"Unexpected Ollama response type: {type(response)}")
+                return []
         except Exception as e:
             logger.error(f"Failed to get model list: {e}")
             return []
