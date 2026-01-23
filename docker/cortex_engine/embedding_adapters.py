@@ -30,15 +30,18 @@ logger = get_logger(__name__)
 
 
 try:
-    # Preferred import path in most LlamaIndex versions
-    from llama_index.embeddings.base import BaseEmbedding  # type: ignore
+    # Try new LlamaIndex 0.14+ path first
+    from llama_index.core.embeddings import BaseEmbedding  # type: ignore
 except Exception:
     try:
-        # Alternative path in some versions
-        from llama_index.core.embeddings.base import BaseEmbedding  # type: ignore
+        # Alternative path in older versions
+        from llama_index.embeddings.base import BaseEmbedding  # type: ignore
     except Exception:
-        # Fallback to object to avoid hard dependency; duck-typing should still work
-        BaseEmbedding = object  # type: ignore
+        try:
+            from llama_index.core.embeddings.base import BaseEmbedding  # type: ignore
+        except Exception:
+            # Fallback to object to avoid hard dependency; duck-typing should still work
+            BaseEmbedding = object  # type: ignore
 
 
 class EmbeddingServiceAdapter(BaseEmbedding):  # type: ignore
@@ -50,9 +53,12 @@ class EmbeddingServiceAdapter(BaseEmbedding):  # type: ignore
     for image embedding are available.
     """
 
-    def __init__(self, model_name: str | None = None):
-        # model_name is optional and informational; embedding_service reads from config
-        self.model_name = model_name
+    # Pydantic field for model name (required by new LlamaIndex BaseEmbedding)
+    model_name: str = "embedding-service-adapter"
+
+    def __init__(self, model_name: str | None = None, **kwargs):
+        # Call parent init for Pydantic compatibility
+        super().__init__(model_name=model_name or "embedding-service-adapter", **kwargs)
         self._multimodal = is_multimodal_enabled()
 
         if self._multimodal:
@@ -70,12 +76,26 @@ class EmbeddingServiceAdapter(BaseEmbedding):  # type: ignore
         """Check if multimodal (image) embedding is available."""
         return self._multimodal
 
-    # Query/text single embedding
-    def get_query_embedding(self, query: str) -> List[float]:  # noqa: D401
+    # Abstract methods required by new LlamaIndex BaseEmbedding (0.14+)
+    def _get_query_embedding(self, query: str) -> List[float]:
+        """Get query embedding (internal method for BaseEmbedding)."""
         return embed_query(query)
 
-    def get_text_embedding(self, text: str) -> List[float]:  # noqa: D401
+    def _get_text_embedding(self, text: str) -> List[float]:
+        """Get text embedding (internal method for BaseEmbedding)."""
         return embed_query(text)
+
+    async def _aget_query_embedding(self, query: str) -> List[float]:
+        """Async get query embedding (internal method for BaseEmbedding)."""
+        # For now, just call sync version - can be made truly async later
+        return embed_query(query)
+
+    # Public methods (for backwards compatibility with older LlamaIndex)
+    def get_query_embedding(self, query: str) -> List[float]:  # noqa: D401
+        return self._get_query_embedding(query)
+
+    def get_text_embedding(self, text: str) -> List[float]:  # noqa: D401
+        return self._get_text_embedding(text)
 
     # Batch embeddings
     def get_text_embeddings(self, texts: List[str], *args, **kwargs) -> List[List[float]]:  # noqa: D401
