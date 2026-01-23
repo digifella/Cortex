@@ -1,7 +1,7 @@
 """
 Proposal Intelligent Completion
-Version: 2.7.0
-Date: 2026-01-21
+Version: 2.9.0
+Date: 2026-01-23
 
 Purpose: Interactive two-tier intelligent proposal completion workflow.
 - Tier 1: Auto-complete simple fields from entity profile
@@ -9,10 +9,12 @@ Purpose: Interactive two-tier intelligent proposal completion workflow.
 
 Key Features:
 - Strict field extraction to focus on real substantive questions
-- Questions grouped by type for organized review
-- Per-question actions: Skip / Auto-fill / Generate / Manual
+- Questions grouped by type in collapsible sections
+- Clean editorial design with refined typography
+- Per-question actions: Edit / Generate (no Skip needed)
 - Evidence panel with knowledge collection search
 - Human-in-the-loop regeneration with hints to refine responses
+- Save As You Go: Automatic persistence of workflow state
 """
 
 import streamlit as st
@@ -42,6 +44,20 @@ from cortex_engine.field_classifier import (
 from cortex_engine.evidence_retriever import EvidenceRetriever, Evidence
 from cortex_engine.response_generator import ResponseGenerator, DraftResponse
 
+# Persistence models for "Save As You Go"
+from cortex_engine.ic_persistence_model import (
+    ICCompletionState,
+    PersistedClassifiedField,
+    PersistedQuestionState,
+    PersistedEvidence,
+    PersistedFieldTier,
+    PersistedQuestionType,
+    evidence_to_persisted,
+    persisted_to_evidence,
+    classified_field_to_persisted,
+    persisted_to_classified_field
+)
+
 st.set_page_config(
     page_title="Intelligent Completion - Cortex Suite",
     page_icon="🧠",
@@ -69,19 +85,7 @@ chunker = st.session_state.ic_chunker
 # Always reload collection_manager to get fresh data (fixes stale collection counts)
 collection_manager = WorkingCollectionManager()
 
-# Question type icons and colors
-QTYPE_ICONS = {
-    QuestionType.CAPABILITY: "💪",
-    QuestionType.METHODOLOGY: "📋",
-    QuestionType.VALUE_PROPOSITION: "💎",
-    QuestionType.COMPLIANCE: "✅",
-    QuestionType.INNOVATION: "💡",
-    QuestionType.RISK: "⚠️",
-    QuestionType.PERSONNEL: "👥",
-    QuestionType.PRICING: "💰",
-    QuestionType.GENERAL: "📝",
-}
-
+# Question type display names (no emojis in headers - cleaner look)
 QTYPE_DISPLAY = {
     QuestionType.CAPABILITY: "Capability & Experience",
     QuestionType.METHODOLOGY: "Methodology & Approach",
@@ -94,92 +98,317 @@ QTYPE_DISPLAY = {
     QuestionType.GENERAL: "General Questions",
 }
 
-# Professional CSS
+# ============================
+# REFINED EDITORIAL CSS
+# ============================
 st.markdown("""
 <style>
+    /* Import refined typography */
+    @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=DM+Sans:wght@400;500;600&display=swap');
+
+    /* Base styling */
+    .stApp {
+        background: #FAFAF8;
+    }
+
+    /* Main header - editorial style */
     .main-header {
-        font-size: 2rem;
+        font-family: 'Source Serif 4', Georgia, serif;
+        font-size: 2.25rem;
+        font-weight: 600;
+        color: #1a1a1a;
+        margin-bottom: 0.25rem;
+        letter-spacing: -0.02em;
+    }
+
+    .main-subtitle {
+        font-family: 'DM Sans', -apple-system, sans-serif;
+        font-size: 0.95rem;
+        color: #666;
+        margin-bottom: 2rem;
+    }
+
+    /* Progress bar container */
+    .progress-summary {
+        display: flex;
+        gap: 2rem;
+        padding: 1rem 0;
+        border-bottom: 1px solid #e5e5e5;
+        margin-bottom: 1.5rem;
+    }
+
+    .progress-item {
+        font-family: 'DM Sans', sans-serif;
+    }
+
+    .progress-number {
+        font-size: 1.75rem;
+        font-weight: 600;
+        color: #2D5F4F;
+        line-height: 1;
+    }
+
+    .progress-label {
+        font-size: 0.75rem;
+        color: #888;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-top: 0.25rem;
+    }
+
+    /* Section accordion headers */
+    .section-header {
+        font-family: 'DM Sans', sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.875rem 0;
+        cursor: pointer;
+        border-bottom: 1px solid #e5e5e5;
+        transition: all 0.15s ease;
+    }
+
+    .section-header:hover {
+        background: #f5f5f3;
+        margin: 0 -1rem;
+        padding: 0.875rem 1rem;
+    }
+
+    .section-title {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #333;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .section-count {
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: #888;
+        background: #f0f0ee;
+        padding: 0.2rem 0.6rem;
+        border-radius: 10px;
+    }
+
+    .section-count-done {
+        background: #E8F5E9;
+        color: #2D5F4F;
+    }
+
+    /* Question cards - minimal */
+    .question-card {
+        padding: 1.25rem;
+        margin: 0.75rem 0;
+        background: white;
+        border: 1px solid #e8e8e6;
+        border-radius: 6px;
+        transition: border-color 0.15s ease;
+    }
+
+    .question-card:hover {
+        border-color: #ccc;
+    }
+
+    .question-card.completed {
+        border-left: 3px solid #2D5F4F;
+    }
+
+    .question-card.editing {
+        border-left: 3px solid #D4A853;
+    }
+
+    .question-number {
+        font-family: 'DM Sans', sans-serif;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: #999;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 0.5rem;
+    }
+
+    .question-text {
+        font-family: 'Source Serif 4', Georgia, serif;
+        font-size: 1.05rem;
+        color: #1a1a1a;
+        line-height: 1.5;
+        margin-bottom: 0.75rem;
+    }
+
+    .question-meta {
+        font-family: 'DM Sans', sans-serif;
+        font-size: 0.8rem;
+        color: #888;
+    }
+
+    /* Status indicators - subtle */
+    .status-badge {
+        font-family: 'DM Sans', sans-serif;
+        display: inline-block;
+        padding: 0.2rem 0.5rem;
+        border-radius: 3px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+
+    .status-pending {
+        background: #f5f5f3;
+        color: #888;
+    }
+
+    .status-completed {
+        background: #E8F5E9;
+        color: #2D5F4F;
+    }
+
+    .status-editing {
+        background: #FEF7E6;
+        color: #B8860B;
+    }
+
+    /* Evidence cards - refined */
+    .evidence-card {
+        background: #FAFAF8;
+        border-left: 2px solid #2D5F4F;
+        padding: 0.875rem 1rem;
+        margin: 0.5rem 0;
+        font-family: 'DM Sans', sans-serif;
+        font-size: 0.875rem;
+        line-height: 1.6;
+        color: #444;
+    }
+
+    .evidence-source {
+        font-size: 0.75rem;
         font-weight: 600;
         color: #2D5F4F;
         margin-bottom: 0.5rem;
     }
 
-    .tier-badge {
-        display: inline-block;
-        padding: 0.25rem 0.75rem;
-        border-radius: 12px;
+    .evidence-score {
+        float: right;
+        font-size: 0.7rem;
+        color: #888;
+    }
+
+    /* Action buttons - compact and refined */
+    .stButton > button {
+        font-family: 'DM Sans', sans-serif !important;
+        font-size: 0.8rem !important;
+        font-weight: 500 !important;
+        padding: 0.4rem 0.9rem !important;
+        border-radius: 4px !important;
+        transition: all 0.15s ease !important;
+    }
+
+    /* Primary action (Generate) */
+    .stButton > button[kind="primary"] {
+        background: #2D5F4F !important;
+        border: none !important;
+    }
+
+    .stButton > button[kind="primary"]:hover {
+        background: #234A3D !important;
+    }
+
+    /* Secondary action (Edit) */
+    .stButton > button[kind="secondary"] {
+        background: white !important;
+        border: 1px solid #ddd !important;
+        color: #333 !important;
+    }
+
+    .stButton > button[kind="secondary"]:hover {
+        background: #f5f5f3 !important;
+        border-color: #ccc !important;
+    }
+
+    /* Text areas - cleaner */
+    .stTextArea textarea {
+        font-family: 'DM Sans', sans-serif !important;
+        font-size: 0.9rem !important;
+        border: 1px solid #e0e0de !important;
+        border-radius: 4px !important;
+        padding: 0.875rem !important;
+    }
+
+    .stTextArea textarea:focus {
+        border-color: #2D5F4F !important;
+        box-shadow: 0 0 0 1px #2D5F4F !important;
+    }
+
+    /* Expander styling */
+    .streamlit-expanderHeader {
+        font-family: 'DM Sans', sans-serif !important;
+        font-size: 0.875rem !important;
+        font-weight: 500 !important;
+        color: #555 !important;
+        background: transparent !important;
+        border: none !important;
+    }
+
+    /* Word count */
+    .word-count {
+        font-family: 'DM Sans', sans-serif;
         font-size: 0.75rem;
-        font-weight: 600;
-        margin-right: 0.5rem;
+        color: #888;
+        text-align: right;
+        margin-top: 0.25rem;
     }
 
-    .tier-auto {
-        background: #E8F5E9;
-        color: #2E7D32;
+    /* Sidebar refinements */
+    section[data-testid="stSidebar"] {
+        background: #f8f8f6;
     }
 
-    .tier-intelligent {
-        background: #E3F2FD;
-        color: #1565C0;
+    section[data-testid="stSidebar"] .stSelectbox label,
+    section[data-testid="stSidebar"] .stSlider label {
+        font-family: 'DM Sans', sans-serif !important;
+        font-size: 0.8rem !important;
+        font-weight: 500 !important;
+        color: #555 !important;
     }
 
-    .confidence-high { color: #2E7D32; }
-    .confidence-medium { color: #F57C00; }
-    .confidence-low { color: #C62828; }
+    /* Hide streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
 
-    .evidence-card {
-        background: #FAFAFA;
-        border-left: 3px solid #2D5F4F;
-        padding: 0.75rem;
-        margin: 0.5rem 0;
-        font-size: 0.9rem;
+    /* Metrics - cleaner */
+    [data-testid="stMetricValue"] {
+        font-family: 'DM Sans', sans-serif !important;
+        font-size: 1.5rem !important;
+        font-weight: 600 !important;
+        color: #2D5F4F !important;
     }
 
-    .question-type-header {
-        font-size: 1.2rem;
-        font-weight: 600;
-        color: #1565C0;
-        padding: 0.75rem 0;
-        border-bottom: 2px solid #E3F2FD;
-        margin-bottom: 1rem;
+    [data-testid="stMetricLabel"] {
+        font-family: 'DM Sans', sans-serif !important;
+        font-size: 0.75rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
     }
 
-    .question-type-badge {
-        display: inline-block;
-        padding: 0.2rem 0.5rem;
-        border-radius: 8px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        text-transform: uppercase;
+    /* Dividers */
+    hr {
+        border: none;
+        border-top: 1px solid #e5e5e5;
+        margin: 1.5rem 0;
     }
 
-    .qtype-capability { background: #E8EAF6; color: #3949AB; }
-    .qtype-methodology { background: #FFF3E0; color: #EF6C00; }
-    .qtype-value { background: #E8F5E9; color: #388E3C; }
-    .qtype-compliance { background: #FFEBEE; color: #C62828; }
-    .qtype-innovation { background: #F3E5F5; color: #7B1FA2; }
-    .qtype-risk { background: #FFF8E1; color: #FF8F00; }
-    .qtype-personnel { background: #E0F7FA; color: #00838F; }
-    .qtype-pricing { background: #FCE4EC; color: #C2185B; }
-    .qtype-general { background: #ECEFF1; color: #546E7A; }
-
-    .question-status {
-        display: inline-block;
-        padding: 0.2rem 0.5rem;
-        border-radius: 4px;
-        font-size: 0.7rem;
-        font-weight: 600;
+    /* Container borders - subtle */
+    [data-testid="stVerticalBlock"] > div:has(> .stContainer) {
+        border-color: #e8e8e6 !important;
     }
-    .status-pending { background: #ECEFF1; color: #546E7A; }
-    .status-skipped { background: #FFEBEE; color: #C62828; }
-    .status-completed { background: #E8F5E9; color: #2E7D32; }
-    .status-editing { background: #FFF3E0; color: #EF6C00; }
 </style>
 """, unsafe_allow_html=True)
 
 # Title
-st.markdown('<div class="main-header">🧠 Intelligent Proposal Completion</div>', unsafe_allow_html=True)
-st.caption("Interactive human-in-the-loop workflow: review each substantive question with evidence support")
+st.markdown('<div class="main-header">Intelligent Completion</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-subtitle">Review and complete substantive proposal questions with AI assistance</div>', unsafe_allow_html=True)
 
 # ============================
 # SESSION STATE INITIALIZATION
@@ -190,16 +419,184 @@ if 'ic_classified_fields' not in st.session_state:
     st.session_state.ic_auto_complete_fields = []
     st.session_state.ic_intelligent_fields = []
     st.session_state.ic_questions_by_type = {}
-    st.session_state.ic_question_status = {}  # {field_text: {'status': 'pending'|'skipped'|'completed'|'manual', 'response': str}}
+    st.session_state.ic_question_status = {}
     st.session_state.ic_current_question_idx = 0
-    st.session_state.ic_evidence_cache = {}  # Cache evidence lookups
+    st.session_state.ic_evidence_cache = {}
+
+# Track which workspace was last loaded to detect changes
+if 'ic_last_loaded_workspace' not in st.session_state:
+    st.session_state.ic_last_loaded_workspace = None
+
+# Track expanded sections
+if 'ic_expanded_sections' not in st.session_state:
+    st.session_state.ic_expanded_sections = set()
+
+
+# ============================
+# PERSISTENCE HELPER FUNCTIONS
+# ============================
+
+def load_ic_state_from_workspace(workspace_id: str) -> bool:
+    """Load saved IC state from workspace into session state."""
+    saved_state = workspace_manager.get_ic_completion_state(workspace_id)
+
+    if not saved_state:
+        return False
+
+    try:
+        persisted_fields = saved_state.get('classified_fields', [])
+        if not persisted_fields:
+            return False
+
+        classified_fields = []
+        for pf_dict in persisted_fields:
+            pf = PersistedClassifiedField(**pf_dict)
+            classified_fields.append(persisted_to_classified_field(pf))
+
+        st.session_state.ic_classified_fields = classified_fields
+
+        auto_indices = saved_state.get('auto_complete_field_indices', [])
+        intel_indices = saved_state.get('intelligent_field_indices', [])
+
+        st.session_state.ic_auto_complete_fields = [
+            classified_fields[i] for i in auto_indices if i < len(classified_fields)
+        ]
+        st.session_state.ic_intelligent_fields = [
+            classified_fields[i] for i in intel_indices if i < len(classified_fields)
+        ]
+
+        questions_by_type_raw = saved_state.get('questions_by_type', {})
+        questions_by_type = {}
+        for qtype_value, indices in questions_by_type_raw.items():
+            questions_by_type[qtype_value] = [
+                classified_fields[i] for i in indices if i < len(classified_fields)
+            ]
+        st.session_state.ic_questions_by_type = questions_by_type
+
+        question_status_raw = saved_state.get('question_status', {})
+        question_status = {}
+        for field_text, qs_dict in question_status_raw.items():
+            evidence_list = []
+            for ev_dict in qs_dict.get('evidence', []):
+                pe = PersistedEvidence(**ev_dict)
+                evidence_list.append(persisted_to_evidence(pe))
+
+            question_status[field_text] = {
+                'status': qs_dict.get('status', 'pending'),
+                'response': qs_dict.get('response', ''),
+                'evidence': evidence_list,
+                'confidence': qs_dict.get('confidence'),
+                'collection_name': qs_dict.get('collection_name'),
+                'creativity_level': qs_dict.get('creativity_level')
+            }
+        st.session_state.ic_question_status = question_status
+
+        evidence_cache_raw = saved_state.get('evidence_cache', {})
+        evidence_cache = {}
+        for field_text, ev_list in evidence_cache_raw.items():
+            evidence_cache[field_text] = [
+                persisted_to_evidence(PersistedEvidence(**ev_dict))
+                for ev_dict in ev_list
+            ]
+        st.session_state.ic_evidence_cache = evidence_cache
+
+        return True
+
+    except Exception as e:
+        st.warning(f"Could not restore saved progress: {e}")
+        return False
+
+
+def save_ic_state_to_workspace(workspace_id: str) -> bool:
+    """Save current IC session state to workspace."""
+    if not st.session_state.ic_classified_fields:
+        return False
+
+    try:
+        classified_fields = st.session_state.ic_classified_fields
+        field_to_index = {f.field_text: i for i, f in enumerate(classified_fields)}
+
+        persisted_fields = [
+            classified_field_to_persisted(f).model_dump()
+            for f in classified_fields
+        ]
+
+        auto_indices = [
+            field_to_index[f.field_text]
+            for f in st.session_state.ic_auto_complete_fields
+            if f.field_text in field_to_index
+        ]
+        intel_indices = [
+            field_to_index[f.field_text]
+            for f in st.session_state.ic_intelligent_fields
+            if f.field_text in field_to_index
+        ]
+
+        questions_by_type_indices = {}
+        for qtype_value, fields in st.session_state.ic_questions_by_type.items():
+            questions_by_type_indices[qtype_value] = [
+                field_to_index[f.field_text]
+                for f in fields
+                if f.field_text in field_to_index
+            ]
+
+        question_status_persisted = {}
+        for field_text, qs in st.session_state.ic_question_status.items():
+            evidence_persisted = [
+                evidence_to_persisted(ev).model_dump()
+                for ev in qs.get('evidence', [])
+            ]
+            question_status_persisted[field_text] = {
+                'status': qs.get('status', 'pending'),
+                'response': qs.get('response', ''),
+                'evidence': evidence_persisted,
+                'confidence': qs.get('confidence'),
+                'collection_name': qs.get('collection_name'),
+                'creativity_level': qs.get('creativity_level')
+            }
+
+        evidence_cache_persisted = {}
+        for field_text, ev_list in st.session_state.ic_evidence_cache.items():
+            evidence_cache_persisted[field_text] = [
+                evidence_to_persisted(ev).model_dump()
+                for ev in ev_list
+            ]
+
+        state = {
+            'workspace_id': workspace_id,
+            'created_at': datetime.now().isoformat(),
+            'classified_fields': persisted_fields,
+            'auto_complete_field_indices': auto_indices,
+            'intelligent_field_indices': intel_indices,
+            'questions_by_type': questions_by_type_indices,
+            'question_status': question_status_persisted,
+            'evidence_cache': evidence_cache_persisted
+        }
+
+        return workspace_manager.save_ic_completion_state(workspace_id, state)
+
+    except Exception as e:
+        st.warning(f"Could not save progress: {e}")
+        return False
+
+
+def clear_ic_state():
+    """Clear all IC session state (for re-extract)."""
+    st.session_state.ic_classified_fields = None
+    st.session_state.ic_auto_complete_fields = []
+    st.session_state.ic_intelligent_fields = []
+    st.session_state.ic_questions_by_type = {}
+    st.session_state.ic_question_status = {}
+    st.session_state.ic_evidence_cache = {}
+    st.session_state.ic_expanded_sections = set()
+
 
 # ============================
 # SIDEBAR: Configuration
 # ============================
 
 with st.sidebar:
-    st.header("Configuration")
+    st.markdown("### Configuration")
 
     # Workspace selection
     workspaces = workspace_manager.list_workspaces()
@@ -220,6 +617,13 @@ with st.sidebar:
 
     workspace = workspace_options[selected_workspace_name]
 
+    # Auto-load saved state when workspace changes
+    if st.session_state.ic_last_loaded_workspace != workspace.metadata.workspace_id:
+        clear_ic_state()
+        if load_ic_state_from_workspace(workspace.metadata.workspace_id):
+            st.toast("Restored previous progress", icon="")
+        st.session_state.ic_last_loaded_workspace = workspace.metadata.workspace_id
+
     # Check entity is bound
     if not workspace.metadata.entity_id:
         st.error("No entity bound to workspace")
@@ -228,76 +632,65 @@ with st.sidebar:
     # Show entity info
     entity = entity_manager.get_entity_profile(workspace.metadata.entity_id)
     if entity:
-        st.success(f"Entity: {getattr(entity, 'company_name', workspace.metadata.entity_id)}")
+        st.caption(f"Entity: {getattr(entity, 'company_name', workspace.metadata.entity_id)}")
 
     st.divider()
 
     # Knowledge collection selection
-    st.subheader("Knowledge Collection")
-    st.caption("Select collection for evidence search")
+    st.markdown("#### Evidence Source")
 
     collections = collection_manager.get_collection_names()
-
-    # Build options list with "Entire Knowledge Base" first
     collection_options = ["-- Entire Knowledge Base --"] + (collections if collections else [])
 
     selected_option = st.selectbox(
-        "Evidence Source",
+        "Collection",
         options=collection_options,
         key="ic_collection_select",
-        help="Select a specific collection or search the entire knowledge base"
+        label_visibility="collapsed"
     )
 
-    # Convert selection to collection name (None for entire KB)
     if selected_option == "-- Entire Knowledge Base --":
         selected_collection = None
         st.caption("Searching entire knowledge base")
     else:
         selected_collection = selected_option
         doc_count = len(collection_manager.get_doc_ids_by_name(selected_collection))
-        st.caption(f"{doc_count} documents in collection")
+        st.caption(f"{doc_count} documents")
 
     st.divider()
 
     # Generation settings
-    st.subheader("Generation Settings")
+    st.markdown("#### Generation")
 
     creativity_level = st.select_slider(
-        "Creativity",
+        "Style",
         options=[0, 1, 2],
         value=1,
-        format_func=lambda x: {0: "📊 Factual", 1: "⚖️ Balanced", 2: "💡 Creative"}[x],
-        help="Controls how creative vs factual the AI responses are"
+        format_func=lambda x: {0: "Factual", 1: "Balanced", 2: "Creative"}[x]
     )
 
-    # Map creativity to temperature
     temperature_map = {0: 0.3, 1: 0.7, 2: 1.0}
     generation_temperature = temperature_map[creativity_level]
 
-    st.caption(f"Temperature: {generation_temperature}")
-
-    st.divider()
-
-    # Advanced options in expander
-    with st.expander("⚙️ Advanced Options", expanded=False):
+    # Advanced options
+    with st.expander("Advanced", expanded=False):
         max_evidence = st.slider(
-            "Max Evidence per Question",
+            "Evidence per question",
             min_value=2,
             max_value=10,
-            value=5,
-            help="Number of evidence passages to retrieve"
+            value=5
         )
 
         use_reranker = st.checkbox(
-            "Use Neural Reranker",
+            "Neural reranker",
             value=True,
-            help="Use Qwen3-VL reranker for better evidence precision (slower)"
+            help="Better precision, slower"
         )
 
         use_strict_filter = st.checkbox(
-            "Strict Question Filtering",
+            "Strict filtering",
             value=True,
-            help="Only extract questions matching substantive patterns (reduces noise)"
+            help="Only substantive questions"
         )
 
 # ============================
@@ -330,50 +723,34 @@ except Exception as e:
     st.stop()
 
 # ============================
-# STEP 1: Field Extraction & Classification
+# STEP 1: Field Extraction
 # ============================
 
-# Check if fields have already been extracted for this workspace
 fields_already_extracted = (
     st.session_state.ic_classified_fields is not None and
     len(st.session_state.ic_classified_fields) > 0
 )
 
-# Only show Step 1 if fields haven't been extracted yet
 if not fields_already_extracted:
-    st.subheader("Step 1: Extract & Classify Fields")
+    st.markdown("### Extract Questions")
 
-    col1, col2 = st.columns([3, 1])
-
+    col1, col2 = st.columns([4, 1])
     with col1:
-        st.info("""
-        Scan document for fillable fields. Questions grouped by type for organized review.
-        - **Auto-Complete**: Simple fields filled from entity profile
-        - **Substantive Questions**: Review interactively with evidence support
-        """)
-
+        st.caption("Scan the document to identify substantive questions requiring responses.")
     with col2:
-        if st.button("Extract Fields", type="primary", use_container_width=True):
-            with st.spinner("Extracting and classifying fields..."):
-                # Extract fields using document chunker to find completable sections
+        if st.button("Extract", type="primary"):
+            with st.spinner("Analyzing document..."):
                 chunks = chunker.create_chunks(document_text)
                 completable_chunks = chunker.filter_completable_chunks(chunks)
 
-                # For each chunk, extract field-like content and classify
                 classified_fields = []
 
                 for chunk in completable_chunks:
-                    # Patterns that indicate fillable fields
                     field_patterns = [
-                        # Label: [blank] patterns
                         r'^([A-Za-z][A-Za-z\s\(\)\']+):\s*$',
-                        # Question patterns
                         r'^([A-Z][^?]+\?)\s*$',
-                        # "Please provide" patterns (with substance)
                         r'((?:Please\s+)?(?:provide|describe|detail|outline|explain)\s+[^.]{20,}\.)',
-                        # "How will you" patterns
                         r'(How\s+(?:will|would|do|can)\s+you\s+[^?]+\?)',
-                        # Field with placeholder
                         r'^([A-Za-z][A-Za-z\s\']+):\s*[\[\<\_]',
                     ]
 
@@ -393,22 +770,18 @@ if not fields_already_extracted:
                                         context=chunk.title,
                                         strict_filter=use_strict_filter
                                     )
-                                    # Avoid duplicates
                                     if not any(cf.field_text == classified.field_text for cf in classified_fields):
                                         classified_fields.append(classified)
                                 break
 
-                # Separate by tier
                 auto_fields = [f for f in classified_fields if f.tier == FieldTier.AUTO_COMPLETE]
                 intel_fields = [f for f in classified_fields if f.tier == FieldTier.INTELLIGENT]
 
-                # Group intelligent fields by question type (use string keys for session state compatibility)
                 questions_by_type = defaultdict(list)
                 for field in intel_fields:
                     qtype = field.question_type or QuestionType.GENERAL
-                    questions_by_type[qtype.value].append(field)  # Use .value for string key
+                    questions_by_type[qtype.value].append(field)
 
-                # Initialize status for each question
                 question_status = {}
                 for field in intel_fields:
                     question_status[field.field_text] = {
@@ -424,248 +797,155 @@ if not fields_already_extracted:
                 st.session_state.ic_question_status = question_status
                 st.session_state.ic_evidence_cache = {}
 
+                save_ic_state_to_workspace(workspace.metadata.workspace_id)
                 st.rerun()
 
 else:
-    # Fields already extracted - show summary and option to re-extract
-    with st.expander("📋 Field Extraction (completed)", expanded=False):
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Fields", len(st.session_state.ic_classified_fields))
-        col2.metric("Auto-Complete", len(st.session_state.ic_auto_complete_fields))
-        col3.metric("Substantive", len(st.session_state.ic_intelligent_fields))
-        col4.metric("Question Types", len(st.session_state.ic_questions_by_type))
+    # ============================
+    # Show Results
+    # ============================
 
-        if st.button("🔄 Re-extract Fields", help="Start over with fresh field extraction"):
-            # Clear all extraction state
-            st.session_state.ic_classified_fields = None
-            st.session_state.ic_auto_complete_fields = []
-            st.session_state.ic_intelligent_fields = []
-            st.session_state.ic_questions_by_type = {}
-            st.session_state.ic_question_status = {}
-            st.session_state.ic_evidence_cache = {}
-            st.rerun()
-
-# ============================
-# Show Classification Results
-# ============================
-
-if st.session_state.ic_classified_fields:
     auto_fields = st.session_state.ic_auto_complete_fields
     intel_fields = st.session_state.ic_intelligent_fields
     questions_by_type = st.session_state.ic_questions_by_type
     question_status = st.session_state.ic_question_status
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Fields", len(st.session_state.ic_classified_fields))
-    col2.metric("Auto-Complete", len(auto_fields))
-    col3.metric("Substantive", len(intel_fields))
-    col4.metric("Question Types", len(questions_by_type))
+    # Progress summary - clean metrics
+    total_questions = len(intel_fields)
+    completed_count = sum(1 for s in question_status.values() if s['status'] == 'completed')
+    editing_count = sum(1 for s in question_status.values() if s['status'] == 'editing')
+    pending_count = total_questions - completed_count - editing_count
+
+    # Progress display
+    st.markdown(f"""
+    <div class="progress-summary">
+        <div class="progress-item">
+            <div class="progress-number">{completed_count}</div>
+            <div class="progress-label">Completed</div>
+        </div>
+        <div class="progress-item">
+            <div class="progress-number">{editing_count}</div>
+            <div class="progress-label">In Progress</div>
+        </div>
+        <div class="progress-item">
+            <div class="progress-number">{pending_count}</div>
+            <div class="progress-label">Remaining</div>
+        </div>
+        <div class="progress-item">
+            <div class="progress-number">{len(auto_fields)}</div>
+            <div class="progress-label">Auto-filled</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Re-extract option (subtle)
+    with st.expander("Extraction Settings", expanded=False):
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.caption(f"Found {len(st.session_state.ic_classified_fields)} fields total")
+        with col2:
+            if st.button("Re-extract", type="secondary"):
+                clear_ic_state()
+                workspace_manager.clear_ic_completion_state(workspace.metadata.workspace_id)
+                st.rerun()
 
     st.divider()
 
-    # ============================
-    # STEP 2: Auto-Complete Fields
-    # ============================
-
-    st.subheader("Step 2: Auto-Complete Fields")
-
-    if auto_fields:
-        known_fields = [f for f in auto_fields if f.auto_complete_mapping]
-        unknown_fields = [f for f in auto_fields if not f.auto_complete_mapping]
-
-        if known_fields:
-            st.success(f"{len(known_fields)} fields can be auto-completed from entity profile")
-
-            with st.expander("Review Auto-Completed Fields", expanded=False):
-                for field in known_fields:
-                    col1, col2, col3 = st.columns([2, 3, 1])
-
-                    with col1:
-                        st.markdown(f"**{field.field_text}**")
-
-                    with col2:
-                        profile_field = field.auto_complete_mapping
-                        value = "Not set"
-
-                        if entity and profile_field:
-                            value = getattr(entity, profile_field, None)
-                            if value is None and hasattr(entity, 'data'):
-                                value = entity.data.get(profile_field)
-                            if value is None:
-                                value = f"[Not set: {profile_field}]"
-
-                        st.code(str(value) if value else "Not set", language=None)
-
-                    with col3:
-                        st.caption(f"-> {profile_field}")
-
-        if unknown_fields:
-            st.warning(f"{len(unknown_fields)} fields need manual entry (not recognized as substantive)")
-            with st.expander("Fields Needing Manual Entry", expanded=False):
-                for field in unknown_fields:
-                    st.text(f"- {field.field_text}")
-    else:
-        st.info("No auto-complete fields found")
-
-    st.divider()
+    # Initialize components
+    evidence_retriever = EvidenceRetriever(db_path)
+    llm.temperature = generation_temperature
+    response_generator = ResponseGenerator(llm, entity_manager)
 
     # ============================
-    # STEP 3: Interactive Substantive Questions
+    # Questions by Type (Accordion Sections)
     # ============================
 
-    st.subheader("Step 3: Substantive Questions (by Type)")
+    for qtype in QuestionType:
+        qtype_key = qtype.value
+        if qtype_key not in questions_by_type or not questions_by_type[qtype_key]:
+            continue
 
-    if not intel_fields:
-        st.info("No substantive questions found")
-    else:
-        # Progress summary
-        total_questions = len(intel_fields)
-        completed_count = sum(1 for s in question_status.values() if s['status'] in ['completed', 'skipped', 'editing'])
-        pending_count = total_questions - completed_count
+        type_questions = questions_by_type[qtype_key]
+        display_name = QTYPE_DISPLAY.get(qtype, qtype.value.title())
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Pending", pending_count)
-        col2.metric("Completed", sum(1 for s in question_status.values() if s['status'] == 'completed'))
-        col3.metric("Skipped/Editing", sum(1 for s in question_status.values() if s['status'] in ['skipped', 'editing']))
+        # Count status for this type
+        type_completed = sum(1 for q in type_questions if question_status.get(q.field_text, {}).get('status') == 'completed')
+        type_editing = sum(1 for q in type_questions if question_status.get(q.field_text, {}).get('status') == 'editing')
+        type_total = len(type_questions)
 
-        st.divider()
+        # Determine if section should be expanded
+        section_expanded = qtype_key in st.session_state.ic_expanded_sections
 
-        # Initialize evidence retriever and response generator
-        evidence_retriever = EvidenceRetriever(db_path)
-        llm.temperature = generation_temperature  # Apply creativity setting
-        response_generator = ResponseGenerator(llm, entity_manager)
+        # Section header with expander
+        count_class = "section-count-done" if type_completed == type_total else "section-count"
 
-        # Display questions grouped by type
-        for qtype in QuestionType:
-            qtype_key = qtype.value  # Use string key for session state compatibility
-            if qtype_key not in questions_by_type or not questions_by_type[qtype_key]:
-                continue
-
-            type_questions = questions_by_type[qtype_key]
-            icon = QTYPE_ICONS.get(qtype, "📝")
-            display_name = QTYPE_DISPLAY.get(qtype, qtype.value.title())
-
-            # Count status for this type
-            type_pending = sum(1 for q in type_questions if question_status.get(q.field_text, {}).get('status') == 'pending')
-            type_done = len(type_questions) - type_pending
-
-            st.markdown(f"""
-            <div class="question-type-header">
-                {icon} {display_name} ({type_done}/{len(type_questions)} done)
-            </div>
-            """, unsafe_allow_html=True)
+        with st.expander(f"**{display_name}** — {type_completed}/{type_total} complete", expanded=section_expanded):
+            # Track expansion state
+            if qtype_key not in st.session_state.ic_expanded_sections:
+                st.session_state.ic_expanded_sections.add(qtype_key)
 
             for q_idx, field in enumerate(type_questions):
                 field_key = field.field_text
                 status_data = question_status.get(field_key, {'status': 'pending', 'response': '', 'evidence': []})
                 current_status = status_data['status']
 
-                # Status badge
-                status_badge_class = f"status-{current_status}"
-                status_label = current_status.upper()
+                # Determine card style based on status
+                card_class = ""
+                if current_status == 'completed':
+                    card_class = "completed"
+                elif current_status == 'editing':
+                    card_class = "editing"
 
-                with st.container(border=True):
-                    # Header row with question and status
-                    col1, col2 = st.columns([4, 1])
+                # Question card
+                st.markdown(f"""
+                <div class="question-card {card_class}">
+                    <div class="question-number">Question {q_idx + 1}</div>
+                    <div class="question-text">{field.field_text}</div>
+                    <div class="question-meta">
+                        {f'Word limit: {field.word_limit}' if field.word_limit else ''}
+                        <span class="status-badge status-{current_status}" style="float:right;">{current_status.upper()}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
-                    with col1:
-                        st.markdown(f"**Q{q_idx + 1}:** {field.field_text}")
-                        if field.word_limit:
-                            st.caption(f"Word limit: {field.word_limit}")
+                # Action area
+                if current_status == 'pending':
+                    # Compact action buttons
+                    btn_col1, btn_col2, spacer = st.columns([1, 1, 3])
 
-                    with col2:
-                        st.markdown(f'<span class="question-status {status_badge_class}">{status_label}</span>', unsafe_allow_html=True)
-
-                    # Per-question settings (only show if not completed/editing)
-                    if current_status == 'pending':
-                        settings_col1, settings_col2 = st.columns(2)
-
-                        with settings_col1:
-                            q_collection = st.selectbox(
-                                "Evidence Source",
-                                options=collection_options,
-                                index=0,  # Default to "Entire Knowledge Base"
-                                key=f"coll_{qtype.value}_{q_idx}",
-                                label_visibility="collapsed"
-                            )
-                            # Store per-question collection choice
-                            if f"q_collection_{field_key}" not in st.session_state:
-                                st.session_state[f"q_collection_{field_key}"] = q_collection
-
-                        with settings_col2:
-                            q_creativity = st.select_slider(
-                                "Creativity",
-                                options=[0, 1, 2],
-                                value=1,
-                                format_func=lambda x: {0: "📊 Factual", 1: "⚖️ Balanced", 2: "💡 Creative"}[x],
-                                key=f"creat_{qtype.value}_{q_idx}",
-                                label_visibility="collapsed"
-                            )
-                            # Store per-question creativity choice
-                            st.session_state[f"q_creativity_{field_key}"] = q_creativity
-                    else:
-                        # Use stored or default values for non-pending questions
-                        q_collection = st.session_state.get(f"q_collection_{field_key}", collection_options[0])
-                        q_creativity = st.session_state.get(f"q_creativity_{field_key}", 1)
-
-                    # Convert selection to collection name (None for entire KB)
-                    q_collection_name = None if q_collection == "-- Entire Knowledge Base --" else q_collection
-                    q_temperature = {0: 0.3, 1: 0.7, 2: 1.0}[q_creativity]
-
-                    # Action buttons - simplified: Skip | Edit | Auto-Generate
-                    col1, col2, col3 = st.columns(3)
-
-                    with col1:
-                        if st.button("Skip", key=f"skip_{qtype.value}_{q_idx}", use_container_width=True,
-                                     disabled=current_status in ['completed', 'editing', 'skipped'],
-                                     help="Defer for later"):
-                            question_status[field_key]['status'] = 'skipped'
-                            st.session_state.ic_question_status = question_status
-
-                    with col2:
-                        if st.button("✏️ Edit", key=f"edit_{qtype.value}_{q_idx}", use_container_width=True,
-                                     disabled=current_status in ['completed', 'editing'],
-                                     help="Write/paste your own response with evidence support"):
-                            # Open editing interface, fetch evidence in background
+                    with btn_col1:
+                        if st.button("Edit", key=f"edit_{qtype_key}_{q_idx}", type="secondary"):
                             question_status[field_key]['status'] = 'editing'
                             st.session_state.ic_question_status = question_status
-                            # Fetch evidence for reference (using per-question collection)
                             try:
                                 evidence_result = evidence_retriever.find_evidence(
                                     question=field.field_text,
                                     question_type=field.question_type or QuestionType.GENERAL,
-                                    collection_name=q_collection_name,  # Per-question setting
+                                    collection_name=selected_collection,
                                     max_results=max_evidence,
                                     use_reranker=use_reranker
                                 )
                                 st.session_state.ic_evidence_cache[field_key] = evidence_result.evidence
                             except Exception:
-                                pass  # Evidence fetch is optional for manual editing
+                                pass
+                            save_ic_state_to_workspace(workspace.metadata.workspace_id)
                             st.rerun()
 
-                    with col3:
-                        if st.button("✨ Auto-Generate", key=f"gen_{qtype.value}_{q_idx}", type="primary",
-                                     use_container_width=True, disabled=current_status in ['completed', 'editing'],
-                                     help="Let AI generate a first draft, then refine"):
-                            with st.spinner("Generating response..."):
+                    with btn_col2:
+                        if st.button("Generate", key=f"gen_{qtype_key}_{q_idx}", type="primary"):
+                            with st.spinner("Generating..."):
                                 try:
-                                    # Fetch evidence if not cached (using per-question collection)
                                     if field_key not in st.session_state.ic_evidence_cache:
                                         evidence_result = evidence_retriever.find_evidence(
                                             question=field.field_text,
                                             question_type=field.question_type or QuestionType.GENERAL,
-                                            collection_name=q_collection_name,  # Per-question setting
+                                            collection_name=selected_collection,
                                             max_results=max_evidence,
                                             use_reranker=use_reranker
                                         )
                                         st.session_state.ic_evidence_cache[field_key] = evidence_result.evidence
 
                                     evidence = st.session_state.ic_evidence_cache.get(field_key, [])
-
-                                    # Apply per-question creativity/temperature
-                                    llm.temperature = q_temperature
-
-                                    # Generate response
                                     response = response_generator.generate(
                                         classified_field=field,
                                         evidence=evidence,
@@ -676,181 +956,171 @@ if st.session_state.ic_classified_fields:
                                     question_status[field_key]['response'] = response.text
                                     question_status[field_key]['evidence'] = evidence
                                     st.session_state.ic_question_status = question_status
-                                    st.success("Response generated - edit below")
+                                    save_ic_state_to_workspace(workspace.metadata.workspace_id)
+                                    st.rerun()
                                 except Exception as e:
                                     st.error(f"Generation failed: {e}")
 
-                    # Show evidence if cached
-                    cached_evidence = st.session_state.ic_evidence_cache.get(field_key, [])
-                    if cached_evidence:
-                        with st.expander(f"Evidence ({len(cached_evidence)} sources)", expanded=False):
-                            for ev_idx, evidence in enumerate(cached_evidence[:3]):
-                                st.markdown(f"""
-                                <div class="evidence-card">
-                                    <strong>{evidence.source_doc}</strong>
-                                    <span style="float:right; color:#888;">Relevance: {evidence.relevance_score:.0%}</span>
-                                    <br><br>
-                                    {evidence.text[:400]}{'...' if len(evidence.text) > 400 else ''}
-                                </div>
-                                """, unsafe_allow_html=True)
+                elif current_status in ['completed', 'editing']:
+                    # Show response editor
+                    response_text = st.text_area(
+                        "Response",
+                        value=status_data.get('response', ''),
+                        height=180,
+                        key=f"response_{qtype_key}_{q_idx}",
+                        label_visibility="collapsed"
+                    )
 
-                    # Show/edit response if completed or editing
-                    if current_status in ['completed', 'editing']:
-                        # Header row with label and export button
-                        resp_col1, resp_col2 = st.columns([3, 1])
-                        with resp_col1:
-                            st.markdown("**Response** *(edit directly below, or export to edit externally)*")
-                        with resp_col2:
-                            # Per-field download button
-                            field_export = f"# {field.field_text}\n\n{status_data.get('response', '')}"
-                            st.download_button(
-                                "⬇️ Export",
-                                data=field_export,
-                                file_name=f"response_{q_idx + 1}_{qtype.value}.txt",
-                                mime="text/plain",
-                                key=f"export_{qtype.value}_{q_idx}",
-                                use_container_width=True
-                            )
+                    # Update if changed
+                    if response_text != status_data.get('response', ''):
+                        question_status[field_key]['response'] = response_text
+                        question_status[field_key]['status'] = 'completed'
+                        st.session_state.ic_question_status = question_status
+                        save_ic_state_to_workspace(workspace.metadata.workspace_id)
 
-                        # Editable response text area
-                        response_text = st.text_area(
-                            "Response",
-                            value=status_data.get('response', ''),
-                            height=200,
-                            key=f"response_{qtype.value}_{q_idx}",
-                            label_visibility="collapsed",
-                            help="Edit directly here, or export, edit externally, and paste back"
+                    # Word count and actions row
+                    wc_col, action_col1, action_col2, action_col3 = st.columns([2, 1, 1, 1])
+
+                    with wc_col:
+                        word_count = len(response_text.split()) if response_text else 0
+                        limit_info = f" / {field.word_limit}" if field.word_limit else ""
+                        st.caption(f"{word_count} words{limit_info}")
+
+                    with action_col1:
+                        st.download_button(
+                            "Export",
+                            data=f"# {field.field_text}\n\n{response_text}",
+                            file_name=f"response_{q_idx + 1}.txt",
+                            mime="text/plain",
+                            key=f"export_{qtype_key}_{q_idx}"
                         )
 
-                        # Update if changed (handles paste-back workflow)
-                        if response_text != status_data.get('response', ''):
-                            question_status[field_key]['response'] = response_text
-                            st.session_state.ic_question_status = question_status
+                    # Toggle for showing evidence
+                    show_evidence_key = f"show_ev_{qtype_key}_{q_idx}"
+                    if show_evidence_key not in st.session_state:
+                        st.session_state[show_evidence_key] = False
 
-                        # Word count indicator
-                        word_count = len(response_text.split()) if response_text else 0
-                        limit_info = f" / {field.word_limit} limit" if field.word_limit else ""
-                        st.caption(f"📝 {word_count} words{limit_info}")
+                    with action_col2:
+                        if st.button("Evidence", key=f"ev_btn_{qtype_key}_{q_idx}", type="secondary"):
+                            st.session_state[show_evidence_key] = not st.session_state[show_evidence_key]
+                            st.rerun()
 
-                        # Regeneration with hint
-                        with st.expander("🔄 Refine with AI Guidance", expanded=False):
-                            # Settings for regeneration
-                            regen_col1, regen_col2 = st.columns(2)
-                            with regen_col1:
-                                regen_collection = st.selectbox(
-                                    "Evidence Source",
-                                    options=collection_options,
-                                    index=collection_options.index(q_collection) if q_collection in collection_options else 0,
-                                    key=f"regen_coll_{qtype.value}_{q_idx}",
-                                    help="Collection to search for evidence"
-                                )
-                            with regen_col2:
-                                regen_creativity = st.select_slider(
-                                    "Creativity",
-                                    options=[0, 1, 2],
-                                    value=q_creativity,
-                                    format_func=lambda x: {0: "📊 Factual", 1: "⚖️ Balanced", 2: "💡 Creative"}[x],
-                                    key=f"regen_creat_{qtype.value}_{q_idx}"
-                                )
+                    # Toggle for refinement
+                    show_refine_key = f"show_ref_{qtype_key}_{q_idx}"
+                    if show_refine_key not in st.session_state:
+                        st.session_state[show_refine_key] = False
 
-                            regen_collection_name = None if regen_collection == "-- Entire Knowledge Base --" else regen_collection
-                            regen_temperature = {0: 0.3, 1: 0.7, 2: 1.0}[regen_creativity]
+                    with action_col3:
+                        if st.button("Refine", key=f"ref_btn_{qtype_key}_{q_idx}", type="secondary"):
+                            st.session_state[show_refine_key] = not st.session_state[show_refine_key]
+                            st.rerun()
 
-                            hint_text = st.text_area(
-                                "Refinement Guidance",
-                                placeholder="Enter guidance to steer the regeneration, e.g.:\n• Focus more on project X outcomes\n• Emphasize our ISO certification\n• Include specific metrics from the 2024 report\n• Make it more concise\n• Add more detail about our methodology",
-                                key=f"hint_{qtype.value}_{q_idx}",
-                                height=100,
-                                help="Add guidance to steer the regeneration. Leave blank for general improvement."
-                            )
+                    # Evidence panel (conditionally shown)
+                    cached_evidence = st.session_state.ic_evidence_cache.get(field_key, [])
+                    if st.session_state[show_evidence_key] and cached_evidence:
+                        st.markdown("---")
+                        st.caption(f"**Evidence** ({len(cached_evidence)} sources)")
+                        for ev in cached_evidence[:3]:
+                            st.markdown(f"""
+                            <div class="evidence-card">
+                                <div class="evidence-source">
+                                    {ev.source_doc}
+                                    <span class="evidence-score">{ev.relevance_score:.0%} relevant</span>
+                                </div>
+                                {ev.text[:350]}{'...' if len(ev.text) > 350 else ''}
+                            </div>
+                            """, unsafe_allow_html=True)
 
-                            if st.button("🔄 Regenerate with Guidance", key=f"regen_{qtype.value}_{q_idx}",
-                                        use_container_width=True, type="primary"):
-                                with st.spinner("Regenerating with guidance..."):
-                                    try:
-                                        # Fetch fresh evidence with selected collection
-                                        evidence_result = evidence_retriever.find_evidence(
-                                            question=field.field_text,
-                                            question_type=field.question_type or QuestionType.GENERAL,
-                                            collection_name=regen_collection_name,
-                                            max_results=max_evidence,
-                                            use_reranker=use_reranker
-                                        )
-                                        evidence = evidence_result.evidence
-                                        st.session_state.ic_evidence_cache[field_key] = evidence
+                    # Refinement panel (conditionally shown)
+                    if st.session_state[show_refine_key]:
+                        st.markdown("---")
+                        st.caption("**Refine with AI Guidance**")
+                        hint_text = st.text_area(
+                            "Guidance",
+                            placeholder="e.g., Focus on ISO certification, add specific metrics...",
+                            key=f"hint_{qtype_key}_{q_idx}",
+                            height=80,
+                            label_visibility="collapsed"
+                        )
 
-                                        # Build DraftResponse from stored data for regeneration
-                                        previous_response = DraftResponse(
-                                            question=field.field_text,
-                                            question_type=field.question_type or QuestionType.GENERAL,
-                                            text=status_data.get('response', ''),
-                                            evidence_used=evidence,
-                                            confidence=0.5,
-                                            word_count=len(status_data.get('response', '').split()),
-                                            needs_review=True,
-                                            placeholders=[],
-                                            generation_time=0,
-                                            metadata={
-                                                'entity_id': workspace.metadata.entity_id,
-                                                'word_limit': field.word_limit
-                                            }
-                                        )
+                        if st.button("Regenerate", key=f"regen_{qtype_key}_{q_idx}", type="primary"):
+                            with st.spinner("Regenerating..."):
+                                try:
+                                    evidence_result = evidence_retriever.find_evidence(
+                                        question=field.field_text,
+                                        question_type=field.question_type or QuestionType.GENERAL,
+                                        collection_name=selected_collection,
+                                        max_results=max_evidence,
+                                        use_reranker=use_reranker
+                                    )
+                                    evidence = evidence_result.evidence
+                                    st.session_state.ic_evidence_cache[field_key] = evidence
 
-                                        # Apply regeneration creativity/temperature
-                                        llm.temperature = regen_temperature
+                                    previous_response = DraftResponse(
+                                        question=field.field_text,
+                                        question_type=field.question_type or QuestionType.GENERAL,
+                                        text=status_data.get('response', ''),
+                                        evidence_used=evidence,
+                                        confidence=0.5,
+                                        word_count=len(status_data.get('response', '').split()),
+                                        needs_review=True,
+                                        placeholders=[],
+                                        generation_time=0,
+                                        metadata={
+                                            'entity_id': workspace.metadata.entity_id,
+                                            'word_limit': field.word_limit
+                                        }
+                                    )
 
-                                        # Regenerate with hint
-                                        guidance = hint_text if hint_text else "Please improve the response with more specific details from the evidence."
-                                        new_response = response_generator.regenerate(
-                                            previous_response=previous_response,
-                                            entity_id=workspace.metadata.entity_id,
-                                            additional_guidance=guidance,
-                                            new_evidence=evidence
-                                        )
+                                    guidance = hint_text if hint_text else "Improve with more specific details from evidence."
+                                    new_response = response_generator.regenerate(
+                                        previous_response=previous_response,
+                                        entity_id=workspace.metadata.entity_id,
+                                        additional_guidance=guidance,
+                                        new_evidence=evidence
+                                    )
 
-                                        # Update stored response
-                                        question_status[field_key]['response'] = new_response.text
-                                        question_status[field_key]['confidence'] = new_response.confidence
-                                        st.session_state.ic_question_status = question_status
-                                        st.success(f"Regenerated! Confidence: {new_response.confidence:.0%}")
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Regeneration failed: {e}")
+                                    question_status[field_key]['response'] = new_response.text
+                                    question_status[field_key]['confidence'] = new_response.confidence
+                                    st.session_state.ic_question_status = question_status
+                                    save_ic_state_to_workspace(workspace.metadata.workspace_id)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Regeneration failed: {e}")
 
-            st.divider()
+                st.markdown("<div style='height: 0.5rem'></div>", unsafe_allow_html=True)
 
     # ============================
-    # Export / Summary
+    # Export Section
     # ============================
 
-    if intel_fields:
-        st.subheader("Export")
+    st.divider()
 
-        completed_responses = {k: v for k, v in question_status.items()
-                              if v['status'] in ['completed', 'editing'] and v.get('response')}
+    completed_responses = {k: v for k, v in question_status.items()
+                          if v['status'] == 'completed' and v.get('response')}
 
-        if completed_responses:
-            st.success(f"{len(completed_responses)} responses ready for export")
+    if completed_responses:
+        exp_col1, exp_col2 = st.columns([3, 1])
+        with exp_col1:
+            st.caption(f"{len(completed_responses)} responses ready for export")
+        with exp_col2:
+            export_text = f"# Intelligent Completion Export\n"
+            export_text += f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+            export_text += f"# Workspace: {selected_workspace_name}\n\n"
 
-            if st.button("Export to Text", use_container_width=True):
-                export_text = f"# Intelligent Completion Export\n"
-                export_text += f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
-                export_text += f"# Workspace: {selected_workspace_name}\n\n"
+            for field_text, data in completed_responses.items():
+                export_text += f"## {field_text}\n\n"
+                export_text += f"{data['response']}\n\n"
+                export_text += "---\n\n"
 
-                for field_text, data in completed_responses.items():
-                    export_text += f"## {field_text}\n\n"
-                    export_text += f"{data['response']}\n\n"
-                    export_text += "---\n\n"
-
-                st.download_button(
-                    "Download Export",
-                    data=export_text,
-                    file_name=f"intelligent_completion_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
-                    mime="text/plain"
-                )
-        else:
-            st.info("Complete some questions to enable export")
+            st.download_button(
+                "Export All",
+                data=export_text,
+                file_name=f"proposal_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                mime="text/plain",
+                type="primary"
+            )
 
 # Footer
-st.divider()
-st.caption("v2.7.0 | Smart state detection - skip to editing if fields already extracted")
+st.markdown("<div style='height: 2rem'></div>", unsafe_allow_html=True)
+st.caption("v2.9.0 — Progress saved automatically")

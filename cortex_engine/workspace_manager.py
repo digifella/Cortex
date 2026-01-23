@@ -1,16 +1,17 @@
 """
 Workspace Manager
-Version: 2.0.0
-Date: 2026-01-05
+Version: 2.1.0
+Date: 2026-01-23
 
 Purpose: Manage tender response workspaces with mention-based proposal system.
+Includes IC (Intelligent Completion) state persistence for "Save As You Go".
 """
 
 import yaml
 import json
 import shutil
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from datetime import datetime
 
 from .workspace_model import (
@@ -645,6 +646,162 @@ class WorkspaceManager:
         logger.info(f"Archived workspace: {workspace_id}")
 
         return True
+
+    # ========================================
+    # INTELLIGENT COMPLETION PERSISTENCE
+    # ========================================
+
+    def get_ic_completion_state(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Load saved Intelligent Completion state for a workspace.
+
+        Args:
+            workspace_id: Workspace identifier
+
+        Returns:
+            ICCompletionState dict or None if no saved state
+        """
+        workspace_dir = self.base_path / workspace_id
+        state_path = workspace_dir / "ic_completion_state.yaml"
+
+        if not state_path.exists():
+            return None
+
+        try:
+            with open(state_path, 'r') as f:
+                data = yaml.safe_load(f)
+
+            logger.info(f"Loaded IC completion state for workspace {workspace_id}")
+            return data
+
+        except Exception as e:
+            logger.error(f"Failed to load IC completion state: {e}")
+            return None
+
+    def save_ic_completion_state(self, workspace_id: str, state: Dict[str, Any]) -> bool:
+        """
+        Save full Intelligent Completion state for a workspace.
+
+        Args:
+            workspace_id: Workspace identifier
+            state: ICCompletionState as dict
+
+        Returns:
+            True if saved successfully
+        """
+        workspace_dir = self.base_path / workspace_id
+        state_path = workspace_dir / "ic_completion_state.yaml"
+
+        if not workspace_dir.exists():
+            logger.error(f"Workspace directory not found: {workspace_id}")
+            return False
+
+        try:
+            # Update timestamp
+            state['updated_at'] = datetime.now().isoformat()
+
+            with open(state_path, 'w') as f:
+                yaml.dump(state, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+            logger.info(f"Saved IC completion state for workspace {workspace_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to save IC completion state: {e}")
+            return False
+
+    def update_ic_question_state(
+        self,
+        workspace_id: str,
+        field_text: str,
+        status: Optional[str] = None,
+        response: Optional[str] = None,
+        evidence: Optional[List[Dict[str, Any]]] = None,
+        confidence: Optional[float] = None,
+        collection_name: Optional[str] = None,
+        creativity_level: Optional[int] = None
+    ) -> bool:
+        """
+        Update a single question's state in the saved IC state.
+
+        Args:
+            workspace_id: Workspace identifier
+            field_text: The question text (key for lookup)
+            status: New status ('pending', 'skipped', 'completed', 'editing')
+            response: New response text
+            evidence: New evidence list
+            confidence: New confidence score
+            collection_name: Collection used for this question
+            creativity_level: Creativity setting used
+
+        Returns:
+            True if updated successfully
+        """
+        state = self.get_ic_completion_state(workspace_id)
+
+        if state is None:
+            logger.warning(f"No IC state found for workspace {workspace_id}")
+            return False
+
+        try:
+            question_status = state.get('question_status', {})
+
+            if field_text not in question_status:
+                question_status[field_text] = {
+                    'status': 'pending',
+                    'response': '',
+                    'evidence': []
+                }
+
+            q_state = question_status[field_text]
+
+            if status is not None:
+                q_state['status'] = status
+            if response is not None:
+                q_state['response'] = response
+            if evidence is not None:
+                q_state['evidence'] = evidence
+            if confidence is not None:
+                q_state['confidence'] = confidence
+            if collection_name is not None:
+                q_state['collection_name'] = collection_name
+            if creativity_level is not None:
+                q_state['creativity_level'] = creativity_level
+
+            state['question_status'] = question_status
+
+            return self.save_ic_completion_state(workspace_id, state)
+
+        except Exception as e:
+            logger.error(f"Failed to update IC question state: {e}")
+            return False
+
+    def clear_ic_completion_state(self, workspace_id: str) -> bool:
+        """
+        Delete saved IC completion state for a workspace.
+
+        Used when user clicks "Re-extract Fields".
+
+        Args:
+            workspace_id: Workspace identifier
+
+        Returns:
+            True if cleared (or didn't exist)
+        """
+        workspace_dir = self.base_path / workspace_id
+        state_path = workspace_dir / "ic_completion_state.yaml"
+
+        if not state_path.exists():
+            return True
+
+        try:
+            state_path.unlink()
+            logger.info(f"Cleared IC completion state for workspace {workspace_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to clear IC completion state: {e}")
+            return False
 
     # ========================================
     # PRIVATE METHODS
