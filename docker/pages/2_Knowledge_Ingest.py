@@ -117,7 +117,7 @@ st.set_page_config(layout="wide", page_title="Knowledge Ingest")
 # Apply refined editorial theme
 apply_theme()
 
-# Add global CSS for left-aligned directory buttons
+# Add global CSS for left-aligned directory buttons and light-mode code blocks
 st.markdown("""
 <style>
 /* Left-align folder directory navigation buttons */
@@ -134,6 +134,20 @@ button[data-testid="baseButton-secondary"]:contains("📁") {
 div[data-testid="column"] .stButton > button {
     text-align: left !important;
     justify-content: flex-start !important;
+}
+/* Force light mode for code blocks (processing log) */
+pre, code, .stCodeBlock, [data-testid="stCodeBlock"] {
+    background-color: #F8F9FA !important;
+    color: #1A1A1A !important;
+}
+[data-testid="stCodeBlock"] code {
+    background-color: #F8F9FA !important;
+    color: #1A1A1A !important;
+}
+/* Ensure code text is readable */
+.stCodeBlock pre {
+    background-color: #F8F9FA !important;
+    color: #1A1A1A !important;
 }
 </style>
 """, unsafe_allow_html=True)

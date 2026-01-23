@@ -595,12 +595,13 @@ def get_custom_css():
 
     pre {{
         font-family: var(--font-mono);
-        background-color: {COLORS['neutral']['900']};
-        color: {COLORS['neutral']['100']};
+        background-color: {COLORS['neutral']['100']};
+        color: {COLORS['neutral']['900']};
         padding: var(--space-lg);
         border-radius: var(--radius-lg);
         overflow-x: auto;
         line-height: 1.5;
+        border: 1px solid {COLORS['neutral']['200']};
     }}
 
     /* ============================================
