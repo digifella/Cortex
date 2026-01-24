@@ -20,11 +20,19 @@ RUN apt-get update && apt-get install -y \
 # Create app user first
 RUN useradd --create-home --shell /bin/bash cortex
 
-# Install Ollama and give cortex user access
-RUN curl -fsSL https://ollama.ai/install.sh | sh && \
-    chown -R cortex:cortex /usr/local/bin/ollama /usr/bin/ollama 2>/dev/null || true && \
+# Install Ollama - download and extract from GitHub releases
+# Release is now distributed as .tar.zst archive
+RUN apt-get update && apt-get install -y zstd && rm -rf /var/lib/apt/lists/* && \
+    curl -fsSL -o /tmp/ollama.tar.zst https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tar.zst && \
+    mkdir -p /tmp/ollama && \
+    tar --zstd -xf /tmp/ollama.tar.zst -C /tmp/ollama && \
+    cp /tmp/ollama/bin/ollama /usr/local/bin/ollama && \
+    chmod +x /usr/local/bin/ollama && \
+    ln -sf /usr/local/bin/ollama /usr/bin/ollama && \
+    rm -rf /tmp/ollama /tmp/ollama.tar.zst && \
     mkdir -p /home/cortex/.ollama && \
-    chown -R cortex:cortex /home/cortex/.ollama
+    chown -R cortex:cortex /home/cortex/.ollama && \
+    ollama --version
 
 USER cortex
 WORKDIR /home/cortex/app

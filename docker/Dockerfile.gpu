@@ -90,12 +90,19 @@ RUN python -c "import nltk; nltk.download('averaged_perceptron_tagger'); nltk.do
 # Install Docling with NumPy constraints
 RUN pip install 'docling>=1.0.0' 'numpy>=1.26.4,<2.0.0' || echo "Docling installation failed, will use legacy readers"
 
-# Pre-download embedding model for offline operation
+# Pre-download embedding models for offline operation
 # Temporarily disable offline mode during build to allow download
 ENV HF_HUB_OFFLINE=0
 ENV TRANSFORMERS_OFFLINE=0
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-base-en-v1.5')" || echo "WARNING: Embedding model download failed - container will require internet on first use"
-# Re-enable offline mode for runtime
+
+# Download BGE model (CPU fallback and lower VRAM systems)
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-base-en-v1.5')" || echo "WARNING: BGE embedding model download failed"
+
+# Download NV-Embed-v2 model (NVIDIA GPU systems - auto-selected when GPU detected)
+# This is the preferred model for GPU systems with sufficient VRAM
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('nvidia/NV-Embed-v2', trust_remote_code=True)" || echo "WARNING: NV-Embed-v2 model download failed - will use BGE fallback"
+
+# Re-enable offline mode for runtime (models now cached)
 ENV HF_HUB_OFFLINE=1
 ENV TRANSFORMERS_OFFLINE=1
 
