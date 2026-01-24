@@ -44,11 +44,11 @@ COPY --chown=cortex:cortex requirements.txt ./requirements.txt
 
 # Install base requirements WITHOUT torch, spacy model, and torch-dependent packages (installed separately)
 # Increased timeout to 300 seconds for slow/unstable network connections
-# Exclude torch, sentence-transformers, outlines (all depend on torch), and en-core-web-sm (downloaded separately)
+# Exclude torch, sentence-transformers, outlines, accelerate (all depend on torch), and en-core-web-sm (downloaded separately)
 # Extract package names and versions only (no URLs, no hashes) for cross-platform compatibility
 # Use --no-cache-dir to avoid hash mismatch errors from corrupted cache
 # Disable hash checking to avoid transient PyPI hash mismatch errors
-RUN grep -v "^torch" requirements.txt | grep -v "^en-core-web-sm" | grep -v "^outlines" | grep -v "^sentence-transformers" | \
+RUN grep -v "^torch" requirements.txt | grep -v "^en-core-web-sm" | grep -v "^outlines" | grep -v "^sentence-transformers" | grep -v "^accelerate" | \
     grep -v "^#" | grep -v "^$" | \
     sed 's/ @.*//' | sed 's/#.*//' > requirements-base.txt && \
     pip config set install.require-hashes false && \
@@ -66,8 +66,8 @@ RUN pip install --no-cache-dir --retries 10 --timeout 600 \
 RUN python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda if torch.cuda.is_available() else \"N/A\"}')"
 
 # Install torch-dependent packages AFTER PyTorch is installed
-# This includes outlines, outlines_core, and sentence-transformers which all require torch
-RUN grep -E "^(outlines|sentence-transformers)" requirements.txt > requirements-torch-deps.txt && \
+# This includes outlines, outlines_core, sentence-transformers, and accelerate which all require torch
+RUN grep -E "^(outlines|sentence-transformers|accelerate)" requirements.txt > requirements-torch-deps.txt && \
     pip install --no-cache-dir --retries 5 --timeout 300 -r requirements-torch-deps.txt
 
 # Add user's local bin to PATH
