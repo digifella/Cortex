@@ -6,6 +6,31 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Qwen3-VL Embedding Pipeline Fixes - 2026-01-24
+
+Critical fixes to enable Qwen3-VL multimodal embedding generation.
+
+#### 🔧 Bug Fixes
+- **bfloat16 to float32 conversion**: Fixed `TypeError: Got unsupported ScalarType BFloat16` - numpy doesn't support bfloat16, now converts via `.float()` before `.numpy()`
+- **Processor input format**: Rewrote `_process_inputs()` to properly separate text/image inputs for Qwen3-VL processor
+- **Redundant llava VLM calls**: Skip llava processing when Qwen3-VL is enabled (Qwen3-VL embeds images directly)
+- **NetworkX 3.0+ compatibility**: Replaced deprecated `nx.read_gpickle()` with `pickle.load()`
+- **Environment variable loading**: Added `load_dotenv()` to config.py to ensure .env settings are available
+
+#### ✨ New Features
+- **Embedding progress display**: Added real-time "Embedding: X/Y vectors (Z%)" progress bar during finalization
+- **CORTEX_EMBEDDING progress messages**: Machine-readable progress output for UI parsing
+
+#### 📦 Dependency Updates
+- transformers: 4.46.3 → 4.57.6 (required for qwen3_vl architecture support)
+- sentence-transformers: 2.7.0 → 5.2.0
+- chromadb: 0.5.23 → 1.4.1 (tokenizers compatibility)
+- Updated requirements.txt to reflect actual installed packages
+
+#### 📋 Documentation
+- Added UPGRADE_PLAN.md documenting the upgrade path
+- Added Qwen3-VL settings to docker/.env.example
+
 ## v5.2.0 - 2026-01-20
 
 ### Intelligent Proposal Completion Overhaul

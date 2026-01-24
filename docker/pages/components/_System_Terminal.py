@@ -47,7 +47,7 @@ def main():
     
     with col2:
         if st.button("🔧 Go to Maintenance Page", use_container_width=True, type="primary"):
-            st.switch_page("pages/13_Maintenance.py")
+            st.switch_page("pages/6_Maintenance.py")
     
     st.divider()
     
