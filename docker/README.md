@@ -3,6 +3,30 @@
 **Version:** v5.2.0 (Intelligent Proposal Completion Overhaul)
 **Date:** 2026-01-20
 
+---
+## ⚠️ DOCKER INSTALLATION STATUS: TESTING IN PROGRESS
+
+**Last Updated:** 2026-01-25
+
+The Docker installation is currently under **active testing and debugging**. Recent changes include:
+
+- **Dependency Resolution:** Fixed multiple llama-index package version conflicts
+- **Docling Removed:** Docker uses legacy ingestion mode (docling packages removed to avoid conflicts)
+- **PyTorch Updated:** Upgraded to 2.5.1+cu121 for stable package hashes
+- **Ollama Installation:** Updated to handle new .tar.zst release format
+- **Batch Installer:** Added path validation before build to prevent wasted time
+
+**Known Issues Being Addressed:**
+- Ollama installation and service startup
+- Dependency version conflicts between packages
+
+**If you encounter issues:**
+1. Run `docker system prune -a -f` and `docker builder prune -a -f`
+2. Pull the latest code from git
+3. Rebuild the Docker image
+
+---
+
 **Prelim:**
 Please be aware that the system operates in a WSL2 environment, so all paths should support linux and windows.
 
