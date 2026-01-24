@@ -2740,7 +2740,7 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
         st.markdown(f"### {status_header}")
         st.markdown(f"{progress_text}")
         progress_percent = st.session_state.current_doc_number / st.session_state.total_docs_in_batch
-        st.progress(progress_percent, text=progress_text)
+        progress_bar = st.progress(progress_percent, text=progress_text)
 
         # Show embedding progress during finalization
         if st.session_state.get('finalize_started_detected', False) and st.session_state.embedding_total > 0:
@@ -2750,7 +2750,7 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
             embed_text = f"🔢 Embedding: {embed_current}/{embed_total} vectors ({embed_pct:.0f}%)"
             st.progress(embed_current / embed_total if embed_total > 0 else 0, text=embed_text)
     else:
-        st.progress(0, text="Starting process...")
+        progress_bar = st.progress(0, text="Starting process...")
 
     # Throttle status indicator (always visible; values update as lines arrive)
     throttle_col1, throttle_col2, throttle_col3 = st.columns([1, 1, 1])
