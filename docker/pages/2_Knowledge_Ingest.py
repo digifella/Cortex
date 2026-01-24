@@ -2721,12 +2721,17 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
         st.session_state.current_doc_number = 0
     if "total_docs_in_batch" not in st.session_state:
         st.session_state.total_docs_in_batch = 0
+    # Embedding progress tracking
+    if "embedding_current" not in st.session_state:
+        st.session_state.embedding_current = 0
+    if "embedding_total" not in st.session_state:
+        st.session_state.embedding_total = 0
     
     # Progress counter display (prominent)
     if st.session_state.total_docs_in_batch > 0:
         # Distinguish between analysis and finalization phases
         if st.session_state.get('finalize_started_detected', False):
-            progress_text = f"🔄 Embedding document {st.session_state.current_doc_number} of {st.session_state.total_docs_in_batch}"
+            progress_text = f"🔄 Indexing batch {st.session_state.current_doc_number} of {st.session_state.total_docs_in_batch}"
             status_header = "**Finalization in Progress** (Embedding & Indexing)"
         else:
             progress_text = f"📄 Analyzing document {st.session_state.current_doc_number} of {st.session_state.total_docs_in_batch}"
@@ -2735,9 +2740,17 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
         st.markdown(f"### {status_header}")
         st.markdown(f"{progress_text}")
         progress_percent = st.session_state.current_doc_number / st.session_state.total_docs_in_batch
-        progress_bar = st.progress(progress_percent, text=progress_text)
+        st.progress(progress_percent, text=progress_text)
+
+        # Show embedding progress during finalization
+        if st.session_state.get('finalize_started_detected', False) and st.session_state.embedding_total > 0:
+            embed_current = st.session_state.embedding_current
+            embed_total = st.session_state.embedding_total
+            embed_pct = (embed_current / embed_total * 100) if embed_total > 0 else 0
+            embed_text = f"🔢 Embedding: {embed_current}/{embed_total} vectors ({embed_pct:.0f}%)"
+            st.progress(embed_current / embed_total if embed_total > 0 else 0, text=embed_text)
     else:
-        progress_bar = st.progress(0, text="Starting process...")
+        st.progress(0, text="Starting process...")
 
     # Throttle status indicator (always visible; values update as lines arrive)
     throttle_col1, throttle_col2, throttle_col3 = st.columns([1, 1, 1])
@@ -2796,6 +2809,18 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
                     st.session_state.current_doc_number = current
                     st.session_state.total_docs_in_batch = total
                     st.session_state.log_messages.append(f"Processing {current}/{total}: {filename_part}")
+                except (ValueError, IndexError):
+                    st.session_state.log_messages.append(line)
+            elif line.startswith("CORTEX_EMBEDDING::"):
+                # Parse embedding progress: CORTEX_EMBEDDING::current/total::batch_info
+                try:
+                    _, progress_part, batch_info = line.split("::", 2)
+                    current, total = map(int, progress_part.split('/'))
+                    st.session_state.embedding_current = current
+                    st.session_state.embedding_total = total
+                    if current > 0:
+                        pct = (current / total * 100) if total > 0 else 0
+                        st.session_state.log_messages.append(f"🔢 Embedding: {current}/{total} ({pct:.0f}%)")
                 except (ValueError, IndexError):
                     st.session_state.log_messages.append(line)
             elif line.startswith("CORTEX_THROTTLE::"):

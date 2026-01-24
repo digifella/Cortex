@@ -507,6 +507,8 @@ def embed_batch(
     with measure("qwen3_vl_embedding_batch", batch_size=batch_size, doc_count=len(inputs)):
         if len(inputs) > batch_size:
             logger.info(f"🔢 Generating Qwen3-VL embeddings for {len(inputs)} items in {total_batches} batches")
+            # Emit machine-readable progress for UI
+            print(f"CORTEX_EMBEDDING::0/{len(inputs)}::starting", flush=True)
 
         for i in range(0, len(inputs), batch_size):
             batch = inputs[i:i+batch_size]
@@ -517,6 +519,10 @@ def embed_batch(
 
             batch_embeddings = _process_inputs(batch, model, processor, cfg)
             all_embeddings.extend(batch_embeddings.tolist())
+
+            # Emit embedding progress for UI (after each batch)
+            if len(inputs) > batch_size:
+                print(f"CORTEX_EMBEDDING::{len(all_embeddings)}/{len(inputs)}::batch_{batch_num}", flush=True)
 
         if len(inputs) > batch_size:
             logger.info(f"✅ Qwen3-VL embedding generation complete: {len(all_embeddings)} vectors")
