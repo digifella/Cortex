@@ -38,9 +38,9 @@ normalize_path_for_docker() {
 
 echo ""
 echo "==============================================="
-echo "   CORTEX SUITE v5.2.0 (Docker Path Auto-Detection Hotfix)"
+echo "   CORTEX SUITE v5.2.0 - Docker Installer"
 echo "   Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64"
-echo "   GPU acceleration, timeout fixes, and improved reliability (2025-09-02)"
+echo "   GPU acceleration and improved reliability"
 echo "   Date: $(date)"
 echo "==============================================="
 echo ""
@@ -109,102 +109,204 @@ ENV_AI_DB_PATH=$(normalize_path_for_docker "$ENV_AI_DB_PATH_RAW")
 ENV_SOURCE_PATH=$(normalize_path_for_docker "$ENV_SOURCE_PATH_RAW")
 
 # Show existing configuration if present
-if [ -n "$ENV_AI_DB_PATH" ]; then
+if [ -n "$ENV_AI_DB_PATH" ] || [ -n "$ENV_SOURCE_PATH" ]; then
     echo ""
     echo "ℹ️  Found existing storage configuration:"
     [ -n "$ENV_AI_DB_PATH" ] && echo "   AI Database: $ENV_AI_DB_PATH"
     [ -n "$ENV_SOURCE_PATH" ] && echo "   Knowledge Source: $ENV_SOURCE_PATH"
     echo ""
-    echo "You can press ENTER to keep existing paths or type new ones."
-    echo ""
-    # Clear old entries from .env - will be re-added with user confirmation
-    grep -v -E '^(WINDOWS_AI_DATABASE_PATH=|AI_DATABASE_PATH=|WINDOWS_KNOWLEDGE_SOURCE_PATH=|KNOWLEDGE_SOURCE_PATH=)' .env > .env.tmp
-    mv .env.tmp .env
 fi
 
 # ALWAYS prompt for AI Database Path (with default if exists)
-echo ""
-echo "==================================================================="
-echo "STORAGE CONFIGURATION: AI Database Path"
-echo "==================================================================="
-echo "This is where Cortex will store the knowledge graph and vector DB."
-echo ""
-if [ -n "$ENV_AI_DB_PATH" ]; then
-    echo "Current: $ENV_AI_DB_PATH"
+enter_ai_db_path() {
     echo ""
-fi
-read -p "Use host folder for AI database storage? (y/N): " USE_HOST_AI_DB
-if [[ "$USE_HOST_AI_DB" =~ ^[Yy]$ ]]; then
+    echo "==================================================================="
+    echo "STORAGE CONFIGURATION: AI Database Path"
+    echo "==================================================================="
+    echo "This is where Cortex will store the knowledge graph and vector DB."
+    echo "IMPORTANT: Configure paths NOW before the long build process."
+    echo ""
     if [ -n "$ENV_AI_DB_PATH" ]; then
-        read -p "Enter host path [$ENV_AI_DB_PATH]: " HOST_AI_DB
-    else
-        read -p "Enter host path (e.g., /Users/you/ai_databases): " HOST_AI_DB
+        echo "Current: $ENV_AI_DB_PATH"
+        echo ""
     fi
-    # Use existing path if user just pressed ENTER
-    if [ -z "$HOST_AI_DB" ] && [ -n "$ENV_AI_DB_PATH" ]; then
-        HOST_AI_DB="$ENV_AI_DB_PATH"
-        echo "ℹ️  Using existing path: $HOST_AI_DB"
+    read -p "Use host folder for AI database storage? (y/N): " USE_HOST_AI_DB
+    if [[ ! "$USE_HOST_AI_DB" =~ ^[Yy]$ ]]; then
+        return
     fi
-    if [ -n "$HOST_AI_DB" ]; then
+
+    while true; do
+        if [ -n "$ENV_AI_DB_PATH" ]; then
+            read -p "Enter host path [$ENV_AI_DB_PATH]: " HOST_AI_DB
+        else
+            read -p "Enter host path (e.g., /Users/you/ai_databases or ~/ai_databases): " HOST_AI_DB
+        fi
+
+        # Use existing path if user just pressed ENTER
+        if [ -z "$HOST_AI_DB" ] && [ -n "$ENV_AI_DB_PATH" ]; then
+            HOST_AI_DB="$ENV_AI_DB_PATH"
+            echo "ℹ️  Using existing path: $HOST_AI_DB"
+        fi
+
+        if [ -z "$HOST_AI_DB" ]; then
+            echo "ℹ️  Skipping AI database host mapping..."
+            return
+        fi
+
+        # Expand ~ to home directory
+        HOST_AI_DB="${HOST_AI_DB/#\~/$HOME}"
         HOST_AI_DB=$(normalize_path_for_docker "$HOST_AI_DB")
-        # Create directory if it doesn't exist
-        mkdir -p "$HOST_AI_DB" 2>/dev/null || true
+
+        # Validate the path - check if parent directory exists or can be created
+        PARENT_DIR=$(dirname "$HOST_AI_DB")
+        if [ ! -d "$PARENT_DIR" ]; then
+            echo ""
+            echo "*** ERROR: Parent directory does not exist! ***"
+            echo "Path: $PARENT_DIR"
+            echo ""
+            read -p "Would you like to enter a different path? (Y/n): " RETRY_AI_DB
+            RETRY_AI_DB=${RETRY_AI_DB:-Y}
+            if [[ "$RETRY_AI_DB" =~ ^[Nn]$ ]]; then
+                echo "ℹ️  Skipping AI database host mapping..."
+                return
+            fi
+            continue
+        fi
+
+        # Try to create directory if it doesn't exist
+        if [ ! -d "$HOST_AI_DB" ]; then
+            echo "ℹ️  Directory does not exist, attempting to create..."
+            if ! mkdir -p "$HOST_AI_DB" 2>/dev/null; then
+                echo ""
+                echo "*** ERROR: Failed to create directory ***"
+                echo "Path: $HOST_AI_DB"
+                echo ""
+                echo "Possible causes:"
+                echo "  - Permission denied"
+                echo "  - Invalid path format"
+                echo ""
+                read -p "Would you like to enter a different path? (Y/n): " RETRY_AI_DB
+                RETRY_AI_DB=${RETRY_AI_DB:-Y}
+                if [[ "$RETRY_AI_DB" =~ ^[Nn]$ ]]; then
+                    echo "ℹ️  Skipping AI database host mapping..."
+                    return
+                fi
+                continue
+            fi
+            echo "✅ Directory created successfully!"
+        fi
+
+        # Path is valid - save to .env
+        echo "✅ AI database path validated: $HOST_AI_DB"
+        # Remove old entries and add new ones
+        grep -v -E '^(WINDOWS_AI_DATABASE_PATH=|AI_DATABASE_PATH=)' .env > .env.tmp 2>/dev/null || true
+        mv .env.tmp .env 2>/dev/null || true
         echo "WINDOWS_AI_DATABASE_PATH=$HOST_AI_DB" >> .env
         echo "AI_DATABASE_PATH=/data/ai_databases" >> .env
         ENV_AI_DB_PATH="$HOST_AI_DB"
-        echo "✅ AI database will be stored at: $HOST_AI_DB"
-    fi
-fi
+        break
+    done
+}
+enter_ai_db_path
 
 # ALWAYS prompt for Knowledge Source Path (with default if exists)
-echo ""
-echo "==================================================================="
-echo "STORAGE CONFIGURATION: Knowledge Source Path"
-echo "==================================================================="
-echo "This is where your source documents are stored for ingestion."
-echo "(PDF, Word, text files, etc.)"
-echo ""
-if [ -n "$ENV_SOURCE_PATH" ]; then
-    echo "Current: $ENV_SOURCE_PATH"
+enter_source_path() {
     echo ""
-fi
-read -p "Use host folder for Knowledge Source documents? (y/N): " USE_HOST_SRC
-if [[ "$USE_HOST_SRC" =~ ^[Yy]$ ]]; then
+    echo "==================================================================="
+    echo "STORAGE CONFIGURATION: Knowledge Source Path"
+    echo "==================================================================="
+    echo "This is where your source documents are stored for ingestion."
+    echo "(PDF, Word, text files, etc.)"
+    echo ""
     if [ -n "$ENV_SOURCE_PATH" ]; then
-        read -p "Enter host path [$ENV_SOURCE_PATH]: " HOST_SRC
-    else
-        read -p "Enter host path (e.g., /Users/you/Documents/KB_Source): " HOST_SRC
+        echo "Current: $ENV_SOURCE_PATH"
+        echo ""
     fi
-    # Use existing path if user just pressed ENTER
-    if [ -z "$HOST_SRC" ] && [ -n "$ENV_SOURCE_PATH" ]; then
-        HOST_SRC="$ENV_SOURCE_PATH"
-        echo "ℹ️  Using existing path: $HOST_SRC"
+    read -p "Use host folder for Knowledge Source documents? (y/N): " USE_HOST_SRC
+    if [[ ! "$USE_HOST_SRC" =~ ^[Yy]$ ]]; then
+        return
     fi
-    if [ -n "$HOST_SRC" ]; then
+
+    while true; do
+        if [ -n "$ENV_SOURCE_PATH" ]; then
+            read -p "Enter host path [$ENV_SOURCE_PATH]: " HOST_SRC
+        else
+            read -p "Enter host path (e.g., /Users/you/Documents/KB_Source or ~/Documents): " HOST_SRC
+        fi
+
+        # Use existing path if user just pressed ENTER
+        if [ -z "$HOST_SRC" ] && [ -n "$ENV_SOURCE_PATH" ]; then
+            HOST_SRC="$ENV_SOURCE_PATH"
+            echo "ℹ️  Using existing path: $HOST_SRC"
+        fi
+
+        if [ -z "$HOST_SRC" ]; then
+            echo "ℹ️  Skipping Knowledge Source host mapping..."
+            return
+        fi
+
+        # Expand ~ to home directory
+        HOST_SRC="${HOST_SRC/#\~/$HOME}"
         HOST_SRC=$(normalize_path_for_docker "$HOST_SRC")
-        # Verify source directory exists
+
+        # Validate the path - check if parent directory exists
+        PARENT_DIR=$(dirname "$HOST_SRC")
+        if [ ! -d "$PARENT_DIR" ]; then
+            echo ""
+            echo "*** ERROR: Parent directory does not exist! ***"
+            echo "Path: $PARENT_DIR"
+            echo ""
+            read -p "Would you like to enter a different path? (Y/n): " RETRY_SRC
+            RETRY_SRC=${RETRY_SRC:-Y}
+            if [[ "$RETRY_SRC" =~ ^[Nn]$ ]]; then
+                echo "ℹ️  Skipping Knowledge Source host mapping..."
+                return
+            fi
+            continue
+        fi
+
+        # Verify or create source directory
         if [ ! -d "$HOST_SRC" ]; then
             echo "⚠️  WARNING: Source directory does not exist"
             echo "Path: $HOST_SRC"
-            echo "The directory will be created if you continue."
+            echo ""
             read -p "Create this directory? (y/N): " CREATE_SRC
-            if [[ "$CREATE_SRC" =~ ^[Yy]$ ]]; then
-                mkdir -p "$HOST_SRC" 2>/dev/null || {
-                    echo "❌ Failed to create directory"
-                    HOST_SRC=""
-                }
-            else
-                HOST_SRC=""
+            if [[ ! "$CREATE_SRC" =~ ^[Yy]$ ]]; then
+                read -p "Would you like to enter a different path? (Y/n): " RETRY_SRC
+                RETRY_SRC=${RETRY_SRC:-Y}
+                if [[ "$RETRY_SRC" =~ ^[Nn]$ ]]; then
+                    echo "ℹ️  Skipping Knowledge Source host mapping..."
+                    return
+                fi
+                continue
             fi
+            if ! mkdir -p "$HOST_SRC" 2>/dev/null; then
+                echo ""
+                echo "*** ERROR: Failed to create directory ***"
+                echo ""
+                read -p "Would you like to enter a different path? (Y/n): " RETRY_SRC
+                RETRY_SRC=${RETRY_SRC:-Y}
+                if [[ "$RETRY_SRC" =~ ^[Nn]$ ]]; then
+                    echo "ℹ️  Skipping Knowledge Source host mapping..."
+                    return
+                fi
+                continue
+            fi
+            echo "✅ Directory created successfully!"
         fi
-        if [ -n "$HOST_SRC" ]; then
-            echo "WINDOWS_KNOWLEDGE_SOURCE_PATH=$HOST_SRC" >> .env
-            echo "KNOWLEDGE_SOURCE_PATH=/data/knowledge_base" >> .env
-            ENV_SOURCE_PATH="$HOST_SRC"
-            echo "✅ Knowledge Source documents at: $HOST_SRC"
-        fi
-    fi
-fi
+
+        # Path is valid - save to .env
+        echo "✅ Knowledge Source path validated: $HOST_SRC"
+        # Remove old entries and add new ones
+        grep -v -E '^(WINDOWS_KNOWLEDGE_SOURCE_PATH=|KNOWLEDGE_SOURCE_PATH=)' .env > .env.tmp 2>/dev/null || true
+        mv .env.tmp .env 2>/dev/null || true
+        echo "WINDOWS_KNOWLEDGE_SOURCE_PATH=$HOST_SRC" >> .env
+        echo "KNOWLEDGE_SOURCE_PATH=/data/knowledge_base" >> .env
+        ENV_SOURCE_PATH="$HOST_SRC"
+        break
+    done
+}
+enter_source_path
 
 # Translate any configured host paths into -v mounts
 # Note: Paths are stored in arrays to handle spaces correctly
@@ -215,16 +317,47 @@ if [ -n "$ENV_AI_DB_PATH" ]; then
     # Create directory if it doesn't exist
     mkdir -p "$ENV_AI_DB_PATH" 2>/dev/null || true
     AI_DB_MOUNT_ARGS=(-v "$ENV_AI_DB_PATH:/data/ai_databases")
-    echo "  📁 Mapping AI database to host: $ENV_AI_DB_PATH -> /data/ai_databases"
 fi
 if [ -n "$ENV_SOURCE_PATH" ]; then
     # Create directory if it doesn't exist
     mkdir -p "$ENV_SOURCE_PATH" 2>/dev/null || true
     SOURCE_MOUNT_ARGS=(-v "$ENV_SOURCE_PATH:/data/knowledge_base:ro")
-    echo "  📁 Mapping Knowledge Source to host (read-only): $ENV_SOURCE_PATH -> /data/knowledge_base"
+fi
+
+# Show final configuration summary
+echo ""
+echo "==================================================================="
+echo "CONFIGURATION SUMMARY"
+echo "==================================================================="
+if [ -n "$ENV_AI_DB_PATH" ]; then
+    echo "  📁 AI Database:      $ENV_AI_DB_PATH -> /data/ai_databases"
+else
+    echo "  📁 AI Database:      [Using Docker volume - data inside container]"
+fi
+if [ -n "$ENV_SOURCE_PATH" ]; then
+    echo "  📁 Knowledge Source: $ENV_SOURCE_PATH -> /data/knowledge_base (read-only)"
+else
+    echo "  📁 Knowledge Source: [Using Docker volume - data inside container]"
+fi
+echo ""
+
+# Final confirmation before starting the long build
+echo "==================================================================="
+echo "READY TO BUILD"
+echo "==================================================================="
+echo "The Docker build process will now begin."
+echo "This typically takes 5-10 minutes depending on your internet speed."
+echo ""
+read -p "Proceed with build? (Y/n): " CONFIRM_BUILD
+CONFIRM_BUILD=${CONFIRM_BUILD:-Y}
+if [[ "$CONFIRM_BUILD" =~ ^[Nn]$ ]]; then
+    echo ""
+    echo "Build cancelled. Run this script again when ready."
+    exit 0
 fi
 
 # Build the image
+echo ""
 echo "🔨 Building Cortex Suite (this may take a while)..."
 echo "    This includes downloading Python packages and system dependencies..."
 
