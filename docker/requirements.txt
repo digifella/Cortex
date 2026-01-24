@@ -121,7 +121,7 @@ striprtf==0.0.26
 
 # Other document formats
 beautifulsoup4==4.14.3
-lxml==6.0.0
+lxml==4.9.4  # docling-ibm-models requires <5.0.0
 html5lib==1.1
 unstructured==0.18.27
 unstructured-client==0.42.8
