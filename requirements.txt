@@ -192,7 +192,7 @@ websocket-client==1.8.0
 # ASYNC & CONCURRENCY
 # ============================================================================
 anyio==4.12.1
-asyncio-extensions are built-in
+# asyncio-extensions are built-in
 nest-asyncio==1.6.0
 uvloop==0.21.0
 greenlet==3.3.0
