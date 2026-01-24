@@ -30,13 +30,13 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 &
 # Create app user
 RUN useradd --create-home --shell /bin/bash cortex
 
-# Install Ollama - download binary directly for reliability
-RUN curl -fsSL https://ollama.com/download/ollama-linux-amd64 -o /usr/local/bin/ollama && \
+# Install Ollama - download binary directly from GitHub releases
+RUN curl -fsSL -o /usr/local/bin/ollama https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64 && \
     chmod +x /usr/local/bin/ollama && \
     ln -sf /usr/local/bin/ollama /usr/bin/ollama && \
     mkdir -p /home/cortex/.ollama && \
     chown -R cortex:cortex /home/cortex/.ollama && \
-    echo "Ollama installed: $(ollama --version || echo 'version check failed')"
+    ollama --version
 
 USER cortex
 WORKDIR /home/cortex/app
