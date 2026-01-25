@@ -656,17 +656,101 @@ def render_sidebar():
     st.sidebar.markdown("---")
     st.sidebar.subheader("🧠 Search Engine")
 
-    # Show current embedding info
+    # Show current embedding info and model selector
     try:
         from cortex_engine.embedding_service import get_embedding_info, is_multimodal_enabled
+        from cortex_engine.config import QWEN3_VL_MODEL_SIZE, QWEN3_VL_ENABLED
 
         embed_info = get_embedding_info()
         is_multimodal = is_multimodal_enabled()
 
-        if is_multimodal:
+        # Detect database dimensions for compatibility check
+        db_dimensions = None
+        try:
+            chroma_path = os.path.join(convert_windows_to_wsl_path(normalized_db_value), "knowledge_hub_db")
+            if os.path.exists(chroma_path):
+                import chromadb
+                from chromadb.config import Settings as ChromaSettings
+                db_settings = ChromaSettings(anonymized_telemetry=False)
+                client = chromadb.PersistentClient(path=chroma_path, settings=db_settings)
+                collection = client.get_collection(COLLECTION_NAME)
+                if collection.count() > 0:
+                    sample = collection.peek(limit=1)
+                    if sample.get('embeddings') and len(sample['embeddings']) > 0:
+                        db_dimensions = len(sample['embeddings'][0])
+        except Exception:
+            pass
+
+        if is_multimodal and QWEN3_VL_ENABLED:
             st.sidebar.success("🔮 **Qwen3-VL Active**")
-            st.sidebar.caption(f"Model: {embed_info.get('model_name', 'Unknown').split('/')[-1]}")
-            st.sidebar.caption(f"Dimensions: {embed_info.get('embedding_dimension', 'Unknown')}")
+
+            # Model size selector for Qwen3-VL
+            current_size = QWEN3_VL_MODEL_SIZE.upper() if QWEN3_VL_MODEL_SIZE != "auto" else "AUTO"
+
+            # Determine compatible sizes based on database
+            size_options = ["2B", "8B"]
+            size_labels = {
+                "2B": "2B (2048D, 5GB VRAM)",
+                "8B": "8B (4096D, 16GB VRAM)"
+            }
+
+            # Show database compatibility warning
+            if db_dimensions:
+                if db_dimensions == 2048:
+                    st.sidebar.info(f"📊 DB: {db_dimensions}D → Use **2B**")
+                    recommended = "2B"
+                elif db_dimensions == 4096:
+                    st.sidebar.info(f"📊 DB: {db_dimensions}D → Use **8B**")
+                    recommended = "8B"
+                else:
+                    st.sidebar.warning(f"📊 DB: {db_dimensions}D (non-Qwen)")
+                    recommended = None
+            else:
+                recommended = None
+
+            # Model size selector
+            current_idx = size_options.index(current_size) if current_size in size_options else 0
+            selected_size = st.sidebar.selectbox(
+                "Model Size:",
+                options=size_options,
+                index=current_idx,
+                format_func=lambda x: size_labels.get(x, x),
+                key="search_qwen_model_size",
+                help="Select model size matching your database dimensions"
+            )
+
+            # Show mismatch warning
+            if db_dimensions and recommended and selected_size != recommended:
+                st.sidebar.error(f"⚠️ Mismatch! DB needs {recommended}")
+
+            # Apply button if changed
+            if selected_size != current_size and current_size != "AUTO":
+                if st.sidebar.button("🔄 Apply Model Change", type="primary", use_container_width=True, key="apply_search_model"):
+                    os.environ["QWEN3_VL_MODEL_SIZE"] = selected_size
+                    try:
+                        from cortex_engine.qwen3_vl_embedding_service import reset_service
+                        from cortex_engine.config import invalidate_embedding_cache
+                        reset_service()
+                        invalidate_embedding_cache()
+                        st.sidebar.success(f"✅ Switched to {selected_size}")
+                        st.rerun()
+                    except Exception as e:
+                        st.sidebar.error(f"❌ Failed: {e}")
+            elif current_size == "AUTO":
+                # First time - allow setting
+                if st.sidebar.button(f"🔄 Set to {selected_size}", type="primary", use_container_width=True, key="set_search_model"):
+                    os.environ["QWEN3_VL_MODEL_SIZE"] = selected_size
+                    try:
+                        from cortex_engine.qwen3_vl_embedding_service import reset_service
+                        from cortex_engine.config import invalidate_embedding_cache
+                        reset_service()
+                        invalidate_embedding_cache()
+                        st.sidebar.success(f"✅ Set to {selected_size}")
+                        st.rerun()
+                    except Exception as e:
+                        st.sidebar.error(f"❌ Failed: {e}")
+
+            st.sidebar.caption(f"Current: {embed_info.get('embedding_dimension', 'Unknown')}D")
         else:
             model_name = embed_info.get('model_name', EMBED_MODEL)
             short_name = model_name.split('/')[-1] if '/' in model_name else model_name
