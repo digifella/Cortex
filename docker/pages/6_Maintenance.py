@@ -1144,47 +1144,78 @@ def display_database_maintenance():
                 except Exception as e:
                     st.error(f"Failed to set path: {e}")
     
-    st.markdown("## 🚀 Clean Start - Complete System Reset")
-    st.markdown("### 🧹 Clean Start Function")
-    st.warning("""
-    **Complete system reset function** that addresses database schema issues, collection conflicts, and provides a fresh start.
-    This function is specifically designed to resolve ChromaDB schema errors like 'collections.config_json_str' column missing.
-    """)
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.markdown("""
-        **Clean Start will:**
-        - ✅ Delete entire ingested document database (ChromaDB)
-        - ✅ Delete knowledge graph file (.gpickle)  
-        - ✅ Delete collections file (working_collections.json)
-        - ✅ Clear ALL ingestion logs and progress files
-        - ✅ Remove ingested files log from database directory
-        - ✅ Clear ALL staging and batch ingestion files (including failed ingests)
-        - ✅ Reset working collections (working_collections.json)
-        - ✅ Clear ingestion recovery metadata
-        - ✅ Remove Streamlit cache and session state files
-        - ✅ Clear temporary files, lock files, and state files
-        - ✅ Reset database configuration paths
-        - ✅ Fix ChromaDB schema conflicts and version issues
-        - ✅ Provide completely fresh installation state
-        """)
-        
-        st.info("**Use Clean Start when:**")
-        st.markdown("""
-        - Getting 'collections.config_json_str' schema errors
-        - Collection Management shows connection errors  
-        - Docker vs non-Docker database conflicts
-        - ChromaDB version compatibility issues
-        - System appears corrupted or inconsistent
-        - **Failed batch ingests** showing up in Knowledge Ingest page
-        - Half-finished ingestion operations need clearing
-        - Want completely fresh system without any residual files
-        """)
-    
-    with col2:
-        st.info("**⚠️ Most Dangerous Operations**\n\nComplete system reset functions are now located in the **Advanced Database Recovery & Repair** section below for safety.")
+    # Database Operations section header
+    st.markdown("---")
+
+    # ----- DATABASE HEALTH CHECK -----
+    with st.container(border=True):
+        st.subheader("🔍 Database Health Check")
+        st.caption("Scan for inconsistencies between the ingestion log and ChromaDB")
+
+        if st.button("🔍 Scan Database", use_container_width=True, key="btn_scan_database"):
+            try:
+                with st.spinner("Analyzing database state..."):
+                    recovery_manager = IngestionRecoveryManager(db_path)
+                    analysis = recovery_manager.analyze_ingestion_state()
+
+                # Display results
+                stats = analysis.get('statistics', {})
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Files in Log", stats.get('ingested_files_count', 0))
+                with col2:
+                    st.metric("Files in ChromaDB", stats.get('chromadb_files_count', 0))
+                with col3:
+                    orphaned = stats.get('orphaned_count', 0)
+                    st.metric("Orphaned Entries", orphaned, delta=f"-{orphaned}" if orphaned > 0 else None, delta_color="inverse")
+
+                if orphaned > 0:
+                    st.warning(f"⚠️ Found {orphaned} orphaned log entries")
+                    st.caption("Files in the log but missing from ChromaDB. May have failed to ingest or were manually deleted.")
+
+                    # Show orphaned files using checkbox toggle
+                    show_orphaned = st.checkbox(f"Show orphaned files ({orphaned})", key="show_orphaned_files")
+                    if show_orphaned:
+                        with st.container(height=200):
+                            for doc in analysis.get('orphaned_documents', [])[:50]:
+                                st.text(f"• {doc['file_name']}")
+                            if orphaned > 50:
+                                st.caption(f"... and {orphaned - 50} more")
+
+                    if st.button("🔧 Remove Orphaned Entries", type="primary", use_container_width=True, key="btn_fix_orphaned"):
+                        with st.spinner("Cleaning up orphaned entries..."):
+                            cleanup_result = recovery_manager.cleanup_orphaned_log_entries()
+
+                        if cleanup_result.get('status') == 'success':
+                            st.success(f"✅ Removed {cleanup_result['entries_removed']} orphaned entries")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Cleanup failed: {cleanup_result.get('error', 'Unknown error')}")
+                else:
+                    st.success("✅ Database is healthy - no orphaned entries found")
+
+                # Show collection issues if any
+                collection_issues = analysis.get('collection_inconsistencies', [])
+                if collection_issues:
+                    st.warning(f"⚠️ Found {len(collection_issues)} collection inconsistencies")
+                    show_issues = st.checkbox(f"Show issues ({len(collection_issues)})", key="show_collection_issues")
+                    if show_issues:
+                        for issue in collection_issues:
+                            if issue.get('type') == 'missing_from_chromadb':
+                                st.text(f"• {issue['collection']}: {issue['count']} missing documents")
+
+                    if st.button("🔧 Fix Collection Issues", use_container_width=True, key="btn_fix_collections"):
+                        with st.spinner("Repairing collections..."):
+                            repair_result = recovery_manager.auto_repair_collections()
+                        if repair_result.get('status') == 'success':
+                            st.success(f"✅ Fixed {repair_result['invalid_refs_removed']} invalid references")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Repair failed: {repair_result.get('error', 'Unknown')}")
+
+            except Exception as e:
+                st.error(f"❌ Database scan failed: {e}")
 
     with st.expander("⚙️ Basic Database Operations", expanded=False):
         st.subheader("Clear Ingestion Log")
@@ -1380,15 +1411,8 @@ def display_database_maintenance():
             except Exception as e:
                 st.error(f"Could not access vector collection: {e}")
 
-    with st.expander("🔧 Advanced Database Recovery & Repair", expanded=False):
-        st.markdown("""
-        **Recover from failed ingestions** or **repair inconsistencies** in your knowledge base.
-        Use this when ingestion processes are interrupted or documents seem to be missing.
-        """)
-        
-        # Clean Start Reset - Moved here for safety
-        st.markdown("---")
-        st.markdown("### ⚠️ **DANGER ZONE - Complete System Reset**")
+    with st.expander("⚠️ Danger Zone - System Reset", expanded=False):
+        st.markdown("### ⚠️ **Complete System Reset**")
         st.error("**This section contains destructive operations that cannot be undone!**")
         
         col1, col2 = st.columns([2, 1])
@@ -1445,100 +1469,9 @@ def display_database_maintenance():
                 if c2.button("❌ Cancel", use_container_width=True):
                     st.session_state.show_confirm_clean_start = False
                     st.rerun()
-        
+
         st.markdown("---")
-        
-        try:
-            recovery_manager = IngestionRecoveryManager(db_path)
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("#### 🔍 Analyze Current State")
-                if st.button("🔍 Analyze Ingestion State", use_container_width=True, key="analyze_recovery_state"):
-                    with st.spinner("🔄 Analyzing knowledge base state..."):
-                        analysis = recovery_manager.analyze_ingestion_state()
-                        st.session_state.recovery_analysis = analysis
-                        st.rerun()
-                
-                if "recovery_analysis" in st.session_state:
-                    analysis = st.session_state.recovery_analysis
-                    
-                    # Show key statistics
-                    if "statistics" in analysis:
-                        stats = analysis["statistics"]
-                        stat_col1, stat_col2, stat_col3 = st.columns(3)
-                        with stat_col1:
-                            st.metric("📁 Ingested Files", stats.get("ingested_files_count", 0))
-                        with stat_col2:
-                            st.metric("📄 KB Documents", stats.get("chromadb_docs_count", 0))
-                        with stat_col3:
-                            st.metric("🚨 Orphaned", stats.get("orphaned_count", 0))
-                    
-                    # Show issues found
-                    if analysis.get("issues_found"):
-                        st.warning("**Issues Found:**")
-                        for issue in analysis["issues_found"]:
-                            st.write(f"• {issue}")
-                    else:
-                        st.success("✅ No issues detected")
-            
-            with col2:
-                st.markdown("#### 🛠️ Recovery Actions")
-                
-                # Quick recovery collection creation
-                if st.button("🚀 Quick Recovery: Create Collection from Recent Files", use_container_width=True, key="quick_recovery_recent"):
-                    collection_name = st.text_input("Collection name:", value="recovered_files", key="quick_recovery_name")
-                    
-                    if collection_name:
-                        with st.spinner(f"🔄 Creating recovery collection '{collection_name}'..."):
-                            result = recovery_manager.create_recovery_collection_from_recent(collection_name, hours_back=24)
-                            
-                            if result["status"] == "success":
-                                st.success(f"✅ Created '{collection_name}' with {result['documents_added']} documents!")
-                            else:
-                                st.error(f"❌ Recovery failed: {result.get('error', 'Unknown error')}")
-                
-                # Orphaned document recovery
-                if st.session_state.get("recovery_analysis", {}).get("statistics", {}).get("orphaned_count", 0) > 0:
-                    st.markdown("**Orphaned Documents Detected**")
-                    orphaned_count = st.session_state.recovery_analysis["statistics"]["orphaned_count"]
-                    collection_name = st.text_input(f"Recover {orphaned_count} orphaned documents to collection:", 
-                                                   value="recovered_orphaned", key="orphaned_recovery_name")
-                    
-                    if st.button(f"🔄 Recover {orphaned_count} Documents", use_container_width=True, key="recover_orphaned_docs"):
-                        if collection_name:
-                            with st.spinner("🔄 Recovering orphaned documents..."):
-                                result = recovery_manager.recover_orphaned_documents(collection_name)
-                                
-                                if result["status"] == "success":
-                                    st.success(f"✅ Recovered {result['recovered_count']} documents to '{collection_name}'!")
-                                else:
-                                    st.error(f"❌ Recovery failed: {result.get('error', 'Unknown error')}")
-                
-                # Collection repair
-                if st.button("🔧 Auto-Repair Collections", use_container_width=True, key="auto_repair_collections"):
-                    with st.spinner("🔄 Repairing collection inconsistencies..."):
-                        result = recovery_manager.auto_repair_collections()
-                        
-                        if result["status"] == "success":
-                            if result["collections_cleaned"] > 0:
-                                st.success(f"✅ Repaired {result['collections_cleaned']} collections, removed {result['invalid_refs_removed']} invalid references")
-                            else:
-                                st.info("✅ No repairs needed - all collections are consistent")
-                        else:
-                            st.error(f"❌ Repair failed: {result.get('error', 'Unknown error')}")
-            
-            # Show recommendations if available
-            if st.session_state.get("recovery_analysis", {}).get("recommendations"):
-                st.markdown("---")
-                st.markdown("#### 💡 Recommended Actions")
-                recommendations = st.session_state.recovery_analysis["recommendations"]
-                for rec in recommendations:
-                    st.info(f"💡 {rec}")
-                    
-        except Exception as e:
-            st.error(f"Failed to initialize recovery manager: {e}")
+        st.info("💡 **Tip:** For database health issues, orphaned entries, and collection repairs, use the **Database Health Check** section above.")
 
 def display_system_terminal():
     """Display system terminal and command execution interface"""
@@ -1615,99 +1548,19 @@ def display_setup_maintenance():
             st.info("After resetting, you can navigate to the Setup Wizard to reconfigure the system.")
 
 def display_backup_management():
-    """Display backup and database portability functions"""
-    st.header("💾 Backup & Transfer")
+    """Display database portability functions for transfer between machines"""
+    st.header("🔄 Database Transfer")
 
     config = load_maintenance_config()
     if not config:
-        st.error("Cannot load configuration for backup operations")
+        st.error("Cannot load configuration for transfer operations")
         return
 
     try:
         from cortex_engine.utils.default_paths import get_default_ai_database_path
         db_path = config.get('db_path', get_default_ai_database_path())
 
-        st.caption("Create portable database exports with embedding model configuration for seamless transfer between machines.")
-
-        # ----- DATABASE HEALTH CHECK -----
-        with st.expander("🔍 Database Health Check", expanded=False):
-            st.markdown("""
-            Scan the database for inconsistencies between the ingestion log and ChromaDB.
-            This detects orphaned entries (files in the log that aren't in the database) and collection issues.
-            """)
-
-            if st.button("🔍 Scan Database", use_container_width=True, key="btn_scan_database"):
-                try:
-                    from cortex_engine.ingestion_recovery import IngestionRecoveryManager
-
-                    with st.spinner("Analyzing database state..."):
-                        recovery = IngestionRecoveryManager(db_path)
-                        analysis = recovery.analyze_ingestion_state()
-
-                    # Display results
-                    stats = analysis.get('statistics', {})
-
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Files in Log", stats.get('ingested_files_count', 0))
-                    with col2:
-                        st.metric("Files in ChromaDB", stats.get('chromadb_files_count', 0))
-                    with col3:
-                        orphaned = stats.get('orphaned_count', 0)
-                        st.metric("Orphaned Entries", orphaned, delta=f"-{orphaned}" if orphaned > 0 else None, delta_color="inverse")
-
-                    if orphaned > 0:
-                        st.warning(f"⚠️ Found {orphaned} orphaned log entries")
-                        st.caption("These are files listed in the ingestion log but missing from ChromaDB. They may have failed to ingest or were manually deleted.")
-
-                        # Show orphaned files using checkbox toggle (no nested expanders)
-                        show_orphaned = st.checkbox(f"Show orphaned files ({orphaned})", key="show_orphaned_files")
-                        if show_orphaned:
-                            with st.container(height=200):
-                                for doc in analysis.get('orphaned_documents', [])[:50]:
-                                    st.text(f"• {doc['file_name']}")
-                                if orphaned > 50:
-                                    st.caption(f"... and {orphaned - 50} more")
-
-                        # Fix button
-                        st.caption("Removing orphaned entries allows you to re-ingest the files or cleans up the database.")
-
-                        if st.button("🔧 Remove Orphaned Entries", type="primary", use_container_width=True, key="btn_fix_orphaned"):
-                            with st.spinner("Cleaning up orphaned entries..."):
-                                cleanup_result = recovery.cleanup_orphaned_log_entries()
-
-                            if cleanup_result.get('status') == 'success':
-                                st.success(f"✅ Removed {cleanup_result['entries_removed']} orphaned entries from the ingestion log")
-                                st.caption("Files can now be re-ingested if needed.")
-                                st.rerun()
-                            else:
-                                st.error(f"❌ Cleanup failed: {cleanup_result.get('error', 'Unknown error')}")
-                    else:
-                        st.success("✅ Database is healthy - no orphaned entries found")
-
-                    # Show collection issues if any
-                    collection_issues = analysis.get('collection_inconsistencies', [])
-                    if collection_issues:
-                        st.warning(f"⚠️ Found {len(collection_issues)} collection inconsistencies")
-
-                        show_issues = st.checkbox(f"Show collection issues ({len(collection_issues)})", key="show_collection_issues")
-                        if show_issues:
-                            for issue in collection_issues:
-                                if issue.get('type') == 'missing_from_chromadb':
-                                    st.text(f"• {issue['collection']}: {issue['count']} missing documents")
-
-                        if st.button("🔧 Fix Collection Issues", use_container_width=True, key="btn_fix_collections"):
-                            with st.spinner("Repairing collections..."):
-                                repair_result = recovery.auto_repair_collections()
-
-                            if repair_result.get('status') == 'success':
-                                st.success(f"✅ Fixed {repair_result['invalid_refs_removed']} invalid references")
-                                st.rerun()
-                            else:
-                                st.error(f"❌ Repair failed: {repair_result.get('error', 'Unknown')}")
-
-                except Exception as e:
-                    st.error(f"❌ Database scan failed: {e}")
+        st.caption("Transfer your knowledge base between machines with automatic embedding model configuration.")
 
         # ----- EXPORT DATABASE -----
         with st.expander("📤 Export Database", expanded=False):
@@ -2351,7 +2204,7 @@ def main():
         "🗄️ Database",
         "💻 Terminal",
         "⚙️ Setup",
-        "💾 Backups",
+        "🔄 Transfer",
         "📊 Performance",
         "📋 Changelog",
         "ℹ️ Info"
@@ -2378,33 +2231,38 @@ def main():
     with tab7:
         st.markdown("""
         ## 📋 Maintenance Information
-        
-        This maintenance interface consolidates system administration functions from across the Cortex Suite:
-        
-        **Database Functions:**
-        - Clear ingestion logs for re-processing files
-        - Delete and rebuild knowledge base
-        - Analyze and repair database inconsistencies
-        - Recover orphaned documents and failed ingestions
-        
-        **System Functions:**
+
+        This maintenance interface consolidates system administration functions:
+
+        **🗄️ Database Tab:**
+        - Configure database path and embedding model settings
+        - **Health Check** - Scan for and fix orphaned entries, collection issues
+        - Clear ingestion logs, delete/rebuild knowledge base
+        - Database deduplication and optimization
+        - System reset (Clean Start) for severe issues
+
+        **💻 Terminal Tab:**
         - Execute safe system commands
-        - Check model availability and system status  
-        - Monitor disk usage and resource consumption
-        
-        **Setup Functions:**
+        - Check model availability and system status
+        - Monitor disk usage and resources
+
+        **⚙️ Setup Tab:**
         - Reset installation state if setup gets stuck
-        - Reconfigure system components
-        
-        **Backup Functions:**
-        - Create and restore knowledge base backups
-        - Manage backup lifecycle and storage
-        
+
+        **🔄 Transfer Tab:**
+        - Export portable database packages with embedding model config
+        - Import databases with automatic model configuration
+        - Transfer knowledge bases between machines
+
+        **📊 Performance Tab:**
+        - Monitor operation performance
+        - View query cache statistics
+        - GPU and device information
+
         **⚠️ Important Notes:**
-        - Always backup your data before performing destructive operations
-        - Some functions require system administrator privileges
-        - Monitor system resources during intensive operations
-        - Check logs for detailed error information if operations fail
+        - Always backup data before destructive operations
+        - Use Health Check before Export to ensure clean database
+        - Check logs for detailed error information
         """)
         
         st.markdown(f"**Page Version:** {PAGE_VERSION} | **Date:** 2025-08-27")
