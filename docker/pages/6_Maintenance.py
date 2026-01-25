@@ -1,5 +1,5 @@
 # ## File: pages/6_Maintenance.py
-# Version: v5.2.0
+# Version: v5.4.0
 # Date: 2026-01-17
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -32,7 +32,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v5.2.0"
+PAGE_VERSION = "v5.4.0"
 
 # Import Cortex modules
 try:
@@ -1615,173 +1615,205 @@ def display_setup_maintenance():
             st.info("After resetting, you can navigate to the Setup Wizard to reconfigure the system.")
 
 def display_backup_management():
-    """Display backup management functions"""
-    st.header("💾 Backup Management")
-    
+    """Display backup and database portability functions"""
+    st.header("💾 Backup & Transfer")
+
     config = load_maintenance_config()
     if not config:
         st.error("Cannot load configuration for backup operations")
         return
-    
+
     try:
         from cortex_engine.utils.default_paths import get_default_ai_database_path
         db_path = config.get('db_path', get_default_ai_database_path())
-        # Convert to proper WSL path format for backup manager
-        wsl_db_path = convert_windows_to_wsl_path(db_path)
-        
-        # Ensure the backups directory exists using centralized utility
-        backups_dir = ensure_directory(Path(wsl_db_path) / "backups")
-        
-        backup_manager = BackupManager(wsl_db_path)
-        
-        with st.expander("📦 Create New Backup", expanded=False):
-            backup_name = st.text_input("Backup name (optional):", placeholder="my_backup_2025_08_27")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("💾 Create Backup", use_container_width=True):
-                    with st.spinner("Creating backup..."):
-                        try:
-                            backup_id = backup_manager.create_backup(backup_name if backup_name else None)
-                            st.success(f"✅ Backup created successfully: {backup_id}")
-                        except Exception as e:
-                            st.error(f"❌ Backup failed: {e}")
 
-        # Export to external location (Host/Filesystem) — non-Docker parity
-        with st.expander("📤 Export Backup To External Location", expanded=False):
-            st.caption("Copies your entire knowledge base (Chroma, graph, collections, logs) to a folder you choose.")
+        st.caption("Create portable database exports with embedding model configuration for seamless transfer between machines.")
 
-            def _resolve_destination(p: str) -> Path:
-                # Convert Windows or POSIX input to a usable local path (handles WSL too)
-                p = (p or '').strip()
-                if not p:
-                    return Path('')
-                resolved = convert_windows_to_wsl_path(p)
-                return Path(resolved)
+        # ----- EXPORT DATABASE -----
+        with st.expander("📤 Export Database", expanded=False):
+            st.markdown("""
+            Create a portable database package that can be transferred to another machine.
+            The export includes embedding model configuration for automatic setup on import.
+            """)
 
-            dest_root_input = st.text_input(
-                "Destination folder (e.g., C:/CortexBackups or /home/user/CortexBackups)",
-                placeholder="C:/CortexBackups or /home/you/CortexBackups",
-                key="kb_external_backup_dest_host"
+            export_col1, export_col2 = st.columns([2, 1])
+
+            with export_col1:
+                export_dest = st.text_input(
+                    "Destination Folder:",
+                    value=str(Path.home() / "cortex_exports"),
+                    key="export_destination_folder",
+                    help="Folder where the export zip will be saved"
+                )
+
+            with export_col2:
+                export_name = st.text_input(
+                    "Export Name (optional):",
+                    value="",
+                    key="export_custom_name",
+                    help="Custom name for the export (timestamp added automatically)"
+                )
+
+            if st.button("📦 Create Portable Export", type="primary", use_container_width=True, key="btn_create_export"):
+                try:
+                    from cortex_engine.database_exporter import DatabaseExporter, get_export_summary
+
+                    exporter = DatabaseExporter(db_path)
+
+                    # Progress display
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+
+                    def update_progress(stage: str, percent: int):
+                        progress_bar.progress(percent)
+                        status_text.text(f"{stage}...")
+
+                    success, message, manifest = exporter.create_export(
+                        destination_folder=export_dest,
+                        export_name=export_name if export_name else None,
+                        progress_callback=update_progress
+                    )
+
+                    if success:
+                        st.success(f"✅ {message}")
+
+                        # Show export summary
+                        if manifest:
+                            summary = get_export_summary(manifest)
+                            with st.container(border=True):
+                                st.markdown("**Export Summary:**")
+                                sum_col1, sum_col2, sum_col3 = st.columns(3)
+                                with sum_col1:
+                                    st.metric("Documents", summary["documents"])
+                                    st.caption(f"Model: {summary['model_size']}")
+                                with sum_col2:
+                                    st.metric("Collections", summary["collections"])
+                                    st.caption(f"Dims: {summary['dimensions']}")
+                                with sum_col3:
+                                    st.metric("VRAM Required", summary["vram_required"])
+                                    st.caption(f"Version: {summary['cortex_version']}")
+                    else:
+                        st.error(f"❌ {message}")
+
+                except Exception as e:
+                    st.error(f"❌ Export failed: {e}")
+
+        # ----- IMPORT PORTABLE DATABASE -----
+        with st.expander("📥 Import Database", expanded=False):
+            st.markdown("""
+            Import a portable database package from another machine.
+            The embedding model will be automatically configured based on the export settings.
+            """)
+
+            import_path = st.text_input(
+                "Export Package Path (.zip):",
+                value="",
+                key="import_package_path",
+                help="Full path to the cortex_export_*.zip file"
             )
 
-            backup_name_hint = datetime.now().strftime("cortex_kb_backup_%Y%m%d_%H%M%S")
-            dest_backup_name = st.text_input("Backup folder name", value=backup_name_hint, key="kb_external_backup_name_host")
+            if import_path:
+                # Validate button
+                if st.button("🔍 Validate Package", use_container_width=True, key="btn_validate_import"):
+                    try:
+                        from cortex_engine.database_exporter import DatabaseImporter, get_export_summary
 
-            if st.button("📤 Export Now", use_container_width=True, key="btn_export_external_backup_host"):
-                try:
-                    dest_root = _resolve_destination(dest_root_input)
-                    if not dest_root or str(dest_root) == ".":
-                        st.error("Please provide a valid destination path.")
-                        st.stop()
+                        importer = DatabaseImporter(import_path)
+                        valid, message, manifest = importer.validate()
 
-                    # Ensure destination base exists
-                    dest_root.mkdir(parents=True, exist_ok=True)
+                        if valid and manifest:
+                            st.success(f"✅ {message}")
 
-                    # Source paths
-                    src_base = Path(convert_windows_to_wsl_path(db_path))
-                    chroma_src = src_base / "knowledge_hub_db"
-                    files_to_copy = [
-                        (src_base / "working_collections.json", "working_collections.json"),
-                        (src_base / "knowledge_cortex.gpickle", "knowledge_cortex.gpickle"),
-                        (src_base / "batch_state.json", "batch_state.json"),
-                        (src_base / "staging_ingestion.json", "staging_ingestion.json"),
-                    ]
+                            # Show package info
+                            summary = get_export_summary(manifest)
+                            with st.container(border=True):
+                                st.markdown("**Package Contents:**")
+                                info_col1, info_col2 = st.columns(2)
+                                with info_col1:
+                                    st.write(f"**Source:** {summary['source']}")
+                                    st.write(f"**Date:** {summary['date'][:10]}")
+                                    st.write(f"**Documents:** {summary['documents']}")
+                                    st.write(f"**Collections:** {summary['collections']}")
+                                with info_col2:
+                                    st.write(f"**Model:** {summary['embedding_model'].split('/')[-1]}")
+                                    st.write(f"**Size:** {summary['model_size']}")
+                                    st.write(f"**Dimensions:** {summary['dimensions']}")
+                                    st.write(f"**VRAM Required:** {summary['vram_required']}")
 
-                    # Prevent exporting into the same KB folder
-                    dest_dir = dest_root / dest_backup_name
-                    if str(dest_dir.resolve()) == str(src_base.resolve()) or str(dest_root.resolve()) == str(src_base.resolve()):
-                        st.error("Destination cannot be the same as the knowledge base path.")
-                        st.stop()
+                            # Check hardware compatibility
+                            compatible, compat_msg, details = importer.check_hardware_compatibility()
 
-                    # Create destination
-                    dest_dir.mkdir(parents=True, exist_ok=True)
+                            if compatible:
+                                st.success(f"✅ {compat_msg}")
+                            else:
+                                st.warning(f"⚠️ {compat_msg}")
 
-                    # Copy ChromaDB directory if exists
-                    if chroma_src.exists():
-                        st.info("Copying ChromaDB directory (this may take a while)...")
-                        shutil.copytree(chroma_src, dest_dir / "knowledge_hub_db", dirs_exist_ok=True)
+                            st.caption(f"Your GPU: {details.get('gpu_name', 'Unknown')} ({details.get('available_vram_gb', 0):.1f} GB)")
 
-                    # Copy other files
-                    copied_files = 0
-                    for src_path, name in files_to_copy:
-                        if src_path.exists():
-                            shutil.copy2(src_path, dest_dir / name)
-                            copied_files += 1
+                            # Store validation state
+                            st.session_state.import_validated = True
+                            st.session_state.import_manifest = manifest
+                            st.session_state.import_compatible = compatible
+                        else:
+                            st.error(f"❌ {message}")
+                            st.session_state.import_validated = False
 
-                    st.success(f"✅ Export complete to: {dest_dir}")
-                    st.caption(f"Copied extra files: {copied_files}")
-                except PermissionError as pe:
-                    st.error(f"Permission denied writing to destination: {pe}")
-                except FileNotFoundError as fe:
-                    st.error(f"Destination not found: {fe}")
-                except Exception as e:
-                    st.error(f"Export failed: {e}")
-        
-        with st.expander("📋 Manage Existing Backups", expanded=False):
-            try:
-                import asyncio
-                backups = asyncio.run(backup_manager.list_backups())
-                
-                if not backups:
-                    st.info("No backups found.")
-                else:
-                    st.write(f"Found {len(backups)} backup(s):")
-                    
-                    for i, backup in enumerate(backups):
-                        with st.container(border=True):
-                            backup_col1, backup_col2, backup_col3 = st.columns([3, 1, 1])
-                            
-                            with backup_col1:
-                                st.markdown(f"**{backup.backup_id}**")
-                                st.caption(f"Created: {backup.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
-                                st.caption(f"Size: {backup.size_mb:.1f} MB • Files: {backup.file_count}")
-                            
-                            with backup_col2:
-                                if st.button("🔄 Restore", key=f"restore_backup_{i}", help="Restore this backup"):
-                                    st.warning("⚠️ Restoring will overwrite current data!")
-                                    if st.button("✅ Confirm Restore", key=f"confirm_restore_{i}"):
-                                        with st.spinner("Restoring backup..."):
-                                            try:
-                                                success = backup_manager.restore_backup(backup.backup_id)
-                                                if success:
-                                                    st.success("✅ Backup restored successfully!")
-                                                else:
-                                                    st.error("❌ Restore failed")
-                                            except Exception as e:
-                                                st.error(f"❌ Restore failed: {e}")
-                            
-                            with backup_col3:
-                                if st.button("🗑️ Delete", key=f"delete_backup_{i}", help="Delete this backup"):
-                                    st.session_state[f"confirm_delete_backup_{backup.backup_id}"] = True
-                                    st.rerun()
-                        
-                        # Confirmation for backup deletion
-                        if st.session_state.get(f"confirm_delete_backup_{backup.backup_id}", False):
-                            st.warning(f"⚠️ Are you sure you want to delete backup `{backup.backup_id}`?")
-                            
-                            confirm_col1, confirm_col2 = st.columns(2)
-                            with confirm_col1:
-                                if st.button("✅ Yes, Delete", key=f"confirm_delete_final_{i}", type="primary"):
-                                    try:
-                                        success = backup_manager.delete_backup(backup.backup_id)
-                                        if success:
-                                            st.success(f"✅ Backup `{backup.backup_id}` deleted successfully")
-                                            del st.session_state[f"confirm_delete_backup_{backup.backup_id}"]
-                                            st.rerun()
-                                        else:
-                                            st.error("❌ Failed to delete backup")
-                                    except Exception as e:
-                                        st.error(f"❌ Delete failed: {e}")
-                            
-                            with confirm_col2:
-                                if st.button("❌ Cancel", key=f"cancel_delete_{i}"):
-                                    del st.session_state[f"confirm_delete_backup_{backup.backup_id}"]
-                                    st.rerun()
-                                    
-            except Exception as e:
-                st.error(f"Failed to list backups: {e}")
-                
+                    except Exception as e:
+                        st.error(f"❌ Validation failed: {e}")
+                        st.session_state.import_validated = False
+
+                # Show import options if validated
+                if st.session_state.get('import_validated', False):
+                    st.markdown("---")
+
+                    overwrite_confirm = st.checkbox(
+                        "I understand this will replace my current database",
+                        key="import_overwrite_confirm",
+                        help="Your existing database will be backed up before replacement"
+                    )
+
+                    import_disabled = not overwrite_confirm
+
+                    if st.button(
+                        "📥 Import Now",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=import_disabled,
+                        key="btn_import_now"
+                    ):
+                        try:
+                            from cortex_engine.database_exporter import DatabaseImporter
+
+                            importer = DatabaseImporter(import_path)
+
+                            # Progress display
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+
+                            def update_progress(stage: str, percent: int):
+                                progress_bar.progress(percent)
+                                status_text.text(f"{stage}...")
+
+                            success, message = importer.import_database(
+                                destination_path=db_path,
+                                overwrite=True,
+                                progress_callback=update_progress
+                            )
+
+                            if success:
+                                st.success(f"✅ {message}")
+                                st.info("🔄 Embedding model has been auto-configured. Refresh the page to use the imported database.")
+
+                                # Clear session state
+                                st.session_state.import_validated = False
+                                if 'model_info_cache' in st.session_state:
+                                    del st.session_state.model_info_cache
+                            else:
+                                st.error(f"❌ {message}")
+
+                        except Exception as e:
+                            st.error(f"❌ Import failed: {e}")
+
     except Exception as e:
         st.error(f"Failed to initialize backup manager: {e}")
 

@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v5.3.0
+# Version: v5.4.0
 # Date: 2026-01-23
 # Purpose: GUI for knowledge base ingestion.
 #          - FEATURE (v5.1.0): Added Qwen3-VL multimodal embedding status and
@@ -1974,6 +1974,29 @@ def render_model_status_bar():
         st.session_state.model_info_cache = get_model_info_summary()
     model_info = st.session_state.model_info_cache
     gpu_info = model_info.get('gpu_info', {})
+    embed_strategy = model_info.get('embedding_strategy', {})
+
+    # Build embedding model display name
+    embed_approach = embed_strategy.get('approach', '')
+    if embed_approach == 'qwen3vl':
+        # Show clean Qwen3-VL name with size - derive dims from config, not stale cache
+        from cortex_engine.config import QWEN3_VL_MODEL_SIZE
+        size_to_dims = {"2B": 2048, "8B": 4096}
+        if QWEN3_VL_MODEL_SIZE in size_to_dims:
+            embed_dims = size_to_dims[QWEN3_VL_MODEL_SIZE]
+            size_display = QWEN3_VL_MODEL_SIZE.upper()
+        else:
+            # "auto" - derive from what the GPU would select
+            vram_gb = gpu_info.get('memory_total_gb', 0)
+            embed_dims = 4096 if vram_gb >= 16 else 2048
+            size_display = "8B" if vram_gb >= 16 else "2B"
+        embed_display = f"Qwen3-VL ({size_display}, {embed_dims}D)"
+    elif embed_approach == 'nv-embed':
+        embed_display = "NV-Embed-v2"
+    elif embed_approach == 'bge':
+        embed_display = "BGE-base"
+    else:
+        embed_display = model_info['embedding_model'].split('/')[-1][:25]
 
     # Custom styled status bar
     status_html = f"""
@@ -1999,7 +2022,7 @@ def render_model_status_bar():
                     Embedding Model
                 </div>
                 <div style="color: #FFFFFF; font-size: 1.35rem; font-weight: 800; text-shadow: 0 2px 4px rgba(0,0,0,0.4);">
-                    {model_info['embedding_model'].split('/')[-1][:30]}
+                    {embed_display}
                 </div>
             </div>
             <div style="flex: 0; min-width: 140px; text-align: right;">
@@ -2071,97 +2094,81 @@ def render_sidebar_model_config():
                 for issue in gpu_info['issues']:
                     st.sidebar.caption(f"• {issue}")
 
-    # Model Selection Section
-    st.sidebar.markdown("### Embedding Model")
-
-    current_model = model_info['embedding_model']
-    is_cached, _ = check_model_cached(current_model)
-
-    # Model dropdown
-    model_options = list(available_models.keys())
-    model_labels = {}
-
-    for model_id in model_options:
-        model_data = available_models[model_id]
-        label = model_data['name'][:35]
-        if model_id == model_info['recommended_model']:
-            label += " ⭐"
-        if model_id == current_model:
-            label += " ✓"
-        model_labels[model_id] = label
-
-    try:
-        current_index = model_options.index(current_model)
-    except ValueError:
-        current_index = 0
-
-    selected_model = st.sidebar.selectbox(
-        "Select Model:",
-        options=model_options,
-        index=current_index,
-        format_func=lambda x: model_labels[x],
-        key="sidebar_model_selection"
-    )
-
-    # Show selected model details
-    if selected_model:
-        model_data = available_models[selected_model]
-
-        col1, col2 = st.sidebar.columns(2)
-        with col1:
-            st.metric("Quality", model_data['quality'])
-        with col2:
-            st.metric("Size", f"{model_data['size_gb']:.1f}GB")
-
-        st.sidebar.caption(f"**Best for**: {model_data['recommended_for']}")
-
-        # Apply model change
-        if selected_model != current_model:
-            if st.sidebar.button("🔄 Apply Change", type="primary", use_container_width=True):
-                st.session_state.selected_embedding_model = selected_model
-                from cortex_engine import config
-                config.EMBED_MODEL = selected_model
-                st.sidebar.success(f"✅ Changed to {selected_model.split('/')[-1]}")
-                st.rerun()
-        else:
-            # Download if not cached
-            if not is_cached:
-                is_available, status_msg = validate_model_available(selected_model)
-                st.sidebar.info(status_msg)
-                if not is_available:
-                    if st.sidebar.button("⬇️ Download Now", use_container_width=True):
-                        with st.spinner("Downloading..."):
-                            success, message = download_model(selected_model)
-                            if success:
-                                st.sidebar.success(message)
-                                st.rerun()
-                            else:
-                                st.sidebar.error(message)
-
-    # Qwen3-VL Multimodal Section
-    st.sidebar.markdown("### Multimodal (Qwen3-VL)")
-
-    # Use dynamic embedding strategy check (not stale module-level constant)
+    # Check Qwen3-VL status FIRST to determine which UI to show
     embed_strategy = model_info.get('embedding_strategy', {})
     qwen3vl_active = embed_strategy.get('approach') == 'qwen3vl'
 
-    # Import config values for display
+    # Import config values
     from cortex_engine.config import (
         QWEN3_VL_MODEL_SIZE,
         QWEN3_VL_RERANKER_ENABLED,
         QWEN3_VL_RERANKER_TOP_K,
     )
 
-    if qwen3vl_active:
-        st.sidebar.success("✅ **Enabled**")
+    # =========================================================================
+    # UNIFIED EMBEDDING MODEL SECTION
+    # =========================================================================
+    st.sidebar.markdown("### Embedding Model")
 
-        # Show model size
-        size_label = {
+    if qwen3vl_active:
+        # ----- QWEN3-VL ACTIVE: Show unified Qwen3-VL controls -----
+        st.sidebar.success("✅ **Qwen3-VL Multimodal**")
+
+        # Interactive model size selector
+        size_options = ["auto", "2B", "8B"]
+        size_labels = {
             "auto": "Auto (based on VRAM)",
             "2B": "2B (5GB VRAM, 2048 dims)",
             "8B": "8B (16GB VRAM, 4096 dims)",
-        }.get(QWEN3_VL_MODEL_SIZE, QWEN3_VL_MODEL_SIZE)
-        st.sidebar.caption(f"📊 **Model**: {size_label}")
+        }
+
+        current_size = QWEN3_VL_MODEL_SIZE
+        try:
+            current_index = size_options.index(current_size)
+        except ValueError:
+            current_index = 0
+
+        selected_size = st.sidebar.selectbox(
+            "Model Size:",
+            options=size_options,
+            index=current_index,
+            format_func=lambda x: size_labels.get(x, x),
+            key="qwen3_vl_size_selector",
+            help="Select embedding model size. 2B works on most GPUs (5GB+), 8B requires 16GB+ VRAM."
+        )
+
+        # Show dimensions for the SELECTED size (what user will get after Apply)
+        size_to_dims = {"2B": 2048, "8B": 4096}
+        if selected_size in size_to_dims:
+            display_dims = size_to_dims[selected_size]
+        elif selected_size == "auto":
+            # For "auto", show what the GPU would select
+            vram_gb = gpu_info.get('memory_total_gb', 0)
+            display_dims = 4096 if vram_gb >= 16 else 2048
+        else:
+            display_dims = 2048  # fallback
+        st.sidebar.caption(f"**Dimensions**: {display_dims}")
+
+        # Show apply button if size changed
+        if selected_size != current_size:
+            if st.sidebar.button("🔄 Apply Size Change", type="primary", use_container_width=True):
+                import os
+                os.environ["QWEN3_VL_MODEL_SIZE"] = selected_size
+
+                try:
+                    from cortex_engine.qwen3_vl_embedding_service import reset_service
+                    reset_service()
+                except Exception as e:
+                    st.sidebar.warning(f"Service reset warning: {e}")
+
+                from cortex_engine.config import invalidate_embedding_cache
+                invalidate_embedding_cache()
+
+                if 'model_info_cache' in st.session_state:
+                    del st.session_state.model_info_cache
+
+                st.sidebar.success(f"✅ Changed to {size_labels[selected_size]}")
+                st.rerun()
 
         # Reranker status
         if QWEN3_VL_RERANKER_ENABLED:
@@ -2169,29 +2176,83 @@ def render_sidebar_model_config():
         else:
             st.sidebar.caption("🔄 **Reranker**: Disabled")
 
-        # Info about capabilities
-        with st.sidebar.expander("ℹ️ Capabilities"):
+        # Capabilities expander
+        with st.sidebar.expander("ℹ️ Qwen3-VL Capabilities"):
             st.markdown("""
-            **Qwen3-VL enables:**
+            **Multimodal features:**
             - Image embedding (charts, diagrams)
             - Visual document search
-            - Cross-modal search (text to image)
+            - Cross-modal search (text ↔ image)
             - Neural reranking for precision
             """)
     else:
-        # Show what model is actually being used
+        # ----- QWEN3-VL NOT ACTIVE: Show legacy model selection -----
+        current_model = model_info['embedding_model']
+        is_cached, _ = check_model_cached(current_model)
+
+        # Show current approach info
         current_approach = embed_strategy.get('approach', 'unknown')
-        current_model = embed_strategy.get('model', 'unknown')
         reason = embed_strategy.get('reason', '')
 
         if current_approach == 'nv-embed':
-            st.sidebar.info(f"**NV-Embed-v2** (GPU-optimized)")
+            st.sidebar.info("**NV-Embed-v2** (GPU-optimized)")
         elif current_approach == 'bge':
-            st.sidebar.info(f"**BGE** (CPU-friendly)")
+            st.sidebar.info("**BGE** (CPU-friendly)")
         else:
-            st.sidebar.info(f"**{current_model}**")
+            st.sidebar.info(f"**{current_model.split('/')[-1]}**")
 
         st.sidebar.caption(f"Reason: {reason[:60]}..." if len(reason) > 60 else f"Reason: {reason}")
+
+        # Model dropdown for manual selection
+        with st.sidebar.expander("🔧 Manual Model Selection"):
+            model_options = list(available_models.keys())
+            model_labels = {}
+
+            for model_id in model_options:
+                model_data = available_models[model_id]
+                label = model_data['name'][:35]
+                if model_id == model_info['recommended_model']:
+                    label += " ⭐"
+                if model_id == current_model:
+                    label += " ✓"
+                model_labels[model_id] = label
+
+            try:
+                current_index = model_options.index(current_model)
+            except ValueError:
+                current_index = 0
+
+            selected_model = st.selectbox(
+                "Select Model:",
+                options=model_options,
+                index=current_index,
+                format_func=lambda x: model_labels[x],
+                key="sidebar_model_selection"
+            )
+
+            if selected_model:
+                model_data = available_models[selected_model]
+                st.caption(f"**Best for**: {model_data['recommended_for']}")
+
+                if selected_model != current_model:
+                    if st.button("🔄 Apply Change", type="primary", use_container_width=True):
+                        st.session_state.selected_embedding_model = selected_model
+                        from cortex_engine import config
+                        config.EMBED_MODEL = selected_model
+                        st.success(f"✅ Changed to {selected_model.split('/')[-1]}")
+                        st.rerun()
+                elif not is_cached:
+                    is_available, status_msg = validate_model_available(selected_model)
+                    st.info(status_msg)
+                    if not is_available:
+                        if st.button("⬇️ Download Now", use_container_width=True):
+                            with st.spinner("Downloading..."):
+                                success, message = download_model(selected_model)
+                                if success:
+                                    st.success(message)
+                                    st.rerun()
+                                else:
+                                    st.error(message)
 
     # LLM Models Info
     st.sidebar.markdown("### LLM Models")
@@ -4022,12 +4083,8 @@ else:
                 st.session_state.resume_mode_enabled = True
         
         st.markdown("---")
-    
-    # DIRECTORY SELECTION SECTION - Only show when no active batch
-    st.header("Ingest New Documents")
-    st.markdown("Set your paths, navigate folders, and select directories to scan.")
 
-    # Add maintenance access button
+    # Add maintenance access button (shown at top of ingestion workflow)
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("⚙️ Document Type Management", use_container_width=True, help="Manage document categories and type mappings"):

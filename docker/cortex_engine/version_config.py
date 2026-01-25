@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "5.3.0"
+CORTEX_VERSION = "5.4.0"
 
 # Version details
 VERSION_INFO = {
     "major": 5,
-    "minor": 3,
+    "minor": 4,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -24,34 +24,32 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-01-23",
-    "release_name": "Adaptive Embedding & Save As You Go",
-    "description": "Automatic embedding model selection based on hardware (Qwen3-VL/NV-Embed/BGE), IC workflow persistence, and editorial UI redesign.",
+    "release_date": "2026-01-25",
+    "release_name": "Database Portability & Model Size Selection",
+    "description": "Portable database transfers between machines with different GPU configurations, interactive Qwen3-VL model size selector, and streamlined backup UI.",
     "breaking_changes": [],
     "new_features": [
-        "Adaptive Embedding Selection: Auto-detects best model (Qwen3-VL > NV-Embed > BGE)",
-        "IC Save As You Go: Progress auto-saved on every action",
-        "IC Editorial UI Redesign: Clean typography, collapsible sections",
-        "Per-question Creativity dropdown next to Generate button",
-        "Collapsible question sections with completion counts"
+        "Database Portability: Export/import databases with embedding model auto-configuration",
+        "Qwen3-VL Model Size Selector: Interactive dropdown to choose 2B/8B/Auto in Knowledge Ingest sidebar",
+        "Export Manifest: Packages include hardware requirements, model config, and MRL compatibility info",
+        "Hardware Compatibility Check: Validates GPU VRAM before import"
     ],
     "improvements": [
-        "Embedding model selection uses hardware detection throughout pipeline",
-        "RTX 8000/A100 class GPUs auto-select Qwen3-VL-8B multimodal embedding",
-        "Session state cache invalidation for model info updates",
-        "Removed Skip button from IC (not needed with new UX)",
-        "Compact Edit/Generate buttons instead of giant full-width"
+        "Unified Embedding Model UI: Single section in sidebar replaces confusing dual-section layout",
+        "Status bar shows clean model display (e.g., 'Qwen3-VL (2B, 2048D)')",
+        "Sidebar dimensions update immediately when selecting different model size",
+        "Streamlined Maintenance tab: Removed redundant backup sections, kept unified Backup & Transfer",
+        "Export summary correctly shows dimensions and VRAM based on actual model size config"
     ],
     "bug_fixes": [
-        "Fixed static EMBED_MODEL constant not using adaptive selection",
-        "Fixed model_info_cache showing stale embedding model",
-        "Fixed GraphQueryEngine initialization error",
-        "Fixed st.rerun() causing premature page restart"
+        "Fixed dimensions showing 4096 when 2B model selected (stale cache issue)",
+        "Fixed status bar showing wrong model size after selection change",
+        "Fixed duplicate 'Ingest New Documents' header",
+        "Fixed export VRAM requirements showing 16GB for 2B model (should be 5GB)"
     ],
     "performance": [
-        "Knowledge Ingest page now responds instantly to button clicks",
-        "Removed 3 expensive operations from every page interaction",
-        "Cached network calls, file reads, and database analysis"
+        "Model size changes take effect without full page reload",
+        "Embedding info derived from config rather than stale strategy cache"
     ]
 }
 

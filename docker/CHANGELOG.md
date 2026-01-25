@@ -6,6 +6,26 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+
+## v5.4.0 - 2026-01-25
+
+### Database Portability & Model Size Selection
+
+Portable database transfers between machines with different GPU configurations, interactive Qwen3-VL model size selector, and streamlined backup UI.
+
+### ✨ New Features
+- Database Portability: Export/import databases with embedding model auto-configuration
+- Qwen3-VL Model Size Selector: Interactive dropdown to choose 2B/8B/Auto in Knowledge Ingest sidebar
+- Export Manifest: Packages include hardware requirements, model config, and MRL compatibility info
+- Hardware Compatibility Check: Validates GPU VRAM before import
+
+### 🚀 Improvements
+- Unified Embedding Model UI: Single section in sidebar replaces confusing dual-section layout
+- Status bar shows clean model display (e.g., 'Qwen3-VL (2B, 2048D)')
+- Sidebar dimensions update immediately when selecting different model size
+- Streamlined Maintenance tab: Removed redundant backup sections, kept unified Backup & Transfer
+- Export summary correctly shows dimensions and VRAM based on actual model size config
+
 ### Qwen3-VL Embedding Pipeline Fixes - 2026-01-24
 
 Critical fixes to enable Qwen3-VL multimodal embedding generation.

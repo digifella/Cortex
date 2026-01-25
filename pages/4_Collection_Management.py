@@ -1,5 +1,5 @@
 # ## File: pages/4_Collection_Management.py
-# Version: v5.2.0
+# Version: v5.4.0
 # Date: 2026-01-19
 # Purpose: A UI for managing Working Collections only.
 #          Knowledge base maintenance functions moved to Maintenance page (page 13).
@@ -170,7 +170,7 @@ except Exception as e:
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🔧 Go to Maintenance Page", use_container_width=True, type="primary"):
-                st.switch_page("pages/13_Maintenance.py")
+                st.switch_page("pages/6_Maintenance.py")
         with col2:
             if st.button("📖 Learn More About This Error", use_container_width=True):
                 st.info("""
@@ -747,7 +747,7 @@ except Exception as e:
         
         with col2:
             if st.button("📊 Check Database Status", use_container_width=True):
-                st.switch_page("pages/13_Maintenance.py")
+                st.switch_page("pages/6_Maintenance.py")
         
         st.stop()  # Stop execution here
     else:

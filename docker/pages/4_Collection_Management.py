@@ -1,5 +1,5 @@
 # ## File: pages/4_Collection_Management.py
-# Version: v5.2.0
+# Version: v5.4.0
 # Date: 2026-01-19
 # Purpose: A UI for managing Working Collections only.
 #          Knowledge base maintenance functions moved to Maintenance page (page 13).
