@@ -38,8 +38,13 @@ def convert_windows_to_wsl_path(path_str: Union[str, Path, None]) -> str:
     """
     if not path_str:
         return ""
-    
+
     path_str = str(path_str).strip()
+
+    # Strip surrounding quotes (common when users copy-paste paths)
+    if (path_str.startswith('"') and path_str.endswith('"')) or \
+       (path_str.startswith("'") and path_str.endswith("'")):
+        path_str = path_str[1:-1].strip()
     
     # Already WSL/Docker mount format, return as-is
     if path_str.startswith('/mnt/'):
