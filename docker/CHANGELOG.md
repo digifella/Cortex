@@ -7,6 +7,37 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## v5.4.1 - 2026-01-26
+
+### Database Health & Search Model Selection
+
+Database Health Check with orphan detection fix, Maintenance tab reorganization, and runtime model selection for Knowledge Search.
+
+### ✨ New Features
+- **Database Health Check**: Scan and fix orphaned log entries, collection inconsistencies
+- **Knowledge Search Model Selector**: Choose Qwen3-VL 2B/8B based on database compatibility
+- **Auto-scan on Import**: Option to automatically scan and fix database after portable import
+- **Database Dimension Detection**: Shows compatibility info and warnings for model mismatches
+
+### 🚀 Improvements
+- **Maintenance Tab Reorganization**:
+  - Renamed "Backups" tab to "Transfer" (reflects portable export/import focus)
+  - Moved Database Health Check to Database tab (where it belongs)
+  - Removed duplicate Clean Start description (was shown twice)
+  - Simplified "Advanced Recovery" to "Danger Zone - System Reset"
+  - Health Check uses bordered container for better visibility
+- Health Check results persist in session state with auto-rescan after fixes
+- Maintenance page shows actual embedding model from `get_embedding_strategy()`
+- Database dimensions cached in session state to avoid repeated DB connections
+
+### 🔧 Bug Fixes
+- **Fixed orphaned document detection**: Was comparing file hashes against UUIDs (never matched). Now correctly compares file paths from ingested_files.log against doc_posix_path in ChromaDB
+- Fixed nested expander error in Database Health Check (Streamlit doesn't allow nested expanders)
+- Fixed Health Check not updating after "Remove Orphaned Entries" (results weren't persisted)
+- Fixed Maintenance showing BAAI/bge-base-en-v1.5 instead of actual Qwen3-VL model
+- Fixed Knowledge Search model selector causing infinite render loop
+- Fixed ChromaSettings scoping error from redundant import in dimension detection
+
 ## v5.4.0 - 2026-01-25
 
 ### Database Portability & Model Size Selection
