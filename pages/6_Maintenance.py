@@ -1660,17 +1660,17 @@ def display_backup_management():
                         st.warning(f"⚠️ Found {orphaned} orphaned log entries")
                         st.caption("These are files listed in the ingestion log but missing from ChromaDB. They may have failed to ingest or were manually deleted.")
 
-                        # Show orphaned files
-                        with st.expander(f"View orphaned files ({orphaned})", expanded=False):
-                            for doc in analysis.get('orphaned_documents', [])[:20]:
-                                st.text(f"• {doc['file_name']}")
-                            if orphaned > 20:
-                                st.caption(f"... and {orphaned - 20} more")
+                        # Show orphaned files using checkbox toggle (no nested expanders)
+                        show_orphaned = st.checkbox(f"Show orphaned files ({orphaned})", key="show_orphaned_files")
+                        if show_orphaned:
+                            with st.container(height=200):
+                                for doc in analysis.get('orphaned_documents', [])[:50]:
+                                    st.text(f"• {doc['file_name']}")
+                                if orphaned > 50:
+                                    st.caption(f"... and {orphaned - 50} more")
 
                         # Fix button
-                        st.markdown("---")
-                        st.markdown("**🔧 Fix Options:**")
-                        st.caption("Removing orphaned entries allows you to re-ingest the files or just cleans up the database.")
+                        st.caption("Removing orphaned entries allows you to re-ingest the files or cleans up the database.")
 
                         if st.button("🔧 Remove Orphaned Entries", type="primary", use_container_width=True, key="btn_fix_orphaned"):
                             with st.spinner("Cleaning up orphaned entries..."):
@@ -1689,7 +1689,9 @@ def display_backup_management():
                     collection_issues = analysis.get('collection_inconsistencies', [])
                     if collection_issues:
                         st.warning(f"⚠️ Found {len(collection_issues)} collection inconsistencies")
-                        with st.expander("View collection issues", expanded=False):
+
+                        show_issues = st.checkbox(f"Show collection issues ({len(collection_issues)})", key="show_collection_issues")
+                        if show_issues:
                             for issue in collection_issues:
                                 if issue.get('type') == 'missing_from_chromadb':
                                     st.text(f"• {issue['collection']}: {issue['count']} missing documents")
