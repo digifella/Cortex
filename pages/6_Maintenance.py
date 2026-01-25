@@ -872,28 +872,37 @@ def display_database_maintenance():
         st.subheader("🤖 Embedding Model Status")
 
         try:
-            from cortex_engine.config import EMBED_MODEL
+            from cortex_engine.config import get_embedding_strategy
             from cortex_engine.utils.embedding_validator import (
                 get_embedding_dimension,
                 validate_embedding_compatibility
             )
             from cortex_engine.collection_manager import WorkingCollectionManager
 
+            # Get the actual embedding strategy (properly detects Qwen3-VL, etc.)
+            embed_strategy = get_embedding_strategy()
+            EMBED_MODEL = embed_strategy.get('model', 'BAAI/bge-base-en-v1.5')
+            embed_dims = embed_strategy.get('dimensions', 768)
+            embed_approach = embed_strategy.get('approach', 'sentence_transformers')
+
             # Check if model is locked via environment variable
             model_locked = os.getenv("CORTEX_EMBED_MODEL") is not None
-            lock_source = "🔒 Environment Variable" if model_locked else "⚡ Auto-detected (hardware-based)"
+            if model_locked:
+                lock_source = "🔒 Environment Variable"
+            elif embed_approach == 'qwen3vl':
+                lock_source = "🤖 Qwen3-VL (auto-detected)"
+            else:
+                lock_source = "⚡ Auto-detected (hardware-based)"
 
             col_a, col_b = st.columns(2)
             with col_a:
-                st.metric("Current Model", EMBED_MODEL)
+                # Show short model name
+                model_display = EMBED_MODEL.split('/')[-1] if '/' in EMBED_MODEL else EMBED_MODEL
+                st.metric("Current Model", model_display)
                 st.caption(lock_source)
 
             with col_b:
-                try:
-                    dimension = get_embedding_dimension(EMBED_MODEL)
-                    st.metric("Embedding Dimension", f"{dimension}D")
-                except Exception as e:
-                    st.error(f"Cannot determine dimension: {e}")
+                st.metric("Embedding Dimension", f"{embed_dims}D")
 
             # Check collection metadata
             try:
