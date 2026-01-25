@@ -1698,19 +1698,34 @@ def display_backup_management():
                 except Exception as e:
                     st.error(f"❌ Export failed: {e}")
 
-        # ----- IMPORT PORTABLE DATABASE -----
+        # ----- IMPORT DATABASE -----
         with st.expander("📥 Import Database", expanded=False):
             st.markdown("""
             Import a portable database package from another machine.
             The embedding model will be automatically configured based on the export settings.
             """)
 
-            import_path = st.text_input(
-                "Export Package Path (.zip):",
-                value="",
-                key="import_package_path",
-                help="Full path to the cortex_export_*.zip file"
+            # File uploader for zip files
+            uploaded_zip = st.file_uploader(
+                "Choose a database export package:",
+                type=['zip'],
+                key="import_zip_uploader",
+                help="Select a cortex_export_*.zip file"
             )
+
+            import_path = None
+            if uploaded_zip:
+                # Save uploaded file to temp location
+                import tempfile
+                temp_dir = Path(tempfile.gettempdir()) / "cortex_imports"
+                temp_dir.mkdir(exist_ok=True)
+
+                temp_zip_path = temp_dir / uploaded_zip.name
+                with open(temp_zip_path, 'wb') as f:
+                    f.write(uploaded_zip.getvalue())
+
+                import_path = str(temp_zip_path)
+                st.success(f"📦 File loaded: {uploaded_zip.name} ({uploaded_zip.size / (1024*1024):.1f} MB)")
 
             if import_path:
                 # Validate button
