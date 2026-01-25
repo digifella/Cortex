@@ -664,27 +664,42 @@ def render_sidebar():
         embed_info = get_embedding_info()
         is_multimodal = is_multimodal_enabled()
 
-        # Detect database dimensions for compatibility check
-        db_dimensions = None
-        try:
-            chroma_path = os.path.join(convert_windows_to_wsl_path(normalized_db_value), "knowledge_hub_db")
-            if os.path.exists(chroma_path):
-                # Use module-level chromadb and ChromaSettings (already imported at top)
-                db_check_settings = ChromaSettings(anonymized_telemetry=False)
-                db_check_client = chromadb.PersistentClient(path=chroma_path, settings=db_check_settings)
-                db_check_collection = db_check_client.get_collection(COLLECTION_NAME)
-                if db_check_collection.count() > 0:
-                    sample = db_check_collection.peek(limit=1)
-                    if sample.get('embeddings') and len(sample['embeddings']) > 0:
-                        db_dimensions = len(sample['embeddings'][0])
-        except Exception:
-            pass
+        # Cache database dimensions in session state to avoid repeated DB connections
+        cache_key = f"db_dimensions_{normalized_db_value}"
+        if cache_key not in st.session_state:
+            db_dimensions = None
+            try:
+                chroma_path = os.path.join(convert_windows_to_wsl_path(normalized_db_value), "knowledge_hub_db")
+                if os.path.exists(chroma_path):
+                    db_check_settings = ChromaSettings(anonymized_telemetry=False)
+                    db_check_client = chromadb.PersistentClient(path=chroma_path, settings=db_check_settings)
+                    db_check_collection = db_check_client.get_collection(COLLECTION_NAME)
+                    if db_check_collection.count() > 0:
+                        sample = db_check_collection.peek(limit=1)
+                        if sample.get('embeddings') and len(sample['embeddings']) > 0:
+                            db_dimensions = len(sample['embeddings'][0])
+            except Exception:
+                pass
+            st.session_state[cache_key] = db_dimensions
+        else:
+            db_dimensions = st.session_state[cache_key]
 
         if is_multimodal and QWEN3_VL_ENABLED:
             st.sidebar.success("🔮 **Qwen3-VL Active**")
 
-            # Model size selector for Qwen3-VL
-            current_size = QWEN3_VL_MODEL_SIZE.upper() if QWEN3_VL_MODEL_SIZE != "auto" else "AUTO"
+            # Get current model size (normalize "auto" to actual detected size)
+            raw_size = QWEN3_VL_MODEL_SIZE.upper() if QWEN3_VL_MODEL_SIZE else "AUTO"
+            # For display, map AUTO to the actual dimension-based size
+            if raw_size == "AUTO":
+                current_dims = embed_info.get('embedding_dimension', 0)
+                if current_dims == 2048:
+                    current_size = "2B"
+                elif current_dims == 4096:
+                    current_size = "8B"
+                else:
+                    current_size = "2B"  # Default
+            else:
+                current_size = raw_size
 
             # Determine compatible sizes based on database
             size_options = ["2B", "8B"]
@@ -693,7 +708,8 @@ def render_sidebar():
                 "8B": "8B (4096D, 16GB VRAM)"
             }
 
-            # Show database compatibility warning
+            # Show database compatibility info
+            recommended = None
             if db_dimensions:
                 if db_dimensions == 2048:
                     st.sidebar.info(f"📊 DB: {db_dimensions}D → Use **2B**")
@@ -703,9 +719,6 @@ def render_sidebar():
                     recommended = "8B"
                 else:
                     st.sidebar.warning(f"📊 DB: {db_dimensions}D (non-Qwen)")
-                    recommended = None
-            else:
-                recommended = None
 
             # Model size selector
             current_idx = size_options.index(current_size) if current_size in size_options else 0
@@ -722,8 +735,8 @@ def render_sidebar():
             if db_dimensions and recommended and selected_size != recommended:
                 st.sidebar.error(f"⚠️ Mismatch! DB needs {recommended}")
 
-            # Apply button if changed
-            if selected_size != current_size and current_size != "AUTO":
+            # Apply button only if user changed selection
+            if selected_size != current_size:
                 if st.sidebar.button("🔄 Apply Model Change", type="primary", use_container_width=True, key="apply_search_model"):
                     os.environ["QWEN3_VL_MODEL_SIZE"] = selected_size
                     try:
@@ -731,20 +744,10 @@ def render_sidebar():
                         from cortex_engine.config import invalidate_embedding_cache
                         reset_service()
                         invalidate_embedding_cache()
+                        # Clear dimension cache to force re-check
+                        if cache_key in st.session_state:
+                            del st.session_state[cache_key]
                         st.sidebar.success(f"✅ Switched to {selected_size}")
-                        st.rerun()
-                    except Exception as e:
-                        st.sidebar.error(f"❌ Failed: {e}")
-            elif current_size == "AUTO":
-                # First time - allow setting
-                if st.sidebar.button(f"🔄 Set to {selected_size}", type="primary", use_container_width=True, key="set_search_model"):
-                    os.environ["QWEN3_VL_MODEL_SIZE"] = selected_size
-                    try:
-                        from cortex_engine.qwen3_vl_embedding_service import reset_service
-                        from cortex_engine.config import invalidate_embedding_cache
-                        reset_service()
-                        invalidate_embedding_cache()
-                        st.sidebar.success(f"✅ Set to {selected_size}")
                         st.rerun()
                     except Exception as e:
                         st.sidebar.error(f"❌ Failed: {e}")
