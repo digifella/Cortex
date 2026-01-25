@@ -1629,6 +1629,84 @@ def display_backup_management():
 
         st.caption("Create portable database exports with embedding model configuration for seamless transfer between machines.")
 
+        # ----- DATABASE HEALTH CHECK -----
+        with st.expander("🔍 Database Health Check", expanded=False):
+            st.markdown("""
+            Scan the database for inconsistencies between the ingestion log and ChromaDB.
+            This detects orphaned entries (files in the log that aren't in the database) and collection issues.
+            """)
+
+            if st.button("🔍 Scan Database", use_container_width=True, key="btn_scan_database"):
+                try:
+                    from cortex_engine.ingestion_recovery import IngestionRecoveryManager
+
+                    with st.spinner("Analyzing database state..."):
+                        recovery = IngestionRecoveryManager(db_path)
+                        analysis = recovery.analyze_ingestion_state()
+
+                    # Display results
+                    stats = analysis.get('statistics', {})
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Files in Log", stats.get('ingested_files_count', 0))
+                    with col2:
+                        st.metric("Files in ChromaDB", stats.get('chromadb_files_count', 0))
+                    with col3:
+                        orphaned = stats.get('orphaned_count', 0)
+                        st.metric("Orphaned Entries", orphaned, delta=f"-{orphaned}" if orphaned > 0 else None, delta_color="inverse")
+
+                    if orphaned > 0:
+                        st.warning(f"⚠️ Found {orphaned} orphaned log entries")
+                        st.caption("These are files listed in the ingestion log but missing from ChromaDB. They may have failed to ingest or were manually deleted.")
+
+                        # Show orphaned files
+                        with st.expander(f"View orphaned files ({orphaned})", expanded=False):
+                            for doc in analysis.get('orphaned_documents', [])[:20]:
+                                st.text(f"• {doc['file_name']}")
+                            if orphaned > 20:
+                                st.caption(f"... and {orphaned - 20} more")
+
+                        # Fix button
+                        st.markdown("---")
+                        st.markdown("**🔧 Fix Options:**")
+                        st.caption("Removing orphaned entries allows you to re-ingest the files or just cleans up the database.")
+
+                        if st.button("🔧 Remove Orphaned Entries", type="primary", use_container_width=True, key="btn_fix_orphaned"):
+                            with st.spinner("Cleaning up orphaned entries..."):
+                                cleanup_result = recovery.cleanup_orphaned_log_entries()
+
+                            if cleanup_result.get('status') == 'success':
+                                st.success(f"✅ Removed {cleanup_result['entries_removed']} orphaned entries from the ingestion log")
+                                st.caption("Files can now be re-ingested if needed.")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Cleanup failed: {cleanup_result.get('error', 'Unknown error')}")
+                    else:
+                        st.success("✅ Database is healthy - no orphaned entries found")
+
+                    # Show collection issues if any
+                    collection_issues = analysis.get('collection_inconsistencies', [])
+                    if collection_issues:
+                        st.warning(f"⚠️ Found {len(collection_issues)} collection inconsistencies")
+                        with st.expander("View collection issues", expanded=False):
+                            for issue in collection_issues:
+                                if issue.get('type') == 'missing_from_chromadb':
+                                    st.text(f"• {issue['collection']}: {issue['count']} missing documents")
+
+                        if st.button("🔧 Fix Collection Issues", use_container_width=True, key="btn_fix_collections"):
+                            with st.spinner("Repairing collections..."):
+                                repair_result = recovery.auto_repair_collections()
+
+                            if repair_result.get('status') == 'success':
+                                st.success(f"✅ Fixed {repair_result['invalid_refs_removed']} invalid references")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Repair failed: {repair_result.get('error', 'Unknown')}")
+
+                except Exception as e:
+                    st.error(f"❌ Database scan failed: {e}")
+
         # ----- EXPORT DATABASE -----
         with st.expander("📤 Export Database", expanded=False):
             st.markdown("""
@@ -1787,6 +1865,13 @@ def display_backup_management():
                         help="Your existing database will be backed up before replacement"
                     )
 
+                    auto_scan_fix = st.checkbox(
+                        "Auto-scan and fix database after import",
+                        value=True,
+                        key="import_auto_scan_fix",
+                        help="Recommended: Removes orphaned entries from the ingestion log so you start with a clean database"
+                    )
+
                     import_disabled = not overwrite_confirm
 
                     if st.button(
@@ -1817,6 +1902,38 @@ def display_backup_management():
 
                             if success:
                                 st.success(f"✅ {message}")
+
+                                # Run auto-scan and fix if enabled
+                                if auto_scan_fix:
+                                    status_text.text("🔍 Scanning database for inconsistencies...")
+                                    progress_bar.progress(90)
+
+                                    try:
+                                        from cortex_engine.ingestion_recovery import IngestionRecoveryManager
+
+                                        recovery = IngestionRecoveryManager(db_path)
+                                        analysis = recovery.analyze_ingestion_state()
+
+                                        orphaned_count = analysis['statistics'].get('orphaned_count', 0)
+                                        if orphaned_count > 0:
+                                            status_text.text(f"🔧 Found {orphaned_count} orphaned log entries, cleaning up...")
+                                            cleanup_result = recovery.cleanup_orphaned_log_entries()
+
+                                            if cleanup_result.get('status') == 'success':
+                                                st.success(f"✅ Cleaned up {cleanup_result['entries_removed']} orphaned log entries")
+                                                st.caption("These files were in the ingestion log but not in the database. They can now be re-ingested if needed.")
+                                            else:
+                                                st.warning(f"⚠️ Cleanup encountered issues: {cleanup_result.get('error', 'Unknown')}")
+                                        else:
+                                            st.success("✅ Database scan complete - no issues found")
+
+                                        progress_bar.progress(100)
+                                        status_text.text("✅ Import and cleanup complete!")
+
+                                    except Exception as scan_e:
+                                        st.warning(f"⚠️ Auto-scan encountered an error: {scan_e}")
+                                        st.caption("Import was successful, but you may want to run maintenance manually.")
+
                                 st.info("🔄 Embedding model has been auto-configured. Refresh the page to use the imported database.")
 
                                 # Clear session state

@@ -87,18 +87,19 @@ class IngestionRecoveryManager:
             # Load ingested files log
             ingested_files = self._load_ingested_files_log()
             analysis["statistics"]["ingested_files_count"] = len(ingested_files)
-            
+
             # Check ChromaDB collection
-            chroma_docs = self._get_chromadb_documents()
-            analysis["statistics"]["chromadb_docs_count"] = len(chroma_docs)
-            
+            chroma_data = self._get_chromadb_documents()
+            analysis["statistics"]["chromadb_files_count"] = len(chroma_data.get("file_paths", set()))
+            analysis["statistics"]["chromadb_chunks_count"] = len(chroma_data.get("doc_ids", set()))
+
             # Find orphaned documents (in log but not in ChromaDB)
-            orphaned_docs = self._find_orphaned_documents(ingested_files, chroma_docs)
+            orphaned_docs = self._find_orphaned_documents(ingested_files, chroma_data)
             analysis["orphaned_documents"] = orphaned_docs
             analysis["statistics"]["orphaned_count"] = len(orphaned_docs)
-            
+
             # Check collection consistency
-            collection_issues = self._check_collection_consistency(chroma_docs)
+            collection_issues = self._check_collection_consistency(chroma_data)
             analysis["collection_inconsistencies"] = collection_issues
             
             # Generate recommendations
@@ -134,58 +135,76 @@ class IngestionRecoveryManager:
             logger.error(f"Failed to load ingested files log: {e}")
             return {}
     
-    def _get_chromadb_documents(self) -> List[str]:
-        """Get all document IDs from ChromaDB."""
+    def _get_chromadb_documents(self) -> Dict[str, Set[str]]:
+        """Get document file paths and doc_ids from ChromaDB.
+
+        Returns:
+            Dict with 'file_paths' (set of unique file paths) and 'doc_ids' (set of unique doc_ids)
+        """
         try:
             db_settings = ChromaSettings(anonymized_telemetry=False)
             db = chromadb.PersistentClient(path=self.chroma_db_path, settings=db_settings)
             collection = db.get_or_create_collection(COLLECTION_NAME)
-            
-            # Get all document IDs
+
+            # Get all document metadata
             results = collection.get(include=["metadatas"])
+            file_paths = set()
+            doc_ids = set()
+
             if results and "metadatas" in results:
-                doc_ids = []
                 for metadata in results["metadatas"]:
-                    if metadata and "doc_id" in metadata:
-                        doc_ids.append(metadata["doc_id"])
-                return doc_ids
-            return []
-            
+                    if metadata:
+                        # Get file path - the key for matching with ingested_files.log
+                        if "doc_posix_path" in metadata:
+                            file_paths.add(metadata["doc_posix_path"])
+                        # Also track doc_ids for collection consistency checks
+                        if "doc_id" in metadata:
+                            doc_ids.add(metadata["doc_id"])
+
+            return {"file_paths": file_paths, "doc_ids": doc_ids}
+
         except Exception as e:
             logger.error(f"Failed to get ChromaDB documents: {e}")
-            return []
+            return {"file_paths": set(), "doc_ids": set()}
     
     def _find_orphaned_documents(self, ingested_files: Dict[str, Any],
-                                chroma_docs: List[str]) -> List[Dict[str, Any]]:
+                                chroma_data: Dict[str, Set[str]]) -> List[Dict[str, Any]]:
         """Find documents that are in the log but not in ChromaDB.
 
-        Note: Excludes user-excluded files (doc_id starting with 'user_excluded')
-        as these are intentionally not in ChromaDB.
+        Compares file paths from the ingested_files.log against doc_posix_path
+        values in ChromaDB. A file is orphaned if it's in the log but has no
+        corresponding chunks in ChromaDB.
+
+        Note: Excludes user-excluded files as these are intentionally not in ChromaDB.
+
+        Args:
+            ingested_files: Dict from ingested_files.log {file_path: hash_or_metadata}
+            chroma_data: Dict with 'file_paths' (set) and 'doc_ids' (set) from ChromaDB
         """
         orphaned = []
-        chroma_doc_set = set(chroma_docs)
+        chroma_file_paths = chroma_data.get("file_paths", set())
 
         for file_path, metadata in ingested_files.items():
             try:
-                # Extract doc_id from metadata
-                doc_id = None
-                if isinstance(metadata, dict):
-                    doc_id = metadata.get("doc_id")
-                elif isinstance(metadata, str):
-                    doc_id = metadata  # Old format
-
                 # Skip user-excluded files - these are intentionally not in ChromaDB
-                if doc_id and doc_id.startswith("user_excluded"):
-                    continue
+                if isinstance(metadata, dict):
+                    # New format with metadata dict
+                    if metadata.get("status") == "excluded":
+                        continue
+                    doc_id = metadata.get("doc_id", "")
+                    if doc_id and doc_id.startswith("user_excluded"):
+                        continue
+                elif isinstance(metadata, str):
+                    # Old format: metadata is just the file hash
+                    # Check if the hash looks like it might be a user_excluded marker
+                    if metadata.startswith("user_excluded"):
+                        continue
 
-                # Skip files marked as excluded in metadata
-                if isinstance(metadata, dict) and metadata.get("status") == "excluded":
-                    continue
-
-                if doc_id and doc_id not in chroma_doc_set:
+                # Compare by file path - this is the correct comparison
+                if file_path not in chroma_file_paths:
                     orphaned.append({
                         "file_path": file_path,
-                        "doc_id": doc_id,
+                        "file_hash": metadata if isinstance(metadata, str) else metadata.get("doc_id", "unknown"),
                         "metadata": metadata,
                         "file_name": os.path.basename(file_path)
                     })
@@ -194,19 +213,20 @@ class IngestionRecoveryManager:
 
         return orphaned
     
-    def _check_collection_consistency(self, chroma_docs: List[str]) -> List[Dict[str, Any]]:
+    def _check_collection_consistency(self, chroma_data: Dict[str, Set[str]]) -> List[Dict[str, Any]]:
         """Check for inconsistencies in working collections."""
         issues = []
-        
+
         try:
             collections = self.collection_mgr.get_collection_names()
-            chroma_doc_set = set(chroma_docs)
+            # Use doc_ids for collection consistency (collections reference by doc_id)
+            chroma_doc_ids = chroma_data.get("doc_ids", set())
             
             for collection_name in collections:
                 collection_docs = set(self.collection_mgr.get_doc_ids_by_name(collection_name))
-                
+
                 # Find documents in collection but not in ChromaDB
-                missing_from_chromadb = collection_docs - chroma_doc_set
+                missing_from_chromadb = collection_docs - chroma_doc_ids
                 if missing_from_chromadb:
                     issues.append({
                         "type": "missing_from_chromadb",
