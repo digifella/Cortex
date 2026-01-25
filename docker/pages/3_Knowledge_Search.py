@@ -669,13 +669,12 @@ def render_sidebar():
         try:
             chroma_path = os.path.join(convert_windows_to_wsl_path(normalized_db_value), "knowledge_hub_db")
             if os.path.exists(chroma_path):
-                import chromadb
-                from chromadb.config import Settings as ChromaSettings
-                db_settings = ChromaSettings(anonymized_telemetry=False)
-                client = chromadb.PersistentClient(path=chroma_path, settings=db_settings)
-                collection = client.get_collection(COLLECTION_NAME)
-                if collection.count() > 0:
-                    sample = collection.peek(limit=1)
+                # Use module-level chromadb and ChromaSettings (already imported at top)
+                db_check_settings = ChromaSettings(anonymized_telemetry=False)
+                db_check_client = chromadb.PersistentClient(path=chroma_path, settings=db_check_settings)
+                db_check_collection = db_check_client.get_collection(COLLECTION_NAME)
+                if db_check_collection.count() > 0:
+                    sample = db_check_collection.peek(limit=1)
                     if sample.get('embeddings') and len(sample['embeddings']) > 0:
                         db_dimensions = len(sample['embeddings'][0])
         except Exception:
