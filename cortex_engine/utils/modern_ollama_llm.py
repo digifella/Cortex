@@ -70,7 +70,6 @@ class ModernOllamaLLM(LLM):
         chat_response = self.chat(messages, **kwargs)
         return CompletionResponse(text=chat_response.message.content)
     
-    @llm_completion_callback()
     def chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
         """Chat with the model using modern Ollama API."""
         try:
@@ -158,7 +157,6 @@ class ModernOllamaLLM(LLM):
         messages = [ChatMessage(role="user", content=prompt)]
         yield from self.stream_chat(messages, **kwargs)
 
-    @llm_completion_callback()
     def stream_chat(self, messages: Sequence[ChatMessage], **kwargs: Any):
         """Stream chat using Ollama streaming API."""
         try:
