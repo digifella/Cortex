@@ -31,100 +31,197 @@ logger = get_logger(__name__)
 st.set_page_config(page_title="Document Summarizer", layout="wide", page_icon="📄")
 
 # Page metadata
-PAGE_VERSION = "v5.5.0"
+PAGE_VERSION = "v5.5.1"
+
+def get_installed_ollama_models() -> set:
+    """Get set of actually installed Ollama models."""
+    import requests
+    installed = set()
+    try:
+        response = requests.get("http://localhost:11434/api/tags", timeout=5)
+        if response.status_code == 200:
+            models = response.json().get('models', [])
+            for m in models:
+                name = m.get('name', '')
+                installed.add(name)
+                # Also add base name without tag
+                if ':' in name:
+                    installed.add(name.split(':')[0])
+    except Exception as e:
+        logger.debug(f"Could not fetch Ollama models: {e}")
+    return installed
+
+
+def install_ollama_model(model_name: str) -> bool:
+    """Install an Ollama model. Returns True if successful."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ollama", "pull", model_name],
+            capture_output=True,
+            text=True,
+            timeout=600  # 10 minute timeout for large models
+        )
+        return result.returncode == 0
+    except Exception as e:
+        logger.error(f"Failed to install model {model_name}: {e}")
+        return False
+
 
 def render_model_selector():
-    """Render the model selection sidebar."""
+    """Render the model selection sidebar with clear installed/available sections."""
     st.sidebar.header("🤖 Model Selection")
 
-    # Get available models
-    available_models = DocumentSummarizer.get_available_models()
+    # Get hardware info
+    try:
+        from cortex_engine.utils.smart_model_selector import detect_nvidia_gpu
+        has_nvidia, gpu_info = detect_nvidia_gpu()
+        available_vram = gpu_info.get("memory_total_gb", 0) if has_nvidia else 0
+    except Exception:
+        has_nvidia = False
+        available_vram = 0
 
-    # Initialize session state for model
-    if 'summarizer_model' not in st.session_state:
-        st.session_state.summarizer_model = DocumentSummarizer.get_recommended_model()
+    # Get actually installed models from Ollama
+    installed_models = get_installed_ollama_models()
 
-    # Build options list
-    model_options = []
-    model_labels = {}
+    # Categorize models
+    installed_ready = []  # Installed and can run
+    installed_heavy = []  # Installed but needs more VRAM
+    not_installed = []    # Not installed
 
-    for model_name, config in available_models.items():
-        status = config.get("status", "unknown")
-        tier = config.get("tier", "unknown")
-        vram = config.get("vram_gb", 0)
-        desc = config.get("description", "")
-        multimodal = config.get("multimodal", False)
+    recommended_model = None
 
-        # Create label with status indicator
-        if status == "ready":
-            icon = "✅"
-            status_text = ""
-        elif status == "not_installed":
-            icon = "📥"
-            status_text = " (not installed)"
-        else:
-            icon = "⚠️"
-            status_text = " (needs more VRAM)"
+    for model_name, config in SUMMARIZER_MODELS.items():
+        vram_needed = config.get("vram_gb", 0)
+        can_run = available_vram >= vram_needed if has_nvidia else vram_needed <= 4.0
 
-        vision_tag = " 👁️" if multimodal else ""
-        label = f"{icon} {model_name}{vision_tag} - {vram}GB{status_text}"
-        model_options.append(model_name)
-        model_labels[model_name] = label
+        # Check if installed (check both full name and base name)
+        base_name = model_name.split(':')[0]
+        is_installed = model_name in installed_models or base_name in installed_models
 
-    # Model selector
-    current_model = st.session_state.summarizer_model
-    if current_model not in model_options:
-        current_model = model_options[0] if model_options else "mistral:latest"
+        model_info = {
+            "name": model_name,
+            "config": config,
+            "can_run": can_run,
+            "is_installed": is_installed
+        }
 
-    selected_model = st.sidebar.selectbox(
-        "Choose Model:",
-        options=model_options,
-        format_func=lambda x: model_labels.get(x, x),
-        index=model_options.index(current_model) if current_model in model_options else 0,
-        key="model_selector_dropdown",
-        help="Select the LLM model for summarization and Q&A"
-    )
-
-    # Show model details
-    if selected_model in available_models:
-        config = available_models[selected_model]
-        with st.sidebar.expander("📋 Model Details", expanded=False):
-            st.markdown(f"**Description:** {config.get('description', 'N/A')}")
-            st.markdown(f"**VRAM Required:** {config.get('vram_gb', 0)}GB")
-            st.markdown(f"**Context Window:** {config.get('context_window', 'N/A'):,} tokens")
-            st.markdown(f"**Tier:** {config.get('tier', 'unknown').title()}")
-            if config.get('multimodal'):
-                st.markdown("**Vision:** Yes - can analyze images in documents")
-
-            status = config.get("status")
-            if status == "not_installed":
-                st.warning(f"⚠️ Model not installed. Run: `ollama pull {selected_model}`")
-            elif status == "insufficient_vram":
-                st.warning(f"⚠️ Your GPU has {config.get('available_vram', 0):.1f}GB, model needs {config.get('vram_gb', 0)}GB")
-
-    # Apply model change
-    if selected_model != st.session_state.summarizer_model:
-        st.session_state.summarizer_model = selected_model
-        st.sidebar.success(f"✅ Model set to: {selected_model}")
-        # Clear any cached summarizer instance
-        if 'summarizer_instance' in st.session_state:
-            del st.session_state['summarizer_instance']
-
-    # Hardware info
-    with st.sidebar.expander("💻 Hardware Info", expanded=False):
-        try:
-            from cortex_engine.utils.smart_model_selector import detect_nvidia_gpu
-            has_nvidia, gpu_info = detect_nvidia_gpu()
-            if has_nvidia:
-                st.markdown(f"**GPU:** {gpu_info.get('device_name', 'Unknown')}")
-                st.markdown(f"**VRAM:** {gpu_info.get('memory_total_gb', 0):.1f}GB")
+        if is_installed:
+            if can_run:
+                installed_ready.append(model_info)
+                # Track best recommended model (prefer non-vision, highest tier that fits)
+                if not config.get("multimodal") and (
+                    recommended_model is None or
+                    config.get("vram_gb", 0) > SUMMARIZER_MODELS.get(recommended_model, {}).get("vram_gb", 0)
+                ):
+                    recommended_model = model_name
             else:
-                st.markdown("**GPU:** No NVIDIA GPU detected")
-                st.markdown("Using CPU-compatible models only")
-        except Exception as e:
-            st.markdown(f"Could not detect hardware: {e}")
+                installed_heavy.append(model_info)
+        else:
+            if can_run:  # Only show installable models that can actually run
+                not_installed.append(model_info)
 
-    return selected_model
+    # Initialize session state
+    if 'summarizer_model' not in st.session_state:
+        st.session_state.summarizer_model = recommended_model or (
+            installed_ready[0]["name"] if installed_ready else "mistral:latest"
+        )
+
+    # ============ INSTALLED & READY MODELS ============
+    if installed_ready:
+        st.sidebar.markdown("### ✅ Installed Models")
+
+        # Build options for dropdown
+        model_options = []
+        model_labels = {}
+
+        for m in installed_ready:
+            name = m["name"]
+            config = m["config"]
+            vram = config.get("vram_gb", 0)
+            vision = " 👁️" if config.get("multimodal") else ""
+            rec = " ⭐" if name == recommended_model else ""
+
+            label = f"{name}{vision} ({vram}GB){rec}"
+            model_options.append(name)
+            model_labels[name] = label
+
+        # Ensure current selection is valid
+        current = st.session_state.summarizer_model
+        if current not in model_options:
+            current = model_options[0]
+            st.session_state.summarizer_model = current
+
+        selected_model = st.sidebar.selectbox(
+            "Select model:",
+            options=model_options,
+            format_func=lambda x: model_labels.get(x, x),
+            index=model_options.index(current) if current in model_options else 0,
+            key="model_selector_main"
+        )
+
+        # Update session state
+        if selected_model != st.session_state.summarizer_model:
+            st.session_state.summarizer_model = selected_model
+
+        # Show selected model details
+        if selected_model in SUMMARIZER_MODELS:
+            config = SUMMARIZER_MODELS[selected_model]
+            st.sidebar.caption(f"📝 {config.get('description', '')}")
+            st.sidebar.caption(f"📊 Context: {config.get('context_window', 8192):,} tokens")
+
+        if recommended_model:
+            st.sidebar.info(f"⭐ **Recommended:** {recommended_model}")
+
+    else:
+        st.sidebar.warning("⚠️ No compatible models installed!")
+        selected_model = None
+
+    # ============ MODELS THAT NEED MORE VRAM ============
+    if installed_heavy:
+        with st.sidebar.expander(f"⚠️ Installed but need more VRAM ({len(installed_heavy)})", expanded=False):
+            for m in installed_heavy:
+                config = m["config"]
+                st.markdown(f"**{m['name']}** - needs {config.get('vram_gb', 0)}GB (you have {available_vram:.1f}GB)")
+
+    # ============ AVAILABLE TO INSTALL ============
+    if not_installed:
+        with st.sidebar.expander(f"📥 Available to Install ({len(not_installed)})", expanded=not installed_ready):
+            st.caption("These models can run on your hardware:")
+
+            for m in not_installed:
+                config = m["config"]
+                name = m["name"]
+                vram = config.get("vram_gb", 0)
+                vision = " 👁️" if config.get("multimodal") else ""
+                desc = config.get("description", "")
+
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.markdown(f"**{name}**{vision}")
+                    st.caption(f"{desc} ({vram}GB)")
+
+                with col2:
+                    # Install button with unique key
+                    if st.button("Install", key=f"install_{name}", use_container_width=True):
+                        with st.spinner(f"Installing {name}... This may take several minutes."):
+                            success = install_ollama_model(name)
+                            if success:
+                                st.success(f"✅ Installed {name}!")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Failed to install {name}")
+
+    # ============ HARDWARE INFO ============
+    with st.sidebar.expander("💻 Your Hardware", expanded=False):
+        if has_nvidia:
+            st.markdown(f"**GPU:** {gpu_info.get('device_name', 'Unknown')}")
+            st.markdown(f"**VRAM:** {available_vram:.1f}GB")
+        else:
+            st.markdown("**GPU:** None detected")
+            st.markdown("Running on CPU (limited to small models)")
+
+    return selected_model or "mistral:latest"
 
 
 def main():

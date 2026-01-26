@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "5.5.0"
+CORTEX_VERSION = "5.5.1"
 
 # Version details
 VERSION_INFO = {
     "major": 5,
     "minor": 5,
-    "patch": 0,
+    "patch": 1,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -26,21 +26,26 @@ VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-01-26",
     "release_name": "Document Summarizer Enhancement",
-    "description": "Document Summarizer with hardware-aware model selection and interactive Document Q&A feature.",
+    "description": "Document Summarizer with hardware-aware model selection, one-click model install, and interactive Document Q&A feature.",
     "breaking_changes": [],
     "new_features": [
         "Document Summarizer Model Selection: Choose from available local models based on hardware",
         "Document Q&A: Ask follow-up questions about documents after summarization",
         "Hardware detection for Document Summarizer with VRAM-aware model recommendations",
-        "Q&A history tracking within session for document conversations"
+        "Q&A history tracking within session for document conversations",
+        "One-click model installation from sidebar for models not yet installed"
     ],
     "improvements": [
-        "Document Summarizer shows model details including VRAM requirements and context window",
+        "Model selector now clearly separates Installed vs Available to Install",
+        "Only installed models appear in dropdown (prevents selection of missing models)",
+        "Recommended model marked with star icon based on hardware capabilities",
         "Processing status shows which model is being used for summarization",
         "Summary results include model used in metadata",
         "Context-aware Q&A uses relevant document sections for large documents"
     ],
-    "bug_fixes": [],
+    "bug_fixes": [
+        "Fixed model selector showing uninstalled models as selectable (caused LLM call failures)"
+    ],
     "performance": [
         "Q&A uses intelligent context selection for documents exceeding model context window",
         "Document content cached in session state for efficient Q&A"
