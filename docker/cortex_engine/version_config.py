@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "5.4.1"
+CORTEX_VERSION = "5.5.0"
 
 # Version details
 VERSION_INFO = {
     "major": 5,
-    "minor": 4,
-    "patch": 1,
+    "minor": 5,
+    "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,33 +25,25 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-01-26",
-    "release_name": "Database Health & Search Model Selection",
-    "description": "Database Health Check with orphan detection fix, Maintenance tab reorganization, and runtime model selection for Knowledge Search.",
+    "release_name": "Document Summarizer Enhancement",
+    "description": "Document Summarizer with hardware-aware model selection and interactive Document Q&A feature.",
     "breaking_changes": [],
     "new_features": [
-        "Database Health Check: Scan and fix orphaned log entries, collection issues",
-        "Knowledge Search Model Selector: Choose Qwen3-VL 2B/8B based on database compatibility",
-        "Auto-scan option on database import for clean portable transfers",
-        "Database dimension detection with compatibility warnings"
+        "Document Summarizer Model Selection: Choose from available local models based on hardware",
+        "Document Q&A: Ask follow-up questions about documents after summarization",
+        "Hardware detection for Document Summarizer with VRAM-aware model recommendations",
+        "Q&A history tracking within session for document conversations"
     ],
     "improvements": [
-        "Maintenance tab reorganized: 'Backups' renamed to 'Transfer', Health Check moved to Database tab",
-        "Removed duplicate Clean Start description and redundant recovery sections",
-        "Health Check results persist in session state with auto-rescan after fixes",
-        "Maintenance page shows actual embedding model from get_embedding_strategy()",
-        "Simplified Danger Zone section with helpful tip pointing to Health Check"
+        "Document Summarizer shows model details including VRAM requirements and context window",
+        "Processing status shows which model is being used for summarization",
+        "Summary results include model used in metadata",
+        "Context-aware Q&A uses relevant document sections for large documents"
     ],
-    "bug_fixes": [
-        "Fixed orphaned document detection: Now compares file paths (not hash vs UUID)",
-        "Fixed nested expander error in Database Health Check",
-        "Fixed Health Check not updating after Remove Orphaned Entries",
-        "Fixed Maintenance showing BAAI/bge-base instead of actual Qwen3-VL model",
-        "Fixed Knowledge Search model selector causing infinite loop",
-        "Fixed ChromaSettings scoping error in dimension detection"
-    ],
+    "bug_fixes": [],
     "performance": [
-        "Model size changes take effect without full page reload",
-        "Embedding info derived from config rather than stale strategy cache"
+        "Q&A uses intelligent context selection for documents exceeding model context window",
+        "Document content cached in session state for efficient Q&A"
     ]
 }
 

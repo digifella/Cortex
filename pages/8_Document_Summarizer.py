@@ -1,8 +1,9 @@
 # ## File: pages/14_Document_Summarizer.py
-# Version: v5.4.0
-# Date: 2025-08-28
+# Version: v5.5.0
+# Date: 2026-01-26
 # Purpose: Advanced Document Summarizer with multiple detail levels.
 #          Leverages Docling, LLM infrastructure, and intelligent chunking.
+#          NEW: Hardware-aware model selection and Document Q&A feature.
 
 import streamlit as st
 import sys
@@ -17,7 +18,9 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 # Import core modules
-from cortex_engine.document_summarizer import DocumentSummarizer, SummaryResult
+from cortex_engine.document_summarizer import (
+    DocumentSummarizer, SummaryResult, QAResult, SUMMARIZER_MODELS
+)
 from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 from cortex_engine.config_manager import ConfigManager
 
@@ -28,27 +31,130 @@ logger = get_logger(__name__)
 st.set_page_config(page_title="Document Summarizer", layout="wide", page_icon="📄")
 
 # Page metadata
-PAGE_VERSION = "v5.4.0"
+PAGE_VERSION = "v5.5.0"
+
+def render_model_selector():
+    """Render the model selection sidebar."""
+    st.sidebar.header("🤖 Model Selection")
+
+    # Get available models
+    available_models = DocumentSummarizer.get_available_models()
+
+    # Initialize session state for model
+    if 'summarizer_model' not in st.session_state:
+        st.session_state.summarizer_model = DocumentSummarizer.get_recommended_model()
+
+    # Build options list
+    model_options = []
+    model_labels = {}
+
+    for model_name, config in available_models.items():
+        status = config.get("status", "unknown")
+        tier = config.get("tier", "unknown")
+        vram = config.get("vram_gb", 0)
+        desc = config.get("description", "")
+        multimodal = config.get("multimodal", False)
+
+        # Create label with status indicator
+        if status == "ready":
+            icon = "✅"
+            status_text = ""
+        elif status == "not_installed":
+            icon = "📥"
+            status_text = " (not installed)"
+        else:
+            icon = "⚠️"
+            status_text = " (needs more VRAM)"
+
+        vision_tag = " 👁️" if multimodal else ""
+        label = f"{icon} {model_name}{vision_tag} - {vram}GB{status_text}"
+        model_options.append(model_name)
+        model_labels[model_name] = label
+
+    # Model selector
+    current_model = st.session_state.summarizer_model
+    if current_model not in model_options:
+        current_model = model_options[0] if model_options else "mistral:latest"
+
+    selected_model = st.sidebar.selectbox(
+        "Choose Model:",
+        options=model_options,
+        format_func=lambda x: model_labels.get(x, x),
+        index=model_options.index(current_model) if current_model in model_options else 0,
+        key="model_selector_dropdown",
+        help="Select the LLM model for summarization and Q&A"
+    )
+
+    # Show model details
+    if selected_model in available_models:
+        config = available_models[selected_model]
+        with st.sidebar.expander("📋 Model Details", expanded=False):
+            st.markdown(f"**Description:** {config.get('description', 'N/A')}")
+            st.markdown(f"**VRAM Required:** {config.get('vram_gb', 0)}GB")
+            st.markdown(f"**Context Window:** {config.get('context_window', 'N/A'):,} tokens")
+            st.markdown(f"**Tier:** {config.get('tier', 'unknown').title()}")
+            if config.get('multimodal'):
+                st.markdown("**Vision:** Yes - can analyze images in documents")
+
+            status = config.get("status")
+            if status == "not_installed":
+                st.warning(f"⚠️ Model not installed. Run: `ollama pull {selected_model}`")
+            elif status == "insufficient_vram":
+                st.warning(f"⚠️ Your GPU has {config.get('available_vram', 0):.1f}GB, model needs {config.get('vram_gb', 0)}GB")
+
+    # Apply model change
+    if selected_model != st.session_state.summarizer_model:
+        st.session_state.summarizer_model = selected_model
+        st.sidebar.success(f"✅ Model set to: {selected_model}")
+        # Clear any cached summarizer instance
+        if 'summarizer_instance' in st.session_state:
+            del st.session_state['summarizer_instance']
+
+    # Hardware info
+    with st.sidebar.expander("💻 Hardware Info", expanded=False):
+        try:
+            from cortex_engine.utils.smart_model_selector import detect_nvidia_gpu
+            has_nvidia, gpu_info = detect_nvidia_gpu()
+            if has_nvidia:
+                st.markdown(f"**GPU:** {gpu_info.get('device_name', 'Unknown')}")
+                st.markdown(f"**VRAM:** {gpu_info.get('memory_total_gb', 0):.1f}GB")
+            else:
+                st.markdown("**GPU:** No NVIDIA GPU detected")
+                st.markdown("Using CPU-compatible models only")
+        except Exception as e:
+            st.markdown(f"Could not detect hardware: {e}")
+
+    return selected_model
+
 
 def main():
     """Main Document Summarizer application."""
-    
+
     # Initialize session state
     if 'summarizer_results' not in st.session_state:
         st.session_state.summarizer_results = {}
-    
+
     if 'current_summary' not in st.session_state:
         st.session_state.current_summary = None
-    
+
+    if 'document_content' not in st.session_state:
+        st.session_state.document_content = None
+
+    if 'qa_history' not in st.session_state:
+        st.session_state.qa_history = []
+
+    # Render model selector in sidebar
+    selected_model = render_model_selector()
+
     # Header
     st.title("📄 Document Summarizer")
-    st.caption(f"Version: {PAGE_VERSION} • Advanced AI-powered document analysis with multiple detail levels")
+    st.caption(f"Version: {PAGE_VERSION} • Advanced AI-powered document analysis with model selection and Q&A")
     
     # Info section
     with st.expander("ℹ️ About Document Summarizer", expanded=False):
         st.markdown("""
         **Transform any document into clear, actionable summaries** using advanced AI analysis.
-        
+
         **✨ Features:**
         - **Multiple Detail Levels**: Choose from Highlights, Summary, or Detailed analysis
         - **Smart Processing**: Handles large documents with intelligent chunking
@@ -56,12 +162,15 @@ def main():
         - **Markdown Output**: Clean, structured summaries ready for use
         - **File Support**: PDF, DOCX, PPTX, XLSX, TXT files
         - **Integration Ready**: Works with anonymized documents from Document Anonymizer
-        
+        - **🆕 Model Selection**: Choose from available local models based on your hardware
+        - **🆕 Document Q&A**: Ask follow-up questions about the document after summarization
+
         **🎯 Perfect For:**
         - Executive briefings from lengthy reports
         - Key insights from research papers
         - Quick overviews of contracts and proposals
         - Structured analysis of meeting notes
+        - Deep-dive Q&A sessions with documents
         """)
     
     # Main interface
@@ -179,7 +288,7 @@ def main():
         
         # Process button
         if selected_file and st.button("🚀 Generate Summary", type="primary", use_container_width=True):
-            process_document(selected_file, summary_level)
+            process_document(selected_file, summary_level, selected_model)
     
     with col2:
         st.header("📊 Summary Results")
@@ -229,44 +338,45 @@ def main():
                 ```
                 """)
 
-def process_document(file_path: str, summary_level: str):
+def process_document(file_path: str, summary_level: str, model_name: str):
     """Process document and generate summary."""
-    
+
     # Check if this is a temporary uploaded file
     is_temp_file = "/tmp/" in file_path or "cortex_summaries" in file_path
-    
+
     # Initialize progress tracking with better visibility
     st.markdown("### 🔄 Processing Status")
     progress_container = st.container()
-    
+
     with progress_container:
         progress_bar = st.progress(0)
         status_text = st.empty()
         detail_text = st.empty()
-        
+
         # Add estimated time info
+        st.info(f"🤖 **Using model:** {model_name}")
         st.info("⏱️ **Estimated processing time:** Small docs (30-60s), Large docs (2-5 mins)")
         st.info("💡 **Tip:** For very large documents, try 'Highlights' level first - it's faster and more reliable!")
-    
+
     def progress_callback(message: str, percent: float):
         progress_bar.progress(percent / 100)
         status_text.markdown(f"**🔄 {message}**")
-        
+
         # Add helpful details based on progress stage
         if percent < 30:
             detail_text.text("📖 Reading and extracting text from document...")
         elif percent < 50:
             detail_text.text("🧮 Analyzing document structure and content...")
         elif percent < 85:
-            detail_text.text("🤖 AI is generating your summary (loading model to GPU if needed)...")
+            detail_text.text(f"🤖 AI ({model_name}) is generating your summary...")
         else:
             detail_text.text("✨ Finalizing summary format and preparing results...")
-    
+
     try:
-        # Initialize summarizer
-        status_text.markdown("**🚀 Initializing document summarizer...**")
-        summarizer = DocumentSummarizer()
-        
+        # Initialize summarizer with selected model
+        status_text.markdown(f"**🚀 Initializing document summarizer with {model_name}...**")
+        summarizer = DocumentSummarizer(model_name=model_name)
+
         # Process document - remove the spinner since we have detailed progress
         result = summarizer.summarize_document(
             file_path=file_path,
@@ -281,14 +391,18 @@ def process_document(file_path: str, summary_level: str):
         if result.success:
             # Store result in session state
             st.session_state.current_summary = result
-            
+            # Store document content for Q&A
+            st.session_state.document_content = result.document_content
+            # Clear Q&A history for new document
+            st.session_state.qa_history = []
+
             # Success message
             st.success(f"✅ Summary generated successfully!")
-            st.info(f"📊 Processed {result.word_count:,} words in {result.processing_time:.1f} seconds")
-            
+            st.info(f"📊 Processed {result.word_count:,} words in {result.processing_time:.1f} seconds using {model_name}")
+
             # Log successful processing
-            logger.info(f"Document summarized successfully: {result.metadata.get('filename', 'unknown')} ({summary_level} level)")
-            
+            logger.info(f"Document summarized successfully: {result.metadata.get('filename', 'unknown')} ({summary_level} level) with {model_name}")
+
         else:
             st.error(f"❌ Summarization failed: {result.error}")
             logger.error(f"Document summarization failed: {result.error}")
@@ -309,44 +423,46 @@ def process_document(file_path: str, summary_level: str):
                 logger.warning(f"Failed to cleanup temp file {file_path}: {cleanup_error}")
 
 def display_summary_results(result: SummaryResult):
-    """Display the summary results with download options."""
-    
+    """Display the summary results with download options and Q&A."""
+
     # Metadata display
     metadata = result.metadata
-    
-    col1, col2, col3 = st.columns(3)
+
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("📄 Document", metadata.get('filename', 'Unknown'))
     with col2:
         st.metric("📊 Words", f"{result.word_count:,}")
     with col3:
         st.metric("⏱️ Processing", f"{result.processing_time:.1f}s")
-    
+    with col4:
+        st.metric("🤖 Model", metadata.get('model_used', 'Unknown').split(':')[0])
+
     # Summary level indicator
     level_icons = {
         'highlights': '📋 Highlights Only',
         'summary': '📄 Summary',
         'detailed': '📖 Detailed Analysis'
     }
-    
+
     st.subheader(f"{level_icons.get(metadata.get('summary_level', 'summary'), '📄 Summary')}")
-    
+
     # Display the summary
     st.markdown(result.summary)
-    
+
     # Download options
     st.subheader("💾 Download Options")
-    
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
         # Generate filename for download
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base_name = Path(metadata.get('filename', 'document')).stem
         summary_level = metadata.get('summary_level', 'summary')
-        
+
         download_filename = f"{base_name}_{summary_level}_{timestamp}.md"
-        
+
         st.download_button(
             label="📥 Download as Markdown",
             data=result.summary,
@@ -354,12 +470,67 @@ def display_summary_results(result: SummaryResult):
             mime="text/markdown",
             use_container_width=True
         )
-    
+
     with col2:
         # Copy to clipboard button (using st.code for easy copying)
         if st.button("📋 Show Raw Markdown", use_container_width=True):
             st.code(result.summary, language="markdown")
-    
+
+    # ==================== NEW: Document Q&A Section ====================
+    st.divider()
+    st.subheader("💬 Ask Questions About This Document")
+    st.caption("Ask follow-up questions about the document content. The AI will answer based only on what's in the document.")
+
+    # Q&A input
+    question = st.text_input(
+        "Your question:",
+        placeholder="e.g., What are the main conclusions? Who are the key stakeholders?",
+        key="qa_question_input"
+    )
+
+    col_ask, col_clear = st.columns([3, 1])
+    with col_ask:
+        ask_button = st.button("🔍 Ask Question", type="primary", use_container_width=True, disabled=not question)
+    with col_clear:
+        if st.button("🗑️ Clear History", use_container_width=True):
+            st.session_state.qa_history = []
+            st.rerun()
+
+    # Process question
+    if ask_button and question:
+        with st.spinner(f"🤖 Thinking with {st.session_state.get('summarizer_model', 'AI')}..."):
+            try:
+                summarizer = DocumentSummarizer(model_name=st.session_state.get('summarizer_model'))
+                qa_result = summarizer.query_document(
+                    question=question,
+                    document_content=st.session_state.get('document_content'),
+                    summary=result.summary
+                )
+
+                if qa_result.success:
+                    # Add to history
+                    st.session_state.qa_history.append({
+                        'question': question,
+                        'answer': qa_result.answer,
+                        'time': qa_result.processing_time
+                    })
+                    st.rerun()
+                else:
+                    st.error(f"❌ Could not answer: {qa_result.error}")
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+
+    # Display Q&A history
+    if st.session_state.get('qa_history'):
+        st.markdown("---")
+        st.markdown("**📜 Q&A History:**")
+        for i, qa in enumerate(reversed(st.session_state.qa_history)):
+            with st.container():
+                st.markdown(f"**Q{len(st.session_state.qa_history) - i}:** {qa['question']}")
+                st.markdown(qa['answer'])
+                st.caption(f"⏱️ {qa['time']:.1f}s")
+                st.markdown("---")
+
     # Processing details
     with st.expander("📊 Processing Details", expanded=False):
         st.json({
@@ -373,25 +544,27 @@ def display_summary_results(result: SummaryResult):
                 "Summary Level": metadata.get('summary_level'),
                 "Processing Time": f"{result.processing_time:.2f} seconds",
                 "Word Count": result.word_count,
-                "Model Used": "mistral-small3.2"
+                "Model Used": metadata.get('model_used', 'Unknown')
             }
         })
-    
+
     # Action buttons
     st.subheader("🔄 Actions")
     col1, col2, col3 = st.columns(3)
-    
+
     with col1:
         if st.button("🔄 Process Another Level", use_container_width=True):
             st.session_state.current_summary = None
             st.rerun()
-    
+
     with col2:
         if st.button("📄 New Document", use_container_width=True):
             st.session_state.current_summary = None
             st.session_state.summarizer_results = {}
+            st.session_state.document_content = None
+            st.session_state.qa_history = []
             st.rerun()
-    
+
     with col3:
         # Option to save to knowledge base (future feature)
         st.button("💾 Save to Knowledge Base", use_container_width=True, disabled=True, help="Coming soon: Save summaries directly to your knowledge base")

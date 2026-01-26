@@ -1,15 +1,17 @@
 # ## File: cortex_engine/document_summarizer.py
-# Version: 1.0.0
-# Date: 2025-08-28
+# Version: 2.0.0
+# Date: 2026-01-26
 # Purpose: Advanced document summarization engine for Cortex Suite.
 #          Leverages existing document processing and LLM infrastructure.
+#          NEW: Hardware-aware model selection and Document Q&A feature.
 
 import os
 import json
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
+import requests
 
 from .utils import get_logger
 from .config import get_model_config_for_task, PROPOSAL_LLM_MODEL
@@ -17,6 +19,61 @@ from .docling_reader import DoclingDocumentReader, DOCLING_AVAILABLE
 
 # Set up logging
 logger = get_logger(__name__)
+
+# Model configurations with VRAM requirements and descriptions
+SUMMARIZER_MODELS = {
+    "mistral:latest": {
+        "vram_gb": 4.0,
+        "description": "Efficient 7B model, good for quick summaries",
+        "tier": "efficient",
+        "context_window": 8192
+    },
+    "llama3.2:3b": {
+        "vram_gb": 2.0,
+        "description": "Compact 3B model, fast but basic",
+        "tier": "basic",
+        "context_window": 8192
+    },
+    "llama3.2:11b": {
+        "vram_gb": 8.0,
+        "description": "Balanced 11B model, good quality",
+        "tier": "balanced",
+        "context_window": 8192
+    },
+    "mistral-small3.2": {
+        "vram_gb": 20.0,
+        "description": "Powerful 22B model, best quality summaries",
+        "tier": "powerful",
+        "context_window": 32768
+    },
+    "llava:7b": {
+        "vram_gb": 4.5,
+        "description": "Vision-language model, can analyze document images",
+        "tier": "vision",
+        "context_window": 4096,
+        "multimodal": True
+    },
+    "llava:13b": {
+        "vram_gb": 8.0,
+        "description": "Larger vision model, better image understanding",
+        "tier": "vision",
+        "context_window": 4096,
+        "multimodal": True
+    },
+    "qwen2.5:7b": {
+        "vram_gb": 5.0,
+        "description": "Qwen 7B, excellent for structured analysis",
+        "tier": "balanced",
+        "context_window": 32768
+    },
+    "qwen2.5:14b": {
+        "vram_gb": 10.0,
+        "description": "Qwen 14B, high quality outputs",
+        "tier": "powerful",
+        "context_window": 32768
+    }
+}
+
 
 @dataclass
 class SummaryResult:
@@ -28,24 +85,47 @@ class SummaryResult:
     processing_time: float = 0.0
     word_count: int = 0
     page_count: int = 0
+    document_content: str = ""  # Store for Q&A feature
+
+
+@dataclass
+class QAResult:
+    """Container for Q&A results"""
+    success: bool
+    answer: str
+    question: str
+    context_used: str = ""
+    error: Optional[str] = None
+    processing_time: float = 0.0
 
 class DocumentSummarizer:
     """
     Advanced document summarization engine using Cortex Suite's LLM infrastructure.
-    
+
     Features:
     - Multiple summary levels (Highlights, Summary, Detailed)
     - Smart document chunking for large files
     - Integration with Docling for superior text extraction
     - Markdown-formatted output
     - Progress tracking for long operations
+    - NEW: Hardware-aware model selection
+    - NEW: Document Q&A for follow-up questions
     """
-    
-    def __init__(self):
-        """Initialize the document summarizer."""
-        # Use the same model as proposals for consistency
-        self.model_name = PROPOSAL_LLM_MODEL
-        
+
+    def __init__(self, model_name: Optional[str] = None):
+        """
+        Initialize the document summarizer.
+
+        Args:
+            model_name: Optional model name override. If None, uses PROPOSAL_LLM_MODEL.
+        """
+        # Use provided model or default
+        self.model_name = model_name or PROPOSAL_LLM_MODEL
+
+        # Store document content for Q&A
+        self._current_document_content = ""
+        self._current_document_metadata = {}
+
         # Initialize document reader
         if DOCLING_AVAILABLE:
             self.document_reader = DoclingDocumentReader(
@@ -56,6 +136,95 @@ class DocumentSummarizer:
         else:
             self.document_reader = None
             logger.warning("⚠️ Docling not available, using fallback text extraction")
+
+    def set_model(self, model_name: str):
+        """
+        Change the model used for summarization.
+
+        Args:
+            model_name: Name of the Ollama model to use
+        """
+        self.model_name = model_name
+        logger.info(f"📦 Model changed to: {model_name}")
+
+    @staticmethod
+    def get_available_models() -> Dict[str, Dict[str, Any]]:
+        """
+        Get list of available models based on hardware capabilities.
+
+        Returns:
+            Dict of model configurations that can run on current hardware
+        """
+        try:
+            from cortex_engine.utils.smart_model_selector import detect_nvidia_gpu
+            has_nvidia, gpu_info = detect_nvidia_gpu()
+        except ImportError:
+            has_nvidia = False
+            gpu_info = {}
+
+        available_vram = 0
+        if has_nvidia:
+            available_vram = gpu_info.get("memory_total_gb", 0)
+
+        # Check which models are actually installed in Ollama
+        installed_models = set()
+        try:
+            response = requests.get("http://localhost:11434/api/tags", timeout=5)
+            if response.status_code == 200:
+                models = response.json().get('models', [])
+                installed_models = {m['name'].split(':')[0] for m in models}
+                # Also include full names
+                installed_models.update({m['name'] for m in models})
+        except Exception as e:
+            logger.debug(f"Could not fetch Ollama models: {e}")
+
+        available = {}
+        for model_name, config in SUMMARIZER_MODELS.items():
+            # Check if hardware can run this model
+            can_run = available_vram >= config["vram_gb"] if has_nvidia else config["vram_gb"] <= 4.0
+
+            # Check if model is installed
+            base_model = model_name.split(':')[0]
+            is_installed = model_name in installed_models or base_model in installed_models
+
+            available[model_name] = {
+                **config,
+                "can_run": can_run,
+                "is_installed": is_installed,
+                "available_vram": available_vram,
+                "status": "ready" if (can_run and is_installed) else (
+                    "not_installed" if not is_installed else "insufficient_vram"
+                )
+            }
+
+        return available
+
+    @staticmethod
+    def get_recommended_model() -> str:
+        """
+        Get the recommended model based on available hardware.
+
+        Returns:
+            Model name string
+        """
+        available = DocumentSummarizer.get_available_models()
+
+        # Find best ready model by tier preference
+        tier_priority = ["powerful", "balanced", "efficient", "basic"]
+
+        for tier in tier_priority:
+            for model_name, config in available.items():
+                if config["status"] == "ready" and config.get("tier") == tier:
+                    if not config.get("multimodal"):  # Prefer text models for summarization
+                        return model_name
+
+        # Fallback to any ready model
+        for model_name, config in available.items():
+            if config["status"] == "ready":
+                return model_name
+
+        # Ultimate fallback
+        return PROPOSAL_LLM_MODEL
     
     def _call_llm(self, prompt: str, max_tokens: int = 4000, temperature: float = 0.3) -> str:
         """Call LLM using Ollama API with GPU optimization."""
@@ -252,20 +421,26 @@ class DocumentSummarizer:
                 progress_callback("Finalizing...", 90)
             
             processing_time = time.time() - start_time
-            
+
+            # Store document content for Q&A feature
+            self._current_document_content = document_content
+            self._current_document_metadata = metadata
+
             return SummaryResult(
                 success=True,
                 summary=summary,
                 metadata={
                     **metadata,
                     'summary_level': summary_level,
-                    'processing_time_seconds': round(processing_time, 2)
+                    'processing_time_seconds': round(processing_time, 2),
+                    'model_used': self.model_name
                 },
                 processing_time=processing_time,
                 word_count=word_count,
-                page_count=estimated_pages
+                page_count=estimated_pages,
+                document_content=document_content  # Include for session state storage
             )
-            
+
         except Exception as e:
             logger.error(f"Document summarization failed: {e}")
             return SummaryResult(
@@ -275,6 +450,172 @@ class DocumentSummarizer:
                 error=str(e),
                 processing_time=time.time() - start_time
             )
+
+    def query_document(
+        self,
+        question: str,
+        document_content: Optional[str] = None,
+        summary: Optional[str] = None,
+        progress_callback: Optional[callable] = None
+    ) -> QAResult:
+        """
+        Answer a question about the document.
+
+        Args:
+            question: User's question about the document
+            document_content: Optional document content (uses stored if not provided)
+            summary: Optional summary to include for context
+            progress_callback: Optional callback for progress updates
+
+        Returns:
+            QAResult with the answer
+        """
+        import time
+        start_time = time.time()
+
+        # Use stored content if not provided
+        content = document_content or self._current_document_content
+        if not content:
+            return QAResult(
+                success=False,
+                answer="",
+                question=question,
+                error="No document content available. Please summarize a document first."
+            )
+
+        if progress_callback:
+            progress_callback("Preparing context...", 10)
+
+        try:
+            # Get model's context window
+            model_config = SUMMARIZER_MODELS.get(self.model_name, {})
+            context_window = model_config.get("context_window", 8192)
+
+            # Estimate tokens (rough: 1 word ≈ 1.3 tokens)
+            max_content_tokens = int(context_window * 0.7)  # Reserve 30% for prompt and answer
+            max_content_words = int(max_content_tokens / 1.3)
+
+            # Prepare context - prioritize relevant sections
+            context = self._prepare_qa_context(content, question, max_content_words, summary)
+
+            if progress_callback:
+                progress_callback("Generating answer...", 30)
+
+            # Create Q&A prompt
+            prompt = self._create_qa_prompt(question, context, summary)
+
+            # Call LLM
+            answer = self._call_llm(
+                prompt=prompt,
+                max_tokens=2000,
+                temperature=0.3
+            )
+
+            if progress_callback:
+                progress_callback("Finalizing...", 90)
+
+            processing_time = time.time() - start_time
+
+            return QAResult(
+                success=True,
+                answer=answer.strip(),
+                question=question,
+                context_used=context[:500] + "..." if len(context) > 500 else context,
+                processing_time=processing_time
+            )
+
+        except Exception as e:
+            logger.error(f"Document Q&A failed: {e}")
+            return QAResult(
+                success=False,
+                answer="",
+                question=question,
+                error=str(e),
+                processing_time=time.time() - start_time
+            )
+
+    def _prepare_qa_context(
+        self,
+        content: str,
+        question: str,
+        max_words: int,
+        summary: Optional[str] = None
+    ) -> str:
+        """
+        Prepare relevant context from document for Q&A.
+
+        Uses simple keyword matching to find relevant sections.
+        """
+        words = content.split()
+
+        # If content fits, use it all
+        if len(words) <= max_words:
+            return content
+
+        # Extract keywords from question (simple approach)
+        question_words = set(
+            word.lower().strip('?.,!') for word in question.split()
+            if len(word) > 3
+        )
+
+        # Split into paragraphs and score by relevance
+        paragraphs = content.split('\n\n')
+        scored_paragraphs = []
+
+        for para in paragraphs:
+            if not para.strip():
+                continue
+            para_words = set(word.lower() for word in para.split())
+            score = len(question_words & para_words)
+            scored_paragraphs.append((score, para))
+
+        # Sort by score (highest first)
+        scored_paragraphs.sort(reverse=True, key=lambda x: x[0])
+
+        # Build context from most relevant paragraphs
+        context_parts = []
+        current_words = 0
+
+        # Always include summary if available
+        if summary:
+            context_parts.append(f"DOCUMENT SUMMARY:\n{summary}\n\n---\n")
+            current_words += len(summary.split())
+
+        context_parts.append("RELEVANT DOCUMENT SECTIONS:\n")
+
+        for score, para in scored_paragraphs:
+            para_words = len(para.split())
+            if current_words + para_words > max_words:
+                break
+            context_parts.append(para)
+            current_words += para_words
+
+        return '\n\n'.join(context_parts)
+
+    def _create_qa_prompt(
+        self,
+        question: str,
+        context: str,
+        summary: Optional[str] = None
+    ) -> str:
+        """Create prompt for document Q&A."""
+        return f"""You are a helpful document analyst. Answer the user's question based ONLY on the provided document content. If the answer cannot be found in the document, say so clearly.
+
+DOCUMENT CONTEXT:
+---
+{context}
+---
+
+USER QUESTION: {question}
+
+INSTRUCTIONS:
+- Answer based ONLY on information in the document above
+- Be specific and cite relevant parts of the document
+- If the document doesn't contain the answer, say "This information is not found in the document"
+- Keep your answer focused and concise
+- Use markdown formatting for clarity
+
+ANSWER:"""
     
     def _extract_document_content(self, file_path: str) -> Tuple[str, Dict[str, Any]]:
         """Extract text content from document using available readers."""
