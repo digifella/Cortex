@@ -377,10 +377,98 @@ class BatchState:
         """Get set of already processed files from ingested_files.log"""
         if not self.processed_log.exists():
             return set()
-            
+
         try:
             with open(self.processed_log, 'r') as f:
                 data = json.load(f)
                 return set(data.keys())
         except (json.JSONDecodeError, IOError):
             return set()
+
+
+def clear_all_ingestion_state(db_path: str) -> Dict[str, any]:
+    """
+    Clear ALL ingestion state for a clean slate.
+
+    Call this after importing a database to remove stale state from previous
+    ingest attempts that don't apply to the imported database.
+
+    Clears:
+    - batch_state.json (batch processing state)
+    - staging_ingestion.json (staged documents awaiting finalization)
+
+    Args:
+        db_path: Path to the AI database directory
+
+    Returns:
+        Dict with cleanup results
+    """
+    results = {
+        "batch_state_cleared": False,
+        "staging_cleared": False,
+        "errors": []
+    }
+
+    db_path = Path(db_path)
+
+    # Clear batch state
+    batch_state_file = db_path / "batch_state.json"
+    if batch_state_file.exists():
+        try:
+            batch_state_file.unlink()
+            results["batch_state_cleared"] = True
+            logger.info(f"Cleared batch state: {batch_state_file}")
+        except Exception as e:
+            # Try WSL workaround
+            if _is_wsl_env() and str(batch_state_file).startswith("/mnt/"):
+                try:
+                    win_path = subprocess.run(
+                        ["wslpath", "-w", str(batch_state_file)],
+                        capture_output=True, text=True, check=True
+                    ).stdout.strip()
+                    subprocess.run([
+                        "powershell.exe", "-NoProfile", "-Command",
+                        f'Remove-Item -Path "{win_path}" -Force'
+                    ], check=True)
+                    results["batch_state_cleared"] = True
+                    logger.info(f"Cleared batch state via PowerShell: {batch_state_file}")
+                except Exception as wsl_e:
+                    results["errors"].append(f"Failed to clear batch state: {wsl_e}")
+                    logger.warning(f"Failed to clear batch state: {wsl_e}")
+            else:
+                results["errors"].append(f"Failed to clear batch state: {e}")
+                logger.warning(f"Failed to clear batch state: {e}")
+    else:
+        results["batch_state_cleared"] = True  # Nothing to clear
+
+    # Clear staging file
+    staging_file = db_path / "staging_ingestion.json"
+    if staging_file.exists():
+        try:
+            staging_file.unlink()
+            results["staging_cleared"] = True
+            logger.info(f"Cleared staging file: {staging_file}")
+        except Exception as e:
+            # Try WSL workaround
+            if _is_wsl_env() and str(staging_file).startswith("/mnt/"):
+                try:
+                    win_path = subprocess.run(
+                        ["wslpath", "-w", str(staging_file)],
+                        capture_output=True, text=True, check=True
+                    ).stdout.strip()
+                    subprocess.run([
+                        "powershell.exe", "-NoProfile", "-Command",
+                        f'Remove-Item -Path "{win_path}" -Force'
+                    ], check=True)
+                    results["staging_cleared"] = True
+                    logger.info(f"Cleared staging file via PowerShell: {staging_file}")
+                except Exception as wsl_e:
+                    results["errors"].append(f"Failed to clear staging file: {wsl_e}")
+                    logger.warning(f"Failed to clear staging file: {wsl_e}")
+            else:
+                results["errors"].append(f"Failed to clear staging file: {e}")
+                logger.warning(f"Failed to clear staging file: {e}")
+    else:
+        results["staging_cleared"] = True  # Nothing to clear
+
+    return results

@@ -1,5 +1,5 @@
 # ## File: pages/6_Maintenance.py
-# Version: v5.4.0
+# Version: v5.6.0
 # Date: 2026-01-17
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -32,7 +32,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v5.4.0"
+PAGE_VERSION = "v5.6.0"
 
 # Import Cortex modules
 try:
@@ -1795,6 +1795,19 @@ def display_backup_management():
                             if success:
                                 st.success(f"✅ {message}")
 
+                                # CRITICAL: Clear stale ingestion state from previous ingest attempts
+                                # This prevents the UI from showing batch progress from a different database
+                                try:
+                                    from cortex_engine.batch_manager import clear_all_ingestion_state
+                                    cleanup_result = clear_all_ingestion_state(db_path)
+                                    if cleanup_result["batch_state_cleared"] or cleanup_result["staging_cleared"]:
+                                        st.info("🧹 Cleared stale ingestion state from previous database")
+                                    if cleanup_result["errors"]:
+                                        for err in cleanup_result["errors"]:
+                                            st.warning(f"⚠️ Cleanup warning: {err}")
+                                except Exception as cleanup_e:
+                                    st.warning(f"⚠️ Could not clear ingestion state: {cleanup_e}")
+
                                 # Run auto-scan and fix if enabled
                                 if auto_scan_fix:
                                     status_text.text("🔍 Scanning database for inconsistencies...")
@@ -1828,10 +1841,22 @@ def display_backup_management():
 
                                 st.info("🔄 Embedding model has been auto-configured. Refresh the page to use the imported database.")
 
-                                # Clear session state
+                                # Clear all relevant session state for clean slate
                                 st.session_state.import_validated = False
-                                if 'model_info_cache' in st.session_state:
-                                    del st.session_state.model_info_cache
+                                # Clear model caches
+                                for key in ['model_info_cache', 'available_models_cache']:
+                                    if key in st.session_state:
+                                        del st.session_state[key]
+                                # Clear ingestion-related session state
+                                ingest_keys_to_clear = [
+                                    'ingestion_process', 'ingestion_running', 'batch_status',
+                                    'current_throttle_delay', 'last_progress_update',
+                                    'ingestion_output', 'process_output_queue'
+                                ]
+                                for key in ingest_keys_to_clear:
+                                    if key in st.session_state:
+                                        del st.session_state[key]
+                                st.info("🧹 Session state cleared - Knowledge Ingest will show fresh state")
                             else:
                                 st.error(f"❌ {message}")
 
