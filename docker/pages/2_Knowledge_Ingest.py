@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v5.4.0
+# Version: v5.6.0
 # Date: 2026-01-23
 # Purpose: GUI for knowledge base ingestion.
 #          - FEATURE (v5.1.0): Added Qwen3-VL multimodal embedding status and
@@ -263,6 +263,10 @@ def build_ingestion_command(container_db_path, files_to_process, target_collecti
     default_throttle = 2.0 if _is_wsl_env() else 0.5
     throttle_delay = st.session_state.get("throttle_delay", default_throttle)
     command.extend(["--throttle-delay", str(throttle_delay)])
+
+    # Add GPU intensity control (affects batch size and inter-batch delays)
+    gpu_intensity = st.session_state.get("gpu_intensity", 75)
+    command.extend(["--gpu-intensity", str(gpu_intensity)])
 
     # Apply conservative runtime stability defaults automatically on WSL
     if _is_wsl_env():
@@ -2110,47 +2114,110 @@ def render_sidebar_model_config():
     # =========================================================================
     st.sidebar.markdown("### Embedding Model")
 
+    # CRITICAL: Check database embedding dimension to prevent corruption
+    from cortex_engine.utils.embedding_validator import get_compatible_qwen3vl_sizes
+    db_path = st.session_state.get('db_path', '')
+    db_compat = get_compatible_qwen3vl_sizes(db_path) if db_path else {
+        "is_new_database": True,
+        "compatible_sizes": ["2B", "8B"],
+        "incompatible_sizes": [],
+        "database_dimension": None,
+        "warning_message": None,
+    }
+
     if qwen3vl_active:
         # ----- QWEN3-VL ACTIVE: Show unified Qwen3-VL controls -----
         st.sidebar.success("✅ **Qwen3-VL Multimodal**")
 
-        # Interactive model size selector
-        size_options = ["auto", "2B", "8B"]
-        size_labels = {
-            "auto": "Auto (based on VRAM)",
-            "2B": "2B (5GB VRAM, 2048 dims)",
-            "8B": "8B (16GB VRAM, 4096 dims)",
-        }
+        # Show database dimension status
+        if not db_compat["is_new_database"]:
+            st.sidebar.info(f"📊 Database: {db_compat['database_dimension']}D embeddings")
 
-        current_size = QWEN3_VL_MODEL_SIZE
-        try:
-            current_index = size_options.index(current_size)
-        except ValueError:
-            current_index = 0
-
-        selected_size = st.sidebar.selectbox(
-            "Model Size:",
-            options=size_options,
-            index=current_index,
-            format_func=lambda x: size_labels.get(x, x),
-            key="qwen3_vl_size_selector",
-            help="Select embedding model size. 2B works on most GPUs (5GB+), 8B requires 16GB+ VRAM."
-        )
-
-        # Show dimensions for the SELECTED size (what user will get after Apply)
+        # Filter model sizes based on database compatibility
+        all_sizes = ["2B", "8B"]
         size_to_dims = {"2B": 2048, "8B": 4096}
-        if selected_size in size_to_dims:
-            display_dims = size_to_dims[selected_size]
-        elif selected_size == "auto":
-            # For "auto", show what the GPU would select
-            vram_gb = gpu_info.get('memory_total_gb', 0)
-            display_dims = 4096 if vram_gb >= 16 else 2048
-        else:
-            display_dims = 2048  # fallback
-        st.sidebar.caption(f"**Dimensions**: {display_dims}")
 
-        # Show apply button if size changed
-        if selected_size != current_size:
+        if db_compat["is_new_database"]:
+            # New database - all sizes available, include auto
+            size_options = ["auto", "2B", "8B"]
+            size_labels = {
+                "auto": "Auto (based on VRAM)",
+                "2B": "2B (5GB VRAM, 2048 dims)",
+                "8B": "8B (16GB VRAM, 4096 dims)",
+            }
+        else:
+            # Existing database - only show compatible sizes
+            size_options = db_compat["compatible_sizes"]
+            size_labels = {}
+            for size in all_sizes:
+                if size in db_compat["compatible_sizes"]:
+                    size_labels[size] = f"{size} ({size_to_dims[size]} dims) ✓ Compatible"
+                else:
+                    size_labels[size] = f"{size} ({size_to_dims[size]} dims) ❌ Incompatible"
+
+            # Show warning about restricted options
+            if db_compat["warning_message"]:
+                st.sidebar.warning(f"⚠️ {db_compat['warning_message']}")
+
+        # Handle case where no compatible sizes exist
+        if not size_options:
+            st.sidebar.error("❌ No compatible Qwen3-VL models for this database!")
+            st.sidebar.caption(f"Database dimension: {db_compat['database_dimension']}")
+            st.sidebar.caption("You may need to rebuild the database or use a different embedding model.")
+            selected_size = None
+        else:
+            current_size = QWEN3_VL_MODEL_SIZE
+
+            # Ensure current size is in options, or default to first compatible
+            if current_size not in size_options:
+                if "auto" in size_options:
+                    current_size = "auto"
+                else:
+                    current_size = size_options[0]
+                    st.sidebar.warning(f"⚠️ Switched to {current_size} (previous selection incompatible)")
+
+            try:
+                current_index = size_options.index(current_size)
+            except ValueError:
+                current_index = 0
+
+            selected_size = st.sidebar.selectbox(
+                "Model Size:",
+                options=size_options,
+                index=current_index,
+                format_func=lambda x: size_labels.get(x, x),
+                key="qwen3_vl_size_selector",
+                help="Only models matching the database dimension are shown to prevent corruption."
+            )
+
+            # Show dimensions for the SELECTED size (what user will get after Apply)
+            if selected_size in size_to_dims:
+                display_dims = size_to_dims[selected_size]
+            elif selected_size == "auto":
+                # For "auto", show what the GPU would select
+                vram_gb = gpu_info.get('memory_total_gb', 0)
+                display_dims = 4096 if vram_gb >= 16 else 2048
+            else:
+                display_dims = 2048  # fallback
+            st.sidebar.caption(f"**Dimensions**: {display_dims}")
+
+            # Validate selected size against database before allowing apply
+            selected_dims = size_to_dims.get(selected_size)
+            if selected_size == "auto":
+                vram_gb = gpu_info.get('memory_total_gb', 0)
+                selected_dims = 4096 if vram_gb >= 16 else 2048
+
+            # Check if "auto" would select an incompatible model
+            if selected_size == "auto" and not db_compat["is_new_database"]:
+                if selected_dims != db_compat["database_dimension"]:
+                    st.sidebar.error(
+                        f"⚠️ 'Auto' would select {selected_dims}D model but database uses "
+                        f"{db_compat['database_dimension']}D. Please select a specific compatible model."
+                    )
+                    selected_size = None  # Block the selection
+
+        # Show apply button if size changed and selection is valid
+        if selected_size and selected_size != current_size:
             if st.sidebar.button("🔄 Apply Size Change", type="primary", use_container_width=True):
                 import os
                 os.environ["QWEN3_VL_MODEL_SIZE"] = selected_size
@@ -2476,6 +2543,29 @@ def render_config_and_scan_ui():
                     "0 = no baseline (auto-throttle only), 1–2s recommended on laptops/WSL."
                 ),
             )
+
+            # GPU Intensity Control - allows other GPU tasks to run during ingest
+            st.slider(
+                "🎮 GPU Intensity (%)",
+                min_value=25,
+                max_value=100,
+                value=int(st.session_state.get("gpu_intensity", 75)),
+                step=5,
+                key="gpu_intensity",
+                help=(
+                    "Controls GPU usage during embedding. Lower = smaller batches + longer pauses between batches. "
+                    "Use 50-75% if running other GPU tasks (photo editing, etc). "
+                    "100% = maximum speed, 25% = minimal GPU load."
+                ),
+            )
+            gpu_intensity = st.session_state.get("gpu_intensity", 75)
+            if gpu_intensity < 50:
+                st.caption(f"⚠️ Low intensity ({gpu_intensity}%) - embedding will be slower but GPU stays available for other tasks")
+            elif gpu_intensity < 75:
+                st.caption(f"🎮 Balanced ({gpu_intensity}%) - good for multitasking")
+            else:
+                st.caption(f"⚡ High intensity ({gpu_intensity}%) - faster embedding, higher GPU load")
+
             if _is_wsl_env():
                 st.caption("WSL profile active: baseline default 1.5s; auto-applies cooldown every 20 docs for 15s and LLM timeout 120s.")
         with col2:

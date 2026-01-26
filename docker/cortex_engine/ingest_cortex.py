@@ -873,6 +873,10 @@ def calculate_adaptive_throttle(
     """
     Calculate adaptive throttle delay based on system load.
 
+    STABILITY: Enforces a mandatory minimum delay of 1.0 second regardless of
+    detected load. Load detection is not always reliable, and uncontrolled
+    processing can drive GPU/CPU to dangerous levels causing system instability.
+
     Args:
         base_delay: User-configured baseline delay (minimum)
         gpu_util: Current GPU utilization (0-100)
@@ -885,7 +889,11 @@ def calculate_adaptive_throttle(
     Returns:
         Tuple of (delay_seconds, reason_string)
     """
-    current_delay = base_delay
+    # STABILITY: Mandatory minimum delay to prevent system instability
+    # Load detection is not always reliable - this ensures we never run unchecked
+    MANDATORY_MINIMUM_DELAY = 1.0
+
+    current_delay = max(base_delay, MANDATORY_MINIMUM_DELAY)
     reasons = []
 
     # GPU has priority (more likely to cause freezing with Ollama)
@@ -905,7 +913,12 @@ def calculate_adaptive_throttle(
     # Cap at max delay
     current_delay = min(current_delay, max_delay)
 
-    reason = f"throttle={current_delay:.1f}s ({', '.join(reasons)})" if reasons else None
+    # Always report the delay reason (including mandatory baseline)
+    if reasons:
+        reason = f"throttle={current_delay:.1f}s ({', '.join(reasons)})"
+    else:
+        reason = f"stability={current_delay:.1f}s (mandatory)"
+
     return current_delay, reason
 
 
@@ -1315,17 +1328,24 @@ def finalize_ingestion(db_path: str, args=None):
         for rel_dict in doc_meta.extracted_relationships:
             source_id = entity_map.get(rel_dict['source'], rel_dict['source'])
             target_id = entity_map.get(rel_dict['target'], rel_dict['target'])
-            
+
             # Handle special case where target might be the document
             if rel_dict['target'] == doc_meta.file_name:
                 target_id = doc_meta.doc_id
-            
+
             graph_manager.add_relationship(
                 source_id,
                 target_id,
                 rel_dict['relationship_type'],
                 context=rel_dict.get('context', '')
             )
+
+        # STABILITY: Mandatory delay between document graph processing
+        # Prevents runaway resource consumption during intensive operations
+        import time
+        import gc
+        gc.collect()
+        time.sleep(0.5)  # Half-second delay for graph operations (lighter than embedding)
 
     if not docs_to_index_paths:
         logging.warning("No new, valid documents to ingest. Finalization complete.")
@@ -1440,15 +1460,48 @@ def finalize_ingestion(db_path: str, args=None):
                 # Keep original documents if chunking fails
 
     # Validate embedding model compatibility before ingestion
+    # CRITICAL: This prevents database corruption from dimension mismatches
     from cortex_engine.utils.embedding_validator import (
         validate_embedding_compatibility,
         get_embedding_dimension,
+        get_database_embedding_dimension,
         EmbeddingModelMismatchError
     )
     from cortex_engine.collection_manager import WorkingCollectionManager
 
     # Get adaptive embedding model
     current_embed_model = get_embed_model()
+    current_model_dimension = get_embedding_dimension(current_embed_model)
+    logging.info(f"Current embedding model: {current_embed_model} ({current_model_dimension}D)")
+
+    # CRITICAL: Check actual database dimension directly from ChromaDB
+    # This catches dimension mismatches even for imported databases without metadata
+    db_dimension = get_database_embedding_dimension(db_path)
+
+    if db_dimension is not None:
+        # Existing database - validate dimension match
+        if db_dimension != current_model_dimension:
+            error_msg = (
+                f"DIMENSION MISMATCH DETECTED!\n"
+                f"   Database contains: {db_dimension}-dimensional embeddings\n"
+                f"   Current model produces: {current_model_dimension}-dimensional embeddings\n"
+                f"   Model: {current_embed_model}\n"
+                f"\n"
+                f"   Using this model would CORRUPT the database!\n"
+                f"\n"
+                f"   SOLUTIONS:\n"
+                f"   1. Select a model with {db_dimension}D embeddings (e.g., "
+                f"{'Qwen3-VL-2B' if db_dimension == 2048 else 'Qwen3-VL-8B' if db_dimension == 4096 else 'matching model'})\n"
+                f"   2. Or delete the database and start fresh with the current model\n"
+            )
+            logging.error(f"❌ CRITICAL: {error_msg}")
+            print(f"CORTEX_ERROR::DIMENSION_MISMATCH::{db_dimension}::{current_model_dimension}", flush=True)
+            raise RuntimeError(f"Embedding dimension mismatch prevents ingestion: {db_dimension}D database vs {current_model_dimension}D model")
+        else:
+            logging.info(f"✅ Embedding dimension validated: {db_dimension}D (database matches model)")
+    else:
+        # New database - any dimension is fine
+        logging.info(f"Creating new database with {current_model_dimension}D embeddings")
 
     # Check if collection already exists and validate compatibility
     db_settings = ChromaSettings(anonymized_telemetry=False)
@@ -1460,37 +1513,37 @@ def finalize_ingestion(db_path: str, args=None):
         collection_exists = any(c.name == COLLECTION_NAME for c in existing_collections)
 
         if collection_exists:
-            # Validate existing collection
+            # Validate existing collection metadata (secondary check)
             collection_mgr_temp = WorkingCollectionManager()
             collection_metadata = collection_mgr_temp.get_embedding_model_metadata("default")
 
-            try:
-                validation_result = validate_embedding_compatibility(
-                    collection_metadata,
-                    current_model=current_embed_model,
-                    strict=True
-                )
-                logging.info(f"✅ Embedding model validation passed: {current_embed_model}")
-            except EmbeddingModelMismatchError as e:
-                logging.error(f"❌ CRITICAL: {e}")
-                logging.error(f"   Current model: {e.current_model}")
-                logging.error(f"   Expected model: {e.expected_model}")
-                logging.error("")
-                logging.error("   SOLUTION:")
-                logging.error("   1. Set CORTEX_EMBED_MODEL environment variable to lock model")
-                logging.error("   2. Or delete database and re-ingest with current model")
-                logging.error("")
-                raise RuntimeError(f"Embedding model mismatch prevents ingestion: {e}")
+            # Only validate metadata if it exists (imported DBs may not have it)
+            if collection_metadata.get("embedding_model") or collection_metadata.get("embedding_dimension"):
+                try:
+                    validation_result = validate_embedding_compatibility(
+                        collection_metadata,
+                        current_model=current_embed_model,
+                        strict=True
+                    )
+                    logging.info(f"✅ Embedding model metadata validation passed")
+                except EmbeddingModelMismatchError as e:
+                    logging.error(f"❌ CRITICAL: {e}")
+                    logging.error(f"   Current model: {e.current_model}")
+                    logging.error(f"   Expected model: {e.expected_model}")
+                    raise RuntimeError(f"Embedding model mismatch prevents ingestion: {e}")
+            else:
+                logging.info("No embedding metadata found - relying on dimension check (passed above)")
         else:
             # New collection - store embedding model metadata
             logging.info(f"Creating new collection with embedding model: {current_embed_model}")
-            embedding_dimension = get_embedding_dimension(current_embed_model)
-            logging.info(f"Embedding dimension: {embedding_dimension}")
+            logging.info(f"Embedding dimension: {current_model_dimension}")
 
     except EmbeddingModelMismatchError:
         raise  # Re-raise validation errors
+    except RuntimeError:
+        raise  # Re-raise dimension mismatch errors
     except Exception as e:
-        logging.warning(f"Could not validate embedding model (non-critical): {e}")
+        logging.warning(f"Could not validate embedding model metadata (dimension check passed): {e}")
 
     chroma_collection = chroma_client.get_or_create_collection(COLLECTION_NAME)
     vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
@@ -1516,10 +1569,18 @@ def finalize_ingestion(db_path: str, args=None):
         last_name = batch_docs[-1].metadata.get('file_name', 'batch') if batch_docs else 'batch'
         print(f"CORTEX_PROGRESS::{indexed}/{total_docs}::{last_name}", flush=True)
 
-        # Gentle pause between index batches to reduce sustained load
-        if index_batch_cooldown > 0:
-            import time as _t
-            _t.sleep(index_batch_cooldown)
+        # STABILITY: Mandatory cleanup and pause between index batches
+        # Prevents memory buildup and GPU exhaustion during embedding
+        import gc
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Mandatory delay (minimum 1 second for stability)
+        import time as _t
+        actual_cooldown = max(1.0, index_batch_cooldown)
+        _t.sleep(actual_cooldown)
 
     logging.info(f"Persisting index to disk at {chroma_db_path}...")
     storage_context.persist(persist_dir=chroma_db_path)
@@ -1596,7 +1657,13 @@ def main():
                        help="Sleep (s) between indexing batches to reduce sustained load")
     parser.add_argument("--llm-timeout", type=float, default=120.0,
                        help="Hard timeout (seconds) per LLM metadata call; on timeout, fallback metadata is used")
+    parser.add_argument("--gpu-intensity", type=int, default=75,
+                       help="GPU intensity 25-100%%. Lower = smaller batches + longer delays. Use 50-75%% if multitasking.")
     args = parser.parse_args()
+
+    # Store GPU intensity in environment for embedding services to use
+    import os
+    os.environ["CORTEX_GPU_INTENSITY"] = str(args.gpu_intensity)
 
     writable, reason = ensure_directory_writable(args.db_path)
     if not writable:

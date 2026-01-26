@@ -199,6 +199,11 @@ def embed_texts_batch(texts: List[str], batch_size: int = 32) -> List[List[float
 
     This function utilizes GPU/CPU vectorization by processing texts in batches
     rather than one-at-a-time, resulting in 2-5x speedup for large document sets.
+    Includes mandatory delays between batches for system stability.
+
+    GPU intensity (CORTEX_GPU_INTENSITY env var) controls:
+    - Batch size: Lower intensity = smaller batches = less GPU memory at once
+    - Delay: Lower intensity = longer pauses = more time for other GPU tasks
 
     Args:
         texts: List of text strings to embed
@@ -212,13 +217,35 @@ def embed_texts_batch(texts: List[str], batch_size: int = 32) -> List[List[float
         - GPU: ~5x faster than sequential processing
         - Batch size 32 is optimal for most NVIDIA GPUs (8-16GB VRAM)
     """
+    import time
+    import gc
+    import torch
+
     if not texts:
         return []
 
-    # Qwen3-VL has its own batch processing
+    # Qwen3-VL has its own batch processing with stability delays
     if _using_qwen3_vl():
         service = _load_qwen3_vl_service()
         return service.embed_texts(texts)
+
+    # GPU Intensity control (25-100%)
+    # Lower intensity = smaller batches + longer delays = less GPU load
+    gpu_intensity = int(os.environ.get("CORTEX_GPU_INTENSITY", "75"))
+    gpu_intensity = max(25, min(100, gpu_intensity))  # Clamp to valid range
+
+    # Scale batch size based on intensity (100% = full batch, 25% = 1/4 batch)
+    intensity_factor = gpu_intensity / 100.0
+    adjusted_batch_size = max(4, int(batch_size * intensity_factor))
+
+    # Scale delay inversely with intensity (100% = 1s, 25% = 4s)
+    # This gives other GPU processes time to run between batches
+    BATCH_DELAY_SECONDS = max(1.0, (100 - gpu_intensity) / 25.0)
+
+    if gpu_intensity < 100:
+        logger.info(f"🎮 GPU intensity {gpu_intensity}%: batch_size={adjusted_batch_size}, delay={BATCH_DELAY_SECONDS:.1f}s")
+
+    batch_size = adjusted_batch_size
 
     # Track performance metrics for the entire batch operation
     with measure("embedding_batch", batch_size=batch_size, doc_count=len(texts)):
@@ -228,6 +255,7 @@ def embed_texts_batch(texts: List[str], batch_size: int = 32) -> List[List[float
 
         if len(texts) > batch_size:
             logger.info(f"🔢 Generating embeddings for {len(texts)} texts in {total_batches} batches (size: {batch_size})")
+            logger.info(f"⏱️ Stability mode: {BATCH_DELAY_SECONDS}s delay between batches")
 
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i+batch_size]
@@ -248,6 +276,16 @@ def embed_texts_batch(texts: List[str], batch_size: int = 32) -> List[List[float
                 all_embeddings.extend(vecs.tolist())
             else:
                 all_embeddings.extend([list(v) for v in vecs])
+
+            # STABILITY: Mandatory cleanup and delay after each batch
+            if batch_num < total_batches:  # Don't delay after final batch
+                # Clear GPU cache to prevent memory buildup
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
+
+                # Mandatory delay for system stability
+                time.sleep(BATCH_DELAY_SECONDS)
 
         if len(texts) > batch_size:
             logger.info(f"✅ Embedding generation complete: {len(all_embeddings)} vectors")

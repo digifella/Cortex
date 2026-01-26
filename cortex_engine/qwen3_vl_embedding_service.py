@@ -50,8 +50,21 @@ import numpy as np
 from .utils.logging_utils import get_logger
 from .utils.performance_monitor import measure
 from .utils.gpu_monitor import get_gpu_memory_info, clear_gpu_cache
+from .utils.resource_throttler import (
+    ResourceThrottler, ThrottleConfig, ThrottleLevel, log_resource_status
+)
 
 logger = get_logger(__name__)
+
+# Global throttler for embedding operations - use conservative settings for stability
+_embedding_throttler: Optional[ResourceThrottler] = None
+
+def _get_embedding_throttler() -> ResourceThrottler:
+    """Get or create the embedding throttler."""
+    global _embedding_throttler
+    if _embedding_throttler is None:
+        _embedding_throttler = ResourceThrottler(ThrottleConfig.conservative())
+    return _embedding_throttler
 
 
 # ============================================================================
@@ -486,6 +499,11 @@ def embed_batch(
     Generate embeddings for a batch of inputs.
 
     Automatically handles batch sizing based on GPU memory.
+    Includes mandatory delays between batches for system stability.
+
+    GPU intensity (CORTEX_GPU_INTENSITY env var) controls:
+    - Batch size: Lower intensity = smaller batches = less GPU memory at once
+    - Delay: Lower intensity = longer pauses = more time for other GPU tasks
 
     Args:
         inputs: List of EmbeddingInput objects
@@ -495,18 +513,39 @@ def embed_batch(
     Returns:
         List of embedding vectors
     """
+    import time
+    import gc
+
     if not inputs:
         return []
 
     model, processor, cfg = _load_model(config)
 
+    # GPU Intensity control (25-100%)
+    # Lower intensity = smaller batches + longer delays = less GPU load
+    gpu_intensity = int(os.environ.get("CORTEX_GPU_INTENSITY", "75"))
+    gpu_intensity = max(25, min(100, gpu_intensity))  # Clamp to valid range
+
+    # Scale batch size based on intensity (100% = full batch, 25% = 1/4 batch)
+    intensity_factor = gpu_intensity / 100.0
+    base_batch_size = cfg.max_batch_size
+    adjusted_batch_size = max(1, int(base_batch_size * intensity_factor))
+
+    # Scale delay inversely with intensity (100% = 1s, 25% = 4s)
+    # This gives other GPU processes time to run between batches
+    BATCH_DELAY_SECONDS = max(1.0, (100 - gpu_intensity) / 25.0)
+
+    if gpu_intensity < 100:
+        logger.info(f"🎮 GPU intensity {gpu_intensity}%: batch_size={adjusted_batch_size}, delay={BATCH_DELAY_SECONDS:.1f}s")
+
     all_embeddings = []
-    batch_size = cfg.max_batch_size
+    batch_size = adjusted_batch_size
     total_batches = (len(inputs) + batch_size - 1) // batch_size
 
     with measure("qwen3_vl_embedding_batch", batch_size=batch_size, doc_count=len(inputs)):
         if len(inputs) > batch_size:
             logger.info(f"🔢 Generating Qwen3-VL embeddings for {len(inputs)} items in {total_batches} batches")
+            logger.info(f"⏱️ Stability mode: {BATCH_DELAY_SECONDS}s delay between batches")
             # Emit machine-readable progress for UI
             print(f"CORTEX_EMBEDDING::0/{len(inputs)}::starting", flush=True)
 
@@ -523,6 +562,16 @@ def embed_batch(
             # Emit embedding progress for UI (after each batch)
             if len(inputs) > batch_size:
                 print(f"CORTEX_EMBEDDING::{len(all_embeddings)}/{len(inputs)}::batch_{batch_num}", flush=True)
+
+            # STABILITY: Mandatory cleanup and delay after each batch
+            if batch_num < total_batches:  # Don't delay after final batch
+                # Clear GPU cache to prevent memory buildup
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
+
+                # Mandatory delay for system stability
+                time.sleep(BATCH_DELAY_SECONDS)
 
         if len(inputs) > batch_size:
             logger.info(f"✅ Qwen3-VL embedding generation complete: {len(all_embeddings)} vectors")

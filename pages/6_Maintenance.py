@@ -1,5 +1,5 @@
 # ## File: pages/6_Maintenance.py
-# Version: v5.4.0
+# Version: v5.6.0
 # Date: 2026-01-17
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions
@@ -32,7 +32,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v5.4.0"
+PAGE_VERSION = "v5.6.0"
 
 # Import Cortex modules
 try:

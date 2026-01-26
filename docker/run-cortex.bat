@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 echo.
 echo ===============================================
-echo    CORTEX SUITE v5.4.0 - Docker Installer
+echo    CORTEX SUITE v5.6.0 - Docker Installer
 echo    Multi-Platform Support: Intel x86_64, Apple Silicon, ARM64
 echo    GPU acceleration and improved reliability
 echo    Date: %date% %time%

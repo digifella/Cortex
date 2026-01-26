@@ -7,6 +7,28 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+
+## v5.6.0 - 2026-01-26
+
+### Document Dialog
+
+Conversational Q&A with document collections. Multi-turn conversations with source citations using RAG retrieval from ingested documents.
+
+### ✨ New Features
+- Document Dialog: Multi-turn conversations with document collections
+- RAG-based retrieval scoped to specific collections
+- Source citations with numbered references in responses
+- Conversation export to Markdown format
+- Optional neural reranking for improved precision
+- Collection preselect navigation from other pages
+- Add documents to collections from Document Summarizer
+
+### 🚀 Improvements
+- Collection Management now has direct Dialog button for quick Q&A
+- Document Summarizer includes 'Add to Collection' workflow
+- Conversation history maintained within session for follow-up questions
+- Model selection shared with Document Summarizer for consistency
+
 ## v5.5.0 - 2026-01-26
 
 ### Document Summarizer Enhancement

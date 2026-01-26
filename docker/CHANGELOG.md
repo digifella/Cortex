@@ -7,6 +7,30 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## v5.5.0 - 2026-01-26
+
+### Document Summarizer Enhancement
+
+Document Summarizer with hardware-aware model selection and interactive Document Q&A feature.
+
+### ✨ New Features
+- **Document Summarizer Model Selection**: Choose from available local models based on hardware capabilities
+- **Document Q&A**: Ask follow-up questions about documents after summarization
+- **Hardware Detection for Summarizer**: VRAM-aware model recommendations with installation status
+- **Q&A History Tracking**: Maintains conversation history within session for document Q&A
+
+### 🚀 Improvements
+- Document Summarizer shows model details including VRAM requirements and context window
+- Processing status displays which model is being used during summarization
+- Summary results include model used in metadata for transparency
+- Context-aware Q&A uses relevant document sections for documents exceeding model context window
+
+### ⚡ Performance
+- Q&A uses intelligent context selection to handle large documents within model limits
+- Document content cached in session state for efficient multi-question Q&A sessions
+
+---
+
 ## v5.4.1 - 2026-01-26
 
 ### Database Health & Search Model Selection

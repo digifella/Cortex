@@ -1,5 +1,5 @@
 # ## File: pages/14_Document_Summarizer.py
-# Version: v5.5.0
+# Version: v5.6.0
 # Date: 2026-01-26
 # Purpose: Advanced Document Summarizer with multiple detail levels.
 #          Leverages Docling, LLM infrastructure, and intelligent chunking.
@@ -31,7 +31,7 @@ logger = get_logger(__name__)
 st.set_page_config(page_title="Document Summarizer", layout="wide", page_icon="📄")
 
 # Page metadata
-PAGE_VERSION = "v5.5.1"
+PAGE_VERSION = "v5.6.0"
 
 def get_installed_ollama_models() -> set:
     """Get set of actually installed Ollama models."""
@@ -627,6 +627,32 @@ def display_summary_results(result: SummaryResult):
                 st.markdown(qa['answer'])
                 st.caption(f"⏱️ {qa['time']:.1f}s")
                 st.markdown("---")
+
+    # ==================== Extended Q&A with Document Dialog ====================
+    st.divider()
+    st.subheader("💬 Want Multi-Turn Conversations?")
+
+    with st.container(border=True):
+        st.markdown("""
+        **Document Dialog** enables rich, multi-turn Q&A with source citations across document collections.
+
+        To use Document Dialog with this document:
+        1. **Ingest the document** via Knowledge Ingest (adds embeddings, entity extraction, metadata)
+        2. **Add to a collection** via Knowledge Search or Collection Management
+        3. **Open Document Dialog** for conversational Q&A with citations
+        """)
+
+        col_nav1, col_nav2 = st.columns(2)
+
+        with col_nav1:
+            if st.button("📥 Go to Knowledge Ingest", use_container_width=True):
+                st.switch_page("pages/2_Knowledge_Ingest.py")
+
+        with col_nav2:
+            if st.button("💬 Go to Document Dialog", use_container_width=True):
+                st.switch_page("pages/12_Document_Dialog.py")
+
+        st.caption("💡 This page is for quick one-off analysis. For persistent knowledge base Q&A, use the ingest workflow above.")
 
     # Processing details
     with st.expander("📊 Processing Details", expanded=False):

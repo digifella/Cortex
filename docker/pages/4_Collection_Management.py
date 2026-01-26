@@ -1,6 +1,6 @@
 # ## File: pages/4_Collection_Management.py
-# Version: v5.4.0
-# Date: 2026-01-19
+# Version: v5.6.0
+# Date: 2026-01-26
 # Purpose: A UI for managing Working Collections only.
 #          Knowledge base maintenance functions moved to Maintenance page (page 13).
 #          - FEATURE (v5.2.0): Enhanced tag management with three tabs: Tag Selected, Tag All
@@ -991,7 +991,7 @@ for collection in page_collections:
 
     with st.container(border=True):
         # --- Main Collection Row ---
-        col1, col2, col3, col4, col5 = st.columns([4, 1, 2, 1, 1])
+        col1, col2, col3, col4, col5, col6 = st.columns([3.5, 1, 2, 1, 1, 1])
         with col1: st.markdown(f"**{name}**")
         with col2: st.markdown(f"<p style='text-align: center;'>{len(doc_ids)}</p>", unsafe_allow_html=True)
         with col3: st.write(modified_str)
@@ -999,6 +999,10 @@ for collection in page_collections:
             if st.button("📄 View", key=f"view_{name}", use_container_width=True):
                 st.session_state[f"view_visible_{name}"] = not st.session_state.get(f"view_visible_{name}", False)
         with col5:
+            if st.button("💬 Dialog", key=f"dialog_{name}", use_container_width=True, disabled=len(doc_ids) == 0):
+                st.session_state.dialog_collection_preselect = name
+                st.switch_page("pages/12_Document_Dialog.py")
+        with col6:
             if st.button("⚙️ Manage", key=f"manage_{name}", use_container_width=True):
                 st.session_state[f"manage_visible_{name}"] = not st.session_state.get(f"manage_visible_{name}", False)
 

@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "5.5.1"
+CORTEX_VERSION = "5.6.0"
 
 # Version details
 VERSION_INFO = {
     "major": 5,
-    "minor": 5,
-    "patch": 1,
+    "minor": 6,
+    "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,30 +25,28 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-01-26",
-    "release_name": "Document Summarizer Enhancement",
-    "description": "Document Summarizer with hardware-aware model selection, one-click model install, and interactive Document Q&A feature.",
+    "release_name": "Document Dialog",
+    "description": "Conversational Q&A with document collections. Multi-turn conversations with source citations using RAG retrieval from ingested documents.",
     "breaking_changes": [],
     "new_features": [
-        "Document Summarizer Model Selection: Choose from available local models based on hardware",
-        "Document Q&A: Ask follow-up questions about documents after summarization",
-        "Hardware detection for Document Summarizer with VRAM-aware model recommendations",
-        "Q&A history tracking within session for document conversations",
-        "One-click model installation from sidebar for models not yet installed"
+        "Document Dialog: Multi-turn conversations with document collections",
+        "RAG-based retrieval scoped to specific collections",
+        "Source citations with numbered references in responses",
+        "Conversation export to Markdown format",
+        "Optional neural reranking for improved precision",
+        "Collection preselect navigation from other pages",
+        "Add documents to collections from Document Summarizer"
     ],
     "improvements": [
-        "Model selector now clearly separates Installed vs Available to Install",
-        "Only installed models appear in dropdown (prevents selection of missing models)",
-        "Recommended model marked with star icon based on hardware capabilities",
-        "Processing status shows which model is being used for summarization",
-        "Summary results include model used in metadata",
-        "Context-aware Q&A uses relevant document sections for large documents"
+        "Collection Management now has direct Dialog button for quick Q&A",
+        "Document Summarizer includes 'Add to Collection' workflow",
+        "Conversation history maintained within session for follow-up questions",
+        "Model selection shared with Document Summarizer for consistency"
     ],
-    "bug_fixes": [
-        "Fixed model selector showing uninstalled models as selectable (caused LLM call failures)"
-    ],
+    "bug_fixes": [],
     "performance": [
-        "Q&A uses intelligent context selection for documents exceeding model context window",
-        "Document content cached in session state for efficient Q&A"
+        "Efficient chunk retrieval filtered by collection doc_ids",
+        "Reranking applied only to relevant chunks for speed"
     ]
 }
 
