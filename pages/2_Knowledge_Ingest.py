@@ -3040,7 +3040,9 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
                 stop_ev.set()
 
     # Expandable log section (just for display now)
-    with st.expander("📋 Processing Log (click to expand/collapse)", expanded=False):
+    # Keep expanded while process is running so user can monitor progress
+    log_expanded = process_still_running or st.session_state.get('ingestion_process') is not None
+    with st.expander("📋 Processing Log (click to expand/collapse)", expanded=log_expanded):
         log_container = st.container(height=400, border=True)
         with log_container:
             if st.session_state.log_messages:
