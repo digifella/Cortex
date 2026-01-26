@@ -44,6 +44,13 @@ _model = None  # SentenceTransformer or None
 _qwen3_service = None  # Qwen3VLEmbeddingService or None
 _optimal_batch_size: Optional[int] = None  # Cached optimal batch size
 
+# Query embedding cache to avoid re-embedding the same query multiple times
+# (e.g., hybrid search embeds query twice - once for vector search, once for GraphRAG)
+from collections import OrderedDict
+_query_embedding_cache: OrderedDict = OrderedDict()
+_query_cache_lock = threading.Lock()
+_QUERY_CACHE_MAX_SIZE = 50  # Cache last 50 unique queries
+
 
 def _load_qwen3_vl_service():
     """Load Qwen3-VL embedding service (lazy import to avoid loading if not used)."""
@@ -157,15 +164,36 @@ def embed_query(text: str) -> List[float]:
     Return a single embedding vector for a query string.
 
     Uses Qwen3-VL if enabled, otherwise SentenceTransformer (BGE/NV-Embed).
+    Results are cached to avoid re-embedding the same query multiple times
+    (common in hybrid search which queries both vector and graph indexes).
     """
+    # Check cache first (avoid re-embedding same query)
+    with _query_cache_lock:
+        if text in _query_embedding_cache:
+            logger.debug(f"Query embedding cache HIT: '{text[:30]}...'")
+            # Move to end (LRU)
+            _query_embedding_cache.move_to_end(text)
+            return _query_embedding_cache[text]
+
+    # Generate embedding
     if _using_qwen3_vl():
         service = _load_qwen3_vl_service()
-        return service.embed_query(text)
+        vec = service.embed_query(text)
+    else:
+        model = _load_sentence_transformer_model()
+        # BGE models benefit from normalization
+        raw_vec = model.encode(text, normalize_embeddings=True)
+        vec = raw_vec.tolist() if hasattr(raw_vec, 'tolist') else list(raw_vec)
 
-    model = _load_sentence_transformer_model()
-    # BGE models benefit from normalization
-    vec = model.encode(text, normalize_embeddings=True)
-    return vec.tolist() if hasattr(vec, 'tolist') else list(vec)
+    # Cache the result
+    with _query_cache_lock:
+        _query_embedding_cache[text] = vec
+        # Evict oldest if over capacity
+        while len(_query_embedding_cache) > _QUERY_CACHE_MAX_SIZE:
+            _query_embedding_cache.popitem(last=False)
+        logger.debug(f"Query embedding cached: '{text[:30]}...' (cache size: {len(_query_embedding_cache)})")
+
+    return vec
 
 
 def embed_texts(texts: List[str]) -> List[List[float]]:

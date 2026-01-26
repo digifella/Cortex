@@ -1,5 +1,5 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v5.4.0
+# Version: v5.6.0
 # Date: 2026-01-19
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
 #          - FEATURE (v5.5.0): Added optional tag input when saving to collections. Tags apply
@@ -784,9 +784,11 @@ def render_sidebar():
             st.sidebar.caption(f"✅ Active (top-{reranker_top_k} from {QWEN3_VL_RERANKER_CANDIDATES} candidates)")
 
             # Check if model is already loaded
+            # Must import module and access attribute dynamically (not `from x import var`)
+            # because the variable gets reassigned when model loads
             try:
-                from cortex_engine.qwen3_vl_reranker_service import _reranker_model
-                if _reranker_model is not None:
+                import cortex_engine.qwen3_vl_reranker_service as reranker_svc
+                if reranker_svc._reranker_model is not None:
                     st.sidebar.caption("🟢 Model ready")
                 elif st.session_state.get('reranker_preload_started'):
                     st.sidebar.caption("🔄 Model loading in background...")

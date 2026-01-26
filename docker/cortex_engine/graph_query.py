@@ -4,6 +4,7 @@
 # V2.1 (2025-10-06) Added LRU query result caching for performance
 # V2.2 (2025-10-09) Added persistent SQLite cache for cross-session caching
 # V2.3 (2026-01-17) Added optional Qwen3-VL neural reranking for precision
+# V2.4 (2026-01-27) Module-level PageRank caching for search performance
 from typing import List, Dict, Optional, Set, Tuple
 from collections import defaultdict, deque, OrderedDict
 import networkx as nx
@@ -17,6 +18,13 @@ from cortex_engine.utils.persistent_cache import get_persistent_cache
 from cortex_engine.config import QWEN3_VL_RERANKER_ENABLED, QWEN3_VL_RERANKER_TOP_K, QWEN3_VL_RERANKER_CANDIDATES
 
 logger = get_logger(__name__)
+
+# ============================================================================
+# Module-level PageRank Cache (v2.4)
+# Persists across GraphQueryEngine instances for faster repeated searches
+# ============================================================================
+_pagerank_cache_lock = threading.Lock()
+_pagerank_cache: Dict[int, Dict[str, float]] = {}  # graph_hash -> doc_scores
 
 
 # ============================================================================
@@ -762,30 +770,39 @@ class GraphQueryEngine:
         return context
     
     def _calculate_graph_document_scores(self) -> Dict[str, float]:
-        """Calculate graph-based importance scores for documents using PageRank."""
+        """Calculate graph-based importance scores for documents using PageRank.
+
+        Uses module-level cache to persist across GraphQueryEngine instances,
+        avoiding expensive recalculation on every search.
+        """
         if not self.graph.graph.nodes():
             return {}
-        
-        # Use cached PageRank if available
+
+        # Use module-level cache for persistence across instances
         graph_hash = hash(frozenset(self.graph.graph.edges()))
-        if graph_hash in self._pagerank_cache:
-            return self._pagerank_cache[graph_hash]
-        
+
+        with _pagerank_cache_lock:
+            if graph_hash in _pagerank_cache:
+                logger.debug(f"PageRank cache HIT (hash: {graph_hash})")
+                return _pagerank_cache[graph_hash]
+
         try:
+            logger.info(f"Calculating PageRank for graph ({self.graph.graph.number_of_nodes()} nodes, {self.graph.graph.number_of_edges()} edges)...")
             # Calculate PageRank on the entire graph
             pagerank_scores = nx.pagerank(self.graph.graph, weight='relationship_strength', max_iter=100)
-            
+
             # Filter to document nodes only
             doc_scores = {}
             for node, score in pagerank_scores.items():
                 # Documents are nodes that don't start with entity prefixes
                 if not any(node.startswith(prefix) for prefix in ['person:', 'organization:', 'project:']):
                     doc_scores[node] = score
-            
-            self._pagerank_cache[graph_hash] = doc_scores
-            logger.info(f"Calculated PageRank scores for {len(doc_scores)} documents")
+
+            with _pagerank_cache_lock:
+                _pagerank_cache[graph_hash] = doc_scores
+            logger.info(f"PageRank calculated and cached for {len(doc_scores)} documents")
             return doc_scores
-            
+
         except Exception as e:
             logger.warning(f"PageRank calculation failed: {e}")
             return {}
