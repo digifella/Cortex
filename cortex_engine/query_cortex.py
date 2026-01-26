@@ -22,6 +22,7 @@ import ollama
 import base64
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import threading
+import time
 from typing import Optional
 
 from .config import KB_LLM_MODEL, get_embed_model, VLM_MODEL
@@ -41,9 +42,10 @@ def _get_image_executor():
     if _image_executor is None:
         with _executor_lock:
             if _image_executor is None:
-                # Phase 1 Enhancement: Increased workers for RTX 8000 (48GB VRAM)
+                # Sequential processing - llava:7b crashes on concurrent requests
+                # The executor still provides timeout functionality even with 1 worker
                 _image_executor = ThreadPoolExecutor(
-                    max_workers=6,
+                    max_workers=1,
                     thread_name_prefix="vlm_image"
                 )
     return _image_executor
@@ -267,6 +269,10 @@ def describe_image_with_vlm_for_ingestion(image_path: str) -> str:
     Returns:
         A text description of the image, or an error message.
     """
+    # Retry configuration for transient errors (500s, connection issues)
+    max_retries = 3
+    base_delay = 2.0  # Start with 2 second delay
+
     try:
         print(f"  -> VLM Ingestion: Describing '{image_path}' with model '{VLM_MODEL}'...")
         with open(image_path, "rb") as image_file:
@@ -274,12 +280,16 @@ def describe_image_with_vlm_for_ingestion(image_path: str) -> str:
 
         # This uses the official ollama client with reduced timeout (30s)
         client = ollama.Client(timeout=30)  # 30 second timeout for faster processing
-        response = client.chat(
-            model=VLM_MODEL,
-            messages=[
-                {
-                    'role': 'user',
-                    'content': '''Analyze this image comprehensively for a professional knowledge management system. Please provide:
+
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                response = client.chat(
+                    model=VLM_MODEL,
+                    messages=[
+                        {
+                            'role': 'user',
+                            'content': '''Analyze this image comprehensively for a professional knowledge management system. Please provide:
 
 1. **Visual Content**: Describe what you see (objects, people, scenes, layout)
 2. **Text Content**: Extract and transcribe any visible text, labels, titles, or captions
@@ -288,18 +298,45 @@ def describe_image_with_vlm_for_ingestion(image_path: str) -> str:
 5. **Key Information**: What are the most important details for knowledge retrieval?
 
 Be specific and detailed. Include any data, numbers, or technical specifications visible. This description will be used for document search and analysis.''',
-                    'images': [encoded_image]
-                }
-            ],
-            options={
-                "temperature": 0.1,  # Very low temperature for factual accuracy
-                "top_p": 0.9,       # Slightly reduce randomness
-                "num_predict": 500   # Allow longer, more detailed responses
-            }
-        )
-        description = response['message']['content']
-        print(f"  -> VLM Ingestion: Success. Description length: {len(description)} chars.")
-        return description
+                            'images': [encoded_image]
+                        }
+                    ],
+                    options={
+                        "temperature": 0.1,  # Very low temperature for factual accuracy
+                        "top_p": 0.9,       # Slightly reduce randomness
+                        "num_predict": 500   # Allow longer, more detailed responses
+                    }
+                )
+                description = response['message']['content']
+                print(f"  -> VLM Ingestion: Success. Description length: {len(description)} chars.")
+                return description
+
+            except Exception as retry_error:
+                last_error = retry_error
+                error_str = str(retry_error).lower()
+
+                # Check if this is a retryable error (500, connection refused, model runner stopped)
+                is_retryable = (
+                    "500" in str(retry_error) or
+                    "connection refused" in error_str or
+                    "model runner" in error_str or
+                    "internal server error" in error_str or
+                    "resource" in error_str
+                )
+
+                if is_retryable and attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)  # Exponential backoff: 2s, 4s, 8s
+                    logger.warning(f"⚠️ VLM retry {attempt + 1}/{max_retries} for {image_path} after {delay}s delay: {retry_error}")
+                    print(f"  -> VLM retry {attempt + 1}/{max_retries} in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    # Non-retryable error or exhausted retries
+                    raise retry_error
+
+        # Should not reach here, but handle edge case
+        raise last_error if last_error else Exception("Unknown VLM error")
+
     except FileNotFoundError:
         error_msg = f"VLM Error: Image file not found at {image_path}"
         print(f"  -> {error_msg}")

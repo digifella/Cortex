@@ -315,7 +315,11 @@ def get_optimal_embedding_model() -> str:
 
 def get_optimal_qwen3_vl_config() -> Dict[str, Any]:
     """
-    Get optimal Qwen3-VL model configuration based on available GPU memory.
+    Get optimal Qwen3-VL model configuration.
+
+    PRIORITY ORDER:
+    1. QWEN3_VL_MODEL_SIZE env/config (which checks database dimensions first)
+    2. VRAM-based auto-selection (for new databases)
 
     Returns configuration for both embedding and reranker models that will
     fit comfortably in available VRAM.
@@ -331,6 +335,19 @@ def get_optimal_qwen3_vl_config() -> Dict[str, Any]:
             "notes": str
         }
     """
+    # Check if model size is already determined (e.g., from database dimensions)
+    # Import here to avoid circular import
+    import os
+    forced_size = os.getenv("QWEN3_VL_MODEL_SIZE", "auto").upper()
+
+    # Also check if config module already computed the size based on database
+    try:
+        from cortex_engine.config import QWEN3_VL_MODEL_SIZE
+        if QWEN3_VL_MODEL_SIZE in ("2B", "8B"):
+            forced_size = QWEN3_VL_MODEL_SIZE
+    except ImportError:
+        pass
+
     has_nvidia, gpu_info = detect_nvidia_gpu()
 
     result = {
@@ -363,7 +380,31 @@ def get_optimal_qwen3_vl_config() -> Dict[str, Any]:
     # Reserve ~20% for other operations (LLM, etc.)
     usable_gb = available_gb * 0.8
 
-    # Configuration matrix based on available memory
+    # PRIORITY: If model size is explicitly set (e.g., from database dimensions), use that
+    if forced_size == "2B":
+        logger.info("📊 Using Qwen3-VL-2B (forced by QWEN3_VL_MODEL_SIZE or database compatibility)")
+        result.update({
+            "embedding_model": "Qwen/Qwen3-VL-Embedding-2B",
+            "embedding_dim": 2048,
+            "reranker_model": "Qwen/Qwen3-VL-Reranker-2B",
+            "can_run_both": True,
+            "recommended_mrl_dim": None,
+            "notes": f"2B model forced (database compatibility or explicit setting)"
+        })
+        return result
+    elif forced_size == "8B":
+        logger.info("📊 Using Qwen3-VL-8B (forced by QWEN3_VL_MODEL_SIZE or database compatibility)")
+        result.update({
+            "embedding_model": "Qwen/Qwen3-VL-Embedding-8B",
+            "embedding_dim": 4096,
+            "reranker_model": "Qwen/Qwen3-VL-Reranker-8B" if usable_gb >= 40 else "Qwen/Qwen3-VL-Reranker-2B",
+            "can_run_both": usable_gb >= 24,
+            "recommended_mrl_dim": None if usable_gb >= 24 else 2048,
+            "notes": f"8B model forced (database compatibility or explicit setting)"
+        })
+        return result
+
+    # AUTO mode: Configuration matrix based on available memory
     if usable_gb >= 40:
         # RTX 8000 / A100 class - run both 8B models with room to spare
         result.update({

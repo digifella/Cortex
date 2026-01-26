@@ -295,8 +295,9 @@ def get_database_embedding_dimension(db_path: str) -> Optional[int]:
             include=["embeddings"]
         )
 
-        if results and results.get("embeddings") and len(results["embeddings"]) > 0:
-            sample_embedding = results["embeddings"][0]
+        embeddings = results.get("embeddings") if results else None
+        if embeddings is not None and len(embeddings) > 0:
+            sample_embedding = embeddings[0]
             dimension = len(sample_embedding)
             logger.info(f"Detected database embedding dimension: {dimension}")
             return dimension

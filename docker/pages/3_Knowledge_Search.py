@@ -118,6 +118,39 @@ def start_reranker_preload():
         logger.info("🚀 Started background reranker model preload")
 
 
+# =============================================================================
+# Embedding Model Background Preload
+# =============================================================================
+def _preload_embedding_model():
+    """Background task to preload the embedding model into GPU memory.
+
+    Uses embed_query() which goes through the proper config path to ensure
+    the correct model (2B vs 8B) is loaded based on QWEN3_VL_MODEL_SIZE config.
+    """
+    try:
+        logger.info("🔄 Background preload: Loading embedding model...")
+
+        # Use embed_query which goes through the proper service loading path
+        # This ensures the correct model is loaded based on config (not auto-select)
+        from cortex_engine.embedding_service import embed_query
+
+        # Warm up the model with a simple query
+        _ = embed_query("warmup")
+        logger.info("✅ Background preload: Embedding model ready")
+
+    except Exception as e:
+        logger.warning(f"Background embedding preload failed (will load on first search): {e}")
+
+
+def start_embedding_preload():
+    """Start background preload of embedding model if not already loading."""
+    if 'embedding_preload_started' not in st.session_state:
+        st.session_state.embedding_preload_started = True
+        thread = threading.Thread(target=_preload_embedding_model, daemon=True)
+        thread.start()
+        logger.info("🚀 Started background embedding model preload")
+
+
 def get_candidate_db_paths(db_path: str):
     """Build ordered list of possible knowledge base locations."""
     candidates = []
@@ -791,7 +824,7 @@ def render_sidebar():
                 if reranker_svc._reranker_model is not None:
                     st.sidebar.caption("🟢 Model ready")
                 elif st.session_state.get('reranker_preload_started'):
-                    st.sidebar.caption("🔄 Model loading in background...")
+                    st.sidebar.caption("🔄 Loading... (status updates on search)")
                 else:
                     st.sidebar.caption("⚠️ First search loads model (~3 min)")
             except ImportError:
@@ -1890,7 +1923,8 @@ def main():
     # Initialize session state first
     initialize_search_state()
 
-    # Start background preload of reranker model (if enabled)
+    # Start background preload of models (embedding first, then reranker if enabled)
+    start_embedding_preload()
     start_reranker_preload()
 
     # Render sidebar and get config early

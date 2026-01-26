@@ -116,7 +116,47 @@ class Qwen3VLConfig:
 
     @classmethod
     def auto_select(cls, prefer_quality: bool = True) -> "Qwen3VLConfig":
-        """Auto-select model based on available VRAM."""
+        """Auto-select model based on database dimensions first, then VRAM.
+
+        Priority:
+        1. Existing database dimensions (must match for compatibility)
+        2. VRAM-based selection (for new databases)
+        """
+        # PRIORITY 1: Check existing database dimensions
+        try:
+            from .utils.embedding_validator import get_database_embedding_dimension
+            from .utils.default_paths import get_default_ai_database_path
+
+            # Also check cortex_config.json for user-configured path
+            db_path = None
+            try:
+                import json
+                from pathlib import Path
+                config_file = Path(__file__).parent.parent / "cortex_config.json"
+                if config_file.exists():
+                    with open(config_file) as f:
+                        config = json.load(f)
+                        db_path = config.get("ai_database_path")
+            except Exception:
+                pass
+
+            if not db_path:
+                db_path = get_default_ai_database_path()
+
+            db_dim = get_database_embedding_dimension(db_path)
+            if db_dim is not None:
+                if db_dim == 2048:
+                    logger.info(f"📊 Database has 2048D embeddings - using Qwen3-VL-2B for compatibility")
+                    return cls.for_model_size(Qwen3VLModelSize.SMALL)
+                elif db_dim == 4096:
+                    logger.info(f"📊 Database has 4096D embeddings - using Qwen3-VL-8B for compatibility")
+                    return cls.for_model_size(Qwen3VLModelSize.LARGE)
+                else:
+                    logger.warning(f"⚠️ Database has {db_dim}D embeddings - unusual dimension")
+        except Exception as e:
+            logger.debug(f"Could not detect database dimensions: {e}")
+
+        # PRIORITY 2: VRAM-based selection (for new databases)
         gpu_info = get_gpu_memory_info()
 
         if gpu_info.is_cuda:
@@ -159,6 +199,10 @@ def _load_model(config: Optional[Qwen3VLConfig] = None) -> tuple:
     """
     Load Qwen3-VL embedding model and processor.
 
+    Uses the custom Qwen3VLForEmbedding class which properly wraps the base model
+    for embedding extraction. This class is defined in the model's scripts directory
+    and loaded via trust_remote_code=True.
+
     Returns:
         Tuple of (model, processor, config)
     """
@@ -181,19 +225,61 @@ def _load_model(config: Optional[Qwen3VLConfig] = None) -> tuple:
         try:
             # Import required packages
             import os
-            from transformers import AutoModel, AutoProcessor
+            import sys
+            from transformers import AutoProcessor
+            from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+                Qwen3VLPreTrainedModel, Qwen3VLModel
+            )
+            from transformers.modeling_outputs import ModelOutput
+            from dataclasses import dataclass
 
             device = config.device or _get_device()
             dtype = torch.bfloat16 if config.torch_dtype == "bfloat16" else torch.float16
+
+            # Define the custom embedding model class (from Qwen's scripts)
+            @dataclass
+            class Qwen3VLForEmbeddingOutput(ModelOutput):
+                last_hidden_state: Optional[torch.FloatTensor] = None
+                attention_mask: Optional[torch.Tensor] = None
+
+            class Qwen3VLForEmbedding(Qwen3VLPreTrainedModel):
+                """Custom model class for Qwen3-VL embedding extraction."""
+                _checkpoint_conversion_mapping = {}
+
+                def __init__(self, config):
+                    super().__init__(config)
+                    self.model = Qwen3VLModel(config)
+                    self.post_init()
+
+                def get_input_embeddings(self):
+                    return self.model.get_input_embeddings()
+
+                def forward(self, input_ids=None, attention_mask=None, position_ids=None,
+                           past_key_values=None, inputs_embeds=None, pixel_values=None,
+                           pixel_values_videos=None, image_grid_thw=None, video_grid_thw=None,
+                           cache_position=None, **kwargs):
+                    outputs = self.model(
+                        input_ids=input_ids, pixel_values=pixel_values,
+                        pixel_values_videos=pixel_values_videos,
+                        image_grid_thw=image_grid_thw, video_grid_thw=video_grid_thw,
+                        attention_mask=attention_mask, position_ids=position_ids,
+                        past_key_values=past_key_values, inputs_embeds=inputs_embeds,
+                        cache_position=cache_position, **kwargs
+                    )
+                    return Qwen3VLForEmbeddingOutput(
+                        last_hidden_state=outputs.last_hidden_state,
+                        attention_mask=attention_mask
+                    )
 
             # Model loading with offline/online fallback
             def load_model_and_processor():
                 global _processor, _embedding_model
 
-                # Load processor
+                # Load processor with right padding (required for embedding)
                 _processor = AutoProcessor.from_pretrained(
                     config.model_name,
-                    trust_remote_code=config.trust_remote_code
+                    trust_remote_code=config.trust_remote_code,
+                    padding_side='right'
                 )
 
                 # Load model with optimizations
@@ -211,7 +297,8 @@ def _load_model(config: Optional[Qwen3VLConfig] = None) -> tuple:
                     except ImportError:
                         logger.info("📝 Flash Attention 2 not installed - using default attention")
 
-                _embedding_model = AutoModel.from_pretrained(
+                # Use custom Qwen3VLForEmbedding class that properly loads the checkpoint
+                _embedding_model = Qwen3VLForEmbedding.from_pretrained(
                     config.model_name,
                     **model_kwargs
                 ).to(device).eval()
@@ -399,8 +486,21 @@ def _process_inputs(
         # Forward pass
         outputs = model(**processed)
 
-        # Extract embeddings (last hidden state, pooled)
-        embeddings = outputs.last_hidden_state.mean(dim=1)
+        # Extract embeddings using last-token pooling (required for Qwen3-VL-Embedding)
+        # This takes the hidden state of the last non-padding token
+        last_hidden_state = outputs.last_hidden_state
+        attention_mask = processed.get('attention_mask')
+
+        if attention_mask is not None:
+            # Last-token pooling: find the position of the last non-pad token
+            flipped_mask = attention_mask.flip(dims=[1])
+            last_one_positions = flipped_mask.argmax(dim=1)
+            col_indices = attention_mask.shape[1] - last_one_positions - 1
+            row_indices = torch.arange(last_hidden_state.shape[0], device=last_hidden_state.device)
+            embeddings = last_hidden_state[row_indices, col_indices]
+        else:
+            # Fallback to last token if no attention mask
+            embeddings = last_hidden_state[:, -1, :]
 
         # Normalize if requested
         if config.normalize_embeddings:

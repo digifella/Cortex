@@ -8,6 +8,7 @@
 #          - Environment-aware model selection strategy
 
 import os
+import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -16,6 +17,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from .utils.default_paths import get_default_ai_database_path
+
+# Config logger (minimal setup to avoid circular imports)
+logger = logging.getLogger(__name__)
 
 # --- Core Paths ---
 # This is now a FALLBACK. The scripts will accept a path argument to override this.
@@ -210,10 +214,61 @@ def _should_use_qwen3vl() -> bool:
 QWEN3_VL_ENABLED = _should_use_qwen3vl()
 
 # Model size selection: "auto", "2B", "8B"
-# - auto: Selects based on available VRAM (8B if >=20GB free, else 2B)
+# - auto: FIRST checks existing database dimensions, then falls back to VRAM-based selection
 # - 2B: Qwen3-VL-Embedding-2B (~5GB VRAM, 2048 dimensions)
 # - 8B: Qwen3-VL-Embedding-8B (~16GB VRAM, 4096 dimensions)
-QWEN3_VL_MODEL_SIZE = os.getenv("QWEN3_VL_MODEL_SIZE", "auto")
+def _get_qwen3vl_model_size() -> str:
+    """
+    Determine Qwen3-VL model size, prioritizing database compatibility.
+
+    Priority order:
+    1. Explicit env var override (QWEN3_VL_MODEL_SIZE=2B or 8B)
+    2. Existing database dimensions (if database exists)
+    3. VRAM-based auto-selection (for new databases)
+    """
+    env_size = os.getenv("QWEN3_VL_MODEL_SIZE", "auto").upper()
+
+    # Explicit override - respect user's choice
+    if env_size in ("2B", "8B"):
+        return env_size
+
+    # Auto mode: check database first
+    # Note: Can't use get_db_path() here as it's defined later in this file
+    # Use BASE_DATA_PATH directly (already defined above)
+    try:
+        from cortex_engine.utils.embedding_validator import get_database_embedding_dimension
+        db_path = BASE_DATA_PATH  # Use the base path defined at module top
+        db_dim = get_database_embedding_dimension(db_path)
+
+        if db_dim is not None:
+            if db_dim == 2048:
+                logger.info(f"📊 Database has 2048D embeddings - using Qwen3-VL-2B for compatibility")
+                return "2B"
+            elif db_dim == 4096:
+                logger.info(f"📊 Database has 4096D embeddings - using Qwen3-VL-8B for compatibility")
+                return "8B"
+            else:
+                logger.warning(f"⚠️ Database has {db_dim}D embeddings - unusual dimension, defaulting to VRAM-based selection")
+    except Exception as e:
+        # Database doesn't exist yet or error - fall through to VRAM selection
+        logger.debug(f"Could not detect database dimensions: {e}")
+
+    # No database or unknown dimensions - select based on VRAM
+    try:
+        import torch
+        if torch.cuda.is_available():
+            free_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            # Use 8B only if plenty of VRAM (20GB+ free)
+            if free_vram_gb >= 20:
+                logger.info(f"🚀 No existing database - auto-selecting Qwen3-VL-8B ({free_vram_gb:.0f}GB VRAM)")
+                return "8B"
+    except Exception:
+        pass
+
+    logger.info("📦 Auto-selecting Qwen3-VL-2B (conservative default)")
+    return "2B"
+
+QWEN3_VL_MODEL_SIZE = _get_qwen3vl_model_size()
 
 # Matryoshka Representation Learning (MRL) dimension reduction
 # Set to reduce embedding dimensions for storage efficiency while maintaining quality
