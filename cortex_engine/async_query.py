@@ -38,11 +38,12 @@ def get_model_aware_threshold(db_path: Optional[str] = None) -> float:
         float: Adjusted similarity threshold (0.0-1.0)
     """
     # Default thresholds by embedding dimension
+    # Using 1/(1+distance) formula: distance 1.0 = 0.5 similarity, distance 2.0 = 0.33
     DIMENSION_THRESHOLDS = {
-        2048: 0.55,  # 2B model - lower threshold due to compressed similarity space
-        4096: 0.70,  # 8B model - standard threshold
+        2048: 0.30,  # 2B model - lower threshold for L2 distance formula
+        4096: 0.40,  # 8B model - slightly higher threshold
     }
-    DEFAULT_THRESHOLD = 0.65  # Fallback for unknown dimensions
+    DEFAULT_THRESHOLD = 0.35  # Fallback for unknown dimensions
 
     try:
         # Try to detect dimension from database
@@ -66,11 +67,11 @@ def get_model_aware_threshold(db_path: Optional[str] = None) -> float:
         # Fallback: check config for model size
         from .config import QWEN3_VL_MODEL_SIZE
         if QWEN3_VL_MODEL_SIZE == "2B":
-            logger.info(f"📊 Model-aware threshold: 0.55 (2B model from config)")
-            return 0.55
+            logger.info(f"📊 Model-aware threshold: 0.30 (2B model from config)")
+            return 0.30
         elif QWEN3_VL_MODEL_SIZE == "8B":
-            logger.info(f"📊 Model-aware threshold: 0.70 (8B model from config)")
-            return 0.70
+            logger.info(f"📊 Model-aware threshold: 0.40 (8B model from config)")
+            return 0.40
 
     except Exception as e:
         logger.warning(f"Could not detect embedding dimension: {e}")
@@ -244,7 +245,8 @@ class AsyncSearchEngine:
                 search_result['metadatas'][0],
                 search_result['distances'][0]
             )):
-                similarity = 1.0 - distance
+                # L2 distance to similarity: 1/(1+d) maps [0,∞) to (0,1]
+                similarity = 1.0 / (1.0 + distance)
                 if similarity >= effective_threshold:
                     results.append({
                         'content': doc,

@@ -26,6 +26,59 @@ from .config import COLLECTION_NAME, KB_LLM_MODEL
 
 logger = get_logger(__name__)
 
+
+def get_model_aware_threshold(db_path: Optional[str] = None) -> float:
+    """
+    Get similarity threshold adjusted for the embedding model dimension.
+
+    Lower-dimension models (2B/2048D) produce lower raw similarity scores
+    than higher-dimension models (8B/4096D) for equivalent semantic matches.
+
+    Returns:
+        float: Adjusted similarity threshold (0.0-1.0)
+    """
+    # Default thresholds by embedding dimension
+    # Using 1/(1+distance) formula: distance 1.0 = 0.5 similarity, distance 2.0 = 0.33
+    DIMENSION_THRESHOLDS = {
+        2048: 0.30,  # 2B model - lower threshold for L2 distance formula
+        4096: 0.40,  # 8B model - slightly higher threshold
+    }
+    DEFAULT_THRESHOLD = 0.35  # Fallback for unknown dimensions
+
+    try:
+        # Try to detect dimension from database
+        if db_path:
+            chroma_path = os.path.join(db_path, "knowledge_hub_db")
+            if os.path.exists(chroma_path):
+                import sqlite3
+                db_file = os.path.join(chroma_path, "chroma.sqlite3")
+                if os.path.exists(db_file):
+                    conn = sqlite3.connect(db_file)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT dimension FROM collections LIMIT 1")
+                    row = cursor.fetchone()
+                    conn.close()
+                    if row and row[0]:
+                        dimension = row[0]
+                        threshold = DIMENSION_THRESHOLDS.get(dimension, DEFAULT_THRESHOLD)
+                        logger.info(f"📊 Model-aware threshold: {threshold:.2f} (detected {dimension}D embeddings)")
+                        return threshold
+
+        # Fallback: check config for model size
+        from .config import QWEN3_VL_MODEL_SIZE
+        if QWEN3_VL_MODEL_SIZE == "2B":
+            logger.info(f"📊 Model-aware threshold: 0.30 (2B model from config)")
+            return 0.30
+        elif QWEN3_VL_MODEL_SIZE == "8B":
+            logger.info(f"📊 Model-aware threshold: 0.40 (8B model from config)")
+            return 0.40
+
+    except Exception as e:
+        logger.warning(f"Could not detect embedding dimension: {e}")
+
+    logger.info(f"📊 Using default threshold: {DEFAULT_THRESHOLD}")
+    return DEFAULT_THRESHOLD
+
 class AsyncQueryConfig(BaseModel):
     """Configuration for async query operations"""
     max_concurrent_queries: int = 5
@@ -177,24 +230,48 @@ class AsyncSearchEngine:
                 n_results=self.config.max_results_per_query,
                 include=['documents', 'metadatas', 'distances']
             )
-            
+
+            # Use model-aware threshold if not explicitly configured
+            effective_threshold = self.config.similarity_threshold
+            if effective_threshold == 0.7:  # Default value - auto-adjust
+                effective_threshold = get_model_aware_threshold(self.db_path)
+
             results = []
+            filtered_count = 0
+            filtered_scores = []
+
             for i, (doc, metadata, distance) in enumerate(zip(
                 search_result['documents'][0],
                 search_result['metadatas'][0],
                 search_result['distances'][0]
             )):
-                if distance <= (1.0 - self.config.similarity_threshold):
+                # L2 distance to similarity: 1/(1+d) maps [0,∞) to (0,1]
+                similarity = 1.0 / (1.0 + distance)
+                if similarity >= effective_threshold:
                     results.append({
                         'content': doc,
                         'metadata': metadata,
-                        'similarity': 1.0 - distance,
+                        'similarity': similarity,
                         'rank': i + 1,
                         'source': 'vector'
                     })
-            
+                else:
+                    filtered_count += 1
+                    filtered_scores.append(similarity)
+
+            # Log filtering statistics
+            if filtered_count > 0:
+                avg_filtered = sum(filtered_scores) / len(filtered_scores)
+                max_filtered = max(filtered_scores)
+                logger.info(
+                    f"🔍 Vector search: {len(results)} results passed threshold ({effective_threshold:.2f}), "
+                    f"{filtered_count} filtered (max filtered score: {max_filtered:.3f}, avg: {avg_filtered:.3f})"
+                )
+            else:
+                logger.info(f"🔍 Vector search: {len(results)} results (threshold: {effective_threshold:.2f})")
+
             return results
-            
+
         except Exception as e:
             logger.error(f"Vector search error: {e}")
             return []

@@ -1247,7 +1247,7 @@ class ChromaRetriever:
                         result = type('RetrievalResult', (), {
                             'text': doc,
                             'metadata': metadata,
-                            'score': 1.0 - distance
+                            'score': 1.0 / (1.0 + distance)  # L2 distance to similarity
                         })()
                         retrieved_results.append(result)
                     return retrieved_results
@@ -1514,7 +1514,9 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
                 logger.info(f"Processing {len(documents)} raw results (threshold: {similarity_threshold:.2f})...")
 
                 for i, (doc, metadata, distance) in enumerate(zip(documents, metadatas, distances)):
-                    similarity_score = max(0, 1.0 - distance)
+                    # L2 distance to similarity: 1/(1+d) maps [0,∞) to (0,1]
+                    # This works correctly for L2 distances which can exceed 1.0
+                    similarity_score = 1.0 / (1.0 + distance)
 
                     result = {
                         'rank': i + 1,
