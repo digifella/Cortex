@@ -1,10 +1,11 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v5.6.1
+# Version: v5.7.0
 # Date: 2026-01-27
 # Purpose: GUI for knowledge base ingestion.
-#          - FIX (v5.6.1): When navigating to a directory with no subdirectories,
-#            now shows files in the current directory with a checkbox to include them
-#            in the scan. Previously stalled with "No subdirectories found" message.
+#          - FEATURE (v5.7.0): When navigating to a directory with no subdirectories,
+#            now shows individual files with checkboxes for selection. Users can
+#            select specific files and click "Proceed with X Selected File(s)" to
+#            ingest them directly without needing to select parent directories.
 #          - FEATURE (v5.1.0): Added Qwen3-VL multimodal embedding status and
 #            configuration display in sidebar. Shows model size, reranker status,
 #            and setup instructions when disabled.
@@ -2430,42 +2431,92 @@ def render_config_and_scan_ui():
                                 help=f"Include {dirname} in the file scan"
                             )
             else:
-                # No subdirectories found - offer to scan current directory directly
-                st.info("📂 No subdirectories found. You can scan files directly in this directory.")
+                # No subdirectories found - offer to select files directly
+                st.info("📂 No subdirectories found. Select individual files below for ingestion.")
 
-                # Count files in current directory (non-recursive, direct files only)
+                # Get files in current directory (non-recursive, direct files only)
                 try:
                     direct_files = [f for f in os.scandir(current_scan_path_wsl) if f.is_file()]
-                    supported_files = [f for f in direct_files if Path(f.name).suffix.lower() not in UNSUPPORTED_EXTENSIONS]
+                    supported_files = sorted(
+                        [f for f in direct_files if Path(f.name).suffix.lower() not in UNSUPPORTED_EXTENSIONS],
+                        key=lambda x: x.name.lower()
+                    )
                     file_count = len(supported_files)
 
                     if file_count > 0:
-                        # Show file count and preview
-                        st.write(f"**{file_count} supported files** found in this directory:")
+                        # Initialize direct file selections if needed
+                        if 'direct_file_selections' not in st.session_state:
+                            st.session_state.direct_file_selections = {}
 
-                        # Show preview of first few files
-                        preview_limit = 10
-                        preview_files = supported_files[:preview_limit]
-                        file_names = [f.name for f in preview_files]
+                        st.write(f"**{file_count} supported files** found:")
 
-                        with st.expander(f"📄 Preview files ({min(file_count, preview_limit)} of {file_count})", expanded=False):
-                            for fname in file_names:
-                                st.text(f"  • {fname}")
-                            if file_count > preview_limit:
-                                st.text(f"  ... and {file_count - preview_limit} more files")
+                        # Select All / Deselect All buttons
+                        sel_col1, sel_col2 = st.columns(2)
+                        if sel_col1.button("✅ Select All Files", key="select_all_direct", use_container_width=True):
+                            for f in supported_files:
+                                full_path = str(Path(current_display_path) / f.name)
+                                st.session_state.direct_file_selections[full_path] = True
+                            st.rerun()
+                        if sel_col2.button("❌ Deselect All Files", key="deselect_all_direct", use_container_width=True):
+                            for f in supported_files:
+                                full_path = str(Path(current_display_path) / f.name)
+                                st.session_state.direct_file_selections[full_path] = False
+                            st.rerun()
 
-                        # Checkbox to include current directory in scan
-                        include_current = st.checkbox(
-                            f"✅ Include this directory ({file_count} files)",
-                            value=st.session_state.dir_selections.get(current_display_path, False),
-                            key=f"cb_current_{current_display_path}",
-                            help=f"Scan all {file_count} files in {Path(current_display_path).name}"
-                        )
-                        st.session_state.dir_selections[current_display_path] = include_current
+                        # Show files with checkboxes (paginated if many files)
+                        files_per_page = 20
+                        if 'direct_files_page' not in st.session_state:
+                            st.session_state.direct_files_page = 0
+
+                        total_pages = max(1, -(-file_count // files_per_page))
+                        current_page = st.session_state.direct_files_page
+                        start_idx = current_page * files_per_page
+                        end_idx = min(start_idx + files_per_page, file_count)
+
+                        # File list with checkboxes
+                        with st.container(border=True, height=400):
+                            for f in supported_files[start_idx:end_idx]:
+                                full_path = str(Path(current_display_path) / f.name)
+                                wsl_path = str(Path(current_scan_path_wsl) / f.name)
+
+                                # Get file info
+                                try:
+                                    mod_time = datetime.fromtimestamp(Path(wsl_path).stat().st_mtime)
+                                    mod_str = mod_time.strftime('%Y-%m-%d')
+                                except:
+                                    mod_str = "?"
+
+                                is_selected = st.session_state.direct_file_selections.get(full_path, False)
+                                new_val = st.checkbox(
+                                    f"**{f.name}** ({mod_str})",
+                                    value=is_selected,
+                                    key=f"df_{full_path}"
+                                )
+                                st.session_state.direct_file_selections[full_path] = new_val
+
+                        # Pagination controls
+                        if total_pages > 1:
+                            pag_col1, pag_col2, pag_col3 = st.columns([1, 2, 1])
+                            if current_page > 0:
+                                if pag_col1.button("⬅️ Prev", key="df_prev"):
+                                    st.session_state.direct_files_page -= 1
+                                    st.rerun()
+                            pag_col2.write(f"Page {current_page + 1} of {total_pages} ({file_count} files)")
+                            if current_page < total_pages - 1:
+                                if pag_col3.button("Next ➡️", key="df_next"):
+                                    st.session_state.direct_files_page += 1
+                                    st.rerun()
+
+                        # Count selected files
+                        selected_count = sum(1 for v in st.session_state.direct_file_selections.values() if v)
+                        if selected_count > 0:
+                            st.success(f"✅ **{selected_count} files selected** for ingestion")
+                        else:
+                            st.warning("No files selected. Check the boxes above to select files.")
                     else:
                         st.warning("No supported files found in this directory.")
                 except Exception as e:
-                    st.warning(f"Could not count files: {e}")
+                    st.warning(f"Could not list files: {e}")
         except Exception as e:
             st.warning(f"Could not read directory: {e}")
     else:
@@ -2631,112 +2682,212 @@ def render_config_and_scan_ui():
 
     selected_to_scan = [path for path, selected in st.session_state.dir_selections.items() if selected]
 
-    if st.button(f"🔎 Scan {len(selected_to_scan)} Selected Director(y/ies) for New Files", type="primary", use_container_width=True, disabled=not selected_to_scan):
-        if is_knowledge_path_valid and is_db_path_valid and db_path_writable:
-            resolved_runtime = set_runtime_db_path(converted_db_path)
-            config_manager = ConfigManager(); config_manager.update_config({"knowledge_source_path": st.session_state.knowledge_source_path, "ai_database_path": st.session_state.db_path})
-            
-            # Capture scan configuration for batch resume (avoid modifying existing widget keys)
-            scan_config = {
-                "selected_directories": selected_to_scan,
-                "knowledge_source_path": st.session_state.knowledge_source_path,
-                "db_path": st.session_state.db_path,
-                "db_path_runtime": resolved_runtime,
-                "filter_exclude_common": st.session_state.get("filter_exclude_common", False),
-                "enable_pattern_exclusion": st.session_state.get("enable_pattern_exclusion", False),
-                "exclude_patterns_input": st.session_state.get("exclude_patterns_input", ""),
-                "filter_prefer_docx": st.session_state.get("filter_prefer_docx", False),
-                "batch_ingest_mode": st.session_state.get("batch_ingest_mode", False),
-                "auto_finalize_enabled": st.session_state.get("batch_ingest_mode", False),
-                "scan_timestamp": datetime.now().isoformat()
-            }
-            # Store in a way that won't conflict with widgets
-            if "current_scan_config" not in st.session_state:
-                st.session_state.current_scan_config = {}
-            st.session_state.current_scan_config.update(scan_config)
-            
-            # Check model availability before scanning
-            include_images = not st.session_state.get("skip_image_processing", False)
-            model_check = model_checker.check_ingestion_requirements(include_images=include_images)
-            
-            if not model_check["can_proceed"]:
-                st.error("❌ **Cannot proceed with ingestion - Missing required models**")
-                st.markdown(model_checker.format_status_message(model_check))
-                
-                # Show quick fix options
-                if model_check["missing_models"]:
-                    st.markdown("### Quick Fix Options:")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown("**Option 1: Install missing models**")
-                        install_cmds = model_checker.get_model_installation_commands(model_check["missing_models"])
-                        for cmd in install_cmds:
-                            st.code(cmd, language="bash")
-                        if st.button("Install missing models now", key="install_missing_models", use_container_width=True):
-                            if install_missing_models(model_check["missing_models"]):
-                                st.success("Models installed. Re-checking availability...")
-                                st.rerun()
-                    
-                    with col2:
-                        if "llava" in model_check["missing_models"]:
-                            st.markdown("**Option 2: Skip image processing**")
-                            st.info("📋 **To proceed without image analysis:**\n\n"
-                                   "1. Expand **'Advanced Options'** section below\n"
-                                   "2. Under **'Smart Filtering'**, check the box:\n"
-                                   "   ⚡ **Skip image processing (faster ingestion)**\n"
-                                   "3. Click **'Scan 1 Selected Directory(ies)'** again")
-                            st.markdown("↓ *Scroll down to Advanced Options* ↓")
-                return
-            
-            # Show successful model check
-            if model_check["warnings"]:
-                st.warning(model_checker.format_status_message(model_check))
-            else:
-                st.success("✅ All required models available - proceeding with ingestion")
-            
-            # Start file scanning with enhanced progress monitoring (no spinner to allow progress updates to show)
-            scan_for_files(selected_to_scan)
+    # Check for directly selected files (when no subdirectories exist)
+    direct_files_selected = [
+        path for path, selected in st.session_state.get('direct_file_selections', {}).items() if selected
+    ]
 
-            # After scanning, determine next stage based on batch mode
-            if st.session_state.get("batch_ingest_mode", False):
-                # In batch mode, skip the batch management screen and start processing immediately
-                files_to_process = st.session_state.get("files_to_review", [])
-                if files_to_process:
-                    # Initialize batch state
-                    container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
-                    batch_manager = BatchState(container_db_path)
-                    batch_manager.create_batch(files_to_process, scan_config)
+    # Show appropriate button based on selection mode
+    has_direct_files = len(direct_files_selected) > 0 and len(selected_to_scan) == 0
+    has_dir_selection = len(selected_to_scan) > 0
 
-                    # Start processing immediately - go directly to analysis_running
-                    st.session_state.log_messages = []
-                    st.session_state.ingestion_stage = "analysis_running"
-                    st.session_state.batch_mode_active = True
+    if has_direct_files:
+        # Direct file selection mode - button to proceed with selected files
+        if st.button(f"📄 Proceed with {len(direct_files_selected)} Selected File(s)", type="primary", use_container_width=True):
+            if is_knowledge_path_valid and is_db_path_valid and db_path_writable:
+                resolved_runtime = set_runtime_db_path(converted_db_path)
+                config_manager = ConfigManager()
+                config_manager.update_config({"knowledge_source_path": st.session_state.knowledge_source_path, "ai_database_path": st.session_state.db_path})
 
-                    # Build and start ingestion command
-                    target_collection = st.session_state.get('target_collection_name', '')
-                    command = build_ingestion_command(container_db_path, files_to_process, target_collection)
+                # Check model availability before proceeding
+                include_images = not st.session_state.get("skip_image_processing", False)
+                model_check = model_checker.check_ingestion_requirements(include_images=include_images)
 
-                    try:
-                        st.session_state.ingestion_process = spawn_ingest(command)
-                        start_ingest_reader(st.session_state.ingestion_process)
-                        logger.info(f"Batch mode: Auto-started processing {len(files_to_process)} files")
-                    except Exception as e:
-                        st.error(f"❌ Failed to start processing: {e}")
-                        logger.error(f"Auto-start failed: {e}")
-                        st.session_state.ingestion_stage = "batch_processing"  # Fallback to manual start
+                if not model_check["can_proceed"]:
+                    st.error("❌ **Cannot proceed with ingestion - Missing required models**")
+                    st.markdown(model_checker.format_status_message(model_check))
+                    return
+
+                if model_check["warnings"]:
+                    st.warning(model_checker.format_status_message(model_check))
                 else:
-                    st.session_state.ingestion_stage = "batch_processing"  # No files, show batch screen
-            else:
-                st.session_state.ingestion_stage = "pre_analysis"
+                    st.success("✅ All required models available - proceeding with ingestion")
 
-            st.rerun()
-        else:
-            if not is_knowledge_path_valid: st.error(f"Root Source Path is not valid.")
-            if not is_db_path_valid:
-                st.error(f"DB path's parent directory is not accessible: {db_parent}")
-            elif not db_path_writable:
-                st.error(db_path_error or "Database path is not writable. Please choose a directory on a mounted drive that allows write access.")
+                # Convert Windows paths to WSL/container paths for the selected files
+                converted_files = []
+                for file_path in direct_files_selected:
+                    wsl_path = convert_windows_to_wsl_path(file_path)
+                    converted_files.append(wsl_path)
+
+                # Populate files_to_review directly (bypass directory scanning)
+                st.session_state.files_to_review = sorted(converted_files)
+                st.session_state.file_selections = {fp: True for fp in st.session_state.files_to_review}
+                st.session_state.review_page = 0
+
+                # Save scan configuration
+                scan_config = {
+                    "selected_directories": [],
+                    "direct_files": direct_files_selected,
+                    "knowledge_source_path": st.session_state.knowledge_source_path,
+                    "db_path": st.session_state.db_path,
+                    "db_path_runtime": resolved_runtime,
+                    "batch_ingest_mode": st.session_state.get("batch_ingest_mode", False),
+                    "scan_timestamp": datetime.now().isoformat()
+                }
+                if "current_scan_config" not in st.session_state:
+                    st.session_state.current_scan_config = {}
+                st.session_state.current_scan_config.update(scan_config)
+
+                # Determine next stage based on batch mode
+                if st.session_state.get("batch_ingest_mode", False):
+                    files_to_process = st.session_state.files_to_review
+                    if files_to_process:
+                        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                        batch_manager = BatchState(container_db_path)
+                        batch_manager.create_batch(files_to_process, scan_config)
+
+                        st.session_state.log_messages = []
+                        st.session_state.ingestion_stage = "analysis_running"
+                        st.session_state.batch_mode_active = True
+
+                        target_collection = st.session_state.get('target_collection_name', '')
+                        command = build_ingestion_command(container_db_path, files_to_process, target_collection)
+
+                        try:
+                            st.session_state.ingestion_process = spawn_ingest(command)
+                            start_ingest_reader(st.session_state.ingestion_process)
+                            logger.info(f"Direct file mode: Auto-started processing {len(files_to_process)} files")
+                        except Exception as e:
+                            st.error(f"❌ Failed to start processing: {e}")
+                            logger.error(f"Auto-start failed: {e}")
+                            st.session_state.ingestion_stage = "pre_analysis"
+                    else:
+                        st.session_state.ingestion_stage = "pre_analysis"
+                else:
+                    st.session_state.ingestion_stage = "pre_analysis"
+
+                st.rerun()
+            else:
+                if not is_knowledge_path_valid:
+                    st.error("Root Source Path is not valid.")
+                if not is_db_path_valid:
+                    st.error(f"DB path's parent directory is not accessible: {db_parent}")
+                elif not db_path_writable:
+                    st.error(db_path_error or "Database path is not writable.")
+
+    elif has_dir_selection:
+        # Directory selection mode - original scan button
+        if st.button(f"🔎 Scan {len(selected_to_scan)} Selected Director(y/ies) for New Files", type="primary", use_container_width=True):
+            if is_knowledge_path_valid and is_db_path_valid and db_path_writable:
+                resolved_runtime = set_runtime_db_path(converted_db_path)
+                config_manager = ConfigManager(); config_manager.update_config({"knowledge_source_path": st.session_state.knowledge_source_path, "ai_database_path": st.session_state.db_path})
+
+                # Capture scan configuration for batch resume (avoid modifying existing widget keys)
+                scan_config = {
+                    "selected_directories": selected_to_scan,
+                    "knowledge_source_path": st.session_state.knowledge_source_path,
+                    "db_path": st.session_state.db_path,
+                    "db_path_runtime": resolved_runtime,
+                    "filter_exclude_common": st.session_state.get("filter_exclude_common", False),
+                    "enable_pattern_exclusion": st.session_state.get("enable_pattern_exclusion", False),
+                    "exclude_patterns_input": st.session_state.get("exclude_patterns_input", ""),
+                    "filter_prefer_docx": st.session_state.get("filter_prefer_docx", False),
+                    "batch_ingest_mode": st.session_state.get("batch_ingest_mode", False),
+                    "auto_finalize_enabled": st.session_state.get("batch_ingest_mode", False),
+                    "scan_timestamp": datetime.now().isoformat()
+                }
+                # Store in a way that won't conflict with widgets
+                if "current_scan_config" not in st.session_state:
+                    st.session_state.current_scan_config = {}
+                st.session_state.current_scan_config.update(scan_config)
+
+                # Check model availability before scanning
+                include_images = not st.session_state.get("skip_image_processing", False)
+                model_check = model_checker.check_ingestion_requirements(include_images=include_images)
+
+                if not model_check["can_proceed"]:
+                    st.error("❌ **Cannot proceed with ingestion - Missing required models**")
+                    st.markdown(model_checker.format_status_message(model_check))
+
+                    # Show quick fix options
+                    if model_check["missing_models"]:
+                        st.markdown("### Quick Fix Options:")
+
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown("**Option 1: Install missing models**")
+                            install_cmds = model_checker.get_model_installation_commands(model_check["missing_models"])
+                            for cmd in install_cmds:
+                                st.code(cmd, language="bash")
+                            if st.button("Install missing models now", key="install_missing_models", use_container_width=True):
+                                if install_missing_models(model_check["missing_models"]):
+                                    st.success("Models installed. Re-checking availability...")
+                                    st.rerun()
+
+                        with col2:
+                            if "llava" in model_check["missing_models"]:
+                                st.markdown("**Option 2: Skip image processing**")
+                                st.info("📋 **To proceed without image analysis:**\n\n"
+                                       "1. Expand **'Advanced Options'** section below\n"
+                                       "2. Under **'Smart Filtering'**, check the box:\n"
+                                       "   ⚡ **Skip image processing (faster ingestion)**\n"
+                                       "3. Click **'Scan 1 Selected Directory(ies)'** again")
+                                st.markdown("↓ *Scroll down to Advanced Options* ↓")
+                    return
+
+                # Show successful model check
+                if model_check["warnings"]:
+                    st.warning(model_checker.format_status_message(model_check))
+                else:
+                    st.success("✅ All required models available - proceeding with ingestion")
+
+                # Start file scanning with enhanced progress monitoring (no spinner to allow progress updates to show)
+                scan_for_files(selected_to_scan)
+
+                # After scanning, determine next stage based on batch mode
+                if st.session_state.get("batch_ingest_mode", False):
+                    # In batch mode, skip the batch management screen and start processing immediately
+                    files_to_process = st.session_state.get("files_to_review", [])
+                    if files_to_process:
+                        # Initialize batch state
+                        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                        batch_manager = BatchState(container_db_path)
+                        batch_manager.create_batch(files_to_process, scan_config)
+
+                        # Start processing immediately - go directly to analysis_running
+                        st.session_state.log_messages = []
+                        st.session_state.ingestion_stage = "analysis_running"
+                        st.session_state.batch_mode_active = True
+
+                        # Build and start ingestion command
+                        target_collection = st.session_state.get('target_collection_name', '')
+                        command = build_ingestion_command(container_db_path, files_to_process, target_collection)
+
+                        try:
+                            st.session_state.ingestion_process = spawn_ingest(command)
+                            start_ingest_reader(st.session_state.ingestion_process)
+                            logger.info(f"Batch mode: Auto-started processing {len(files_to_process)} files")
+                        except Exception as e:
+                            st.error(f"❌ Failed to start processing: {e}")
+                            logger.error(f"Auto-start failed: {e}")
+                            st.session_state.ingestion_stage = "batch_processing"  # Fallback to manual start
+                    else:
+                        st.session_state.ingestion_stage = "batch_processing"  # No files, show batch screen
+                else:
+                    st.session_state.ingestion_stage = "pre_analysis"
+
+                st.rerun()
+            else:
+                if not is_knowledge_path_valid:
+                    st.error("Root Source Path is not valid.")
+                if not is_db_path_valid:
+                    st.error(f"DB path's parent directory is not accessible: {db_parent}")
+                elif not db_path_writable:
+                    st.error(db_path_error or "Database path is not writable. Please choose a directory on a mounted drive that allows write access.")
+
+    else:
+        # No files or directories selected - show disabled button
+        st.button("🔎 Select files or directories above to enable scanning", type="primary", use_container_width=True, disabled=True)
 
     with st.expander("⚙️ Database Maintenance"):
         st.info("Database maintenance functions have been moved to the dedicated **Maintenance** page for better organization and security.")
