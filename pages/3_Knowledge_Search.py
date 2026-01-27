@@ -1499,6 +1499,11 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
             formatted_results = []
             filtered_by_threshold = []
 
+            # Result diversity: limit chunks per document to ensure variety
+            MAX_CHUNKS_PER_DOC = 5
+            doc_chunk_counts = {}
+            diversity_filtered = 0
+
             # Get model-aware threshold for this database
             wsl_db_path = convert_windows_to_wsl_path(db_path)
             similarity_threshold = get_model_aware_threshold(wsl_db_path)
@@ -1518,12 +1523,14 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
                     # This works correctly for L2 distances which can exceed 1.0
                     similarity_score = 1.0 / (1.0 + distance)
 
+                    file_name = metadata.get('file_name', 'Unknown')
+
                     result = {
                         'rank': i + 1,
                         'score': similarity_score,
                         'text': doc,
                         'file_path': metadata.get('file_path', 'Unknown'),
-                        'file_name': metadata.get('file_name', 'Unknown'),
+                        'file_name': file_name,
                         'document_type': metadata.get('document_type', 'Unknown'),
                         'proposal_outcome': metadata.get('proposal_outcome', 'N/A'),
                         'thematic_tags': metadata.get('thematic_tags', metadata.get('tags', [])),
@@ -1540,6 +1547,12 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
                         filtered_by_threshold.append(similarity_score)
                         continue
 
+                    # Diversity filter: limit chunks per document
+                    doc_chunk_counts[file_name] = doc_chunk_counts.get(file_name, 0) + 1
+                    if doc_chunk_counts[file_name] > MAX_CHUNKS_PER_DOC:
+                        diversity_filtered += 1
+                        continue
+
                     if apply_post_search_filters(result, filters):
                         formatted_results.append(result)
 
@@ -1549,6 +1562,13 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
                         f"📊 Threshold filtering: {len(filtered_by_threshold)} results below {similarity_threshold:.2f} "
                         f"(max filtered: {max(filtered_by_threshold):.3f}, "
                         f"avg filtered: {sum(filtered_by_threshold)/len(filtered_by_threshold):.3f})"
+                    )
+
+                # Log diversity filtering statistics
+                if diversity_filtered > 0:
+                    logger.info(
+                        f"🎯 Diversity filtering: {diversity_filtered} excess chunks filtered "
+                        f"(max {MAX_CHUNKS_PER_DOC} per doc, {len(doc_chunk_counts)} unique docs)"
                     )
             else:
                 logger.warning("No documents returned from ChromaDB query")
