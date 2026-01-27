@@ -1840,9 +1840,9 @@ def render_search_results(results, filters):
     st.subheader("📊 Search Results")
 
     # Show model-aware threshold indicator
-    threshold = st.session_state.get('_search_similarity_threshold', 0.7)
-    if threshold < 0.7:
-        st.caption(f"📊 Using model-aware threshold: **{threshold:.0%}** (lower threshold for 2B model)")
+    threshold = st.session_state.get('_search_similarity_threshold', 0.30)
+    if threshold < 0.5:
+        st.caption(f"📊 Using model-aware threshold: **{threshold:.0%}** (optimized for L2 distance)")
     else:
         st.caption(f"📊 Similarity threshold: **{threshold:.0%}**")
 
