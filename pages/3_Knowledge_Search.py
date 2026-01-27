@@ -1324,8 +1324,10 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
     # Get reranker settings from session state (UI slider) or config
     reranker_top_k = st.session_state.get('reranker_top_k', QWEN3_VL_RERANKER_TOP_K)
 
-    # Get more candidates if reranking is enabled
-    candidate_count = QWEN3_VL_RERANKER_CANDIDATES if use_reranker else top_k
+    # Fetch many more candidates to ensure diversity after per-document limiting
+    # With MAX_CHUNKS_PER_DOC=5 and wanting ~20 unique docs, need 100+ candidates
+    DIVERSITY_CANDIDATE_MULTIPLIER = 200  # Fetch 200 candidates for diversity filtering
+    candidate_count = max(DIVERSITY_CANDIDATE_MULTIPLIER, QWEN3_VL_RERANKER_CANDIDATES if use_reranker else top_k * 10)
     final_top_k = reranker_top_k if use_reranker else top_k
 
     def search_with_timeout():
