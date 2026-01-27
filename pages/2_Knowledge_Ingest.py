@@ -1,7 +1,10 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v5.6.0
-# Date: 2026-01-23
+# Version: v5.6.1
+# Date: 2026-01-27
 # Purpose: GUI for knowledge base ingestion.
+#          - FIX (v5.6.1): When navigating to a directory with no subdirectories,
+#            now shows files in the current directory with a checkbox to include them
+#            in the scan. Previously stalled with "No subdirectories found" message.
 #          - FEATURE (v5.1.0): Added Qwen3-VL multimodal embedding status and
 #            configuration display in sidebar. Shows model size, reranker status,
 #            and setup instructions when disabled.
@@ -2427,7 +2430,42 @@ def render_config_and_scan_ui():
                                 help=f"Include {dirname} in the file scan"
                             )
             else:
-                st.write("No subdirectories found in the current directory.")
+                # No subdirectories found - offer to scan current directory directly
+                st.info("📂 No subdirectories found. You can scan files directly in this directory.")
+
+                # Count files in current directory (non-recursive, direct files only)
+                try:
+                    direct_files = [f for f in os.scandir(current_scan_path_wsl) if f.is_file()]
+                    supported_files = [f for f in direct_files if Path(f.name).suffix.lower() not in UNSUPPORTED_EXTENSIONS]
+                    file_count = len(supported_files)
+
+                    if file_count > 0:
+                        # Show file count and preview
+                        st.write(f"**{file_count} supported files** found in this directory:")
+
+                        # Show preview of first few files
+                        preview_limit = 10
+                        preview_files = supported_files[:preview_limit]
+                        file_names = [f.name for f in preview_files]
+
+                        with st.expander(f"📄 Preview files ({min(file_count, preview_limit)} of {file_count})", expanded=False):
+                            for fname in file_names:
+                                st.text(f"  • {fname}")
+                            if file_count > preview_limit:
+                                st.text(f"  ... and {file_count - preview_limit} more files")
+
+                        # Checkbox to include current directory in scan
+                        include_current = st.checkbox(
+                            f"✅ Include this directory ({file_count} files)",
+                            value=st.session_state.dir_selections.get(current_display_path, False),
+                            key=f"cb_current_{current_display_path}",
+                            help=f"Scan all {file_count} files in {Path(current_display_path).name}"
+                        )
+                        st.session_state.dir_selections[current_display_path] = include_current
+                    else:
+                        st.warning("No supported files found in this directory.")
+                except Exception as e:
+                    st.warning(f"Could not count files: {e}")
         except Exception as e:
             st.warning(f"Could not read directory: {e}")
     else:
