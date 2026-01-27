@@ -1987,12 +1987,15 @@ def render_model_status_bar():
     # Build embedding model display name
     embed_approach = embed_strategy.get('approach', '')
     if embed_approach == 'qwen3vl':
-        # Show clean Qwen3-VL name with size - derive dims from config, not stale cache
+        # Show clean Qwen3-VL name with size
+        # PRIORITY: Use effective size from session state (set by sidebar after compatibility check)
+        # This ensures the display matches the sidebar selection, not stale config
         from cortex_engine.config import QWEN3_VL_MODEL_SIZE
+        effective_size = st.session_state.get('effective_qwen3vl_size', QWEN3_VL_MODEL_SIZE)
         size_to_dims = {"2B": 2048, "8B": 4096}
-        if QWEN3_VL_MODEL_SIZE in size_to_dims:
-            embed_dims = size_to_dims[QWEN3_VL_MODEL_SIZE]
-            size_display = QWEN3_VL_MODEL_SIZE.upper()
+        if effective_size in size_to_dims:
+            embed_dims = size_to_dims[effective_size]
+            size_display = effective_size.upper()
         else:
             # "auto" - derive from what the GPU would select
             vram_gb = gpu_info.get('memory_total_gb', 0)
@@ -2180,6 +2183,9 @@ def render_sidebar_model_config():
                     current_size = size_options[0]
                     st.sidebar.warning(f"⚠️ Switched to {current_size} (previous selection incompatible)")
 
+            # Store effective model size in session state for display consistency
+            st.session_state['effective_qwen3vl_size'] = current_size
+
             try:
                 current_index = size_options.index(current_size)
             except ValueError:
@@ -2237,6 +2243,9 @@ def render_sidebar_model_config():
 
                 if 'model_info_cache' in st.session_state:
                     del st.session_state.model_info_cache
+
+                # Update session state for display consistency
+                st.session_state['effective_qwen3vl_size'] = selected_size
 
                 st.sidebar.success(f"✅ Changed to {size_labels[selected_size]}")
                 st.rerun()
@@ -2345,7 +2354,54 @@ def render_sidebar_model_config():
         st.rerun()
 
 
+def init_effective_model_size():
+    """
+    Initialize the effective Qwen3-VL model size based on database compatibility.
+    This must be called BEFORE render_model_status_bar() to ensure display consistency.
+    Recomputes when the database path changes.
+    """
+    # Get current config
+    from cortex_engine.config import QWEN3_VL_MODEL_SIZE
+    from cortex_engine.utils.embedding_validator import get_compatible_qwen3vl_sizes
+
+    db_path = st.session_state.get('db_path', '')
+
+    # Recompute if db_path changed since last calculation
+    last_db_path = st.session_state.get('_effective_size_db_path', None)
+    if 'effective_qwen3vl_size' in st.session_state and last_db_path == db_path:
+        return
+
+    # Track which db_path we computed for
+    st.session_state['_effective_size_db_path'] = db_path
+
+    if not db_path:
+        # No database path yet, use config value
+        st.session_state['effective_qwen3vl_size'] = QWEN3_VL_MODEL_SIZE
+        return
+
+    # Check database compatibility
+    db_compat = get_compatible_qwen3vl_sizes(db_path)
+
+    if db_compat["is_new_database"]:
+        # New database - use config value
+        st.session_state['effective_qwen3vl_size'] = QWEN3_VL_MODEL_SIZE
+    else:
+        # Existing database - check if config size is compatible
+        current_size = QWEN3_VL_MODEL_SIZE
+        if current_size not in db_compat["compatible_sizes"] and current_size != "auto":
+            # Config size is incompatible - switch to first compatible
+            if db_compat["compatible_sizes"]:
+                st.session_state['effective_qwen3vl_size'] = db_compat["compatible_sizes"][0]
+            else:
+                st.session_state['effective_qwen3vl_size'] = QWEN3_VL_MODEL_SIZE
+        else:
+            st.session_state['effective_qwen3vl_size'] = QWEN3_VL_MODEL_SIZE
+
+
 def render_config_and_scan_ui():
+    # Initialize effective model size before rendering status bar
+    init_effective_model_size()
+
     # Render model status bar at top
     render_model_status_bar()
 

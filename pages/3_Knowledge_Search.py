@@ -74,6 +74,7 @@ from cortex_engine.utils.default_paths import get_default_ai_database_path
 from cortex_engine.embedding_service import embed_query
 from cortex_engine.version_config import VERSION_STRING
 from cortex_engine.ui_theme import apply_theme, section_header
+from cortex_engine.async_query import get_model_aware_threshold
 
 # Set up logging
 logger = get_logger(__name__)
@@ -1494,19 +1495,30 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
                     collection_doc_ids = None
                     filters['search_scope'] = "Entire Knowledge Base"  # Force full search
             
-            # Format results
+            # Format results with model-aware threshold
             formatted_results = []
+            filtered_by_threshold = []
+
+            # Get model-aware threshold for this database
+            wsl_db_path = convert_windows_to_wsl_path(db_path)
+            similarity_threshold = get_model_aware_threshold(wsl_db_path)
+
+            # Store threshold in session state for UI display
+            st.session_state['_search_similarity_threshold'] = similarity_threshold
+
             if results and results.get('documents'):
                 documents = results['documents'][0] if results['documents'] else []
                 metadatas = results['metadatas'][0] if results['metadatas'] else []
                 distances = results['distances'][0] if results['distances'] else []
-                
-                logger.info(f"Processing {len(documents)} raw results...")
-                
+
+                logger.info(f"Processing {len(documents)} raw results (threshold: {similarity_threshold:.2f})...")
+
                 for i, (doc, metadata, distance) in enumerate(zip(documents, metadatas, distances)):
+                    similarity_score = max(0, 1.0 - distance)
+
                     result = {
                         'rank': i + 1,
-                        'score': max(0, 1.0 - distance),  # Convert distance to similarity score
+                        'score': similarity_score,
                         'text': doc,
                         'file_path': metadata.get('file_path', 'Unknown'),
                         'file_name': metadata.get('file_name', 'Unknown'),
@@ -1516,16 +1528,29 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
                         'chunk_id': metadata.get('chunk_id', f'chunk_{i}'),
                         'doc_id': metadata.get('doc_id', f'doc_{i}')
                     }
-                    
+
                     # Collection scope filter
                     if (collection_doc_ids is not None and result['doc_id'] not in collection_doc_ids):
                         continue
-                    
+
+                    # Model-aware similarity threshold filter
+                    if similarity_score < similarity_threshold:
+                        filtered_by_threshold.append(similarity_score)
+                        continue
+
                     if apply_post_search_filters(result, filters):
                         formatted_results.append(result)
+
+                # Log threshold filtering statistics
+                if filtered_by_threshold:
+                    logger.info(
+                        f"📊 Threshold filtering: {len(filtered_by_threshold)} results below {similarity_threshold:.2f} "
+                        f"(max filtered: {max(filtered_by_threshold):.3f}, "
+                        f"avg filtered: {sum(filtered_by_threshold)/len(filtered_by_threshold):.3f})"
+                    )
             else:
                 logger.warning("No documents returned from ChromaDB query")
-            
+
             logger.info(f"Direct ChromaDB search returned {len(formatted_results)} formatted results")
 
             # Apply neural reranking for precision boost
@@ -1811,6 +1836,13 @@ def render_search_results(results, filters):
     
     # Individual results display
     st.subheader("📊 Search Results")
+
+    # Show model-aware threshold indicator
+    threshold = st.session_state.get('_search_similarity_threshold', 0.7)
+    if threshold < 0.7:
+        st.caption(f"📊 Using model-aware threshold: **{threshold:.0%}** (lower threshold for 2B model)")
+    else:
+        st.caption(f"📊 Similarity threshold: **{threshold:.0%}**")
 
     # Deduplicate by file_name - keep highest scoring chunk per document
     unique_results = {}
