@@ -6,7 +6,14 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🔧 Bug Fixes - 2026-01-27
+- **Fixed L2 Distance to Similarity Conversion**: Vector search was producing negative similarity scores due to incorrect formula `1.0 - distance`. Changed to `1.0 / (1.0 + distance)` which properly maps L2 distance [0,∞) to similarity (0,1].
+- **Fixed Path Quote Handling**: `convert_windows_to_wsl_path()` now strips surrounding quotes from paths, fixing database import issues when users copy-paste quoted paths.
+- **Adjusted Model-Aware Thresholds**: Updated thresholds for new similarity formula - 2B model uses 0.30, 8B model uses 0.40.
 
+### ✨ New Features - 2026-01-27
+- **Search Result Diversity**: Added per-document chunk limiting (max 5 chunks per document) to ensure diverse multi-document results. Previously, one highly-relevant document could fill all result slots.
+- **Increased Candidate Pool**: Search now fetches 200 candidates (up from 20-50) to ensure diversity filtering has enough documents to work with.
 
 ## v5.6.0 - 2026-01-26
 

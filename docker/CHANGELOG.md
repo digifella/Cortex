@@ -6,6 +6,35 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🔧 Bug Fixes - 2026-01-27
+- **Fixed L2 Distance to Similarity Conversion**: Vector search was producing negative similarity scores due to incorrect formula `1.0 - distance`. Changed to `1.0 / (1.0 + distance)` which properly maps L2 distance [0,∞) to similarity (0,1].
+- **Fixed Path Quote Handling**: `convert_windows_to_wsl_path()` now strips surrounding quotes from paths, fixing database import issues when users copy-paste quoted paths.
+- **Adjusted Model-Aware Thresholds**: Updated thresholds for new similarity formula - 2B model uses 0.30, 8B model uses 0.40.
+
+### ✨ New Features - 2026-01-27
+- **Search Result Diversity**: Added per-document chunk limiting (max 5 chunks per document) to ensure diverse multi-document results. Previously, one highly-relevant document could fill all result slots.
+- **Increased Candidate Pool**: Search now fetches 200 candidates (up from 20-50) to ensure diversity filtering has enough documents to work with.
+
+## v5.6.0 - 2026-01-26
+
+### Document Dialog
+
+Conversational Q&A with document collections. Multi-turn conversations with source citations using RAG retrieval from ingested documents.
+
+### ✨ New Features
+- Document Dialog: Multi-turn conversations with document collections
+- RAG-based retrieval scoped to specific collections
+- Source citations with numbered references in responses
+- Conversation export to Markdown format
+- Optional neural reranking for improved precision
+- Collection preselect navigation from other pages
+- Add documents to collections from Document Summarizer
+
+### 🚀 Improvements
+- Collection Management now has direct Dialog button for quick Q&A
+- Document Summarizer includes 'Add to Collection' workflow
+- Conversation history maintained within session for follow-up questions
+- Model selection shared with Document Summarizer for consistency
 
 ## v5.5.0 - 2026-01-26
 
