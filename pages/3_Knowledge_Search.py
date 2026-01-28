@@ -1,7 +1,10 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v5.6.0
-# Date: 2026-01-19
+# Version: v5.7.0
+# Date: 2026-01-28
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
+#          - FEATURE (v5.7.0): Added "Strict Mode" search requiring ALL terms to be present.
+#            Added source file path display and "Open File" button in search results.
+#            Users can now view the full source path and open documents directly.
 #          - FEATURE (v5.5.0): Added optional tag input when saving to collections. Tags apply
 #            to all saved documents for easier categorization in proposal workflows.
 #          - FEATURE (v5.4.0): Streamlined "Save to Collection" UI with dropdown showing existing
@@ -865,10 +868,14 @@ def clear_search_debug():
     st.session_state.search_debug_log = []
 
 
-def perform_search(base_index, query, filters, search_mode="Traditional Vector Search"):
-    """Perform search - supports Traditional, GraphRAG Enhanced, and Hybrid modes"""
+def perform_search(base_index, query, filters, search_mode="Traditional Vector Search", strict_mode=False):
+    """Perform search - supports Traditional, GraphRAG Enhanced, and Hybrid modes
+
+    Args:
+        strict_mode: If True, only return results that contain ALL search terms
+    """
     clear_search_debug()  # Start fresh for each search
-    add_search_debug(f"Starting search: mode='{search_mode}', query='{query[:50]}...'")
+    add_search_debug(f"Starting search: mode='{search_mode}', query='{query[:50]}...', strict_mode={strict_mode}")
 
     try:
         if not query.strip():
@@ -903,18 +910,18 @@ def perform_search(base_index, query, filters, search_mode="Traditional Vector S
         # Choose search strategy based on mode
         if search_mode == "GraphRAG Enhanced":
             add_search_debug("Executing GraphRAG Enhanced search...")
-            results = graphrag_enhanced_search(db_path, query, filters)
+            results = graphrag_enhanced_search(db_path, query, filters, strict_mode=strict_mode)
             add_search_debug(f"GraphRAG search returned {len(results)} results")
             return results
         elif search_mode == "Hybrid Search":
             add_search_debug("Executing Hybrid (Vector + GraphRAG) search...")
-            results = hybrid_search(db_path, query, filters)
+            results = hybrid_search(db_path, query, filters, strict_mode=strict_mode)
             add_search_debug(f"Hybrid search returned {len(results)} results")
             return results
         else:
             # Traditional Vector Search (default)
             add_search_debug("Executing Traditional Vector search...")
-            results = direct_chromadb_search(db_path, query, filters)
+            results = direct_chromadb_search(db_path, query, filters, strict_mode=strict_mode)
             add_search_debug(f"Traditional search returned {len(results)} results")
             return results
             
@@ -924,7 +931,7 @@ def perform_search(base_index, query, filters, search_mode="Traditional Vector S
         return []
 
 
-def graphrag_enhanced_search(db_path, query, filters, top_k=20):
+def graphrag_enhanced_search(db_path, query, filters, top_k=20, strict_mode=False):
     """GraphRAG enhanced search using knowledge graph context.
 
     Strategy: Use direct_chromadb_search for vector retrieval (reliable),
@@ -938,7 +945,7 @@ def graphrag_enhanced_search(db_path, query, filters, top_k=20):
 
             # Step 1: Get vector results using direct_chromadb_search (reliable)
             add_search_debug("Step 1: Getting vector results via direct_chromadb_search...")
-            vector_results = direct_chromadb_search(db_path, query, filters, top_k)
+            vector_results = direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
             add_search_debug(f"Vector search returned {len(vector_results)} results")
 
             if not vector_results:
@@ -994,7 +1001,7 @@ def graphrag_enhanced_search(db_path, query, filters, top_k=20):
         except Exception as e:
             logger.error(f"GraphRAG search failed: {e}")
             add_search_debug(f"ERROR: {e} - falling back to traditional search")
-            return direct_chromadb_search(db_path, query, filters, top_k)
+            return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
 
     # Run GraphRAG search with timeout protection
     # Longer timeout when reranker enabled (first model load takes 3-4 minutes)
@@ -1024,23 +1031,23 @@ def graphrag_enhanced_search(db_path, query, filters, top_k=20):
                     st.error("⏱️ GraphRAG search timed out. The reranker model may still be loading - try again.")
                 else:
                     st.error("⏱️ GraphRAG search timed out. Falling back to traditional search.")
-                return direct_chromadb_search(db_path, query, filters, top_k)
+                return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
     except Exception as e:
         logger.error(f"GraphRAG search wrapper failed: {e}")
-        return direct_chromadb_search(db_path, query, filters, top_k)
+        return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
 
 
-def hybrid_search(db_path, query, filters, top_k=20):
+def hybrid_search(db_path, query, filters, top_k=20, strict_mode=False):
     """Hybrid search combining vector and GraphRAG results"""
     import concurrent.futures
-    
+
     def hybrid_search_with_timeout():
         try:
             from cortex_engine.graphrag_integration import get_graphrag_integration
-            
+
             # Get both search results (do not halve top_k)
             # Start with vector results so Hybrid never returns fewer than Traditional
-            vector_results = direct_chromadb_search(db_path, query, filters, top_k)
+            vector_results = direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
             
             try:
                 graphrag = get_graphrag_integration(db_path)
@@ -1060,6 +1067,12 @@ def hybrid_search(db_path, query, filters, top_k=20):
                 
                 # Format GraphRAG results
                 graphrag_results = []
+
+                # Prepare strict mode terms if enabled
+                strict_terms = []
+                if strict_mode:
+                    strict_terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 2]
+
                 for i, result in enumerate(graphrag_raw[:top_k]):
                     if hasattr(result, 'text'):
                         content = result.text
@@ -1067,7 +1080,13 @@ def hybrid_search(db_path, query, filters, top_k=20):
                     else:
                         content = str(result)
                         metadata = {}
-                    
+
+                    # Apply strict mode filtering to GraphRAG results
+                    if strict_mode and strict_terms:
+                        text_lower = content.lower()
+                        if not all(term in text_lower for term in strict_terms):
+                            continue  # Skip results missing required terms
+
                     formatted_result = {
                         'rank': i + 1,
                         'score': metadata.get('score', 0.75),
@@ -1081,7 +1100,7 @@ def hybrid_search(db_path, query, filters, top_k=20):
                         'doc_id': metadata.get('doc_id', f'graphrag_doc_{i}'),
                         'search_source': 'GraphRAG Enhanced'
                     }
-                    
+
                     if apply_post_search_filters(formatted_result, filters):
                         graphrag_results.append(formatted_result)
                 
@@ -1114,7 +1133,7 @@ def hybrid_search(db_path, query, filters, top_k=20):
         except Exception as e:
             logger.error(f"Hybrid search failed: {e}")
             st.warning(f"⚠️ Hybrid search failed: {e}. Using traditional search.")
-            return direct_chromadb_search(db_path, query, filters, top_k)
+            return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
     
     # Run hybrid search with timeout protection
     # Longer timeout when reranker enabled (first model load takes 3-4 minutes)
@@ -1132,10 +1151,10 @@ def hybrid_search(db_path, query, filters, top_k=20):
                     st.error("⏱️ Hybrid search timed out. The reranker model may still be loading - try again.")
                 else:
                     st.error("⏱️ Hybrid search timed out. Falling back to traditional search.")
-                return direct_chromadb_search(db_path, query, filters, top_k)
+                return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
     except Exception as e:
         logger.error(f"Hybrid search wrapper failed: {e}")
-        return direct_chromadb_search(db_path, query, filters, top_k)
+        return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
 
 
 def apply_post_search_filters(result, filters):
@@ -1296,7 +1315,7 @@ class ChromaRetriever:
         return retrieved_results
 
 
-def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None):
+def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None, strict_mode=False):
     """
     Perform direct ChromaDB search bypassing LlamaIndex entirely.
 
@@ -1309,6 +1328,7 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
         filters: Filter options dict
         top_k: Number of results to return
         use_reranker: Enable neural reranking (default from config)
+        strict_mode: If True, only return results containing ALL search terms
 
     Returns:
         List of search result dicts
@@ -1331,6 +1351,7 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
     final_top_k = reranker_top_k if use_reranker else top_k
 
     def search_with_timeout():
+        # strict_mode is captured from outer scope via closure
         try:
             logger.info(f"Starting ChromaDB search for query: '{query}'")
             wsl_db_path = convert_windows_to_wsl_path(db_path)
@@ -1420,10 +1441,12 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
             # Strategy 3: Text-based search (our main fallback)
             if not results or not results.get('documents') or not results['documents'][0]:
                 logger.info("Attempting fallback text-based search...")
-                
+
                 try:
-                    # Get a larger sample of documents
-                    all_results = collection.get(limit=min(2000, top_k * 20))
+                    # Get ALL documents for text search - especially important for strict mode
+                    # which needs to find documents with ALL terms present
+                    total_docs = collection.count()
+                    all_results = collection.get(limit=total_docs)
                     
                     matching_docs = []
                     query_terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 2]
@@ -1577,6 +1600,23 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None)
 
             logger.info(f"Direct ChromaDB search returned {len(formatted_results)} formatted results")
 
+            # Apply strict mode filtering if enabled
+            if strict_mode and formatted_results:
+                query_terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 2]
+                if query_terms:
+                    strict_filtered = []
+                    for result in formatted_results:
+                        text_lower = result['text'].lower()
+                        # Check if ALL terms are present
+                        all_terms_present = all(term in text_lower for term in query_terms)
+                        if all_terms_present:
+                            strict_filtered.append(result)
+
+                    filtered_count = len(formatted_results) - len(strict_filtered)
+                    if filtered_count > 0:
+                        logger.info(f"🎯 Strict mode: filtered {filtered_count} results (kept {len(strict_filtered)})")
+                    formatted_results = strict_filtered
+
             # Apply neural reranking for precision boost
             if use_reranker and formatted_results:
                 try:
@@ -1690,6 +1730,68 @@ def show_graphrag_entity_feedback(results, filters):
                 
     except Exception as e:
         logger.warning(f"Could not show GraphRAG entity feedback: {e}")
+
+
+def open_source_file(file_path: str) -> tuple[bool, str]:
+    """Attempt to open a source file using the system's default application.
+
+    Args:
+        file_path: Path to the file (may be POSIX or Windows format)
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    import subprocess
+    import platform
+
+    if not file_path or file_path == 'Unknown':
+        return False, "No file path available"
+
+    # Convert POSIX path back to native format if needed
+    native_path = file_path
+
+    # Handle WSL paths - convert /mnt/c/... to C:\...
+    if file_path.startswith('/mnt/') and len(file_path) > 6:
+        drive_letter = file_path[5].upper()
+        rest_of_path = file_path[6:].replace('/', '\\')
+        native_path = f"{drive_letter}:{rest_of_path}"
+
+    # Check if file exists
+    check_path = file_path
+    if os.path.exists('/.dockerenv'):
+        # In Docker, we can't open files directly
+        return False, f"Cannot open files from Docker container. File path: {native_path}"
+
+    # Try the original path first, then the converted path
+    for try_path in [file_path, native_path]:
+        if os.path.exists(try_path):
+            check_path = try_path
+            break
+    else:
+        # File not found at either path
+        return False, f"File not found: {native_path}"
+
+    try:
+        system = platform.system()
+        if system == 'Windows':
+            os.startfile(check_path)
+        elif system == 'Darwin':  # macOS
+            subprocess.run(['open', check_path], check=True)
+        else:  # Linux/WSL
+            # Try xdg-open first (standard Linux), then wslview (WSL)
+            try:
+                subprocess.run(['xdg-open', check_path], check=True)
+            except FileNotFoundError:
+                try:
+                    # WSL: use wslview to open with Windows default app
+                    subprocess.run(['wslview', native_path], check=True)
+                except FileNotFoundError:
+                    # Last resort: try explorer.exe for WSL2
+                    subprocess.run(['explorer.exe', native_path], check=True)
+
+        return True, f"Opened: {native_path}"
+    except Exception as e:
+        return False, f"Failed to open file: {e}"
 
 
 def render_search_results(results, filters):
@@ -1965,7 +2067,42 @@ def render_search_results(results, filters):
                 if result.get('proposal_outcome', 'N/A') != 'N/A':
                     st.write(f"📊 **Outcome:** {result['proposal_outcome']}")
                 st.write(f"🔗 **ID:** {result['doc_id']}")
-            
+
+            # Show full file path and open button
+            file_path = result.get('file_path', 'Unknown')
+            if file_path and file_path != 'Unknown':
+                st.divider()
+                st.write("**📂 Source File:**")
+
+                # Convert POSIX path to display-friendly format
+                display_path = file_path
+                if file_path.startswith('/mnt/') and len(file_path) > 6:
+                    # Convert /mnt/c/... to C:\... for display
+                    drive_letter = file_path[5].upper()
+                    rest_of_path = file_path[6:].replace('/', '\\')
+                    display_path = f"{drive_letter}:{rest_of_path}"
+
+                st.code(display_path, language=None)
+
+                # Open file button
+                open_col1, open_col2 = st.columns([1, 3])
+                with open_col1:
+                    if st.button("📂 Open File", key=f"open_file_{i}", help="Open source document in default application"):
+                        success, message = open_source_file(file_path)
+                        if success:
+                            st.success(message)
+                        else:
+                            st.warning(message)
+                with open_col2:
+                    # Copy path button using text input trick
+                    st.text_input(
+                        "Copy path:",
+                        value=display_path,
+                        key=f"copy_path_{i}",
+                        label_visibility="collapsed",
+                        help="Select and copy this path"
+                    )
+
             # Show graph context if available
             if result.get('graph_context'):
                 st.info(f"🧠 **GraphRAG Context:** {result['graph_context']}")
@@ -2133,6 +2270,14 @@ def main():
         key="search_query_input",
         help="💡 **Multi-term searches supported!** Try phrases like 'strategy and transformation' or 'machine learning algorithms'. Use sidebar filters for advanced filtering."
     )
+
+    # Strict mode toggle - require ALL terms to be present
+    strict_mode = st.checkbox(
+        "🎯 Strict Mode (require ALL search terms)",
+        value=st.session_state.get('strict_search_mode', False),
+        key="strict_search_mode",
+        help="When enabled, only returns documents that contain ALL of your search terms. Useful for precise searches like 'strategy workshop with rebecca' where you need all terms present."
+    )
     
     # Show filter summary
     filter_summary = []
@@ -2209,7 +2354,10 @@ def main():
                 
                 # Perform search with selected mode
                 search_mode = st.session_state.get('search_mode_selection', 'Traditional Vector Search')
-                results = perform_search(None, query, config, search_mode)
+                strict_mode = st.session_state.get('strict_search_mode', False)
+                if strict_mode:
+                    st.write("🎯 **Strict mode:** requiring ALL search terms to be present")
+                results = perform_search(None, query, config, search_mode, strict_mode=strict_mode)
                 st.session_state.last_search_results = results
                 
                 # Update status when complete

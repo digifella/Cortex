@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "5.6.0"
+CORTEX_VERSION = "5.7.0"
 
 # Version details
 VERSION_INFO = {
     "major": 5,
-    "minor": 6,
+    "minor": 7,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -24,30 +24,27 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-01-26",
-    "release_name": "Document Dialog",
-    "description": "Conversational Q&A with document collections. Multi-turn conversations with source citations using RAG retrieval from ingested documents.",
+    "release_date": "2026-01-28",
+    "release_name": "Strict Search & Source Access",
+    "description": "Enhanced search precision with strict mode filtering and direct source file access from search results.",
     "breaking_changes": [],
     "new_features": [
-        "Document Dialog: Multi-turn conversations with document collections",
-        "RAG-based retrieval scoped to specific collections",
-        "Source citations with numbered references in responses",
-        "Conversation export to Markdown format",
-        "Optional neural reranking for improved precision",
-        "Collection preselect navigation from other pages",
-        "Add documents to collections from Document Summarizer"
+        "Strict Mode search: Require ALL search terms to be present in results",
+        "Source file path display in search results",
+        "Open File button to launch source documents directly",
+        "Copy path functionality for easy file location access",
+        "Docker hybrid storage: Choose between portable (containerized) or external storage"
     ],
     "improvements": [
-        "Collection Management now has direct Dialog button for quick Q&A",
-        "Document Summarizer includes 'Add to Collection' workflow",
-        "Conversation history maintained within session for follow-up questions",
-        "Model selection shared with Document Summarizer for consistency"
+        "Strict mode works across all search modes (Traditional, GraphRAG, Hybrid)",
+        "Better search precision for multi-term queries",
+        "Clear visual feedback on strict mode filtering results"
     ],
-    "bug_fixes": [],
-    "performance": [
-        "Efficient chunk retrieval filtered by collection doc_ids",
-        "Reranking applied only to relevant chunks for speed"
-    ]
+    "bug_fixes": [
+        "Fixed hybrid search bypassing strict mode filter",
+        "Fixed GraphRAG fallback searches not respecting strict mode"
+    ],
+    "performance": []
 }
 
 # ============================================================================

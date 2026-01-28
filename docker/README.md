@@ -6,7 +6,7 @@
 ---
 ## ⚠️ DOCKER INSTALLATION STATUS: TESTING IN PROGRESS
 
-**Last Updated:** 2026-01-25
+**Last Updated:** 2026-01-28
 
 The Docker installation is currently under **active testing and debugging**. Recent changes include:
 
@@ -24,6 +24,81 @@ The Docker installation is currently under **active testing and debugging**. Rec
 1. Run `docker system prune -a -f` and `docker builder prune -a -f`
 2. Pull the latest code from git
 3. Rebuild the Docker image
+
+---
+
+## 🗄️ Storage Modes: Portable vs External
+
+Cortex Suite Docker now supports **two storage modes** for maximum flexibility:
+
+### Mode 1: Portable (Default) - Fully Containerized
+
+All data is stored inside Docker volumes, making the entire setup **fully transportable**.
+
+```bash
+# Start in portable mode (default)
+./run-compose.sh                    # Linux/Mac
+run-compose.bat                     # Windows
+
+# Or with docker compose directly
+docker compose up -d
+```
+
+**Benefits:**
+- Zero configuration required
+- Export entire setup with `docker save` + volume export
+- Works identically on any system
+- No path issues between Windows/Linux/Mac
+
+**Backup portable volumes:**
+```bash
+# Backup
+docker run --rm -v cortex_ai_databases:/data -v $(pwd):/backup alpine tar czf /backup/cortex_backup.tar.gz /data
+
+# Restore
+docker run --rm -v cortex_ai_databases:/data -v $(pwd):/backup alpine tar xzf /backup/cortex_backup.tar.gz -C /
+```
+
+### Mode 2: External Storage - Host Filesystem
+
+Data is stored on your host filesystem for easy access and backup.
+
+```bash
+# Start in external storage mode
+./run-compose.sh --external         # Linux/Mac
+run-compose.bat --external          # Windows
+
+# Or with docker compose directly
+docker compose -f docker-compose.yml -f docker-compose.external.yml up -d
+```
+
+**Required Configuration** (in `.env` file):
+```bash
+# Windows paths
+EXTERNAL_AI_DATABASE_PATH=C:\ai_databases
+EXTERNAL_KNOWLEDGE_PATH=C:\KB_Test
+
+# WSL/Linux paths
+EXTERNAL_AI_DATABASE_PATH=/mnt/f/ai_databases
+EXTERNAL_KNOWLEDGE_PATH=/mnt/e/KB_Test
+```
+
+**Benefits:**
+- Direct file access from host OS
+- Easy manual backups (just copy folders)
+- Use existing databases from previous installations
+- External tools can access the data
+
+### Quick Reference
+
+| Feature | Portable Mode | External Mode |
+|---------|---------------|---------------|
+| Command | `./run-compose.sh` | `./run-compose.sh --external` |
+| Data Location | Docker volumes | Host filesystem |
+| Configuration | None required | Set paths in `.env` |
+| Portability | Fully portable | Tied to host paths |
+| Backup Method | Volume export | Copy folders |
+| File Access | Via Docker | Direct from host |
 
 ---
 

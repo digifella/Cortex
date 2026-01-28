@@ -1,4 +1,10 @@
 # Docker Compose for Cortex Suite - Multi-Container Setup
+#
+# STORAGE MODES:
+#   Portable (default):  docker compose up -d
+#   External storage:    docker compose -f docker-compose.yml -f docker-compose.external.yml up -d
+#
+# See .env.example for configuration options
 version: '3.8'
 
 services:
@@ -60,10 +66,11 @@ services:
       ollama:
         condition: service_healthy
     volumes:
-      - cortex_data:/data
+      - cortex_data:/data/ai_databases
+      - knowledge_base:/data/knowledge_base
       - cortex_logs:/app/logs
     ports:
-      - "8000:8000"  
+      - "8000:8000"
     environment:
       - AI_DATABASE_PATH=/data/ai_databases
       - KNOWLEDGE_SOURCE_PATH=/data/knowledge_base
@@ -90,15 +97,9 @@ services:
       cortex-api:
         condition: service_healthy
     volumes:
-      - cortex_data:/data
+      - cortex_data:/data/ai_databases
+      - knowledge_base:/data/knowledge_base
       - cortex_logs:/app/logs
-      # External volume mappings for Windows paths
-      - type: bind
-        source: ${WINDOWS_AI_DATABASE_PATH:-./cortex_data}
-        target: /data/ai_databases
-      - type: bind  
-        source: ${WINDOWS_KNOWLEDGE_SOURCE_PATH:-./knowledge_base}
-        target: /data/knowledge_base
     ports:
       - "8501:8501"
     environment:
@@ -146,7 +147,7 @@ services:
     depends_on:
       - cortex-api
     volumes:
-      - cortex_data:/data
+      - cortex_data:/data/ai_databases
       - backup_data:/backups
     environment:
       - BACKUP_SCHEDULE=0 2 * * *  # Daily at 2 AM
@@ -162,6 +163,10 @@ volumes:
     driver: local
   cortex_data:
     driver: local
+    name: cortex_ai_databases
+  knowledge_base:
+    driver: local
+    name: cortex_knowledge_base
   cortex_logs:
     driver: local
   backup_data:
