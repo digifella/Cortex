@@ -312,8 +312,8 @@ def _reader_to_queue(pipe, q: queue.Queue, stop_event: threading.Event):
                 # EOF reached
                 break
             q.put(line)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Reader thread ended: {e}")
 
 def start_ingest_reader(proc: subprocess.Popen) -> None:
     """Start a background thread that enqueues stdout lines for non-blocking UI reads."""
@@ -478,21 +478,22 @@ def show_collection_migration_healthcheck():
                         st.error(f"Failed to migrate collections: {me}")
             with col_b:
                 st.caption(f"Project file: {project_collections}\nExternal file: {external_path}")
-    except Exception:
+    except Exception as e:
         # Non-fatal; just skip if anything goes wrong
-        pass
+        logger.debug(f"Collection migration healthcheck skipped: {e}")
 
 def initialize_state(force_reset: bool = False):
-    # Cache config to avoid file reads on every interaction
-    if "cached_config" not in st.session_state or force_reset:
-        config_manager = ConfigManager()
-        st.session_state.cached_config = config_manager.get_config()
-    config = st.session_state.cached_config
-
+    # On force_reset, clear all session state first, then re-read config
     if force_reset:
         keys_to_reset = list(st.session_state.keys())
         for key in keys_to_reset:
             del st.session_state[key]
+
+    # Cache config to avoid file reads on every interaction
+    if "cached_config" not in st.session_state:
+        config_manager = ConfigManager()
+        st.session_state.cached_config = config_manager.get_config()
+    config = st.session_state.cached_config
 
     # Always sync with config - update session state if config has different values
     config_knowledge_path = config.get("knowledge_source_path", "")
@@ -715,7 +716,9 @@ def scan_for_files(selected_dirs: List[str]):
     filter_progress_container = st.empty()
     filter_progress_container.info("🔍 **Applying filters and exclusions...**")
     
-    candidate_files = [f.as_posix() for f in all_files if f.as_posix() not in ingested_files and f.suffix.lower() not in UNSUPPORTED_EXTENSIONS]
+    # Normalize ingested_files keys to POSIX format for consistent comparison
+    ingested_posix = {Path(k).as_posix() for k in ingested_files}
+    candidate_files = [f.as_posix() for f in all_files if f.as_posix() not in ingested_posix and f.suffix.lower() not in UNSUPPORTED_EXTENSIONS]
     filter_progress_container.text(f"📋 After excluding unsupported formats: {len(candidate_files)} files")
 
     if st.session_state.filter_exclude_common:
@@ -1252,7 +1255,7 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
         auto_refresh = st.checkbox("Auto refresh (3s)", key="auto_refresh_active_batch")
         if auto_refresh:
             import time as _t
-            _t.sleep(3)
+            _t.sleep(1)
             st.rerun()
 
     # If batch is marked processing but no subprocess is attached, try to auto-start and attach
@@ -1750,32 +1753,30 @@ def render_active_batch_management(batch_manager: BatchState, batch_status: dict
                     st.info(f"💡 **New Processing Plan**: {files_per_session} files per session, ~{sessions_needed} sessions needed")
 
                 if st.button("🔄 Apply New Settings", type="secondary", use_container_width=True):
-                    # Modify existing batch with new settings
-                            batch_state = batch_manager.load_state()
-                            if batch_state:
-                                remaining_files = batch_state.get('files_remaining', [])
-                                if remaining_files:
-                                    # Update batch with new settings
-                                    batch_manager.clear_batch()
-                                    scan_config = batch_state.get('scan_config', {})
-                                    auto_finalize_enabled = batch_state.get(
-                                        'auto_finalize_enabled',
-                                        scan_config.get('auto_finalize_enabled', False)
-                                    )
-                                    batch_manager.create_batch(
-                                        remaining_files,
-                                        scan_config,
-                                        new_chunk_size,
-                                        new_auto_pause if new_auto_pause != "No auto-pause" else None,
-                                        auto_finalize_enabled=auto_finalize_enabled
-                                    )
+                    batch_state = batch_manager.load_state()
+                    if batch_state:
+                        remaining_files = batch_state.get('files_remaining', [])
+                        if remaining_files:
+                            batch_manager.clear_batch()
+                            scan_config = batch_state.get('scan_config', {})
+                            auto_finalize_enabled = batch_state.get(
+                                'auto_finalize_enabled',
+                                scan_config.get('auto_finalize_enabled', False)
+                            )
+                            batch_manager.create_batch(
+                                remaining_files,
+                                scan_config,
+                                new_chunk_size,
+                                new_auto_pause if new_auto_pause != "No auto-pause" else None,
+                                auto_finalize_enabled=auto_finalize_enabled
+                            )
 
-                            if new_auto_pause != "No auto-pause":
-                                st.success(f"✅ Settings updated! New session mode: {new_auto_pause} chunks ({new_auto_pause * new_chunk_size} files) then auto-pause")
-                            else:
-                                st.success(f"✅ Settings updated! New chunk size: {new_chunk_size} files per chunk, continuous processing")
+                    if new_auto_pause != "No auto-pause":
+                        st.success(f"✅ Settings updated! New session mode: {new_auto_pause} chunks ({new_auto_pause * new_chunk_size} files) then auto-pause")
+                    else:
+                        st.success(f"✅ Settings updated! New chunk size: {new_chunk_size} files per chunk, continuous processing")
 
-                            st.rerun()
+                    st.rerun()
         else:
             # Not chunked yet - show conversion options only if large batch and paused
             if batch_status.get('total_files', 0) > 500:
@@ -2798,7 +2799,7 @@ def render_config_and_scan_ui():
                 if st.session_state.get("batch_ingest_mode", False):
                     files_to_process = st.session_state.files_to_review
                     if files_to_process:
-                        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                        container_db_path = get_runtime_db_path()
                         batch_manager = BatchState(container_db_path)
                         batch_manager.create_batch(files_to_process, scan_config)
 
@@ -2906,7 +2907,7 @@ def render_config_and_scan_ui():
                     files_to_process = st.session_state.get("files_to_review", [])
                     if files_to_process:
                         # Initialize batch state
-                        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                        container_db_path = get_runtime_db_path()
                         batch_manager = BatchState(container_db_path)
                         batch_manager.create_batch(files_to_process, scan_config)
 
@@ -2954,7 +2955,7 @@ def render_config_and_scan_ui():
         st.markdown("- ⚠️ Delete Entire Knowledge Base")
         
         if st.button("🔧 Open Maintenance Page", use_container_width=True, type="primary"):
-            st.switch_page("pages/7_Maintenance.py")
+            st.switch_page("pages/6_Maintenance.py")
 
 def render_pre_analysis_ui():
     st.header("Pre-Analysis Review")
@@ -2972,7 +2973,12 @@ def render_pre_analysis_ui():
     with st.container(border=True):
         sc1, sc2 = st.columns(2)
         def sort_by_name(): st.session_state.files_to_review.sort(key=lambda f: Path(f).name)
-        def sort_by_date(): st.session_state.files_to_review.sort(key=lambda f: Path(f).stat().st_mtime, reverse=True)
+        def _safe_mtime(f):
+            try:
+                return Path(f).stat().st_mtime
+            except OSError:
+                return 0.0
+        def sort_by_date(): st.session_state.files_to_review.sort(key=_safe_mtime, reverse=True)
         sc1.button("Sort by Name (A-Z)", on_click=sort_by_name, use_container_width=True)
         sc2.button("Sort by Date (Newest First)", on_click=sort_by_date, use_container_width=True)
 
@@ -2993,7 +2999,10 @@ def render_pre_analysis_ui():
     st.markdown("---")
 
     for fp in paginated_files:
-        mod_time = datetime.fromtimestamp(Path(fp).stat().st_mtime)
+        try:
+            mod_time = datetime.fromtimestamp(Path(fp).stat().st_mtime)
+        except OSError:
+            mod_time = datetime.min
         label = f"**{Path(fp).name}** (`{mod_time.strftime('%Y-%m-%d %H:%M:%S')}`)"
         is_selected = st.session_state.file_selections.get(fp, False)
         new_selection = st.checkbox(label, value=is_selected, key=f"cb_{fp}")
@@ -3349,9 +3358,9 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
         if should_finalize and not finalize_done:
             st.session_state.auto_finalize_retry_attempts = 0
             # Show info message to confirm auto-finalize is triggering
-            st.success("✅ Analysis complete! Starting automatic finalization in 2 seconds...")
+            st.success("✅ Analysis complete! Starting automatic finalization...")
             logger.info("Analysis completed successfully - starting automatic finalization")
-            time.sleep(2)  # Brief delay so user sees the message
+            time.sleep(0.5)  # Brief delay so user sees the message
             start_automatic_finalization()
             st.rerun()  # Immediate rerun to show finalization stage
             return  # Exit early to avoid setting stage to metadata_review
@@ -3573,14 +3582,14 @@ def render_metadata_review_ui():
                 st.session_state.last_ingested_doc_ids = [doc['doc_id'] for doc in valid_files if not doc.get('exclude_from_final')]
                 # Write staging file to database directory, not project root
                 container_db_path = get_runtime_db_path()
+                if not container_db_path or not Path(container_db_path).exists():
+                    st.error(f"Database path is invalid or does not exist: {container_db_path}")
+                    st.stop()
                 staging_file_path = Path(container_db_path) / "staging_ingestion.json"
                 payload = serialize_staging_payload(st.session_state.edited_staged_files, st.session_state.get('target_collection_name'))
                 with open(staging_file_path, 'w') as f:
                     json.dump(payload, f, indent=2)
                 st.session_state.staged_metadata = payload
-                if not container_db_path or not Path(container_db_path).exists():
-                    st.error(f"Database path is invalid or does not exist: {container_db_path}")
-                    st.stop()
 
                 st.session_state.log_messages = ["Finalizing batch ingestion..."]
                 st.session_state.ingestion_stage = "finalizing"
@@ -4003,10 +4012,20 @@ def render_document_type_management():
         st.subheader("Reset to Defaults")
         st.warning("⚠️ This will reset all categories, types, and mappings to default values.")
         if st.button("🔄 Reset to Defaults", type="secondary"):
-            if st.button("⚠️ Confirm Reset", type="primary"):
-                if doc_type_manager.reset_to_defaults():
-                    st.success("Configuration reset to defaults!")
-                    st.session_state.show_maintenance = True
+            st.session_state['confirm_doctype_reset'] = True
+        if st.session_state.get('confirm_doctype_reset', False):
+            st.error("Are you sure? This cannot be undone.")
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button("⚠️ Confirm Reset", type="primary"):
+                    st.session_state.pop('confirm_doctype_reset', None)
+                    if doc_type_manager.reset_to_defaults():
+                        st.success("Configuration reset to defaults!")
+                        st.session_state.show_maintenance = True
+                        st.rerun()
+            with col_no:
+                if st.button("Cancel"):
+                    st.session_state.pop('confirm_doctype_reset', None)
                     st.rerun()
     
     # Close button
@@ -4135,7 +4154,7 @@ def render_recovery_section():
             # Redirect to maintenance page for advanced tools
             st.info("💡 **Database maintenance and recovery tools** have been moved to the dedicated **Maintenance** page for better organization.")
             if st.button("🔧 Open Maintenance Page", use_container_width=True, help="Access advanced database repair and recovery features"):
-                st.switch_page("pages/7_Maintenance.py")
+                st.switch_page("pages/6_Maintenance.py")
         
         # Show urgent recovery message if issues detected (already handled by check_recovery_needed dismiss logic)
         if show_maintenance or recovery_needed:
@@ -4390,7 +4409,7 @@ else:
                                 }
                             break
         except Exception as e:
-            pass  # Ignore errors in log parsing
+            logger.debug(f"Orphaned session detection log parse error: {e}")
 
     if orphaned_session and stage in {"config", "pre_analysis"}:
         st.warning("⚠️ **Interrupted Processing Detected**")
