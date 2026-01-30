@@ -49,6 +49,10 @@ import re
 import threading
 from typing import Optional
 
+# Thread-safe debug log buffer (avoids writing to session_state from background threads)
+_debug_log_lock = threading.Lock()
+_debug_log_buffer: list = []
+
 # Import only ChromaDB components needed for direct search
 import chromadb
 from chromadb.config import Settings as ChromaSettings
@@ -81,6 +85,14 @@ from cortex_engine.async_query import get_model_aware_threshold
 
 # Set up logging
 logger = get_logger(__name__)
+
+
+@st.cache_resource(ttl=300)
+def _get_chroma_client(chroma_db_path: str):
+    """Return a cached ChromaDB PersistentClient for the given path."""
+    db_settings = ChromaSettings(anonymized_telemetry=False)
+    return chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+
 
 # Page configuration
 PAGE_VERSION = VERSION_STRING
@@ -226,8 +238,9 @@ def get_document_type_options():
                 "Meeting Minutes", "Financial Report", "Research Paper", "Email Correspondence", "Other"]
 
 
+@st.cache_data(ttl=120)
 def get_available_thematic_tags(db_path: str) -> list:
-    """Collect unique thematic tags from the ChromaDB collection (best-effort, paged)."""
+    """Collect unique thematic tags from the ChromaDB collection (cached 2 min)."""
     try:
         resolved_root = resolve_db_root_path(db_path) if not os.path.exists('/.dockerenv') else Path(db_path)
         if not resolved_root:
@@ -235,8 +248,7 @@ def get_available_thematic_tags(db_path: str) -> list:
         chroma_db_path = os.path.join(str(resolved_root), "knowledge_hub_db")
         if not os.path.isdir(chroma_db_path):
             return []
-        settings = ChromaSettings(anonymized_telemetry=False)
-        client = chromadb.PersistentClient(path=chroma_db_path, settings=settings)
+        client = _get_chroma_client(chroma_db_path)
         collection = client.get_collection(COLLECTION_NAME)
         sample = collection.get(include=["metadatas"], limit=2000)
         metadatas = sample.get("metadatas", [])
@@ -355,11 +367,8 @@ def validate_database(db_path, silent=False):
         gc.collect()
         
         # Simple ChromaDB validation without LlamaIndex
-        db_settings = ChromaSettings(
-            anonymized_telemetry=False
-        )
-        client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
-        
+        client = _get_chroma_client(chroma_db_path)
+
         # Try to get existing collection or create if it doesn't exist
         try:
             collection = client.get_collection(COLLECTION_NAME)
@@ -378,11 +387,10 @@ def validate_database(db_path, silent=False):
         if collection_count > 0:
             if not silent:
                 st.success(f"✅ Knowledge base validated: {collection_count} documents available for direct search.")
-            return {"path": chroma_db_path, "count": collection_count, "collection": collection}
         else:
             if not silent:
                 st.warning("⚠️ Database collection exists but no documents found. Please run Knowledge Ingest to add documents.")
-            return None
+        return {"path": chroma_db_path, "count": collection_count, "collection": collection}
             
     except Exception as e:
         # Check if this is a collections schema error (development database accessed from Docker)
@@ -394,10 +402,7 @@ def validate_database(db_path, silent=False):
             
             # Try to continue with ChromaDB-only access (skip collections)
             try:
-                db_settings = ChromaSettings(
-                    anonymized_telemetry=False
-                )
-                client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+                client = _get_chroma_client(chroma_db_path)
                 collection = client.get_collection(COLLECTION_NAME)
                 collection_count = collection.count()
                 
@@ -557,10 +562,7 @@ def render_sidebar():
                 if db_exists:
                     # Count documents
                     try:
-                        db_settings = ChromaSettings(
-                            anonymized_telemetry=False
-                        )
-                        client = chromadb.PersistentClient(path=db_dir, settings=db_settings)
+                        client = _get_chroma_client(db_dir)
                         collections = client.list_collections()
                         if collections:
                             total_docs = sum(collection.count() for collection in collections)
@@ -708,8 +710,7 @@ def render_sidebar():
             try:
                 chroma_path = os.path.join(convert_windows_to_wsl_path(normalized_db_value), "knowledge_hub_db")
                 if os.path.exists(chroma_path):
-                    db_check_settings = ChromaSettings(anonymized_telemetry=False)
-                    db_check_client = chromadb.PersistentClient(path=chroma_path, settings=db_check_settings)
+                    db_check_client = _get_chroma_client(chroma_path)
                     db_check_collection = db_check_client.get_collection(COLLECTION_NAME)
                     if db_check_collection.count() > 0:
                         sample = db_check_collection.peek(limit=1)
@@ -854,17 +855,29 @@ def render_sidebar():
 
 
 def add_search_debug(message: str):
-    """Add a message to the search debug log in session state."""
-    if 'search_debug_log' not in st.session_state:
-        st.session_state.search_debug_log = []
+    """Add a message to the search debug log (thread-safe)."""
     import datetime
     timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    st.session_state.search_debug_log.append(f"[{timestamp}] {message}")
-    logger.info(message)  # Also log to standard logger
+    entry = f"[{timestamp}] {message}"
+    with _debug_log_lock:
+        _debug_log_buffer.append(entry)
+    logger.info(message)
+
+
+def flush_debug_log():
+    """Flush the thread-safe buffer into session_state (call from main thread only)."""
+    with _debug_log_lock:
+        if _debug_log_buffer:
+            if 'search_debug_log' not in st.session_state:
+                st.session_state.search_debug_log = []
+            st.session_state.search_debug_log.extend(_debug_log_buffer)
+            _debug_log_buffer.clear()
 
 
 def clear_search_debug():
     """Clear the search debug log."""
+    with _debug_log_lock:
+        _debug_log_buffer.clear()
     st.session_state.search_debug_log = []
 
 
@@ -1071,7 +1084,7 @@ def hybrid_search(db_path, query, filters, top_k=20, strict_mode=False):
                 # Prepare strict mode terms if enabled
                 strict_terms = []
                 if strict_mode:
-                    strict_terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 2]
+                    strict_terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 1]
 
                 for i, result in enumerate(graphrag_raw[:top_k]):
                     if hasattr(result, 'text'):
@@ -1189,13 +1202,18 @@ def apply_post_search_filters(result, filters):
     # Apply boolean logic
     if filter_operator == "AND":
         return doc_type_match and outcome_match and tag_match
-    else:  # OR operator
-        return (
-            doc_type_match
-            or outcome_match
-            or tag_match
-            or (doc_type_filter == "Any" and outcome_filter == "Any" and not tag_filter)
-        )
+    else:  # OR operator — only evaluate filters that are actively set
+        active_checks = []
+        if doc_type_filter != "Any":
+            active_checks.append(doc_type_match)
+        if outcome_filter != "Any":
+            active_checks.append(outcome_match)
+        if tag_filter:
+            active_checks.append(tag_match)
+        # If no filters are active, pass everything through
+        if not active_checks:
+            return True
+        return any(active_checks)
 
 
 # Simple ChromaDB Vector Index interface for GraphRAG compatibility
@@ -1361,12 +1379,9 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
                 st.error(f"Database not found: {chroma_db_path}")
                 return []
             
-            # Direct ChromaDB client
+            # Direct ChromaDB client (cached)
             logger.info("Connecting to ChromaDB client...")
-            db_settings = ChromaSettings(
-                anonymized_telemetry=False
-            )
-            client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+            client = _get_chroma_client(chroma_db_path)
             collection = client.get_collection(COLLECTION_NAME)
             logger.info(f"Connected to collection '{COLLECTION_NAME}'")
 
@@ -1443,58 +1458,59 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
                 logger.info("Attempting fallback text-based search...")
 
                 try:
-                    # Get ALL documents for text search - especially important for strict mode
-                    # which needs to find documents with ALL terms present
+                    # Text search fallback — cap scan to avoid loading entire KB into memory
+                    TEXT_FALLBACK_SCAN_LIMIT = 10000
                     total_docs = collection.count()
-                    all_results = collection.get(limit=total_docs)
-                    
+                    scan_limit = min(total_docs, TEXT_FALLBACK_SCAN_LIMIT)
+                    if total_docs > TEXT_FALLBACK_SCAN_LIMIT:
+                        logger.warning(f"Text fallback capped to {TEXT_FALLBACK_SCAN_LIMIT}/{total_docs} docs")
+                    all_results = collection.get(limit=scan_limit)
+
                     matching_docs = []
-                    query_terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 2]
-                    
-                    documents = all_results.get('documents', [])
-                    metadatas = all_results.get('metadatas', [])
-                    
-                    for i, (doc, metadata) in enumerate(zip(documents, metadatas)):
-                        doc_lower = doc.lower()
-                        
-                        # Calculate match score based on term presence
-                        matches = 0
-                        for term in query_terms:
-                            if term in doc_lower:
-                                matches += 1
-                        
-                        # Include documents that match at least one term
-                        if matches > 0:
-                            # Score based on percentage of terms matched and term frequency
-                            base_score = matches / len(query_terms)
-                            
-                            # Boost score for documents with multiple term matches
-                            if matches > 1:
-                                base_score *= 1.5
-                            
-                            matching_docs.append({
-                                'doc': doc,
-                                'meta': metadata,
-                                'score': base_score,
-                                'matches': matches
-                            })
-                    
-                    # Sort by score and matches
-                    if matching_docs:
-                        matching_docs.sort(key=lambda x: (x['matches'], x['score']), reverse=True)
-                        
-                        results = {
-                            'documents': [[item['doc'] for item in matching_docs[:top_k]]],
-                            'metadatas': [[item['meta'] for item in matching_docs[:top_k]]],
-                            'distances': [[1.0 - item['score'] for item in matching_docs[:top_k]]]
-                        }
-                        
-                        search_strategy = "text-fallback"
-                        logger.info(f"Text fallback search found {len(matching_docs)} matches")
-                    else:
+                    query_terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 1]
+
+                    if not query_terms:
+                        logger.warning("Text fallback: all query terms filtered out (too short)")
                         results = {'documents': [[]], 'metadatas': [[]], 'distances': [[]]}
-                        logger.info("No text matches found in fallback search")
-                        
+                    else:
+                        documents = all_results.get('documents', [])
+                        metadatas = all_results.get('metadatas', [])
+
+                        for fb_i, (doc, metadata) in enumerate(zip(documents, metadatas)):
+                            doc_lower = doc.lower()
+
+                            matches = sum(1 for term in query_terms if term in doc_lower)
+
+                            min_matches = len(query_terms) if strict_mode else 1
+                            if matches >= min_matches:
+                                base_score = matches / len(query_terms)
+                                # Boost for multi-term matches, capped at 1.0
+                                if matches > 1:
+                                    base_score = min(base_score * 1.5, 1.0)
+
+                                matching_docs.append({
+                                    'doc': doc,
+                                    'meta': metadata,
+                                    'score': base_score,
+                                    'matches': matches
+                                })
+
+                        if matching_docs:
+                            matching_docs.sort(key=lambda x: (x['matches'], x['score']), reverse=True)
+
+                            # Use candidate_count (not top_k) so downstream filters have enough to work with
+                            results = {
+                                'documents': [[item['doc'] for item in matching_docs[:candidate_count]]],
+                                'metadatas': [[item['meta'] for item in matching_docs[:candidate_count]]],
+                                'distances': [[max(0.0, 1.0 - item['score']) for item in matching_docs[:candidate_count]]]
+                            }
+
+                            search_strategy = "text-fallback"
+                            logger.info(f"Text fallback search found {len(matching_docs)} matches")
+                        else:
+                            results = {'documents': [[]], 'metadatas': [[]], 'distances': [[]]}
+                            logger.info("No text matches found in fallback search")
+
                 except Exception as fallback_e:
                     logger.error(f"Fallback search also failed: {fallback_e}")
                     return []
@@ -1541,7 +1557,15 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
                 metadatas = results['metadatas'][0] if results['metadatas'] else []
                 distances = results['distances'][0] if results['distances'] else []
 
-                logger.info(f"Processing {len(documents)} raw results (threshold: {similarity_threshold:.2f})...")
+                logger.info(f"Processing {len(documents)} raw results (threshold: {similarity_threshold:.2f}, strict_mode: {strict_mode})...")
+
+                # Pre-compute strict mode terms for early filtering (include 2-char terms like "AI", "ML")
+                strict_query_terms = None
+                if strict_mode:
+                    strict_query_terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 1]
+                    if not strict_query_terms:
+                        logger.warning("Strict mode: all query terms too short after filtering — strict matching disabled")
+                        add_search_debug("Warning: all query terms are 1 character or shorter — strict matching disabled")
 
                 for i, (doc, metadata, distance) in enumerate(zip(documents, metadatas, distances)):
                     # L2 distance to similarity: 1/(1+d) maps [0,∞) to (0,1]
@@ -1549,6 +1573,13 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
                     similarity_score = 1.0 / (1.0 + distance)
 
                     file_name = metadata.get('file_name', 'Unknown')
+
+                    # Early strict mode filter: skip documents missing required terms
+                    # before threshold/diversity filters can eliminate good matches
+                    if strict_query_terms:
+                        doc_lower = doc.lower()
+                        if not all(term in doc_lower for term in strict_query_terms):
+                            continue
 
                     result = {
                         'rank': i + 1,
@@ -1568,7 +1599,9 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
                         continue
 
                     # Model-aware similarity threshold filter
-                    if similarity_score < similarity_threshold:
+                    # In strict mode, relax threshold since keyword matching already ensures relevance
+                    effective_threshold = similarity_threshold * 0.5 if strict_mode else similarity_threshold
+                    if similarity_score < effective_threshold:
                         filtered_by_threshold.append(similarity_score)
                         continue
 
@@ -1600,22 +1633,56 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
 
             logger.info(f"Direct ChromaDB search returned {len(formatted_results)} formatted results")
 
-            # Apply strict mode filtering if enabled
-            if strict_mode and formatted_results:
-                query_terms = [term.strip().lower() for term in query.split() if len(term.strip()) > 2]
-                if query_terms:
-                    strict_filtered = []
-                    for result in formatted_results:
-                        text_lower = result['text'].lower()
-                        # Check if ALL terms are present
-                        all_terms_present = all(term in text_lower for term in query_terms)
-                        if all_terms_present:
-                            strict_filtered.append(result)
-
-                    filtered_count = len(formatted_results) - len(strict_filtered)
-                    if filtered_count > 0:
-                        logger.info(f"🎯 Strict mode: filtered {filtered_count} results (kept {len(strict_filtered)})")
-                    formatted_results = strict_filtered
+            # Text fallback: if vector search returned candidates but threshold/strict
+            # filtering eliminated ALL of them, run text-based keyword search as recovery.
+            if not formatted_results and search_strategy == "vector":
+                logger.info("Vector results all filtered out — attempting text-based fallback...")
+                try:
+                    TEXT_FALLBACK_SCAN_LIMIT = 10000
+                    fb_total = collection.count()
+                    fb_scan = min(fb_total, TEXT_FALLBACK_SCAN_LIMIT)
+                    all_results = collection.get(limit=fb_scan)
+                    query_terms_fb = [term.strip().lower() for term in query.split() if len(term.strip()) > 1]
+                    if not query_terms_fb:
+                        logger.warning("Strict fallback: all query terms filtered out (too short)")
+                    else:
+                        fb_documents = all_results.get('documents', [])
+                        fb_metadatas = all_results.get('metadatas', [])
+                        fb_matches = []
+                        min_fb_matches = len(query_terms_fb) if strict_mode else 1
+                        for fb_i, (doc, metadata) in enumerate(zip(fb_documents, fb_metadatas)):
+                            doc_lower = doc.lower()
+                            match_count = sum(1 for term in query_terms_fb if term in doc_lower)
+                            if match_count >= min_fb_matches:
+                                term_count = sum(doc_lower.count(term) for term in query_terms_fb)
+                                fb_matches.append({'doc': doc, 'meta': metadata, 'freq': term_count, 'idx': fb_i})
+                        if fb_matches:
+                            fb_matches.sort(key=lambda x: x['freq'], reverse=True)
+                            doc_chunk_counts_fb = {}
+                            for item in fb_matches[:candidate_count]:
+                                file_name = item['meta'].get('file_name', 'Unknown')
+                                doc_chunk_counts_fb[file_name] = doc_chunk_counts_fb.get(file_name, 0) + 1
+                                if doc_chunk_counts_fb[file_name] > MAX_CHUNKS_PER_DOC:
+                                    continue
+                                result = {
+                                    'rank': len(formatted_results) + 1,
+                                    'score': min(0.5, item['freq'] * 0.05),
+                                    'text': item['doc'],
+                                    'file_path': item['meta'].get('file_path', 'Unknown'),
+                                    'file_name': file_name,
+                                    'document_type': item['meta'].get('document_type', 'Unknown'),
+                                    'proposal_outcome': item['meta'].get('proposal_outcome', 'N/A'),
+                                    'thematic_tags': item['meta'].get('thematic_tags', item['meta'].get('tags', [])),
+                                    'chunk_id': item['meta'].get('chunk_id', f'chunk_{item["idx"]}'),
+                                    'doc_id': item['meta'].get('doc_id', f'doc_{item["idx"]}'),
+                                }
+                                if collection_doc_ids is not None and result['doc_id'] not in collection_doc_ids:
+                                    continue
+                                if apply_post_search_filters(result, filters):
+                                    formatted_results.append(result)
+                            logger.info(f"Text fallback recovered {len(formatted_results)} results (strict={strict_mode})")
+                except Exception as fb_e:
+                    logger.error(f"Strict mode text fallback failed: {fb_e}")
 
             # Apply neural reranking for precision boost
             if use_reranker and formatted_results:
@@ -1983,7 +2050,8 @@ def render_search_results(results, filters):
     if len(results) > len(deduplicated_results):
         st.info(f"📄 Showing {len(deduplicated_results)} unique documents (from {len(results)} chunks)")
 
-    for i, result in enumerate(deduplicated_results[:10]):  # Show top 10 unique documents
+    display_limit = st.session_state.get('reranker_top_k', QWEN3_VL_RERANKER_TOP_K)
+    for i, result in enumerate(deduplicated_results[:display_limit]):
         with st.expander(f"**{result['rank']}.** {result['file_name']} (Score: {result['score']:.3f})"):
             # Action buttons for individual results
             action_col1, action_col2, action_col3 = st.columns([1, 1, 4])
@@ -2220,28 +2288,6 @@ def main():
     
     st.divider()
     
-    # Docker-specific guidance with better detection
-    is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_ENV') == 'true'
-    
-    if is_docker and not db_info:
-        # Check if we're trying to use a development database from Docker
-        current_db_path = config.get('db_path', '') if config else ''
-        if current_db_path and ('F:\\' in current_db_path or 'C:\\' in current_db_path):
-            st.warning("🐳 **Windows Database Path Detected in Docker**")
-            st.error("🚫 **Issue:** You're trying to access a Windows database path from inside Docker.")
-            st.info("📝 **Solutions:**\n\n**Option 1 (Recommended):** Use separate Docker database\n- Set path to `/app/data/ai_databases`\n- Go to Knowledge Ingest to add documents\n\n**Option 2:** Mount Windows database correctly\n- Ensure Windows path is properly mounted as Docker volume\n- Use mounted path like `/mnt/database` instead of `F:\\ai_databases`")
-            
-            with st.expander("🔧 Quick Fix: Use Docker Database Path"):
-                if st.button("🚀 Set Docker Database Path", type="primary"):
-                    st.session_state.db_path_input = "/app/data/ai_databases"
-                    st.success("Database path updated! Please refresh the page.")
-                    st.rerun()
-            return
-        else:
-            st.warning("🐳 **Docker First-Time Setup Required**")
-            st.info("📝 **Next Steps:**\n1. Set database path in sidebar (try `/app/data/ai_databases`)\n2. Go to **Knowledge Ingest** page to add documents\n3. Return here to search your documents")
-            return
-    
     # Add helpful examples
     with st.expander("💡 Search Examples & Tips", expanded=False):
         st.markdown("""
@@ -2335,8 +2381,7 @@ def main():
                 try:
                     safe_db_path = convert_to_docker_mount_path(config.get('db_path_input') or config.get('ai_database_path') or st.session_state.get('db_path_input', ''))
                     chroma_db_path = os.path.join(safe_db_path, "knowledge_hub_db")
-                    db_settings = ChromaSettings(anonymized_telemetry=False)
-                    client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+                    client = _get_chroma_client(chroma_db_path)
                     try:
                         col = client.get_collection(COLLECTION_NAME)
                         total_docs = col.count()
@@ -2358,6 +2403,7 @@ def main():
                 if strict_mode:
                     st.write("🎯 **Strict mode:** requiring ALL search terms to be present")
                 results = perform_search(None, query, config, search_mode, strict_mode=strict_mode)
+                flush_debug_log()  # Move thread-safe buffer into session_state
                 st.session_state.last_search_results = results
                 
                 # Update status when complete

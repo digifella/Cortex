@@ -7,6 +7,7 @@ import streamlit as st
 import sys
 from pathlib import Path
 import os
+import shutil
 import tempfile
 import time
 import zipfile
@@ -68,6 +69,11 @@ def _get_knowledge_base_files(extensions: List[str]) -> List[Path]:
 
 def _file_input_widget(key_prefix: str, allowed_types: List[str], label: str = "Choose a document:"):
     """Render upload / browse KB widget. Returns selected file path or None."""
+    # Use a version counter so "Clear All Files" can reset the uploader widget
+    if f"{key_prefix}_upload_version" not in st.session_state:
+        st.session_state[f"{key_prefix}_upload_version"] = 0
+    upload_version = st.session_state[f"{key_prefix}_upload_version"]
+
     input_method = st.radio(
         "Choose input method:",
         ["Upload File", "Browse Knowledge Base"],
@@ -77,7 +83,8 @@ def _file_input_widget(key_prefix: str, allowed_types: List[str], label: str = "
     selected_file = None
 
     if input_method == "Upload File":
-        uploaded = st.file_uploader(label, type=allowed_types, key=f"{key_prefix}_upload",
+        uploaded = st.file_uploader(label, type=allowed_types,
+                                    key=f"{key_prefix}_upload_v{upload_version}",
                                     accept_multiple_files=(st.session_state.get(f"{key_prefix}_batch", False)))
         if uploaded:
             files = uploaded if isinstance(uploaded, list) else [uploaded]
@@ -119,7 +126,7 @@ def _file_input_widget(key_prefix: str, allowed_types: List[str], label: str = "
 
 def _render_textifier_tab():
     """Render the Textifier tool UI."""
-    st.markdown("Convert PDF, DOCX, or PPTX documents to rich Markdown with optional AI image descriptions.")
+    st.markdown("Convert PDF, DOCX, PPTX, or image files (PNG/JPG) to rich Markdown with optional AI image descriptions.")
 
     col1, col2 = st.columns([1, 2])
 
@@ -130,7 +137,24 @@ def _render_textifier_tab():
         batch_mode = st.toggle("Batch mode (multi-file)", value=False, key="txt_batch_toggle")
         st.session_state["textifier_batch"] = batch_mode
 
-        selected = _file_input_widget("textifier", ["pdf", "docx", "pptx"])
+        selected = _file_input_widget("textifier", ["pdf", "docx", "pptx", "png", "jpg", "jpeg"])
+
+        # Clear all uploaded files button
+        if st.button("Clear All Files", key="txt_clear_all", use_container_width=True):
+            # Bump upload widget version so Streamlit creates a fresh uploader
+            ver = st.session_state.get("textifier_upload_version", 0)
+            # Clear all textifier-related state except the version we're about to set
+            for key in list(st.session_state.keys()):
+                if key.startswith("textifier_"):
+                    del st.session_state[key]
+            if "textifier_results" in st.session_state:
+                del st.session_state["textifier_results"]
+            st.session_state["textifier_upload_version"] = ver + 1
+            # Clean temp files
+            temp_dir = Path(tempfile.gettempdir()) / "cortex_textifier"
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            st.rerun()
 
     with col2:
         st.header("Output")

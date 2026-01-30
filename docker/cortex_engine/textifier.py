@@ -113,6 +113,8 @@ class DocumentTextifier:
             return self.textify_docx(file_path)
         elif ext == ".pptx":
             return self.textify_pptx(file_path)
+        elif ext in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp"):
+            return self.textify_image(file_path)
         else:
             raise ValueError(f"Unsupported file type: {ext}")
 
@@ -286,6 +288,44 @@ class DocumentTextifier:
 
         self._report(1.0, "PPTX conversion complete")
 
+        return "\n".join(md_parts)
+
+    # ------------------------------------------------------------------
+    # Image files (PNG, JPG, etc.)
+    # ------------------------------------------------------------------
+
+    def textify_image(self, file_path: str) -> str:
+        """Convert an image file to Markdown with a VLM description."""
+        self._report(0.0, "Reading image...")
+        file_name = Path(file_path).name
+
+        with open(file_path, "rb") as f:
+            image_bytes = f.read()
+
+        md_parts = [f"# {file_name}\n"]
+
+        self._report(0.3, "Describing image with vision model...")
+        description = self.describe_image(image_bytes)
+        md_parts.append(f"> **[Image]**: {description}")
+        md_parts.append("")
+
+        # Try OCR extraction via pytesseract if available
+        try:
+            from PIL import Image
+            import pytesseract
+            self._report(0.7, "Extracting text via OCR...")
+            img = Image.open(file_path)
+            ocr_text = pytesseract.image_to_string(img).strip()
+            if ocr_text:
+                md_parts.append("## Extracted Text (OCR)\n")
+                md_parts.append(ocr_text)
+                md_parts.append("")
+        except ImportError:
+            logger.debug("pytesseract not available — skipping OCR")
+        except Exception as e:
+            logger.debug(f"OCR extraction failed: {e}")
+
+        self._report(1.0, "Image conversion complete")
         return "\n".join(md_parts)
 
     # ------------------------------------------------------------------

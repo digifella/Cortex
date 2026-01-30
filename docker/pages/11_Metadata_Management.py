@@ -109,22 +109,27 @@ def gather_tags(metadatas: List[Dict[str, Any]]) -> List[str]:
 
 def update_tags(collection, doc_ids: List[str], metadatas: List[Dict[str, Any]],
                 add_tags: List[str], remove_tags: List[str]) -> int:
-    """Apply tag updates to a set of documents."""
+    """Apply tag updates to a set of documents. Uses deep copy to avoid corrupting in-memory state."""
+    import copy
     updated = 0
+    failed = []
     for doc_id, meta in zip(doc_ids, metadatas):
-        existing = normalize_tags(meta.get("thematic_tags"))
+        safe_meta = copy.deepcopy(meta) if meta else {}
+        existing = normalize_tags(safe_meta.get("thematic_tags"))
         tag_set = set(existing)
         if add_tags:
             tag_set.update(add_tags)
         if remove_tags:
             tag_set.difference_update(remove_tags)
-        meta = dict(meta or {})
-        meta["thematic_tags"] = ", ".join(sorted(tag_set))
+        safe_meta["thematic_tags"] = ", ".join(sorted(tag_set))
         try:
-            collection.update(ids=[doc_id], metadatas=[meta])
+            collection.update(ids=[doc_id], metadatas=[safe_meta])
             updated += 1
         except Exception as e:
+            failed.append(doc_id)
             logger.warning(f"Failed to update tags for {doc_id}: {e}")
+    if failed:
+        logger.error(f"Tag update partially failed: {len(failed)}/{len(doc_ids)} documents failed")
     return updated
 
 # ============================================
@@ -187,7 +192,7 @@ with st.sidebar:
 section_header("📚", "Document Browser", f"Showing documents {offset} to {offset + limit}")
 
 try:
-    docs = collection.get(limit=limit, offset=offset, include=["metadatas", "documents"])
+    docs = collection.get(limit=limit, offset=offset, include=["metadatas"])
     logger.info(f"Loaded {len(docs.get('ids', []))} documents")
 except Exception as e:
     error_display(
@@ -200,19 +205,17 @@ except Exception as e:
 
 metadatas = docs.get("metadatas", [])
 ids = docs.get("ids", [])
-documents = docs.get("documents", [])
+documents = []  # Not loaded for efficiency; summaries come from metadata
 
 if not metadatas or not ids:
     st.info("📋 No documents found in this range. Try adjusting the offset.")
     st.stop()
 
 # Flatten single-list structure (ChromaDB sometimes returns nested lists)
-if metadatas and isinstance(metadatas[0], list):
+if metadatas and isinstance(metadatas, list) and metadatas and isinstance(metadatas[0], list):
     metadatas = metadatas[0]
-if ids and isinstance(ids[0], list):
+if ids and isinstance(ids, list) and ids and isinstance(ids[0], list):
     ids = ids[0]
-if documents and isinstance(documents[0], list):
-    documents = documents[0]
 
 all_tags = gather_tags(metadatas)
 
@@ -251,7 +254,7 @@ with st.sidebar:
 # ============================================
 
 rows = []
-for doc_id, meta, text in zip(ids, metadatas, documents or [""] * len(ids)):
+for doc_id, meta in zip(ids, metadatas):
     tags = normalize_tags(meta.get("thematic_tags"))
     if doc_type_filter != "Any" and meta.get("document_type") != doc_type_filter:
         continue
@@ -265,7 +268,7 @@ for doc_id, meta, text in zip(ids, metadatas, documents or [""] * len(ids)):
         "document_type": meta.get("document_type", "Unknown"),
         "proposal_outcome": meta.get("proposal_outcome", "N/A"),
         "thematic_tags": ", ".join(tags),
-        "summary": meta.get("summary", text[:200] + "…" if text else ""),
+        "summary": meta.get("summary", ""),
     })
 
 if not rows:

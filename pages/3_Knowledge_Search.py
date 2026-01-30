@@ -1633,10 +1633,10 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
 
             logger.info(f"Direct ChromaDB search returned {len(formatted_results)} formatted results")
 
-            # Strict mode text fallback: if vector search returned results but strict
-            # filtering eliminated all of them, run text-based search as a second chance.
-            if strict_mode and not formatted_results and search_strategy == "vector":
-                logger.info("Strict mode: vector results all filtered out — attempting text-based fallback...")
+            # Text fallback: if vector search returned candidates but threshold/strict
+            # filtering eliminated ALL of them, run text-based keyword search as recovery.
+            if not formatted_results and search_strategy == "vector":
+                logger.info("Vector results all filtered out — attempting text-based fallback...")
                 try:
                     TEXT_FALLBACK_SCAN_LIMIT = 10000
                     fb_total = collection.count()
@@ -1649,9 +1649,11 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
                         fb_documents = all_results.get('documents', [])
                         fb_metadatas = all_results.get('metadatas', [])
                         fb_matches = []
+                        min_fb_matches = len(query_terms_fb) if strict_mode else 1
                         for fb_i, (doc, metadata) in enumerate(zip(fb_documents, fb_metadatas)):
                             doc_lower = doc.lower()
-                            if all(term in doc_lower for term in query_terms_fb):
+                            match_count = sum(1 for term in query_terms_fb if term in doc_lower)
+                            if match_count >= min_fb_matches:
                                 term_count = sum(doc_lower.count(term) for term in query_terms_fb)
                                 fb_matches.append({'doc': doc, 'meta': metadata, 'freq': term_count, 'idx': fb_i})
                         if fb_matches:
@@ -1678,7 +1680,7 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
                                     continue
                                 if apply_post_search_filters(result, filters):
                                     formatted_results.append(result)
-                            logger.info(f"Text fallback recovered {len(formatted_results)} results for strict mode")
+                            logger.info(f"Text fallback recovered {len(formatted_results)} results (strict={strict_mode})")
                 except Exception as fb_e:
                     logger.error(f"Strict mode text fallback failed: {fb_e}")
 

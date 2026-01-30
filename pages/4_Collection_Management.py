@@ -9,6 +9,7 @@
 
 import streamlit as st
 import sys
+import time
 from pathlib import Path
 import os
 import shutil
@@ -21,7 +22,8 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 # Import centralized utilities
-from cortex_engine.utils import convert_windows_to_wsl_path, get_logger
+from cortex_engine.utils import convert_windows_to_wsl_path, get_logger, resolve_db_root_path
+from cortex_engine.utils import convert_to_docker_mount_path
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.session_state import initialize_app_session_state
 from cortex_engine.config import COLLECTION_NAME
@@ -47,9 +49,13 @@ def init_chroma_client(db_path):
     if not db_path:
         st.error("Database path not configured. Please configure it in Knowledge Ingest.")
         return None
-        
-    wsl_db_path = convert_windows_to_wsl_path(db_path)
-    chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
+
+    resolved = resolve_db_root_path(db_path)
+    if resolved:
+        safe_path = convert_to_docker_mount_path(str(resolved))
+    else:
+        safe_path = convert_windows_to_wsl_path(db_path)
+    chroma_db_path = os.path.join(safe_path, "knowledge_hub_db")
     
     
     if not os.path.isdir(chroma_db_path):
@@ -278,17 +284,12 @@ def render_document_metadata_editor(doc_id, meta, vector_collection, collection_
                     # Parse new tags
                     new_tags = [tag.strip() for tag in new_tags_str.split(',') if tag.strip()]
 
-                    # Update metadata in ChromaDB
-                    updated_metadata = {
-                        'document_type': new_doc_type,
-                        'proposal_outcome': new_outcome,
-                        'summary': new_summary,
-                        'thematic_tags': json.dumps(new_tags),  # Store as JSON string
-                        # Preserve other metadata
-                        'file_name': meta.get('file_name', ''),
-                        'doc_posix_path': meta.get('doc_posix_path', ''),
-                        'last_modified_date': meta.get('last_modified_date', ''),
-                    }
+                    # Update metadata in ChromaDB — preserve all existing fields
+                    updated_metadata = dict(meta)
+                    updated_metadata['document_type'] = new_doc_type
+                    updated_metadata['proposal_outcome'] = new_outcome
+                    updated_metadata['summary'] = new_summary
+                    updated_metadata['thematic_tags'] = json.dumps(new_tags)
 
                     # Update in vector collection
                     vector_collection.update(
@@ -323,7 +324,7 @@ def render_document_metadata_editor(doc_id, meta, vector_collection, collection_
             if isinstance(entities, str):
                 try:
                     entities = json.loads(entities)
-                except:
+                except (json.JSONDecodeError, ValueError):
                     pass
             if isinstance(entities, list) and len(entities) > 0:
                 entity_df_data = []
@@ -350,7 +351,7 @@ def render_document_metadata_editor(doc_id, meta, vector_collection, collection_
             if isinstance(relationships, str):
                 try:
                     relationships = json.loads(relationships)
-                except:
+                except (json.JSONDecodeError, ValueError):
                     pass
             if isinstance(relationships, list) and len(relationships) > 0:
                 rel_df_data = []
