@@ -55,6 +55,9 @@ def initialize_managers():
 # ============================================
 
 st.title("Proposal Workspace")
+st.warning("**This page has been superseded by Proposal Manager.** Use the new consolidated workflow for a better experience.")
+st.page_link("pages/13_Proposal_Manager.py", label="Go to Proposal Manager", icon="📋")
+st.divider()
 st.markdown("Create workspaces, upload tender documents, and bind entity profiles")
 
 workspace_manager, entity_manager = initialize_managers()

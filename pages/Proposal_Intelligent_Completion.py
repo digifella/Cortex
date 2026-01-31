@@ -408,6 +408,9 @@ st.markdown("""
 
 # Title
 st.markdown('<div class="main-header">Intelligent Completion</div>', unsafe_allow_html=True)
+st.warning("**This page has been superseded by Proposal Manager.** Use the new consolidated workflow for a better experience.")
+st.page_link("pages/13_Proposal_Manager.py", label="Go to Proposal Manager", icon="📋")
+st.divider()
 st.markdown('<div class="main-subtitle">Review and complete substantive proposal questions with AI assistance</div>', unsafe_allow_html=True)
 
 # ============================

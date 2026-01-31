@@ -147,6 +147,9 @@ st.markdown("""
 
 # Title
 st.markdown('<div class="main-header">📑 Tender Document Review</div>', unsafe_allow_html=True)
+st.warning("**This page has been superseded by Proposal Manager.** Use the new consolidated workflow for a better experience.")
+st.page_link("pages/13_Proposal_Manager.py", label="Go to Proposal Manager", icon="📋")
+st.divider()
 st.caption("Professional batch analysis and review workflow")
 
 # Workspace selection
