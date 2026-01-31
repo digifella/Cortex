@@ -585,15 +585,29 @@ def _render_photo_keywords_tab():
                     )
 
             # Per-image details
-            for r in results:
-                with st.expander(f"{r['file_name']}", expanded=False):
-                    st.markdown(f"**Description:** {r['description']}")
-                    st.markdown(f"**Keywords ({len(r['keywords'])}):** {', '.join(r['keywords'])}")
-                    exif = r["exif_result"]
-                    if exif["success"]:
-                        st.success(f"EXIF written: {exif['keywords_written']} keywords")
-                    else:
-                        st.error(f"EXIF write failed: {exif['message']}")
+            if len(results) == 1:
+                # Single photo — show inline preview (like Textifier)
+                r = results[0]
+                exif = r["exif_result"]
+                if exif["success"]:
+                    st.success(f"EXIF written: {exif['keywords_written']} keywords to {r['file_name']}")
+                else:
+                    st.error(f"EXIF write failed: {exif['message']}")
+                with st.expander("Preview", expanded=True):
+                    st.markdown(f"**Description:**\n\n{r['description']}")
+                    st.divider()
+                    st.markdown(f"**Keywords ({len(r['keywords'])}):**")
+                    st.markdown(", ".join(r["keywords"]))
+            else:
+                for r in results:
+                    with st.expander(f"{r['file_name']}", expanded=False):
+                        st.markdown(f"**Description:** {r['description']}")
+                        st.markdown(f"**Keywords ({len(r['keywords'])}):** {', '.join(r['keywords'])}")
+                        exif = r["exif_result"]
+                        if exif["success"]:
+                            st.success(f"EXIF written: {exif['keywords_written']} keywords")
+                        else:
+                            st.error(f"EXIF write failed: {exif['message']}")
 
         elif uploaded:
             st.info("Click **Generate Keywords & Write EXIF** to process your photos")
