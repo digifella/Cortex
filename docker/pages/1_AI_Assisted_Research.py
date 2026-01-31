@@ -1,9 +1,10 @@
 # AI-Assisted Research Page
-# Version: v5.4.0
+# Version: v5.6.0
 # Multi-agent research and synthesis engine UI
 
 import streamlit as st
 import sys
+import hashlib
 from pathlib import Path
 
 # Add the project root to the Python path
@@ -26,7 +27,7 @@ from cortex_engine.synthesise import (
 st.set_page_config(page_title="Cortex AI Research Assistant", layout="wide")
 
 # Page configuration
-PAGE_VERSION = "v5.4.0"
+PAGE_VERSION = "v5.6.0"
 
 # --- Initialize Session State ---
 def initialize_session_state():
@@ -100,16 +101,23 @@ st.header(STEP_HEADERS.get(current_step, "AI Research"))
 
 log_expander = st.expander("Show Live Log", expanded=True)
 
+MAX_LOG_LINES = 500
+
 def execute_and_log(step_function, *args, **kwargs):
     """
     Correctly wraps a backend function call to inject a logging callback
     and display live updates in the UI.
     """
     log_placeholder = log_expander.empty()
-    st.session_state.research_log.append(f"--- Running: {step_function.__name__} ---")
+    # Use immutable append pattern to avoid race conditions
+    st.session_state.research_log = st.session_state.research_log + [f"--- Running: {step_function.__name__} ---"]
 
     def ui_log_callback(message):
-        st.session_state.research_log.append(message)
+        log = st.session_state.research_log + [message]
+        # Cap log growth
+        if len(log) > MAX_LOG_LINES:
+            log = log[-MAX_LOG_LINES:]
+        st.session_state.research_log = log
         log_placeholder.code("\n".join(st.session_state.research_log), language="log")
 
     kwargs['status_callback'] = ui_log_callback
@@ -162,7 +170,9 @@ def display_source_list(sources, selection_key, title):
         is_selected = source['url'] in selected_urls
         cite_count = f" (Citations: {source.get('citations', 0)})" if 'citations' in source else ''
         label = f"**[{source['source_type'].upper()}]** {source['title']}{cite_count}"
-        st.checkbox(label, value=is_selected, key=f"{selection_key}_{i}", on_change=toggle_source_selection, args=(source,))
+        # Use URL hash for stable key instead of index
+        url_hash = hashlib.md5(source.get('url', str(i)).encode()).hexdigest()[:8]
+        st.checkbox(label, value=is_selected, key=f"{selection_key}_{url_hash}", on_change=toggle_source_selection, args=(source,))
 
 
 # --- Main Workflow Controller ---
@@ -209,6 +219,13 @@ if current_step == "start":
         except Exception as e:
             st.error(f"❌ LLM Provider configuration error: {e}")
             provider = None
+    # Input validation
+    if research_topic:
+        research_topic = research_topic.strip()
+        if len(research_topic) > 500:
+            st.warning("Research topic is very long. Consider shortening it for better results.")
+            research_topic = research_topic[:500]
+
     # Disable button if no research topic or LLM provider unavailable
     research_disabled = not research_topic or provider is None
     
@@ -344,7 +361,7 @@ elif current_step == "synthesis_complete":
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("📝 Discovery Note")
-                st.markdown(discovery_note, unsafe_allow_html=True)
+                st.markdown(discovery_note)
                 st.download_button("Download Note (.md)", discovery_note, f"{Path(note_path).name}")
             if map_path and Path(map_path).exists():
                  with open(map_path, 'rb') as f: map_image = f.read()
@@ -352,7 +369,7 @@ elif current_step == "synthesis_complete":
                     st.subheader("🎨 Mind Map")
                     st.image(map_image)
                     st.download_button("Download Mind Map (.png)", map_image, f"{Path(map_path).name}", "image/png")
-        except Exception as e:
+        except (OSError, KeyError) as e:
             st.error(f"Error displaying results: {e}")
 
         st.divider()
@@ -364,8 +381,8 @@ elif current_step == "synthesis_complete":
                 try:
                     with open(st.session_state.research_final_results[0], 'r', encoding='utf-8') as f:
                         discovery_note_content = f.read()
-                except Exception:
-                    st.error("Could not read initial discovery note to begin deep research.")
+                except OSError as e:
+                    st.error(f"Could not read initial discovery note to begin deep research: {e}")
                     st.stop()
 
                 final_report_path = execute_and_log(
@@ -390,13 +407,13 @@ elif current_step == "deep_research_complete":
                 deep_research_note = f.read()
 
             st.subheader("📜 Deep Research Report")
-            st.markdown(deep_research_note, unsafe_allow_html=True)
+            st.markdown(deep_research_note)
             st.download_button(
                 "⬇️ Download Deep Research Report (.md)",
                 deep_research_note,
                 file_name=Path(report_path).name
             )
-        except Exception as e:
+        except (OSError, KeyError) as e:
             st.error(f"Error displaying final report: {e}")
     else:
         st.error("Could not find or display the generated deep research report.")

@@ -12,14 +12,12 @@
 #            citations were missing in the final report.
 
 import os
-import openai
 import graphviz
 import time
-import threading
 import json
 import re
+import logging
 import requests
-import ollama
 import shutil
 import subprocess
 import random
@@ -28,11 +26,15 @@ from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
 from googleapiclient.discovery import build
 from pydantic import BaseModel, Field, ValidationError
-from typing import List, Dict, Any, Type, Tuple
+from typing import List, Dict, Any, Optional, Type, Tuple, Union
 
 from llama_index.llms.ollama import Ollama as LlamaOllama
 from llama_index.llms.openai import OpenAI as LlamaOpenAI
 from llama_index.core.llms import LLM
+
+from cortex_engine.utils import convert_windows_to_wsl_path
+
+logger = logging.getLogger(__name__)
 
 # --- Configuration & Schemas ---
 OUTPUT_DIR = Path(__file__).parent.parent / "external_research"
@@ -59,14 +61,8 @@ class ThemeList(BaseModel):
     """Data model for a list of themes."""
     themes: List[str] = Field(..., description="A list of distinct, high-level thematic categories.")
 
-def _convert_windows_to_wsl_path(win_path):
-    if not isinstance(win_path, str) or win_path.startswith('/mnt/'): return win_path
-    path_str = str(win_path).replace('\\', '/')
-    match = re.match(r"^([a-zA-Z]):/(.*)", path_str)
-    if match:
-        drive, rest = match.groups()
-        return f"/mnt/{drive.lower()}/{rest}"
-    return win_path
+# Use centralized path conversion from cortex_engine.utils
+_convert_windows_to_wsl_path = convert_windows_to_wsl_path
 
 def _normalize_json_keys(data: Dict[str, Any], model: Type[BaseModel]) -> Dict[str, Any]:
     normalized_data = {}
@@ -120,62 +116,60 @@ def get_research_llm_provider():
     return os.getenv("RESEARCH_LLM_PROVIDER", "gemini").lower()
 
 LLM_PROVIDER = get_research_llm_provider()
-llm: Any = None
-_current_provider: str = None  # Track current provider globally
 GRAPHVIZ_DOT_EXECUTABLE = os.getenv("GRAPHVIZ_DOT_EXECUTABLE")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 MAX_PAPERS_PER_QUERY, MAX_VIDEOS_PER_QUERY = 3, 1
 
 def get_llm(status_callback=print):
-    global llm, _current_provider
-    # Always refresh provider to respect UI changes
+    """Get or create LLM instance. Uses Streamlit session state when available for thread safety."""
     provider = get_research_llm_provider()
-    
-    # Reset LLM if provider changed
-    if llm is not None and _current_provider != provider:
-        llm = None
-        _current_provider = None
-    
-    if llm is not None:
-        return llm
+
+    # Try session-state-based caching first (thread-safe for Streamlit)
+    _llm_instance = None
+    _cached_provider = None
+    try:
+        import streamlit as st
+        _llm_instance = st.session_state.get("_research_llm_instance")
+        _cached_provider = st.session_state.get("_research_llm_provider")
+    except (ImportError, RuntimeError):
+        pass  # Not in Streamlit context
+
+    # Return cached if provider hasn't changed
+    if _llm_instance is not None and _cached_provider == provider:
+        return _llm_instance
 
     status_callback(f"🚀 Initializing Research LLM provider: {provider.upper()}")
+    llm_instance = None
     if provider == "gemini":
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key: raise ValueError("GEMINI_API_KEY not found in .env file.")
-        llm = GeminiRest(api_key=api_key)
-        try:
-            llm._provider = "gemini"  # Track provider for switching
-        except (AttributeError, TypeError, ValueError):
-            pass  # Ignore if can't set _provider
+        llm_instance = GeminiRest(api_key=api_key)
         status_callback(f"✅ Gemini LLM (gemini-1.5-flash via Direct REST API v1) is ready.")
     elif provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key: raise ValueError("OPENAI_API_KEY not found in .env file.")
-        llm = LlamaOpenAI(model="gpt-4o-mini", api_key=api_key)
-        try:
-            llm._provider = "openai"
-        except (AttributeError, TypeError, ValueError):
-            pass  # Ignore if can't set _provider
+        llm_instance = LlamaOpenAI(model="gpt-4o-mini", api_key=api_key)
         status_callback(f"✅ OpenAI LLM (gpt-4o-mini) is ready.")
     elif provider == "ollama":
-        # Use the research-specific local model
         model_name = os.getenv("OLLAMA_RESEARCH_MODEL", "mistral:latest")
-        llm = LlamaOllama(model=model_name, request_timeout=120.0)
-        try:
-            llm._provider = "ollama"
-        except (AttributeError, TypeError, ValueError):
-            pass  # Ignore if can't set _provider - this is expected with newer LlamaIndex versions
+        llm_instance = LlamaOllama(model=model_name, request_timeout=120.0)
         status_callback(f"✅ Ollama Research LLM ({model_name}) is ready for local research.")
     else:
-        raise ValueError(f"Unsupported LLM_PROVIDER: {LLM_PROVIDER}.")
-    
-    # Track the current provider globally
-    _current_provider = provider
-    return llm
+        raise ValueError(f"Unsupported LLM_PROVIDER: {provider}.")
+
+    # Cache in session state if available
+    try:
+        import streamlit as st
+        st.session_state["_research_llm_instance"] = llm_instance
+        st.session_state["_research_llm_provider"] = provider
+    except (ImportError, RuntimeError):
+        pass
+
+    return llm_instance
 
 def llm_completion(prompt: str, status_callback=print, is_json=False) -> str:
-    status_callback(f"🧠 Generating text with {LLM_PROVIDER.upper()}...")
+    provider = get_research_llm_provider()
+    status_callback(f"🧠 Generating text with {provider.upper()}...")
     try:
         llm_instance = get_llm(status_callback)
         response = llm_instance.complete(prompt)
@@ -186,6 +180,7 @@ def llm_completion(prompt: str, status_callback=print, is_json=False) -> str:
              return ""
         return response_text
     except Exception as e:
+        logger.exception("Unhandled exception in llm_completion")
         status_callback(f"\n❌ Unhandled exception in llm_completion: {e}")
         return ""
 
@@ -212,7 +207,8 @@ Example Format:
         queries = query_object.model_dump()
         status_callback(f"✅ Crafted Foundational Queries (validated): {queries}")
         return queries
-    except Exception as e:
+    except (json.JSONDecodeError, ValidationError, ValueError) as e:
+        logger.warning("Foundational query generation failed: %s", e)
         status_callback(f"❌ Critical failure during foundational query generation. Error: {e}")
         return {"highly_cited_query": f"highly cited papers on {topic}", "review_queries": [f"review of {topic}"]}
 
@@ -228,7 +224,8 @@ def agent_exploratory_query_crafter(topic: str, status_callback=print) -> dict:
         queries = query_object.model_dump()
         status_callback(f"✅ Crafted Exploratory Queries (validated): {queries}")
         return queries
-    except Exception as e:
+    except (json.JSONDecodeError, ValidationError, ValueError) as e:
+        logger.warning("Exploratory query generation failed: %s", e)
         status_callback(f"❌ Critical failure during exploratory query generation. Error: {e}")
         return {"scholar_queries": [topic], "youtube_queries": [topic]}
 
@@ -282,12 +279,13 @@ Example Format: {{"themes": ["First theme", "Second theme", "Third theme"]}}
         themes_list = theme_object.themes
         status_callback(f"✅ Identified and validated themes: {themes_list}")
         return themes_list
-    except Exception as e:
+    except (json.JSONDecodeError, ValidationError, ValueError) as e:
+        logger.warning("Theme generation failed: %s | Raw output: %s", e, llm_output_str[:200])
         status_callback(f"❌ Critical failure during theme generation. Error: {e}\nRAW LLM OUTPUT:\n{llm_output_str}")
         return [] if existing_themes else default_error_response
 
 # --- Data Retrieval Agents ---
-def agent_paper_retriever(query: str, sort_by: str = None, status_callback=print) -> Tuple[bool, list or str]:
+def agent_paper_retriever(query: str, sort_by: str = None, status_callback=print) -> Tuple[bool, Union[List, str]]:
     search_type = f"'{sort_by}'" if sort_by else "standard"
     status_callback(f"📚 Agent Paper Retriever ({search_type} search): Searching for '{query}'...")
     base_url = "https://api.semanticscholar.org/graph/v1/paper/search"
@@ -335,7 +333,7 @@ def agent_paper_retriever(query: str, sort_by: str = None, status_callback=print
     return False, final_error_message
 
 
-def agent_youtube_extractor(query: str, status_callback=print) -> Tuple[bool, list or str]:
+def agent_youtube_extractor(query: str, status_callback=print) -> Tuple[bool, Union[List, str]]:
     status_callback(f"📺 Agent YouTube Extractor: Searching for '{query}'...")
     if not YOUTUBE_API_KEY:
         error_message = "YouTube search failed: YOUTUBE_API_KEY is not configured in your .env file."
@@ -552,8 +550,13 @@ def step4_run_synthesis(sources: List[Dict[str, Any]], themes: List[str], topic:
         status_callback("❌ CRITICAL: Synthesis agent failed."); return None, None
     note_path = final_output_dir / "discovery_note.md"
     map_path = final_output_dir / "mindmap.png"
-    with open(note_path, "w", encoding="utf-8") as f: f.write(discovery_note_md)
-    status_callback(f"✅ Discovery Note saved to {note_path}")
+    try:
+        with open(note_path, "w", encoding="utf-8") as f: f.write(discovery_note_md)
+        status_callback(f"✅ Discovery Note saved to {note_path}")
+    except OSError as e:
+        logger.error("Failed to write discovery note: %s", e)
+        status_callback(f"❌ Failed to save discovery note: {e}")
+        return None, None
     agent_visualiser(mindmap_txt, topic, final_output_dir, status_callback=status_callback)
     if map_path.exists():
         return str(note_path), str(map_path)
@@ -579,10 +582,14 @@ def step5_run_deep_synthesis(topic: str, initial_synthesis_note: str, status_cal
         return None
 
     report_path = final_output_dir / f"deep_research_report_{topic_folder_name}.md"
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write(deep_report_md)
-
-    status_callback(f"✅ Deep Research Report saved to {report_path}")
+    try:
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(deep_report_md)
+        status_callback(f"✅ Deep Research Report saved to {report_path}")
+    except OSError as e:
+        logger.error("Failed to write deep research report: %s", e)
+        status_callback(f"❌ Failed to save deep research report: {e}")
+        return None
     return str(report_path)
 
 
@@ -591,7 +598,10 @@ def save_outputs_to_custom_dir(source_note_path: str, source_map_path: str, cust
         if not custom_dest_dir_str:
             status_callback("❌ Error: Destination directory cannot be empty.")
             return False, "Destination directory was not provided."
-        dest_path = Path(_convert_windows_to_wsl_path(custom_dest_dir_str))
+        if os.path.exists('/.dockerenv'):
+            dest_path = Path(custom_dest_dir_str)
+        else:
+            dest_path = Path(convert_windows_to_wsl_path(custom_dest_dir_str))
         dest_path.mkdir(parents=True, exist_ok=True)
         status_callback(f"  -> Ensured destination directory exists: {dest_path}")
         if source_note_path and Path(source_note_path).exists():
