@@ -439,6 +439,156 @@ def _get_entity_type(anonymized: str) -> str:
 
 
 # ======================================================================
+# Photo Keywords tab
+# ======================================================================
+
+def _render_photo_keywords_tab():
+    """Render the Photo Keywords tool — AI-describe photos and write keywords to EXIF."""
+    st.markdown(
+        "Use a vision model to describe photos, extract keywords, and write them "
+        "directly to EXIF/XMP metadata. Keywords appear in Lightroom, Bridge, and "
+        "any XMP-aware catalog."
+    )
+
+    col1, col2 = st.columns([1, 2])
+
+    with col1:
+        st.header("Input")
+
+        st.session_state["photokw_batch"] = True  # always batch-capable
+
+        # Upload version counter for clear button
+        if "photokw_upload_version" not in st.session_state:
+            st.session_state["photokw_upload_version"] = 0
+        ver = st.session_state["photokw_upload_version"]
+
+        uploaded = st.file_uploader(
+            "Drop photos here:",
+            type=["png", "jpg", "jpeg", "tiff", "webp", "gif", "bmp"],
+            accept_multiple_files=True,
+            key=f"photokw_upload_v{ver}",
+        )
+
+        write_to_original = st.toggle(
+            "Write to original files",
+            value=False,
+            key="photokw_write_original",
+            help="When OFF, keywords are written to copies in a temp folder (originals untouched). "
+                 "When ON, keywords are written directly to the uploaded files.",
+        )
+
+        if st.button("Clear All Photos", key="photokw_clear", use_container_width=True):
+            for key in list(st.session_state.keys()):
+                if key.startswith("photokw_") and key != "photokw_upload_version":
+                    del st.session_state[key]
+            st.session_state["photokw_upload_version"] = ver + 1
+            if "photokw_results" in st.session_state:
+                del st.session_state["photokw_results"]
+            temp_dir = Path(tempfile.gettempdir()) / "cortex_photokw"
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            st.rerun()
+
+    with col2:
+        st.header("Results")
+
+        if uploaded:
+            total = len(uploaded)
+            st.info(f"{total} photo(s) selected")
+
+            if st.button("Generate Keywords & Write EXIF", type="primary", use_container_width=True):
+                from cortex_engine.textifier import DocumentTextifier
+
+                # Save uploads to temp dir
+                temp_dir = Path(tempfile.gettempdir()) / "cortex_photokw"
+                temp_dir.mkdir(exist_ok=True, mode=0o755)
+                file_paths = []
+                for uf in uploaded:
+                    dest = temp_dir / uf.name
+                    with open(dest, "wb") as f:
+                        f.write(uf.getvalue())
+                    os.chmod(str(dest), 0o644)
+                    file_paths.append(str(dest))
+
+                textifier = DocumentTextifier(use_vision=True)
+                results = []
+                progress = st.progress(0.0, "Starting...")
+
+                for idx, fpath in enumerate(file_paths):
+                    fname = Path(fpath).name
+
+                    def _on_progress(frac, msg, _idx=idx, _total=total, _name=fname):
+                        overall = min((_idx + frac) / _total, 1.0)
+                        progress.progress(overall, f"[{_name}] {msg}")
+
+                    textifier.on_progress = _on_progress
+                    try:
+                        result = textifier.keyword_image(fpath)
+                        results.append(result)
+                    except Exception as e:
+                        st.error(f"Failed: {fname}: {e}")
+                        logger.error(f"Photo keyword error for {fpath}: {e}", exc_info=True)
+
+                progress.progress(1.0, "Done!")
+
+                # If writing to originals, user needs to copy back — but since
+                # we're working on uploaded copies in temp, the writes already happened.
+                # The user downloads the processed files.
+                if results:
+                    st.session_state["photokw_results"] = results
+                    st.session_state["photokw_paths"] = file_paths
+
+        # Display results
+        results = st.session_state.get("photokw_results")
+        file_paths = st.session_state.get("photokw_paths", [])
+
+        if results:
+            st.divider()
+
+            # Summary metrics
+            total_kw = sum(len(r["keywords"]) for r in results)
+            successful = sum(1 for r in results if r["exif_result"]["success"])
+            mc1, mc2, mc3 = st.columns(3)
+            with mc1:
+                st.metric("Photos Processed", len(results))
+            with mc2:
+                st.metric("Total Keywords", total_kw)
+            with mc3:
+                st.metric("EXIF Written", f"{successful}/{len(results)}")
+
+            # Download all as zip (with EXIF embedded)
+            if file_paths:
+                buf = io.BytesIO()
+                with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for fpath in file_paths:
+                        zf.write(fpath, Path(fpath).name)
+                buf.seek(0)
+                st.download_button(
+                    "Download All (with EXIF keywords)",
+                    buf.getvalue(),
+                    file_name="photos_with_keywords.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                )
+
+            # Per-image details
+            for r in results:
+                with st.expander(f"{r['file_name']}", expanded=False):
+                    st.markdown(f"**Description:** {r['description']}")
+                    st.markdown(f"**Keywords ({len(r['keywords'])}):** {', '.join(r['keywords'])}")
+                    exif = r["exif_result"]
+                    if exif["success"]:
+                        st.success(f"EXIF written: {exif['keywords_written']} keywords")
+                    else:
+                        st.error(f"EXIF write failed: {exif['message']}")
+
+        elif uploaded:
+            st.info("Click **Generate Keywords & Write EXIF** to process your photos")
+        else:
+            st.info("Upload photos from the left panel to get started")
+
+
+# ======================================================================
 # Main
 # ======================================================================
 
@@ -446,10 +596,13 @@ def main():
     st.title("Document Extract")
     st.caption(f"Version: {PAGE_VERSION} • Document conversion and privacy tools")
 
-    tab_textifier, tab_anonymizer = st.tabs(["Textifier", "Anonymizer"])
+    tab_textifier, tab_photo, tab_anonymizer = st.tabs(["Textifier", "Photo Keywords", "Anonymizer"])
 
     with tab_textifier:
         _render_textifier_tab()
+
+    with tab_photo:
+        _render_photo_keywords_tab()
 
     with tab_anonymizer:
         _render_anonymizer_tab()

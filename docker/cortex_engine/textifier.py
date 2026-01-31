@@ -6,9 +6,10 @@ vision-model descriptions of images and tables.
 
 import os
 import base64
+import subprocess
 import tempfile
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from cortex_engine.utils.logging_utils import get_logger
 
@@ -327,6 +328,155 @@ class DocumentTextifier:
 
         self._report(1.0, "Image conversion complete")
         return "\n".join(md_parts)
+
+    # ------------------------------------------------------------------
+    # Photo Keywords — describe, extract keywords, write EXIF
+    # ------------------------------------------------------------------
+
+    def extract_keywords(self, description: str) -> List[str]:
+        """Extract flat keywords from an image description using the VLM."""
+        self._init_vlm()
+        if self._vlm_client is None:
+            # Fallback: simple word extraction
+            return self._extract_keywords_simple(description)
+        try:
+            response = self._vlm_client.chat(
+                model=self._vlm_model,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "Extract 10-20 descriptive keywords from this image description. "
+                        "Return ONLY a comma-separated list of lowercase keywords. "
+                        "Include: subjects, actions, mood, lighting, colours, setting, "
+                        "composition style, and any notable objects or people.\n\n"
+                        f"Description: {description}"
+                    ),
+                }],
+                options={"temperature": 0.1, "num_predict": 200},
+            )
+            raw = response["message"]["content"].strip()
+            # Parse comma-separated keywords, clean up
+            keywords = [k.strip().lower().strip('"\'') for k in raw.split(",")]
+            keywords = [k for k in keywords if k and len(k) > 1 and len(k) < 50]
+            return keywords
+        except Exception as e:
+            logger.warning(f"VLM keyword extraction failed: {e}")
+            return self._extract_keywords_simple(description)
+
+    @staticmethod
+    def _extract_keywords_simple(description: str) -> List[str]:
+        """Fallback keyword extraction using simple NLP."""
+        import re
+        # Remove bracketed placeholders
+        text = re.sub(r'\[.*?\]', '', description).lower()
+        # Common stop words
+        stop = {
+            'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+            'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+            'should', 'may', 'might', 'can', 'shall', 'of', 'in', 'to', 'for',
+            'with', 'on', 'at', 'from', 'by', 'about', 'as', 'into', 'through',
+            'and', 'but', 'or', 'so', 'if', 'that', 'this', 'it', 'its', 'not',
+            'what', 'which', 'who', 'how', 'there', 'their', 'they', 'them',
+            'image', 'shows', 'appears', 'visible', 'seen', 'also', 'very',
+        }
+        words = re.findall(r'[a-z]+', text)
+        keywords = []
+        seen = set()
+        for w in words:
+            if w not in stop and len(w) > 2 and w not in seen:
+                seen.add(w)
+                keywords.append(w)
+        return keywords[:20]
+
+    @staticmethod
+    def write_exif_keywords(file_path: str, keywords: List[str],
+                            description: str = "") -> Dict[str, any]:
+        """Write keywords and description to image EXIF/XMP using exiftool.
+
+        Writes to:
+          - XMP:dc:subject (Keywords — read by Lightroom, Bridge, etc.)
+          - IPTC:Keywords (broader compatibility)
+          - XMP:dc:description (Caption)
+          - EXIF:ImageDescription (legacy caption)
+
+        Returns dict with 'success', 'message', and 'keywords_written'.
+        """
+        import shutil
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return {
+                "success": False,
+                "message": "exiftool not found on system PATH",
+                "keywords_written": 0,
+            }
+
+        cmd = [exiftool_path, "-overwrite_original"]
+
+        # Write each keyword as a separate -Subject tag (XMP dc:subject)
+        for kw in keywords:
+            cmd.extend([f"-Subject={kw}"])
+            cmd.extend([f"-Keywords={kw}"])  # IPTC
+
+        # Write description/caption
+        if description:
+            # Truncate for EXIF field limits
+            caption = description[:2000]
+            cmd.extend([f"-Description={caption}"])
+            cmd.extend([f"-ImageDescription={caption}"])
+            cmd.extend([f"-Caption-Abstract={caption}"])  # IPTC caption
+
+        cmd.append(file_path)
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                logger.info(f"Wrote {len(keywords)} keywords to {Path(file_path).name}")
+                return {
+                    "success": True,
+                    "message": result.stdout.strip(),
+                    "keywords_written": len(keywords),
+                }
+            else:
+                logger.warning(f"exiftool error: {result.stderr}")
+                return {
+                    "success": False,
+                    "message": result.stderr.strip(),
+                    "keywords_written": 0,
+                }
+        except subprocess.TimeoutExpired:
+            return {"success": False, "message": "exiftool timed out", "keywords_written": 0}
+        except Exception as e:
+            return {"success": False, "message": str(e), "keywords_written": 0}
+
+    def keyword_image(self, file_path: str) -> Dict[str, any]:
+        """Full pipeline: describe image, extract keywords, write to EXIF.
+
+        Returns dict with description, keywords, and write result.
+        """
+        self._report(0.0, "Reading image...")
+        file_name = Path(file_path).name
+
+        with open(file_path, "rb") as f:
+            image_bytes = f.read()
+
+        self._report(0.2, "Describing image with vision model...")
+        description = self.describe_image(image_bytes)
+
+        self._report(0.5, "Extracting keywords...")
+        keywords = self.extract_keywords(description)
+
+        self._report(0.8, "Writing keywords to EXIF...")
+        write_result = self.write_exif_keywords(file_path, keywords, description)
+
+        self._report(1.0, "Done")
+        return {
+            "file_name": file_name,
+            "description": description,
+            "keywords": keywords,
+            "exif_result": write_result,
+        }
 
     # ------------------------------------------------------------------
     # Docling fallback
