@@ -333,15 +333,35 @@ class DocumentTextifier:
     # Photo Keywords — describe, extract keywords, write EXIF
     # ------------------------------------------------------------------
 
+    # Text models for keyword extraction (VLMs need images, so use a text LLM)
+    TEXT_MODELS = ["mistral:latest", "mistral-small3.2", "llama3:latest", "gemma:latest"]
+
     def extract_keywords(self, description: str) -> List[str]:
-        """Extract flat keywords from an image description using the VLM."""
-        self._init_vlm()
-        if self._vlm_client is None:
-            # Fallback: simple word extraction
-            return self._extract_keywords_simple(description)
+        """Extract flat keywords from an image description using a text LLM.
+
+        Uses a text model (Mistral etc.) rather than the VLM, because VLMs
+        like Qwen3-VL return empty responses for text-only prompts.
+        """
         try:
-            response = self._vlm_client.chat(
-                model=self._vlm_model,
+            import ollama
+            client = ollama.Client(timeout=30)
+
+            # Find an available text model
+            text_model = None
+            for model in self.TEXT_MODELS:
+                try:
+                    client.show(model)
+                    text_model = model
+                    break
+                except Exception:
+                    continue
+
+            if not text_model:
+                logger.warning("No text model available for keyword extraction")
+                return self._extract_keywords_simple(description)
+
+            response = client.chat(
+                model=text_model,
                 messages=[{
                     "role": "user",
                     "content": (
@@ -358,9 +378,12 @@ class DocumentTextifier:
             # Parse comma-separated keywords, clean up
             keywords = [k.strip().lower().strip('"\'') for k in raw.split(",")]
             keywords = [k for k in keywords if k and len(k) > 1 and len(k) < 50]
-            return keywords
+            if keywords:
+                return keywords
+            # If LLM returned something unparseable, fall back
+            return self._extract_keywords_simple(description)
         except Exception as e:
-            logger.warning(f"VLM keyword extraction failed: {e}")
+            logger.warning(f"LLM keyword extraction failed: {e}")
             return self._extract_keywords_simple(description)
 
     @staticmethod
