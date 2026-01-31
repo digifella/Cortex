@@ -412,18 +412,23 @@ class DocumentTextifier:
 
         cmd = [exiftool_path, "-overwrite_original"]
 
-        # Write each keyword as a separate -Subject tag (XMP dc:subject)
+        # Use fully-qualified tag names to avoid ambiguity.
+        # XMP-dc:Subject is the keyword list that Lightroom Classic,
+        # Bridge, Capture One, and other DAMs read as "Keywords".
+        # IPTC:Keywords provides legacy compatibility.
         for kw in keywords:
-            cmd.extend([f"-Subject={kw}"])
-            cmd.extend([f"-Keywords={kw}"])  # IPTC
+            cmd.append(f"-XMP-dc:Subject={kw}")
+            cmd.append(f"-IPTC:Keywords={kw}")
 
-        # Write description/caption
+        # Write description/caption to the correct fields:
+        # - XMP-dc:Description → LRC "Caption" in metadata panel
+        # - IPTC:Caption-Abstract → legacy caption
+        # - EXIF:ImageDescription → EXIF-level caption
         if description:
-            # Truncate for EXIF field limits
             caption = description[:2000]
-            cmd.extend([f"-Description={caption}"])
-            cmd.extend([f"-ImageDescription={caption}"])
-            cmd.extend([f"-Caption-Abstract={caption}"])  # IPTC caption
+            cmd.append(f"-XMP-dc:Description={caption}")
+            cmd.append(f"-IPTC:Caption-Abstract={caption}")
+            cmd.append(f"-EXIF:ImageDescription={caption}")
 
         cmd.append(file_path)
 

@@ -556,20 +556,33 @@ def _render_photo_keywords_tab():
             with mc3:
                 st.metric("EXIF Written", f"{successful}/{len(results)}")
 
-            # Download all as zip (with EXIF embedded)
+            # Download — single file direct, multiple as zip
             if file_paths:
-                buf = io.BytesIO()
-                with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for fpath in file_paths:
-                        zf.write(fpath, Path(fpath).name)
-                buf.seek(0)
-                st.download_button(
-                    "Download All (with EXIF keywords)",
-                    buf.getvalue(),
-                    file_name="photos_with_keywords.zip",
-                    mime="application/zip",
-                    use_container_width=True,
-                )
+                if len(file_paths) == 1:
+                    fpath = file_paths[0]
+                    fname = Path(fpath).name
+                    mime = "image/jpeg" if fname.lower().endswith((".jpg", ".jpeg")) else "image/png"
+                    with open(fpath, "rb") as dl_f:
+                        st.download_button(
+                            f"Download {fname} (with keywords)",
+                            dl_f.read(),
+                            file_name=fname,
+                            mime=mime,
+                            use_container_width=True,
+                        )
+                else:
+                    buf = io.BytesIO()
+                    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                        for fpath in file_paths:
+                            zf.write(fpath, Path(fpath).name)
+                    buf.seek(0)
+                    st.download_button(
+                        f"Download All {len(file_paths)} Photos (with keywords)",
+                        buf.getvalue(),
+                        file_name="photos_with_keywords.zip",
+                        mime="application/zip",
+                        use_container_width=True,
+                    )
 
             # Per-image details
             for r in results:
