@@ -77,10 +77,10 @@ class DocumentTextifier:
                 model=self._vlm_model,
                 messages=[{
                     "role": "user",
-                    "content": "Describe this photograph in detail. Focus on the actual visible subjects, scene, and environment. Be specific and literal — only describe what is clearly visible. /no_think",
+                    "content": "Describe this photograph in 2-4 plain sentences. Identify the main subject, setting, and colours. Do not use markdown, headings, or bullet points. /no_think",
                     "images": [encoded],
                 }],
-                options={"temperature": 0.1, "num_predict": 1024},
+                options={"temperature": 0.1, "num_predict": 600},
             )
             result = response["message"]["content"].strip()
             # Qwen3-VL may wrap output in <think>...</think> tags
