@@ -88,6 +88,9 @@ def _file_input_widget(key_prefix: str, allowed_types: List[str], label: str = "
                                     accept_multiple_files=(st.session_state.get(f"{key_prefix}_batch", False)))
         if uploaded:
             files = uploaded if isinstance(uploaded, list) else [uploaded]
+            if len(files) > 20:
+                st.warning(f"Maximum 20 documents per batch — only the first 20 of {len(files)} will be processed.")
+                files = files[:20]
             temp_dir = Path(tempfile.gettempdir()) / f"cortex_{key_prefix}"
             temp_dir.mkdir(exist_ok=True, mode=0o755)
             paths = []
@@ -514,6 +517,9 @@ def _render_photo_keywords_tab():
         st.header("Results")
 
         if uploaded:
+            if len(uploaded) > 100:
+                st.warning(f"Maximum 100 photos per batch — only the first 100 of {len(uploaded)} will be processed.")
+                uploaded = uploaded[:100]
             total = len(uploaded)
             st.info(f"{total} photo(s) selected")
 
