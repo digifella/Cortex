@@ -391,3 +391,4 @@ qwen-vl-utils==0.0.14
 # See UPGRADE_PLAN.md for details on this upgrade.
 #
 # ============================================================================
+geopy>=2.4.0

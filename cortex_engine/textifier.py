@@ -5,6 +5,7 @@ vision-model descriptions of images and tables.
 """
 
 import os
+import re
 import base64
 import subprocess
 import tempfile
@@ -76,12 +77,18 @@ class DocumentTextifier:
                 model=self._vlm_model,
                 messages=[{
                     "role": "user",
-                    "content": "Describe this image concisely. Focus on key content, text, data, or diagrams visible.",
+                    "content": "Describe this photograph in detail. Focus on the actual visible subjects, scene, and environment. Be specific and literal — only describe what is clearly visible. /no_think",
                     "images": [encoded],
                 }],
-                options={"temperature": 0.1, "num_predict": 300},
+                options={"temperature": 0.1, "num_predict": 1024},
             )
-            return response["message"]["content"].strip()
+            result = response["message"]["content"].strip()
+            # Qwen3-VL may wrap output in <think>...</think> tags
+            result = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
+            if not result:
+                logger.warning(f"VLM returned empty description (model: {self._vlm_model})")
+                return "[Image: vision model returned empty description]"
+            return result
         except Exception as e:
             logger.warning(f"VLM describe failed: {e}")
             return "[Image: could not be described — vision model error]"
@@ -342,6 +349,10 @@ class DocumentTextifier:
         Uses a text model (Mistral etc.) rather than the VLM, because VLMs
         like Qwen3-VL return empty responses for text-only prompts.
         """
+        # Don't hallucinate keywords from empty/failed descriptions
+        if not description or description.startswith("[Image:"):
+            logger.warning("No valid description available — skipping keyword extraction")
+            return []
         try:
             import ollama
             client = ollama.Client(timeout=30)
@@ -365,10 +376,14 @@ class DocumentTextifier:
                 messages=[{
                     "role": "user",
                     "content": (
-                        "Extract 10-20 descriptive keywords from this image description. "
-                        "Return ONLY a comma-separated list of lowercase keywords. "
-                        "Include: subjects, actions, mood, lighting, colours, setting, "
-                        "composition style, and any notable objects or people.\n\n"
+                        "Extract 10-15 photo tags from this image description. "
+                        "Return ONLY a comma-separated list. Each tag should be 1-2 "
+                        "simple lowercase words (no underscores, no hyphens). "
+                        "Good tags: specific subjects, species, colours, season, "
+                        "location type, weather. "
+                        "Do NOT include photography jargon (bokeh, depth of field, "
+                        "backlit, composition, close up) or vague words (atmosphere, "
+                        "mood, scene, tones). Maximum 15 tags.\n\n"
                         f"Description: {description}"
                     ),
                 }],
@@ -377,7 +392,22 @@ class DocumentTextifier:
             raw = response["message"]["content"].strip()
             # Parse comma-separated keywords, clean up
             keywords = [k.strip().lower().strip('"\'') for k in raw.split(",")]
-            keywords = [k for k in keywords if k and len(k) > 1 and len(k) < 50]
+            # Replace underscores with spaces
+            keywords = [k.replace("_", " ") for k in keywords]
+            # Filter out photography jargon and empty/too-long entries
+            _jargon = {
+                "bokeh", "bokeh effect", "depth of field", "shallow depth of field",
+                "backlit", "backlighting", "side lit", "composition", "close up",
+                "blurred background", "out of focus", "warm tones", "cool tones",
+                "atmosphere", "mood", "ambiance", "scene", "tones", "texture",
+                "glossy texture", "gradient",
+            }
+            keywords = [
+                k for k in keywords
+                if k and len(k) > 1 and len(k) < 50 and k not in _jargon
+            ]
+            # Cap at 15
+            keywords = keywords[:15]
             if keywords:
                 return keywords
             # If LLM returned something unparseable, fall back
@@ -478,16 +508,165 @@ class DocumentTextifier:
         except Exception as e:
             return {"success": False, "message": str(e), "keywords_written": 0}
 
-    def keyword_image(self, file_path: str) -> Dict[str, any]:
-        """Full pipeline: describe image, extract keywords, write to EXIF.
+    @staticmethod
+    def clear_exif_keywords(file_path: str) -> bool:
+        """Remove all existing XMP Subject, IPTC Keywords, and description fields."""
+        import shutil
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return False
+        try:
+            result = subprocess.run(
+                [exiftool_path, "-overwrite_original",
+                 "-XMP-dc:Subject=", "-IPTC:Keywords=",
+                 "-XMP-dc:Description=", "-IPTC:Caption-Abstract=",
+                 "-EXIF:ImageDescription=",
+                 file_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            return result.returncode == 0
+        except Exception as e:
+            logger.warning(f"Clear keywords failed: {e}")
+            return False
 
-        Returns dict with description, keywords, and write result.
+    @staticmethod
+    def clear_exif_location(file_path: str) -> bool:
+        """Remove existing IPTC/XMP location fields (Country, State, City)."""
+        import shutil
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return False
+        try:
+            result = subprocess.run(
+                [exiftool_path, "-overwrite_original",
+                 "-IPTC:Country-PrimaryLocationName=",
+                 "-XMP-photoshop:Country=",
+                 "-IPTC:Province-State=",
+                 "-XMP-photoshop:State=",
+                 "-IPTC:City=",
+                 "-XMP-photoshop:City=",
+                 file_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            return result.returncode == 0
+        except Exception as e:
+            logger.warning(f"Clear location failed: {e}")
+            return False
+
+    @staticmethod
+    def read_gps(file_path: str) -> Optional[Tuple[float, float]]:
+        """Read GPS coordinates from image EXIF. Returns (lat, lon) or None."""
+        import shutil
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return None
+        try:
+            import json
+            result = subprocess.run(
+                [exiftool_path, "-json", "-n", "-GPSLatitude", "-GPSLongitude",
+                 file_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return None
+            data = json.loads(result.stdout)
+            if not data:
+                return None
+            lat = data[0].get("GPSLatitude")
+            lon = data[0].get("GPSLongitude")
+            if lat is not None and lon is not None:
+                return (float(lat), float(lon))
+        except Exception as e:
+            logger.warning(f"GPS read failed for {file_path}: {e}")
+        return None
+
+    @staticmethod
+    def reverse_geocode(lat: float, lon: float) -> Dict[str, str]:
+        """Reverse-geocode GPS coordinates to country/state/city.
+
+        Returns dict with 'country', 'state', 'city' keys (empty string if
+        not found).
+        """
+        try:
+            from geopy.geocoders import Nominatim
+            g = Nominatim(user_agent="cortex_suite", timeout=10)
+            loc = g.reverse((lat, lon), exactly_one=True, language="en")
+            if loc is None:
+                return {"country": "", "state": "", "city": ""}
+            addr = loc.raw.get("address", {})
+            country = addr.get("country", "")
+            state = addr.get("state", "") or addr.get("region", "")
+            city = (addr.get("city", "")
+                    or addr.get("town", "")
+                    or addr.get("village", "")
+                    or addr.get("suburb", ""))
+            return {"country": country, "state": state, "city": city}
+        except Exception as e:
+            logger.warning(f"Reverse geocode failed for ({lat}, {lon}): {e}")
+            return {"country": "", "state": "", "city": ""}
+
+    @staticmethod
+    def write_exif_location(file_path: str, country: str, state: str,
+                            city: str) -> bool:
+        """Write IPTC/XMP location fields to image using exiftool."""
+        import shutil
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return False
+        cmd = [exiftool_path, "-overwrite_original"]
+        if country:
+            cmd.append(f"-IPTC:Country-PrimaryLocationName={country}")
+            cmd.append(f"-XMP-photoshop:Country={country}")
+        if state:
+            cmd.append(f"-IPTC:Province-State={state}")
+            cmd.append(f"-XMP-photoshop:State={state}")
+        if city:
+            cmd.append(f"-IPTC:City={city}")
+            cmd.append(f"-XMP-photoshop:City={city}")
+        cmd.append(file_path)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            return result.returncode == 0
+        except Exception as e:
+            logger.warning(f"EXIF location write failed: {e}")
+            return False
+
+    def keyword_image(self, file_path: str, city_radius_km: float = 5.0,
+                      clear_keywords: bool = False,
+                      clear_location: bool = False) -> Dict[str, any]:
+        """Full pipeline: describe image, extract keywords, resolve GPS location, write to EXIF.
+
+        Args:
+            file_path: Path to image file.
+            city_radius_km: Reserved for future proximity grouping.
+            clear_keywords: If True, strip existing keywords/description before writing.
+            clear_location: If True, strip existing location fields before writing.
+
+        Returns dict with description, keywords, location, and write result.
         """
         self._report(0.0, "Reading image...")
         file_name = Path(file_path).name
 
+        # Clear existing fields if requested
+        if clear_keywords:
+            self._report(0.02, "Clearing existing keywords...")
+            self.clear_exif_keywords(file_path)
+        if clear_location:
+            self._report(0.04, "Clearing existing location fields...")
+            self.clear_exif_location(file_path)
+
         with open(file_path, "rb") as f:
             image_bytes = f.read()
+
+        # GPS location lookup
+        self._report(0.1, "Reading GPS data...")
+        gps = self.read_gps(file_path)
+        location = None
+        has_gps = gps is not None
+        if has_gps:
+            self._report(0.15, "Reverse-geocoding location...")
+            location = self.reverse_geocode(gps[0], gps[1])
+            logger.info(f"GPS location for {file_name}: {location}")
 
         self._report(0.2, "Describing image with vision model...")
         description = self.describe_image(image_bytes)
@@ -495,14 +674,34 @@ class DocumentTextifier:
         self._report(0.5, "Extracting keywords...")
         keywords = self.extract_keywords(description)
 
+        # Add location tags to keywords
+        if location:
+            for field in ("city", "state", "country"):
+                val = location.get(field, "")
+                if val and val.lower() not in [k.lower() for k in keywords]:
+                    keywords.append(val.lower())
+        elif not has_gps:
+            # Mark as no GPS in batch mode
+            if "nogps" not in keywords:
+                keywords.append("nogps")
+
         self._report(0.8, "Writing keywords to EXIF...")
         write_result = self.write_exif_keywords(file_path, keywords, description)
+
+        # Write location EXIF fields
+        if location and any(location.values()):
+            self.write_exif_location(
+                file_path, location.get("country", ""),
+                location.get("state", ""), location.get("city", ""),
+            )
 
         self._report(1.0, "Done")
         return {
             "file_name": file_name,
             "description": description,
             "keywords": keywords,
+            "has_gps": has_gps,
+            "location": location,
             "exif_result": write_result,
         }
 

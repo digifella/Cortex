@@ -477,6 +477,27 @@ def _render_photo_keywords_tab():
                  "When ON, keywords are written directly to the uploaded files.",
         )
 
+        city_radius = st.slider(
+            "City location radius",
+            min_value=1, max_value=50, value=5, step=1,
+            key="photokw_city_radius",
+            help="Radius (km) for city-level reverse geocoding of GPS coordinates. "
+                 "Larger values may match broader city names for rural locations.",
+        )
+
+        clear_keywords = st.checkbox(
+            "Clear existing keywords/tags first",
+            value=False,
+            key="photokw_clear_keywords",
+            help="Remove all existing XMP Subject and IPTC Keywords before writing new ones.",
+        )
+        clear_location = st.checkbox(
+            "Clear existing location fields first",
+            value=False,
+            key="photokw_clear_location",
+            help="Remove existing Country, State, and City EXIF fields and rebuild from GPS.",
+        )
+
         if st.button("Clear All Photos", key="photokw_clear", use_container_width=True):
             for key in list(st.session_state.keys()):
                 if key.startswith("photokw_") and key != "photokw_upload_version":
@@ -523,7 +544,11 @@ def _render_photo_keywords_tab():
 
                     textifier.on_progress = _on_progress
                     try:
-                        result = textifier.keyword_image(fpath)
+                        result = textifier.keyword_image(
+                            fpath, city_radius_km=city_radius,
+                            clear_keywords=clear_keywords,
+                            clear_location=clear_location,
+                        )
                         results.append(result)
                     except Exception as e:
                         st.error(f"Failed: {fname}: {e}")
@@ -593,15 +618,64 @@ def _render_photo_keywords_tab():
                     st.success(f"EXIF written: {exif['keywords_written']} keywords to {r['file_name']}")
                 else:
                     st.error(f"EXIF write failed: {exif['message']}")
+
+                # GPS / location feedback
+                if not r.get("has_gps"):
+                    st.warning(f"No GPS data found in **{r['file_name']}** — location fields could not be filled.")
+                elif r.get("location"):
+                    loc = r["location"]
+                    parts = [v for v in [loc.get("city"), loc.get("state"), loc.get("country")] if v]
+                    if parts:
+                        st.info(f"Location: **{', '.join(parts)}**")
+
                 with st.expander("Preview", expanded=True):
-                    st.markdown(f"**Description:**\n\n{r['description']}")
+                    # Show thumbnail of the photo
+                    if file_paths and Path(file_paths[0]).exists():
+                        st.image(file_paths[0], caption=r["file_name"], width=400)
+                    desc = r["description"] or "(no description generated)"
+                    st.markdown(f"**Description:**\n\n{desc}")
                     st.divider()
+                    # Location fields
+                    if r.get("location") and any(r["location"].values()):
+                        loc = r["location"]
+                        st.markdown(
+                            f"**Location:** {loc.get('city', '')} · "
+                            f"{loc.get('state', '')} · {loc.get('country', '')}"
+                        )
+                        st.divider()
                     st.markdown(f"**Keywords ({len(r['keywords'])}):**")
-                    st.markdown(", ".join(r["keywords"]))
+                    if r["keywords"]:
+                        st.markdown(", ".join(r["keywords"]))
+                    else:
+                        st.warning("No keywords generated — the vision model may have failed to describe this image.")
             else:
+                # Batch mode — show GPS summary
+                no_gps = [r for r in results if not r.get("has_gps")]
+                if no_gps:
+                    st.warning(
+                        f"**{len(no_gps)} photo(s) have no GPS data** — tagged with "
+                        f"'nogps' for easy filtering: "
+                        f"{', '.join(r['file_name'] for r in no_gps)}"
+                    )
                 for r in results:
-                    with st.expander(f"{r['file_name']}", expanded=False):
-                        st.markdown(f"**Description:** {r['description']}")
+                    loc = r.get("location")
+                    loc_label = ""
+                    if loc and any(loc.values()):
+                        parts = [v for v in [loc.get("city"), loc.get("state"), loc.get("country")] if v]
+                        loc_label = f"  —  {', '.join(parts)}"
+                    with st.expander(f"{r['file_name']}{loc_label}", expanded=False):
+                        # Show thumbnail in batch mode too
+                        idx = next((i for i, fp in enumerate(file_paths) if Path(fp).name == r["file_name"]), None)
+                        if idx is not None and Path(file_paths[idx]).exists():
+                            st.image(file_paths[idx], caption=r["file_name"], width=300)
+                        st.markdown(f"**Description:** {r.get('description') or '(no description)'}")
+                        if loc and any(loc.values()):
+                            st.markdown(
+                                f"**Location:** {loc.get('city', '')} · "
+                                f"{loc.get('state', '')} · {loc.get('country', '')}"
+                            )
+                        elif not r.get("has_gps"):
+                            st.caption("No GPS data — tagged 'nogps'")
                         st.markdown(f"**Keywords ({len(r['keywords'])}):** {', '.join(r['keywords'])}")
                         exif = r["exif_result"]
                         if exif["success"]:
