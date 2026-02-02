@@ -263,9 +263,19 @@ def _render_anonymizer_tab():
 
     with col1:
         st.header("Document Input")
+        batch_mode = st.toggle("Batch mode", value=False, key="anonymizer_batch_toggle")
+        st.session_state["anonymizer_batch"] = batch_mode
         selected_file = _file_input_widget("anonymizer", ["pdf", "docx", "txt"])
 
-        if selected_file and not isinstance(selected_file, list):
+        # Enforce 10-doc limit for anonymizer batch
+        if isinstance(selected_file, list) and len(selected_file) > 10:
+            st.warning(f"Maximum 10 documents for anonymization — only the first 10 of {len(selected_file)} will be processed.")
+            selected_file = selected_file[:10]
+
+        has_files = selected_file is not None
+        file_list = selected_file if isinstance(selected_file, list) else ([selected_file] if selected_file else [])
+
+        if has_files:
             st.divider()
             st.subheader("Anonymization Settings")
             confidence_threshold = st.slider(
@@ -278,64 +288,136 @@ def _render_anonymizer_tab():
     with col2:
         st.header("Anonymization Process")
 
-        if selected_file and not isinstance(selected_file, list):
-            file_path = Path(selected_file)
-            st.markdown(f"**File:** `{file_path.name}`")
+        if has_files:
+            if len(file_list) == 1:
+                st.markdown(f"**File:** `{Path(file_list[0]).name}`")
+            else:
+                st.info(f"{len(file_list)} document(s) selected")
 
             if st.button("Start Anonymization", type="primary", use_container_width=True):
                 progress_bar = st.progress(0, "Initializing anonymization...")
-                status_container = st.container()
 
-                try:
-                    with status_container:
-                        st.info("Reading document content...")
-                    progress_bar.progress(25, "Reading document...")
+                # Shared mapping across batch so entities stay consistent
+                anonymizer = DocumentAnonymizer()
+                mapping = AnonymizationMapping()
+                batch_results = []
 
-                    anonymizer = DocumentAnonymizer()
-                    mapping = AnonymizationMapping()
+                for idx, fpath in enumerate(file_list):
+                    fname = Path(fpath).name
+                    base_pct = idx / len(file_list)
+                    try:
+                        progress_bar.progress(
+                            min(base_pct + 0.02, 1.0),
+                            f"[{idx+1}/{len(file_list)}] Reading {fname}..."
+                        )
 
-                    with status_container:
-                        st.info("Detecting entities and sensitive information...")
-                    progress_bar.progress(50, "Detecting entities...")
+                        result_path, result_mapping = anonymizer.anonymize_single_file(
+                            input_path=fpath,
+                            output_path=None,
+                            mapping=mapping,
+                            confidence_threshold=st.session_state.confidence_threshold,
+                        )
+                        # Re-use the returned mapping for next file (consistent entities)
+                        mapping = result_mapping
 
-                    result_path, result_mapping = anonymizer.anonymize_single_file(
-                        input_path=selected_file,
-                        output_path=None,
-                        mapping=mapping,
-                        confidence_threshold=st.session_state.confidence_threshold,
-                    )
+                        batch_results.append({
+                            "original_file": fpath,
+                            "anonymized_file": result_path,
+                            "mapping": result_mapping,
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        })
 
-                    with status_container:
-                        st.info("Applying anonymization...")
-                    progress_bar.progress(75, "Anonymizing content...")
+                    except Exception as e:
+                        st.error(f"**Failed:** {fname}: {e}")
+                        logger.error(f"Anonymization error for {fpath}: {e}", exc_info=True)
 
-                    st.session_state.current_anonymization = {
-                        "original_file": selected_file,
-                        "anonymized_file": result_path,
-                        "mapping": result_mapping,
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    }
+                progress_bar.progress(1.0, "Anonymization complete!")
 
-                    progress_bar.progress(100, "Anonymization complete!")
-                    with status_container:
-                        st.success("**Anonymization completed successfully!**")
-                        col_a, col_b, col_c = st.columns(3)
-                        with col_a:
-                            st.metric("People", len([k for k, v in result_mapping.mappings.items() if v.startswith("Person")]))
-                        with col_b:
-                            st.metric("Companies", len([k for k, v in result_mapping.mappings.items() if v.startswith("Company")]))
-                        with col_c:
-                            st.metric("Projects", len([k for k, v in result_mapping.mappings.items() if v.startswith("Project")]))
+                if batch_results:
+                    # For single file, keep backward compat
+                    st.session_state.current_anonymization = batch_results[0] if len(batch_results) == 1 else None
+                    st.session_state.anonymization_batch_results = batch_results
 
-                except Exception as e:
-                    progress_bar.progress(0, "Anonymization failed")
-                    st.error(f"**Anonymization failed:** {str(e)}")
-                    logger.error(f"Anonymization error: {e}", exc_info=True)
+                    # Summary metrics (use the final mapping which has all entities)
+                    final_mapping = batch_results[-1]["mapping"]
+                    st.success(f"**Anonymized {len(batch_results)} document(s) successfully!**")
+                    col_a, col_b, col_c = st.columns(3)
+                    with col_a:
+                        st.metric("People", len([k for k, v in final_mapping.mappings.items() if v.startswith("Person")]))
+                    with col_b:
+                        st.metric("Companies", len([k for k, v in final_mapping.mappings.items() if v.startswith("Company")]))
+                    with col_c:
+                        st.metric("Projects", len([k for k, v in final_mapping.mappings.items() if v.startswith("Project")]))
 
-        if st.session_state.current_anonymization:
+        # --- Display results ---
+        batch_results = st.session_state.get("anonymization_batch_results")
+        single_result = st.session_state.get("current_anonymization")
+
+        if batch_results and len(batch_results) > 1:
+            # Batch results
             st.divider()
             st.subheader("Anonymization Results")
-            result = st.session_state.current_anonymization
+
+            # Zip download for all anonymized files
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for r in batch_results:
+                    zf.write(r["anonymized_file"], Path(r["anonymized_file"]).name)
+            buf.seek(0)
+            st.download_button(
+                f"Download All {len(batch_results)} Anonymized Documents",
+                buf.getvalue(),
+                file_name="anonymized_documents.zip",
+                mime="application/zip",
+                use_container_width=True,
+            )
+
+            # Mapping report (shared across batch)
+            mapping_content = _generate_mapping_report(batch_results[-1]["mapping"])
+            st.download_button(
+                label="Download Mapping Reference",
+                data=mapping_content,
+                file_name=f"anonymization_mapping_{int(time.time())}.txt",
+                mime="text/plain",
+                help="Reference file showing original -> anonymized mappings (keep secure!)",
+            )
+
+            # Per-file expanders
+            for r in batch_results:
+                orig_name = Path(r["original_file"]).name
+                anon_name = Path(r["anonymized_file"]).name
+                with st.expander(f"{orig_name} -> {anon_name}", expanded=False):
+                    try:
+                        with open(r["anonymized_file"], "r", encoding="utf-8") as f:
+                            content = f.read()
+                        preview = content[:2000]
+                        if len(content) > 2000:
+                            preview += "\n\n... [Content truncated for preview] ..."
+                        st.text_area("Preview:", preview, height=200, key=f"anon_preview_{orig_name}")
+                        st.download_button(
+                            f"Download {anon_name}",
+                            content,
+                            file_name=anon_name,
+                            mime="text/plain",
+                            key=f"anon_dl_{orig_name}",
+                        )
+                    except Exception as e:
+                        st.error(f"Could not load: {e}")
+
+            # Entity mappings table
+            final_mapping = batch_results[-1]["mapping"]
+            if final_mapping.mappings:
+                with st.expander("Entity Mappings", expanded=False):
+                    import pandas as pd
+                    rows = [{"Original": orig, "Anonymized": anon, "Type": _get_entity_type(anon)}
+                            for orig, anon in final_mapping.mappings.items()]
+                    if rows:
+                        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        elif single_result or (batch_results and len(batch_results) == 1):
+            result = single_result or batch_results[0]
+            st.divider()
+            st.subheader("Anonymization Results")
 
             col_orig, col_anon = st.columns(2)
             with col_orig:
@@ -386,8 +468,8 @@ def _render_anonymizer_tab():
             except Exception as e:
                 st.error(f"Could not load results: {str(e)}")
 
-        elif selected_file and not isinstance(selected_file, list):
-            st.info("Click **Start Anonymization** to process your document")
+        elif has_files:
+            st.info("Click **Start Anonymization** to process your document(s)")
         else:
             st.info("Select a document from the left panel to get started")
 
