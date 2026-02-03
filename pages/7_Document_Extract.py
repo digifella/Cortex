@@ -660,13 +660,17 @@ def _render_photo_keywords_tab():
 
             # Summary metrics
             total_kw = sum(len(r["keywords"]) for r in results)
+            total_new = sum(len(r.get("new_keywords", [])) for r in results)
+            total_existing = sum(len(r.get("existing_keywords", [])) for r in results)
             successful = sum(1 for r in results if r["exif_result"]["success"])
-            mc1, mc2, mc3 = st.columns(3)
+            mc1, mc2, mc3, mc4 = st.columns(4)
             with mc1:
                 st.metric("Photos Processed", len(results))
             with mc2:
-                st.metric("Total Keywords", total_kw)
+                st.metric("Existing Tags", total_existing)
             with mc3:
+                st.metric("New Tags Added", total_new)
+            with mc4:
                 st.metric("EXIF Written", f"{successful}/{len(results)}")
 
             # Download — single file direct, multiple as zip
@@ -731,11 +735,17 @@ def _render_photo_keywords_tab():
                             f"{loc.get('state', '')} · {loc.get('country', '')}"
                         )
                         st.divider()
-                    st.markdown(f"**Keywords ({len(r['keywords'])}):**")
+                    existing = r.get("existing_keywords", [])
+                    new_kw = r.get("new_keywords", [])
+                    if existing:
+                        st.markdown(f"**Existing tags ({len(existing)}):** {', '.join(existing)}")
+                    if new_kw:
+                        st.markdown(f"**New tags added ({len(new_kw)}):** {', '.join(new_kw)}")
+                    elif not existing:
+                        st.warning("No keywords generated — the vision model may have failed to describe this image.")
+                    st.markdown(f"**Combined keywords ({len(r['keywords'])}):**")
                     if r["keywords"]:
                         st.markdown(", ".join(r["keywords"]))
-                    else:
-                        st.warning("No keywords generated — the vision model may have failed to describe this image.")
             else:
                 # Batch mode — show GPS summary
                 no_gps = [r for r in results if not r.get("has_gps")]
@@ -764,10 +774,16 @@ def _render_photo_keywords_tab():
                             )
                         elif not r.get("has_gps"):
                             st.caption("No GPS data — tagged 'nogps'")
+                        existing = r.get("existing_keywords", [])
+                        new_kw = r.get("new_keywords", [])
+                        if existing:
+                            st.caption(f"Existing: {', '.join(existing)}")
+                        if new_kw:
+                            st.caption(f"Added: {', '.join(new_kw)}")
                         st.markdown(f"**Keywords ({len(r['keywords'])}):** {', '.join(r['keywords'])}")
                         exif = r["exif_result"]
                         if exif["success"]:
-                            st.success(f"EXIF written: {exif['keywords_written']} keywords")
+                            st.success(f"EXIF written: {exif['keywords_written']} new keywords")
                         else:
                             st.error(f"EXIF write failed: {exif['message']}")
 

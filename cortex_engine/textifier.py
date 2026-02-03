@@ -442,9 +442,42 @@ class DocumentTextifier:
         return keywords[:20]
 
     @staticmethod
+    def read_exif_keywords(file_path: str) -> List[str]:
+        """Read existing XMP Subject / IPTC Keywords from image."""
+        import shutil
+        import json
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return []
+        try:
+            result = subprocess.run(
+                [exiftool_path, "-json", "-XMP-dc:Subject", "-IPTC:Keywords",
+                 file_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return []
+            data = json.loads(result.stdout)
+            if not data:
+                return []
+            existing = set()
+            for field in ("Subject", "Keywords"):
+                val = data[0].get(field, [])
+                if isinstance(val, str):
+                    val = [val]
+                for v in val:
+                    existing.add(v.strip().lower())
+            return sorted(existing)
+        except Exception as e:
+            logger.warning(f"Read existing keywords failed: {e}")
+            return []
+
+    @staticmethod
     def write_exif_keywords(file_path: str, keywords: List[str],
                             description: str = "") -> Dict[str, any]:
         """Write keywords and description to image EXIF/XMP using exiftool.
+
+        Merges with existing keywords (uses += to append, not replace).
 
         Writes to:
           - XMP:dc:subject (Keywords — read by Lightroom, Bridge, etc.)
@@ -465,13 +498,13 @@ class DocumentTextifier:
 
         cmd = [exiftool_path, "-overwrite_original"]
 
-        # Use fully-qualified tag names to avoid ambiguity.
+        # Use += to ADD to existing keywords rather than replacing them.
         # XMP-dc:Subject is the keyword list that Lightroom Classic,
         # Bridge, Capture One, and other DAMs read as "Keywords".
         # IPTC:Keywords provides legacy compatibility.
         for kw in keywords:
-            cmd.append(f"-XMP-dc:Subject={kw}")
-            cmd.append(f"-IPTC:Keywords={kw}")
+            cmd.append(f"-XMP-dc:Subject+={kw}")
+            cmd.append(f"-IPTC:Keywords+={kw}")
 
         # Write description/caption to the correct fields:
         # - XMP-dc:Description → LRC "Caption" in metadata panel
@@ -655,6 +688,9 @@ class DocumentTextifier:
             self._report(0.04, "Clearing existing location fields...")
             self.clear_exif_location(file_path)
 
+        # Read existing keywords so we can merge (after any clear)
+        existing_keywords = self.read_exif_keywords(file_path)
+
         with open(file_path, "rb") as f:
             image_bytes = f.read()
 
@@ -685,8 +721,12 @@ class DocumentTextifier:
             if "nogps" not in keywords:
                 keywords.append("nogps")
 
+        # Deduplicate: only write keywords that aren't already in EXIF
+        existing_lower = {k.lower() for k in existing_keywords}
+        new_keywords = [k for k in keywords if k.lower() not in existing_lower]
+
         self._report(0.8, "Writing keywords to EXIF...")
-        write_result = self.write_exif_keywords(file_path, keywords, description)
+        write_result = self.write_exif_keywords(file_path, new_keywords, description)
 
         # Write location EXIF fields
         if location and any(location.values()):
@@ -695,11 +735,16 @@ class DocumentTextifier:
                 location.get("state", ""), location.get("city", ""),
             )
 
+        # Combined set for display (existing + new)
+        combined_keywords = sorted(set(existing_keywords + keywords))
+
         self._report(1.0, "Done")
         return {
             "file_name": file_name,
             "description": description,
-            "keywords": keywords,
+            "keywords": combined_keywords,
+            "new_keywords": new_keywords,
+            "existing_keywords": existing_keywords,
             "has_gps": has_gps,
             "location": location,
             "exif_result": write_result,
