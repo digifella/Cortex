@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.0.0"
+CORTEX_VERSION = "6.0.1"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 0,
-    "patch": 0,
+    "patch": 1,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,30 +25,21 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-02-07",
-    "release_name": "Reset Reliability, ID Integrity, and Smart Extract Preface",
-    "description": "Major reliability update for maintenance reset and ingestion ID consistency, plus machine-readable metadata preface generation in Document Extract.",
-    "breaking_changes": [
-        "Document Extract now prepends YAML front matter metadata preface to converted Markdown files (all supported document types).",
-        "Knowledge Ingest UI no longer performs post-finalization collection assignment; assignment is now finalized only inside the ingestion engine."
-    ],
+    "release_name": "Stabilization Pass: Config, Versioning, and Reset UX",
+    "description": "Post-release stabilization focused on config consistency, dynamic version harmonization, and maintenance path simplification.",
+    "breaking_changes": [],
     "new_features": [
-        "Document Extract metadata preface extraction with source classification (Academic, Consulting Company, AI Generated Report, Other)",
-        "YAML preface includes preface_schema, title, source_type, publisher, publishing_date, authors, keywords, and abstract",
-        "LLM-assisted metadata extraction with robust heuristic fallback for missing fields",
-        "Collection ZIP export now includes export_manifest.json with included and skipped files",
-        "Maintenance reset now terminates active ingest processes targeting the same DB path before cleanup"
+        "Document Extract preface now includes explicit schema marker `preface_schema: '1.0'`",
+        "Document Extract preface pipeline applies to all converted document types (not just PDF)"
     ],
     "improvements": [
-        "Clean Start flow simplified to deterministic reset + verification of critical KB artifacts",
-        "Maintenance reset logic consolidated into shared reusable reset routine",
-        "Maintenance and Document Extract pages now use dynamic central version string",
-        "Recovery collection creation now validates IDs against vector store to avoid reintroducing orphans",
-        "Preface keywords capped to top 8 for consistent downstream machine use"
+        "Knowledge base file discovery in Document Extract now uses configured `ai_database_path` key consistently",
+        "Additional UI pages now use dynamic version display from central `version_config.py`",
+        "Deprecated simple maintenance delete path now delegates to canonical delete routine"
     ],
     "bug_fixes": [
-        "Fixed ingestion identity persistence by setting LlamaIndex document id via doc.id_ during finalization",
-        "Fixed orphan collection references caused by stale UI-side assignment IDs",
-        "Fixed reset behavior where lingering ingestion processes could recreate data during/after cleanup"
+        "Fixed Document Extract browse flow missing configured database due to legacy config key lookup",
+        "Reduced maintenance behavior drift by removing duplicate delete implementation path"
     ],
     "performance": []
 }

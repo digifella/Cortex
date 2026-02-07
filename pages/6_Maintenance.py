@@ -444,22 +444,9 @@ def clear_ingestion_log_file():
         logger.error(f"Failed to clear ingestion log: {e}")
 
 def delete_ingested_document_database_simple(db_path):
-    """Permanently delete the entire ingested document database (simple version)"""
-    try:
-        deleted_items, errors = _reset_database_artifacts(db_path, include_extended_state=False)
-
-        if deleted_items:
-            st.success(f"✅ Ingested document database deleted successfully: {', '.join(deleted_items)}")
-
-        if errors:
-            st.error(f"❌ Some items could not be deleted: {', '.join(errors)}")
-
-        if not deleted_items and not errors:
-            st.warning("No ingested document database components found to delete.")
-
-    except Exception as e:
-        st.error(f"❌ Failed to delete ingested document database: {e}")
-        logger.error(f"Failed to delete ingested document database: {e}")
+    """Deprecated wrapper for backward compatibility."""
+    logger.info("delete_ingested_document_database_simple() is deprecated; delegating to canonical delete function")
+    delete_ingested_document_database(db_path)
 
 def display_header():
     """Display page header with navigation and information"""

@@ -24,17 +24,20 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v5.6.0"
+PAGE_VERSION = None
 
 # Import Cortex modules
 try:
     from cortex_engine.visual_search import VisualSearchEngine, analyze_image, extract_text_from_image, analyze_chart_image
     from cortex_engine.config import VLM_MODEL
+    from cortex_engine.version_config import VERSION_STRING
     from cortex_engine.utils.model_checker import model_checker
     from cortex_engine.utils.path_utils import process_drag_drop_path
 except ImportError as e:
     st.error(f"Failed to import Cortex modules: {e}")
     st.stop()
+
+PAGE_VERSION = VERSION_STRING
 
 # Initialize session state
 if "visual_analysis" not in st.session_state:

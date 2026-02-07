@@ -16,6 +16,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from cortex_engine.setup_manager import setup_manager, SetupStep, SetupStatus
+from cortex_engine.version_config import VERSION_STRING
 from cortex_engine.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -24,7 +25,7 @@ logger = get_logger(__name__)
 st.set_page_config(page_title="Setup Wizard", layout="wide", page_icon="🧙‍♂️")
 
 # Page version
-PAGE_VERSION = "v4.4.1"
+PAGE_VERSION = VERSION_STRING
 
 st.title("🧙‍♂️ Cortex Suite Setup Wizard")
 st.caption(f"Version: {PAGE_VERSION}")

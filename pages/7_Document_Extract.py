@@ -47,8 +47,8 @@ def _get_knowledge_base_files(extensions: List[str]) -> List[Path]:
     config = config_manager.get_config()
 
     possible_dirs = []
-    if config.get("db_path"):
-        base_path = Path(convert_windows_to_wsl_path(config["db_path"]))
+    if config.get("ai_database_path"):
+        base_path = Path(convert_windows_to_wsl_path(config["ai_database_path"]))
         possible_dirs.extend([
             base_path / "documents",
             base_path / "source_documents",

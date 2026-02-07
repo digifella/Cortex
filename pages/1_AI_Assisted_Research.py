@@ -23,11 +23,12 @@ from cortex_engine.synthesise import (
     build_context_from_sources,
     save_outputs_to_custom_dir
 )
+from cortex_engine.version_config import VERSION_STRING
 
 st.set_page_config(page_title="Cortex AI Research Assistant", layout="wide")
 
 # Page configuration
-PAGE_VERSION = "v5.6.0"
+PAGE_VERSION = VERSION_STRING
 
 # --- Initialize Session State ---
 def initialize_session_state():

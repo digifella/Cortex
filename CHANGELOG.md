@@ -6,6 +6,25 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## v6.0.1 - 2026-02-07
+
+### Stabilization Pass: Config, Versioning, and Reset UX
+
+Post-release stabilization focused on config consistency, dynamic version harmonization, and maintenance path simplification.
+
+### ✨ New Features
+- Document Extract preface now includes explicit schema marker: `preface_schema: '1.0'`.
+- Document Extract preface pipeline now applies to all converted document types.
+
+### 🚀 Improvements
+- Document Extract knowledge-base browsing now uses configured `ai_database_path` consistently.
+- Additional UI pages now derive displayed version dynamically from `cortex_engine/version_config.py`.
+- Deprecated simple maintenance delete path now delegates to the canonical delete routine.
+
+### 🔧 Bug Fixes
+- Fixed Document Extract browse behavior when legacy `db_path` key was missing.
+- Reduced maintenance drift risk by consolidating duplicate delete implementations.
+
 ## v6.0.0 - 2026-02-07
 
 ### Reset Reliability, ID Integrity, and Smart Extract Preface
