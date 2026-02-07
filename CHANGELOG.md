@@ -20,6 +20,7 @@ Improves Document Extract metadata precision and unifies database path resolutio
 - Academic title/author extraction in Document Extract is now stricter and avoids abstract-first title fallbacks.
 - Maintenance reset UI simplified into a single `Reset & Recovery` flow with explicit reset scope selection.
 - Proposal and Entity pages now resolve DB roots consistently via shared resolver logic.
+- Knowledge Ingest maintenance/recovery messaging has been simplified to reduce duplicate guidance and navigation clutter.
 
 ### 🔧 Bug Fixes
 - Reduced false author extraction where institution/location strings were misclassified as people.

@@ -2889,16 +2889,9 @@ def render_config_and_scan_ui():
         # No files or directories selected - show disabled button
         st.button("🔎 Select files or directories above to enable scanning", type="primary", use_container_width=True, disabled=True)
 
-    with st.expander("⚙️ Database Maintenance"):
-        st.info("Database maintenance functions have been moved to the dedicated **Maintenance** page for better organization and security.")
-        st.markdown("**Available maintenance functions:**")
-        st.markdown("- 🗑️ Clear Ingestion Log (re-scan all files)")
-        st.markdown("- 🛠️ Database Recovery & Repair Tools")
-        st.markdown("- 🔄 Advanced Recovery Operations")
-        st.markdown("- ⚠️ Delete Entire Knowledge Base")
-        
-        if st.button("🔧 Open Maintenance Page", use_container_width=True, type="primary"):
-            st.switch_page("pages/7_Maintenance.py")
+    st.caption("Maintenance, reset, and deep recovery actions are available on the Maintenance page.")
+    if st.button("🔧 Open Maintenance Page", use_container_width=True, type="secondary", key="ingest_open_maintenance_top"):
+        st.switch_page("pages/7_Maintenance.py")
 
 def render_pre_analysis_ui():
     st.header("Pre-Analysis Review")
@@ -4076,9 +4069,8 @@ def render_recovery_section():
         
         # Show maintenance tools access when no issues but tools requested  
         elif not recovery_needed and not show_maintenance:
-            # Redirect to maintenance page for advanced tools
-            st.info("💡 **Database maintenance and recovery tools** have been moved to the dedicated **Maintenance** page for better organization.")
-            if st.button("🔧 Open Maintenance Page", use_container_width=True, help="Access advanced database repair and recovery features"):
+            st.caption("No critical recovery issues detected. Use Maintenance for optional repair/reset tools.")
+            if st.button("🔧 Open Maintenance Page", use_container_width=True, help="Open maintenance and recovery tools"):
                 st.switch_page("pages/7_Maintenance.py")
         
         # Show urgent recovery message if issues detected (already handled by check_recovery_needed dismiss logic)

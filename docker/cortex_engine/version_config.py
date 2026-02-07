@@ -35,7 +35,8 @@ VERSION_METADATA = {
     "improvements": [
         "Academic title/author extraction in Document Extract is more strict and avoids abstract-first title errors",
         "Maintenance reset UI simplified into a single Reset & Recovery flow with explicit scope selection",
-        "Proposal and Entity pages now resolve DB roots consistently via shared path resolver"
+        "Proposal and Entity pages now resolve DB roots consistently via shared path resolver",
+        "Knowledge Ingest maintenance/recovery messaging simplified to reduce duplicate navigation prompts"
     ],
     "bug_fixes": [
         "Reduced false author extraction like organization/location phrases in academic documents",
