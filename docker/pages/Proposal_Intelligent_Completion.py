@@ -35,7 +35,7 @@ from cortex_engine.document_chunker import DocumentChunker
 from cortex_engine.llm_interface import LLMInterface
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.collection_manager import WorkingCollectionManager
-from cortex_engine.utils import convert_windows_to_wsl_path
+from cortex_engine.utils import convert_windows_to_wsl_path, resolve_db_root_path
 
 # New intelligent completion components
 from cortex_engine.field_classifier import (
@@ -66,7 +66,9 @@ st.set_page_config(
 
 # Load config
 config = ConfigManager().get_config()
-db_path = convert_windows_to_wsl_path(config.get('ai_database_path'))
+raw_db_path = config.get('ai_database_path', '')
+resolved_root = resolve_db_root_path(raw_db_path)
+db_path = str(resolved_root) if resolved_root else convert_windows_to_wsl_path(raw_db_path)
 
 # Initialize managers (use session state for persistence, but reload collection_manager fresh)
 if 'ic_workspace_manager' not in st.session_state:
@@ -408,6 +410,9 @@ st.markdown("""
 
 # Title
 st.markdown('<div class="main-header">Intelligent Completion</div>', unsafe_allow_html=True)
+st.warning("**This page has been superseded by Proposal Manager.** Use the new consolidated workflow for a better experience.")
+st.page_link("pages/13_Proposal_Manager.py", label="Go to Proposal Manager", icon="📋")
+st.divider()
 st.markdown('<div class="main-subtitle">Review and complete substantive proposal questions with AI assistance</div>', unsafe_allow_html=True)
 
 # ============================

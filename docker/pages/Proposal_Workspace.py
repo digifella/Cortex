@@ -27,7 +27,7 @@ from cortex_engine.workspace_model import WorkspaceState
 from cortex_engine.entity_profile_manager import EntityProfileManager
 from cortex_engine.document_processor import DocumentProcessor
 from cortex_engine.config_manager import ConfigManager
-from cortex_engine.utils import convert_windows_to_wsl_path, get_logger
+from cortex_engine.utils import convert_windows_to_wsl_path, resolve_db_root_path, get_logger
 
 logger = get_logger(__name__)
 
@@ -39,7 +39,9 @@ def initialize_managers():
     """Initialize all managers."""
     if 'workspace_manager' not in st.session_state:
         config = ConfigManager().get_config()
-        db_path = convert_windows_to_wsl_path(config.get('ai_database_path'))
+        raw_db_path = config.get('ai_database_path', '')
+        resolved_root = resolve_db_root_path(raw_db_path)
+        db_path = str(resolved_root) if resolved_root else convert_windows_to_wsl_path(raw_db_path)
 
         workspaces_path = Path(db_path) / "workspaces"
         st.session_state.workspace_manager = WorkspaceManager(workspaces_path)
@@ -55,6 +57,9 @@ def initialize_managers():
 # ============================================
 
 st.title("Proposal Workspace")
+st.warning("**This page has been superseded by Proposal Manager.** Use the new consolidated workflow for a better experience.")
+st.page_link("pages/13_Proposal_Manager.py", label="Go to Proposal Manager", icon="📋")
+st.divider()
 st.markdown("Create workspaces, upload tender documents, and bind entity profiles")
 
 workspace_manager, entity_manager = initialize_managers()

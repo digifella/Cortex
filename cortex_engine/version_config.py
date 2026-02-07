@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.0.1"
+CORTEX_VERSION = "6.0.2"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 0,
-    "patch": 1,
+    "patch": 2,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,21 +25,21 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-02-07",
-    "release_name": "Stabilization Pass: Config, Versioning, and Reset UX",
-    "description": "Post-release stabilization focused on config consistency, dynamic version harmonization, and maintenance path simplification.",
+    "release_name": "Extraction Metadata Accuracy and Path Consistency",
+    "description": "Improves Document Extract metadata precision and unifies database path resolution in proposal/entity workflows.",
     "breaking_changes": [],
     "new_features": [
-        "Document Extract preface now includes explicit schema marker `preface_schema: '1.0'`",
-        "Document Extract preface pipeline applies to all converted document types (not just PDF)"
+        "Document Extract preface now includes `available_at` field (DOI URL preferred, then canonical URL)",
+        "Collection Management now supports one-click stale reference repair for collections after KB resets"
     ],
     "improvements": [
-        "Knowledge base file discovery in Document Extract now uses configured `ai_database_path` key consistently",
-        "Additional UI pages now use dynamic version display from central `version_config.py`",
-        "Deprecated simple maintenance delete path now delegates to canonical delete routine"
+        "Academic title/author extraction in Document Extract is more strict and avoids abstract-first title errors",
+        "Maintenance reset UI simplified into a single Reset & Recovery flow with explicit scope selection",
+        "Proposal and Entity pages now resolve DB roots consistently via shared path resolver"
     ],
     "bug_fixes": [
-        "Fixed Document Extract browse flow missing configured database due to legacy config key lookup",
-        "Reduced maintenance behavior drift by removing duplicate delete implementation path"
+        "Reduced false author extraction like organization/location phrases in academic documents",
+        "Reduced orphaned collection confusion by adding inline stale reference detection and repair action"
     ],
     "performance": []
 }

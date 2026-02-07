@@ -55,7 +55,7 @@ from cortex_engine.ic_persistence_model import (
     classified_field_to_persisted,
     evidence_to_persisted
 )
-from cortex_engine.utils import convert_windows_to_wsl_path, get_logger
+from cortex_engine.utils import convert_windows_to_wsl_path, resolve_db_root_path, get_logger
 
 logger = get_logger(__name__)
 
@@ -199,10 +199,14 @@ def init_managers():
     """Initialize all managers in session state."""
     if 'pm_initialized' not in st.session_state:
         config = ConfigManager().get_config()
-        if os.path.exists('/.dockerenv'):
-            db_path = config.get('ai_database_path')
+        raw_db_path = config.get('ai_database_path', '')
+        resolved_root = resolve_db_root_path(raw_db_path)
+        if resolved_root:
+            db_path = str(resolved_root)
+        elif os.path.exists('/.dockerenv'):
+            db_path = raw_db_path
         else:
-            db_path = convert_windows_to_wsl_path(config.get('ai_database_path'))
+            db_path = convert_windows_to_wsl_path(raw_db_path)
 
         st.session_state.pm_workspace_manager = WorkspaceManager(Path(db_path) / "workspaces")
         st.session_state.pm_entity_manager = EntityProfileManager(Path(db_path))

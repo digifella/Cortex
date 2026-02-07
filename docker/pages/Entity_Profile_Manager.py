@@ -67,7 +67,7 @@ from cortex_engine.entity_profile_schema import (
     Address
 )
 from cortex_engine.config_manager import ConfigManager
-from cortex_engine.utils import convert_windows_to_wsl_path, get_logger
+from cortex_engine.utils import convert_windows_to_wsl_path, resolve_db_root_path, get_logger
 
 logger = get_logger(__name__)
 
@@ -79,7 +79,9 @@ def initialize_manager():
     """Initialize entity profile manager."""
     if 'entity_manager' not in st.session_state:
         config = ConfigManager().get_config()
-        db_path = convert_windows_to_wsl_path(config.get('ai_database_path'))
+        raw_db_path = config.get('ai_database_path', '')
+        resolved_root = resolve_db_root_path(raw_db_path)
+        db_path = str(resolved_root) if resolved_root else convert_windows_to_wsl_path(raw_db_path)
         st.session_state.entity_manager = EntityProfileManager(Path(db_path))
 
     return st.session_state.entity_manager

@@ -6,6 +6,25 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## v6.0.2 - 2026-02-07
+
+### Extraction Metadata Accuracy and Path Consistency
+
+Improves Document Extract metadata precision and unifies database path resolution in proposal/entity workflows.
+
+### ✨ New Features
+- Document Extract preface now includes `available_at` (DOI URL preferred, then canonical URL, else `Unknown`).
+- Collection Management now includes one-click stale-reference repair for collections after KB resets.
+
+### 🚀 Improvements
+- Academic title/author extraction in Document Extract is now stricter and avoids abstract-first title fallbacks.
+- Maintenance reset UI simplified into a single `Reset & Recovery` flow with explicit reset scope selection.
+- Proposal and Entity pages now resolve DB roots consistently via shared resolver logic.
+
+### 🔧 Bug Fixes
+- Reduced false author extraction where institution/location strings were misclassified as people.
+- Reduced stale collection confusion by surfacing invalid collection references directly in the collection view.
+
 ## v6.0.1 - 2026-02-07
 
 ### Stabilization Pass: Config, Versioning, and Reset UX
