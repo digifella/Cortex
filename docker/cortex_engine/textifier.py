@@ -136,15 +136,42 @@ class DocumentTextifier:
         doc = fitz.open(file_path)
         total_pages = len(doc)
         md_parts: List[str] = []
+        page_lines: List[List[str]] = []
+        header_footer_counts: Dict[str, int] = {}
+
+        # Pass 1: collect lines and detect repeated header/footer boilerplate.
+        for page_num in range(total_pages):
+            page = doc[page_num]
+            raw_text = page.get_text("text") or ""
+            lines = [re.sub(r"\s+", " ", ln).strip() for ln in raw_text.splitlines() if ln.strip()]
+            page_lines.append(lines)
+
+            candidates = lines[:4] + lines[-4:]
+            for line in candidates:
+                if len(line) < 4:
+                    continue
+                if re.fullmatch(r"[\d\W]+", line):
+                    continue
+                header_footer_counts[line] = header_footer_counts.get(line, 0) + 1
+
+        repeated_boilerplate = {line for line, count in header_footer_counts.items() if count >= 2}
 
         for page_num in range(total_pages):
             self._report(page_num / total_pages, f"Page {page_num + 1}/{total_pages}")
             page = doc[page_num]
             md_parts.append(f"## Page {page_num + 1}\n")
 
-            text = page.get_text("text")
-            if text.strip():
-                md_parts.append(text.strip())
+            lines = page_lines[page_num] if page_num < len(page_lines) else []
+            filtered_lines: List[str] = []
+            for idx, line in enumerate(lines):
+                in_header_footer_zone = idx < 5 or idx >= max(len(lines) - 5, 0)
+                if in_header_footer_zone and line in repeated_boilerplate:
+                    continue
+                filtered_lines.append(line)
+
+            text = "\n".join(filtered_lines).strip()
+            if text:
+                md_parts.append(text)
                 md_parts.append("")
 
             image_list = page.get_images(full=True)
@@ -162,6 +189,10 @@ class DocumentTextifier:
                         md_parts.append("")
                 except Exception as e:
                     logger.debug(f"Could not extract image xref={xref}: {e}")
+
+            # Explicit page break marker for downstream parsers.
+            if page_num < total_pages - 1:
+                md_parts.append("\n---\n")
 
         doc.close()
         self._report(1.0, "PDF conversion complete")

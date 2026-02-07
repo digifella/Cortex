@@ -137,12 +137,36 @@ def _first_nonempty_lines(text: str, limit: int = 30) -> List[str]:
 
 
 def _guess_title_from_markdown(md_content: str, file_path: str) -> str:
-    for line in _first_nonempty_lines(md_content, limit=40):
+    lines = _first_nonempty_lines(md_content, limit=120)
+    skip_exact = {
+        "viewpoint", "introduction", "abstract", "background", "keywords", "key words"
+    }
+    for i, line in enumerate(lines[:40]):
+        low = line.lower().strip()
+        if low in skip_exact and i + 1 < len(lines):
+            nxt = lines[i + 1]
+            if len(nxt) > 15:
+                return nxt[:180]
+        if re.match(r"^#+\s*page\s+\d+", line, flags=re.IGNORECASE):
+            continue
+        if re.match(r"^page\s+\d+", low):
+            continue
         if line.startswith("#"):
-            return _clean_line(line.lstrip("#"))
-    lines = _first_nonempty_lines(md_content, limit=40)
-    for line in lines:
-        if len(line) > 15 and not line.lower().startswith("page "):
+            title = _clean_line(line.lstrip("#"))
+            if title and not re.match(r"^page\s+\d+", title, flags=re.IGNORECASE):
+                return title[:180]
+    for line in lines[:60]:
+        low = line.lower()
+        if re.match(r"^page\s+\d+", low):
+            continue
+        if len(line) < 15:
+            continue
+        if any(x in low for x in ["university", "hospital", "school of", "email:", "doi:", "journal", "www."]):
+            continue
+        if low in skip_exact:
+            continue
+        # Prefer sentence-case/title-like lines as title candidates.
+        if len(re.findall(r"[A-Za-z]", line)) >= 12:
             return line[:180]
     return Path(file_path).stem
 
@@ -208,6 +232,8 @@ Rules:
 - Use source hint: "{source_hint}" unless content strongly indicates a different source_type.
 - If AI Generated Report and publisher cannot be identified, set publisher to "Unknown AI".
 - If abstract is not explicitly present, generate a concise abstract from the document.
+- If abstract exists, extract the full abstract paragraph(s), not just one line.
+- For authors, include only person names and exclude affiliations/locations/institutions.
 - Provide 5-12 useful keywords.
 - If a field is unknown use "Unknown" (or [] for authors/keywords).
 
@@ -242,38 +268,68 @@ def _fallback_preface_metadata(file_path: str, md_content: str, source_hint: str
     date_match = re.search(r"(20\d{2}[-/][01]?\d[-/][0-3]?\d|[0-3]?\d\s+[A-Za-z]{3,9}\s+20\d{2}|[A-Za-z]{3,9}\s+[0-3]?\d,\s+20\d{2}|20\d{2})", md_content[:10000])
     publishing_date = date_match.group(1) if date_match else "Unknown"
 
-    # Primitive author heuristic: first lines separated by commas with person-like names
+    # Extract author names from the title/author section (exclude affiliations/locations).
     authors = []
-    for line in lines[:20]:
-        if len(line) > 220:
+    disqualify = {
+        "university", "hospital", "institute", "school", "centre", "center",
+        "australia", "gold coast", "brisbane", "melbourne", "email", "phone",
+        "campus", "department", "service"
+    }
+    pre_abstract = re.split(r"(?im)^\s*abstract\b", md_content, maxsplit=1)[0][:7000]
+    for line in _first_nonempty_lines(pre_abstract, limit=80):
+        if len(line) > 260:
             continue
-        if "@" in line or "http" in line.lower():
+        low = line.lower()
+        if "@" in low or "http" in low:
             continue
-        parts = [p.strip() for p in re.split(r",| and ", line) if p.strip()]
-        candidate_names = [p for p in parts if re.match(r"^[A-Z][A-Za-z\-']+(?:\s+[A-Z][A-Za-z\-']+){1,3}$", p)]
-        if len(candidate_names) >= 1:
-            authors = candidate_names[:12]
-            break
+        if any(k in low for k in disqualify):
+            continue
+        # Split common author separators and strip numeric superscripts/degrees.
+        parts = [p.strip() for p in re.split(r";| and ", line) if p.strip()]
+        found = []
+        for part in parts:
+            cleaned = re.sub(r"\d+", "", part)
+            cleaned = re.sub(r"\b(PhD|MD|MSc|BSc|BA|MA|BHlthSc|Mast\s+Nutr&Diet)\b\.?", "", cleaned, flags=re.IGNORECASE)
+            cleaned = cleaned.replace(",", " ")
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            # Accept names with optional middle initials.
+            if re.match(r"^[A-Z][A-Za-z'\-]+(?:\s+(?:[A-Z]\.?|[A-Z][A-Za-z'\-]+)){1,4}$", cleaned):
+                if not any(k in cleaned.lower() for k in disqualify):
+                    found.append(cleaned)
+        if found:
+            authors.extend(found)
+            if len(authors) >= 12:
+                break
+    authors = list(dict.fromkeys(authors))[:12]
 
     abstract = ""
-    for i, line in enumerate(lines[:80]):
-        if line.lower().startswith("abstract"):
-            abstract = line.split(":", 1)[1].strip() if ":" in line else ""
-            if not abstract and i + 1 < len(lines):
-                abstract = lines[i + 1]
-            break
+    abstract_match = re.search(
+        r"(?is)\babstract\b\s*[:\-]?\s*(.+?)(?=\n\s*(keywords?|key words?|introduction|background|methods?|j\s+med|doi:|##\s*page|\Z))",
+        md_content,
+    )
+    if abstract_match:
+        abstract = _clean_line(abstract_match.group(1))
     if not abstract:
         # Fallback summary from first meaningful lines.
         abstract = " ".join([l for l in lines if len(l) > 30][:4])[:900] or "Summary not available."
 
     keywords = []
-    kw_match = re.search(r"keywords?\s*[:\-]\s*(.+)", md_content[:12000], flags=re.IGNORECASE)
+    kw_match = re.search(
+        r"(?is)\bkeywords?\b\s*[:\-]?\s*(.+?)(?=\n\s*(introduction|background|methods?|##\s*page|\Z))",
+        md_content[:20000],
+        flags=re.IGNORECASE,
+    )
     if kw_match:
-        keywords = [k.strip() for k in re.split(r",|;|\|", kw_match.group(1)) if k.strip()][:12]
+        kw_raw = _clean_line(kw_match.group(1))
+        keywords = [k.strip().lower() for k in re.split(r",|;|\|", kw_raw) if k.strip()][:12]
     if not keywords:
         tokens = re.findall(r"\b[A-Za-z][A-Za-z\-]{3,}\b", md_content[:8000])
         freq = {}
-        stop = {"this", "that", "with", "from", "were", "have", "been", "into", "their", "about", "which", "document", "page", "pages", "report", "using", "used", "study"}
+        stop = {
+            "this", "that", "with", "from", "were", "have", "been", "into", "their", "about", "which",
+            "document", "page", "pages", "report", "using", "used", "study", "journal", "research",
+            "university", "australia", "gold", "coast"
+        }
         for t in tokens:
             low = t.lower()
             if low in stop:
@@ -314,6 +370,10 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         authors = []
     if not authors:
         authors = fallback_meta.get("authors", [])
+    authors = [
+        a for a in authors
+        if a and not any(x in a.lower() for x in ["university", "hospital", "institute", "school", "gold coast", "brisbane", "melbourne", "australia"])
+    ]
 
     keywords_raw = data.get("keywords", fallback_meta.get("keywords", []))
     if isinstance(keywords_raw, str):
@@ -324,6 +384,7 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         keywords = []
     if not keywords:
         keywords = fallback_meta.get("keywords", [])
+    keywords = [k.lower() for k in keywords if k]
 
     abstract = _clean_line(str(data.get("abstract", ""))) or fallback_meta["abstract"] or "Summary not available."
 
