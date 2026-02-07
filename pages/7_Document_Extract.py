@@ -136,11 +136,95 @@ def _first_nonempty_lines(text: str, limit: int = 30) -> List[str]:
     return lines[:limit]
 
 
+def _looks_like_person_name(candidate: str) -> bool:
+    c = _clean_line(re.sub(r"\d+", "", candidate))
+    if not c or len(c) < 5 or len(c) > 80:
+        return False
+    low = c.lower()
+    disallow = [
+        "university", "department", "school", "faculty", "institute", "hospital", "campus",
+        "australia", "india", "srilanka", "melbourne", "brisbane", "gold coast", "corresponding author",
+        "author:", "keywords", "abstract", "study", "comprehensive", "licensed", "creative commons",
+        "lecturer", "postgraduate", "associate professor", "professor",
+    ]
+    if any(x in low for x in disallow):
+        return False
+    if "@" in c or "http" in low:
+        return False
+    c = re.sub(r"\b(Dr|Prof)\.?\s+", "", c, flags=re.IGNORECASE)
+    c = re.sub(r"\b(PhD|MD|MSc|BSc|BA|MA|MPhil|DPhil|MBA|BHlthSc|Mast\s+Nutr&Diet)\b\.?", "", c, flags=re.IGNORECASE)
+    c = re.sub(r"\s+", " ", c).strip(" ,;:-")
+    parts = c.split()
+    if len(parts) < 2 or len(parts) > 5:
+        return False
+    for p in parts:
+        if not re.match(r"^(?:[A-Z]\.?|[A-Z][A-Za-z'\-]+)$", p):
+            return False
+    return True
+
+
+def _extract_available_at(md_content: str) -> str:
+    text = md_content or ""
+    doi_url = re.search(r"https?://(?:dx\.)?doi\.org/\S+", text, flags=re.IGNORECASE)
+    if doi_url:
+        return doi_url.group(0).rstrip(").,;]")
+
+    doi = re.search(r"\bdoi\s*[:]\s*(10\.\d{4,9}/[^\s;,)\]]+)", text, flags=re.IGNORECASE)
+    if doi:
+        return f"https://doi.org/{doi.group(1)}"
+
+    doi_bare = re.search(r"\b(10\.\d{4,9}/[^\s;,)\]]+)", text)
+    if doi_bare:
+        return f"https://doi.org/{doi_bare.group(1)}"
+
+    url = re.search(r"https?://\S+", text, flags=re.IGNORECASE)
+    if url:
+        return url.group(0).rstrip(").,;]")
+
+    return "Unknown"
+
+
+def _extract_authors_from_markdown(md_content: str) -> List[str]:
+    pre_abstract = re.split(r"(?im)^\s*abstract\b", md_content or "", maxsplit=1)[0][:9000]
+    lines = _first_nonempty_lines(pre_abstract, limit=120)
+    authors: List[str] = []
+
+    for line in lines:
+        if len(line) > 260:
+            continue
+        if re.match(r"^\d+\s", line):
+            continue
+        cleaned = re.sub(r"([A-Za-z])\d+\b", r"\1", line)
+        cleaned = re.sub(r"\band\b", ",", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\b(Dr|Prof)\.?\s+", "", cleaned, flags=re.IGNORECASE)
+        parts = [p.strip() for p in re.split(r",|;", cleaned) if p.strip()]
+        for part in parts:
+            part = re.sub(r"\s+", " ", part).strip(" ,;:-")
+            if _looks_like_person_name(part):
+                authors.append(part)
+        if len(authors) >= 12:
+            break
+
+    unique = list(dict.fromkeys(authors))
+    return unique[:12]
+
+
 def _guess_title_from_markdown(md_content: str, file_path: str) -> str:
     lines = _first_nonempty_lines(md_content, limit=120)
     skip_exact = {
         "viewpoint", "introduction", "abstract", "background", "keywords", "key words"
     }
+    # Academic fallback: title is often the line immediately before author names.
+    for i in range(1, min(80, len(lines))):
+        if _extract_authors_from_markdown(lines[i]):
+            prev = _clean_line(lines[i - 1])
+            if (
+                len(prev) >= 20
+                and not re.match(r"^page\s+\d+", prev, flags=re.IGNORECASE)
+                and "licensed" not in prev.lower()
+                and "creative commons" not in prev.lower()
+            ):
+                return prev[:180]
     for i, line in enumerate(lines[:40]):
         low = line.lower().strip()
         if low in skip_exact and i + 1 < len(lines):
@@ -161,7 +245,11 @@ def _guess_title_from_markdown(md_content: str, file_path: str) -> str:
             continue
         if len(line) < 15:
             continue
+        if len(line) > 180:
+            continue
         if any(x in low for x in ["university", "hospital", "school of", "email:", "doi:", "journal", "www."]):
+            continue
+        if any(x in low for x in ["licensed", "creative commons", "corresponding author"]):
             continue
         if low in skip_exact:
             continue
@@ -225,6 +313,7 @@ Return STRICT JSON only with keys:
 - publisher (string)
 - publishing_date (string)
 - authors (array of strings)
+- available_at (string)
 - abstract (string)
 - keywords (array of strings)
 
@@ -234,6 +323,8 @@ Rules:
 - If abstract is not explicitly present, generate a concise abstract from the document.
 - If abstract exists, extract the full abstract paragraph(s), not just one line.
 - For authors, include only person names and exclude affiliations/locations/institutions.
+- For title, prefer the document title and never use abstract opening text.
+- For available_at, prefer DOI URL if present, else canonical report URL, else "Unknown".
 - Provide 5-12 useful keywords.
 - If a field is unknown use "Unknown" (or [] for authors/keywords).
 
@@ -267,40 +358,9 @@ def _fallback_preface_metadata(file_path: str, md_content: str, source_hint: str
 
     date_match = re.search(r"(20\d{2}[-/][01]?\d[-/][0-3]?\d|[0-3]?\d\s+[A-Za-z]{3,9}\s+20\d{2}|[A-Za-z]{3,9}\s+[0-3]?\d,\s+20\d{2}|20\d{2})", md_content[:10000])
     publishing_date = date_match.group(1) if date_match else "Unknown"
+    available_at = _extract_available_at(md_content)
 
-    # Extract author names from the title/author section (exclude affiliations/locations).
-    authors = []
-    disqualify = {
-        "university", "hospital", "institute", "school", "centre", "center",
-        "australia", "gold coast", "brisbane", "melbourne", "email", "phone",
-        "campus", "department", "service"
-    }
-    pre_abstract = re.split(r"(?im)^\s*abstract\b", md_content, maxsplit=1)[0][:7000]
-    for line in _first_nonempty_lines(pre_abstract, limit=80):
-        if len(line) > 260:
-            continue
-        low = line.lower()
-        if "@" in low or "http" in low:
-            continue
-        if any(k in low for k in disqualify):
-            continue
-        # Split common author separators and strip numeric superscripts/degrees.
-        parts = [p.strip() for p in re.split(r";| and ", line) if p.strip()]
-        found = []
-        for part in parts:
-            cleaned = re.sub(r"\d+", "", part)
-            cleaned = re.sub(r"\b(PhD|MD|MSc|BSc|BA|MA|BHlthSc|Mast\s+Nutr&Diet)\b\.?", "", cleaned, flags=re.IGNORECASE)
-            cleaned = cleaned.replace(",", " ")
-            cleaned = re.sub(r"\s+", " ", cleaned).strip()
-            # Accept names with optional middle initials.
-            if re.match(r"^[A-Z][A-Za-z'\-]+(?:\s+(?:[A-Z]\.?|[A-Z][A-Za-z'\-]+)){1,4}$", cleaned):
-                if not any(k in cleaned.lower() for k in disqualify):
-                    found.append(cleaned)
-        if found:
-            authors.extend(found)
-            if len(authors) >= 12:
-                break
-    authors = list(dict.fromkeys(authors))[:12]
+    authors = _extract_authors_from_markdown(md_content)
 
     abstract = ""
     abstract_match = re.search(
@@ -343,6 +403,7 @@ def _fallback_preface_metadata(file_path: str, md_content: str, source_hint: str
         "publisher": publisher,
         "publishing_date": publishing_date,
         "authors": authors,
+        "available_at": available_at,
         "abstract": abstract,
         "keywords": keywords,
     }
@@ -360,6 +421,9 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         publisher = "Unknown AI"
 
     publishing_date = _clean_line(str(data.get("publishing_date", ""))) or fallback_meta["publishing_date"] or "Unknown"
+    available_at = _clean_line(str(data.get("available_at", ""))) or fallback_meta.get("available_at", "Unknown")
+    if available_at != "Unknown":
+        available_at = _extract_available_at(available_at)
 
     authors_raw = data.get("authors", fallback_meta.get("authors", []))
     if isinstance(authors_raw, str):
@@ -370,10 +434,7 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         authors = []
     if not authors:
         authors = fallback_meta.get("authors", [])
-    authors = [
-        a for a in authors
-        if a and not any(x in a.lower() for x in ["university", "hospital", "institute", "school", "gold coast", "brisbane", "melbourne", "australia"])
-    ]
+    authors = [a for a in authors if _looks_like_person_name(a)]
 
     keywords_raw = data.get("keywords", fallback_meta.get("keywords", []))
     if isinstance(keywords_raw, str):
@@ -394,6 +455,7 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         "publisher": publisher or "Unknown",
         "publishing_date": publishing_date,
         "authors": authors[:20],
+        "available_at": available_at or "Unknown",
         "keywords": keywords[:8],
         "abstract": abstract,
     }
@@ -417,6 +479,7 @@ def _build_preface(md_meta: dict) -> str:
         f"publisher: {_yaml_escape(md_meta['publisher'])}",
         f"publishing_date: {_yaml_escape(md_meta['publishing_date'])}",
         f"authors: {authors_yaml}",
+        f"available_at: {_yaml_escape(md_meta.get('available_at', 'Unknown'))}",
         f"keywords: {keywords_yaml}",
         f"abstract: {_yaml_escape(md_meta['abstract'])}",
         "---",
