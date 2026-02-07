@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 import os
+import json
 import shutil
 import chromadb
 from chromadb.config import Settings as ChromaSettings
@@ -43,6 +44,71 @@ def _normalize_tags(raw) -> list:
     if isinstance(raw, list):
         return [str(p).strip() for p in raw if str(p).strip()]
     return []
+
+
+def _safe_collection_archive_name(collection_name: str) -> str:
+    """Create a filesystem-safe archive name from collection name."""
+    cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(collection_name))
+    cleaned = cleaned.strip("_")
+    return cleaned or "collection"
+
+
+def _parse_iso_datetime(value):
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _detect_active_ingestion(db_path: str, active_window_minutes: int = 30) -> dict:
+    """Detect likely active ingestion by checking recent ingestion state artifacts."""
+    try:
+        resolved = resolve_db_root_path(db_path)
+        if resolved:
+            safe_db_path = convert_to_docker_mount_path(str(resolved))
+        else:
+            safe_db_path = convert_windows_to_wsl_path(db_path)
+        if not safe_db_path:
+            return {"active": False, "signals": []}
+
+        base = Path(safe_db_path)
+        now = datetime.now().timestamp()
+        active_window_seconds = active_window_minutes * 60
+        signals = []
+
+        state_files = [
+            base / "batch_state.json",
+            base / "staging_ingestion.json",
+            base / "ingestion_progress.json",
+        ]
+        for state_file in state_files:
+            if state_file.exists() and state_file.is_file():
+                age_seconds = max(0, now - state_file.stat().st_mtime)
+                if age_seconds <= active_window_seconds:
+                    signals.append(f"recent state file: {state_file.name}")
+
+        progress_dir = base / "ingestion_progress"
+        if progress_dir.exists() and progress_dir.is_dir():
+            for progress_file in progress_dir.glob("*.json"):
+                try:
+                    with open(progress_file, "r", encoding="utf-8") as f:
+                        payload = json.load(f)
+                    status = str(payload.get("status", "")).lower()
+                    last_update = _parse_iso_datetime(payload.get("last_update"))
+                    last_update_ts = last_update.timestamp() if last_update else progress_file.stat().st_mtime
+                    age_seconds = max(0, now - last_update_ts)
+                    if status == "running" and age_seconds <= active_window_seconds:
+                        session_id = payload.get("session_id", progress_file.name)
+                        signals.append(f"running progress session: {session_id}")
+                except Exception:
+                    continue
+
+        return {"active": len(signals) > 0, "signals": signals}
+    except Exception as e:
+        logger.debug(f"Ingestion activity detection failed: {e}")
+        return {"active": False, "signals": []}
 
 @st.cache_resource
 def init_chroma_client(db_path):
@@ -98,6 +164,15 @@ st.text_input("Knowledge Hub DB Path", value=db_path, disabled=True, help="Set t
 if not db_path:
     st.warning("Please set a valid AI Database Path on the 'Knowledge Ingest' page first.")
     st.stop()
+
+ingestion_activity = _detect_active_ingestion(db_path)
+if ingestion_activity.get("active"):
+    signal_preview = ", ".join(ingestion_activity.get("signals", [])[:3])
+    st.warning(
+        "⚠️ Active ingestion appears to be running. ZIP export/download is generally safe, "
+        "but avoid mutating collection actions (rename/delete/merge/clear) until ingestion completes."
+        + (f" Signals: {signal_preview}" if signal_preview else "")
+    )
 
 chroma_client = init_chroma_client(db_path)
 if not chroma_client: st.stop()
@@ -1232,14 +1307,47 @@ for collection in page_collections:
                 st.divider()
 
                 st.markdown("**Export Collection**")
-                output_dir = st.text_input("Destination Directory", key=f"export_path_{name}", placeholder="e.g., C:\\Users\\YourUser\\Desktop\\Export")
-                if st.button("Export Files", key=f"export_btn_{name}"):
-                    if output_dir:
-                        with st.spinner("Exporting files..."):
-                            copied, failed = collection_mgr.export_collection_files(name, output_dir, vector_collection)
-                            st.success(f"✅ Export complete! Copied {len(copied)} files.")
-                            if failed: st.warning(f"Could not copy {len(failed)} files: {', '.join(failed)}")
-                    else: st.error("Please provide a destination directory.")
+                zip_state_key = f"collection_zip_payload_{name}"
+                if st.button("📦 Prepare ZIP for Download", key=f"prepare_zip_btn_{name}", use_container_width=True):
+                    with st.spinner("Preparing ZIP archive..."):
+                        zip_bytes, copied, failed = collection_mgr.create_collection_zip_bytes(name, vector_collection)
+                        if zip_bytes:
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            safe_name = _safe_collection_archive_name(name)
+                            st.session_state[zip_state_key] = {
+                                "zip_bytes": zip_bytes,
+                                "filename": f"{safe_name}_documents_{timestamp}.zip",
+                                "copied_count": len(copied),
+                                "failed_count": len(failed),
+                            }
+                            st.success(f"✅ ZIP prepared with {len(copied)} file(s).")
+                            if failed:
+                                st.warning(f"{len(failed)} file(s) could not be added to ZIP (missing/unreadable).")
+                        else:
+                            st.error("No files were available to include in a ZIP for this collection.")
+
+                zip_payload = st.session_state.get(zip_state_key)
+                if zip_payload and zip_payload.get("zip_bytes"):
+                    st.download_button(
+                        label=f"⬇️ Download ZIP ({zip_payload.get('copied_count', 0)} files)",
+                        data=zip_payload["zip_bytes"],
+                        file_name=zip_payload["filename"],
+                        mime="application/zip",
+                        key=f"download_zip_btn_{name}",
+                        use_container_width=True,
+                    )
+                    if zip_payload.get("failed_count", 0) > 0:
+                        st.caption(f"⚠️ {zip_payload['failed_count']} file(s) were skipped while preparing this archive.")
+
+                with st.expander("Export files directly to a directory", expanded=False):
+                    output_dir = st.text_input("Destination Directory", key=f"export_path_{name}", placeholder="e.g., C:\\Users\\YourUser\\Desktop\\Export")
+                    if st.button("Export Files", key=f"export_btn_{name}"):
+                        if output_dir:
+                            with st.spinner("Exporting files..."):
+                                copied, failed = collection_mgr.export_collection_files(name, output_dir, vector_collection)
+                                st.success(f"✅ Export complete! Copied {len(copied)} files.")
+                                if failed: st.warning(f"Could not copy {len(failed)} files: {', '.join(failed)}")
+                        else: st.error("Please provide a destination directory.")
                 st.divider()
 
                 st.markdown("**Rename Collection**")

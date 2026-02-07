@@ -10,6 +10,8 @@
 import json
 import os
 import shutil
+import io
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -222,6 +224,89 @@ class WorkingCollectionManager:
         except Exception as e:
             logger.error(f"Export collection failed: {e}")
             raise CollectionError(f"Failed to export collection '{name}'", str(e))
+
+    def create_collection_zip_bytes(self, name: str, vector_collection) -> tuple:
+        """Create an in-memory ZIP archive for all source files in a collection."""
+        doc_ids = self.get_doc_ids_by_name(name)
+        if not doc_ids:
+            logger.info(f"No documents found in collection '{name}'")
+            return None, [], []
+
+        try:
+            logger.info(f"Building ZIP for collection '{name}' with {len(doc_ids)} document IDs")
+            results = vector_collection.get(where={"doc_id": {"$in": doc_ids}}, include=["metadatas"])
+
+            metadatas = results.get("metadatas", []) if isinstance(results, dict) else []
+            source_paths = []
+            seen_paths = set()
+            for meta in metadatas:
+                if not isinstance(meta, dict):
+                    continue
+                src = meta.get("doc_posix_path")
+                if src and src not in seen_paths:
+                    source_paths.append(src)
+                    seen_paths.add(src)
+
+            if not source_paths:
+                logger.info(f"No source file paths found for collection '{name}'")
+                return None, [], []
+
+            zip_buffer = io.BytesIO()
+            added_files = []
+            failed_files = []
+            manifest_files = []
+            used_arc_names = set()
+
+            with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for src_path_str in source_paths:
+                    try:
+                        src_path = Path(src_path_str)
+                        if not src_path.exists() or not src_path.is_file():
+                            raise FileNotFoundError(f"Source file not found: {src_path}")
+
+                        arc_name = src_path.name or "document"
+                        if arc_name in used_arc_names:
+                            stem = Path(arc_name).stem
+                            suffix = Path(arc_name).suffix
+                            idx = 2
+                            candidate = f"{stem}_{idx}{suffix}"
+                            while candidate in used_arc_names:
+                                idx += 1
+                                candidate = f"{stem}_{idx}{suffix}"
+                            arc_name = candidate
+
+                        zf.write(src_path, arcname=arc_name)
+                        used_arc_names.add(arc_name)
+                        added_files.append(str(src_path))
+                        manifest_files.append({
+                            "archive_name": arc_name,
+                            "source_path": str(src_path),
+                        })
+                    except Exception as e:
+                        failed_files.append(f"{src_path_str} (Reason: {e})")
+                        logger.warning(f"Failed to add {src_path_str} to ZIP: {e}")
+
+                if not added_files:
+                    logger.info(f"No files added to ZIP for collection '{name}'")
+                    return None, [], failed_files
+
+                manifest_payload = {
+                    "collection_name": name,
+                    "exported_at_utc": f"{datetime.utcnow().isoformat()}Z",
+                    "total_files_in_zip": len(manifest_files),
+                    "total_files_skipped": len(failed_files),
+                    "files": manifest_files,
+                    "skipped_files": failed_files,
+                }
+                zf.writestr("export_manifest.json", json.dumps(manifest_payload, indent=2))
+
+            zip_bytes = zip_buffer.getvalue()
+            logger.info(f"ZIP complete for '{name}': {len(added_files)} added, {len(failed_files)} failed")
+            return zip_bytes, added_files, failed_files
+
+        except Exception as e:
+            logger.error(f"Collection ZIP failed: {e}")
+            raise CollectionError(f"Failed to create ZIP for collection '{name}'", str(e))
 
     def deduplicate_vector_store(self, vector_collection, dry_run: bool = True) -> dict:
         """

@@ -1375,7 +1375,9 @@ def finalize_ingestion(db_path: str, args=None):
         path_key = doc.metadata['file_path']
         if path_key in metadata_map:
             doc_meta = metadata_map[path_key]
-            doc.doc_id = doc_meta.doc_id
+            # IMPORTANT: LlamaIndex uses `id_` as the document identity that flows
+            # into node metadata. Using `doc_id` here does not persist.
+            doc.id_ = doc_meta.doc_id
             flat_metadata = {
                 "doc_id": doc_meta.doc_id,
                 "file_name": doc_meta.file_name,

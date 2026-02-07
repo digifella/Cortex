@@ -6,6 +6,35 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## v6.0.0 - 2026-02-07
+
+### Reset Reliability, ID Integrity, and Smart Extract Preface
+
+Major reliability update for maintenance reset and ingestion ID consistency, plus machine-readable metadata preface generation in Document Extract.
+
+### 🔥 Breaking Changes
+- Document Extract now prepends YAML front matter metadata preface to converted Markdown files (all supported document types).
+- Knowledge Ingest UI no longer performs post-finalization collection assignment; assignment is now finalized only inside the ingestion engine.
+
+### ✨ New Features
+- Document Extract preface metadata extraction with source classification: `Academic`, `Consulting Company`, `AI Generated Report`, `Other`.
+- YAML front matter preface includes: `preface_schema`, `title`, `source_type`, `publisher`, `publishing_date`, `authors`, `keywords`, `abstract`.
+- LLM-assisted metadata extraction with robust fallback heuristics when fields are missing.
+- Collection ZIP export includes `export_manifest.json` listing included and skipped files.
+- Maintenance reset now terminates active ingest processes targeting the same DB path before cleanup.
+
+### 🚀 Improvements
+- Clean Start simplified to deterministic reset + critical artifact verification.
+- Shared reset routine now powers maintenance deletion and clean-start operations.
+- Maintenance and Document Extract pages now use dynamic version string from `cortex_engine/version_config.py`.
+- Recovery collection tools validate IDs against current vector-store metadata before adding.
+- Preface keywords are limited to top 8 for consistency in machine-read pipelines.
+
+### 🔧 Bug Fixes
+- Fixed ingestion identity persistence by setting LlamaIndex document identity with `doc.id_` during finalization.
+- Fixed orphan collection references caused by stale UI-side assignment IDs.
+- Fixed reset behavior where lingering ingestion processes could recreate data during/after cleanup.
+
 ### 🔧 Bug Fixes - 2026-01-27
 - **Fixed L2 Distance to Similarity Conversion**: Vector search was producing negative similarity scores due to incorrect formula `1.0 - distance`. Changed to `1.0 / (1.0 + distance)` which properly maps L2 distance [0,∞) to similarity (0,1].
 - **Fixed Path Quote Handling**: `convert_windows_to_wsl_path()` now strips surrounding quotes from paths, fixing database import issues when users copy-paste quoted paths.

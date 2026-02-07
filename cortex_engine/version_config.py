@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "5.7.0"
+CORTEX_VERSION = "6.0.0"
 
 # Version details
 VERSION_INFO = {
-    "major": 5,
-    "minor": 7,
+    "major": 6,
+    "minor": 0,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -24,25 +24,31 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-01-28",
-    "release_name": "Strict Search & Source Access",
-    "description": "Enhanced search precision with strict mode filtering and direct source file access from search results.",
-    "breaking_changes": [],
+    "release_date": "2026-02-07",
+    "release_name": "Reset Reliability, ID Integrity, and Smart Extract Preface",
+    "description": "Major reliability update for maintenance reset and ingestion ID consistency, plus machine-readable metadata preface generation in Document Extract.",
+    "breaking_changes": [
+        "Document Extract now prepends YAML front matter metadata preface to converted Markdown files (all supported document types).",
+        "Knowledge Ingest UI no longer performs post-finalization collection assignment; assignment is now finalized only inside the ingestion engine."
+    ],
     "new_features": [
-        "Strict Mode search: Require ALL search terms to be present in results",
-        "Source file path display in search results",
-        "Open File button to launch source documents directly",
-        "Copy path functionality for easy file location access",
-        "Docker hybrid storage: Choose between portable (containerized) or external storage"
+        "Document Extract metadata preface extraction with source classification (Academic, Consulting Company, AI Generated Report, Other)",
+        "YAML preface includes preface_schema, title, source_type, publisher, publishing_date, authors, keywords, and abstract",
+        "LLM-assisted metadata extraction with robust heuristic fallback for missing fields",
+        "Collection ZIP export now includes export_manifest.json with included and skipped files",
+        "Maintenance reset now terminates active ingest processes targeting the same DB path before cleanup"
     ],
     "improvements": [
-        "Strict mode works across all search modes (Traditional, GraphRAG, Hybrid)",
-        "Better search precision for multi-term queries",
-        "Clear visual feedback on strict mode filtering results"
+        "Clean Start flow simplified to deterministic reset + verification of critical KB artifacts",
+        "Maintenance reset logic consolidated into shared reusable reset routine",
+        "Maintenance and Document Extract pages now use dynamic central version string",
+        "Recovery collection creation now validates IDs against vector store to avoid reintroducing orphans",
+        "Preface keywords capped to top 8 for consistent downstream machine use"
     ],
     "bug_fixes": [
-        "Fixed hybrid search bypassing strict mode filter",
-        "Fixed GraphRAG fallback searches not respecting strict mode"
+        "Fixed ingestion identity persistence by setting LlamaIndex document id via doc.id_ during finalization",
+        "Fixed orphan collection references caused by stale UI-side assignment IDs",
+        "Fixed reset behavior where lingering ingestion processes could recreate data during/after cleanup"
     ],
     "performance": []
 }
