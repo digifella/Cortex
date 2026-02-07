@@ -1089,13 +1089,38 @@ for collection in page_collections:
                     st.info("This collection is empty.")
                 else:
                     with st.spinner("Fetching document details..."):
-                        
                         results = vector_collection.get(where={"doc_id": {"$in": doc_ids}}, include=["metadatas"])
-                        
                         unique_docs = {meta['doc_id']: meta for meta in results.get('metadatas', []) if 'doc_id' in meta}
+                        missing_doc_refs = [doc_id for doc_id in doc_ids if doc_id not in unique_docs]
+
+                        if missing_doc_refs:
+                            st.warning(
+                                f"Detected {len(missing_doc_refs)} stale reference(s) in this collection "
+                                "that no longer exist in the Knowledge Base."
+                            )
+                            c_fix1, c_fix2 = st.columns([1, 2])
+                            with c_fix1:
+                                if st.button("🩹 Repair References", key=f"repair_refs_{name}", use_container_width=True):
+                                    try:
+                                        repair_result = collection_mgr.prune_missing_doc_references(name, vector_collection)
+                                        removed = repair_result.get("removed_count", 0)
+                                        if removed:
+                                            st.success(f"✅ Removed {removed} stale reference(s) from '{name}'.")
+                                        else:
+                                            st.info("No stale references were removed.")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Failed to repair collection references: {e}")
+                            with c_fix2:
+                                st.caption(
+                                    "Use this when documents were deleted/reset and collections still reference old doc IDs."
+                                )
 
                         if not unique_docs:
-                            st.warning("Could not retrieve details for documents in this collection. They may have been deleted from the Knowledge Base.")
+                            st.warning(
+                                "Could not retrieve document metadata for this collection. "
+                                "Repair references above, or re-ingest documents if needed."
+                            )
 
                         # Tag management controls
                         if unique_docs:

@@ -66,12 +66,6 @@ PAGE_VERSION = VERSION_STRING
 logger = get_logger(__name__)
 
 # Initialize session state
-if 'show_confirm_clear_log' not in st.session_state:
-    st.session_state.show_confirm_clear_log = False
-if 'show_confirm_delete_kb' not in st.session_state:
-    st.session_state.show_confirm_delete_kb = False
-if 'show_confirm_clean_start' not in st.session_state:
-    st.session_state.show_confirm_clean_start = False
 if 'maintenance_config' not in st.session_state:
     st.session_state.maintenance_config = None
 
@@ -117,8 +111,6 @@ def clear_ingestion_session_state(reason: str = "maintenance") -> None:
         "show_logs",
         "processing_metrics",
         "ingestion_start_time",
-        "show_confirm_clear_log",
-        "show_confirm_delete_kb",
     }
 
     for key in list(st.session_state.keys()):
@@ -328,8 +320,6 @@ def delete_ingested_document_database(db_path: str):
     except Exception as e:
         logger.error(f"Ingested document database deletion failed: {e}")
         st.error(f"❌ Failed to delete ingested document database: {e}")
-
-    st.session_state.show_confirm_delete_kb = False
 
 def perform_clean_start(db_path: str):
     """Perform complete KB reset with a concise, deterministic cleanup flow."""
@@ -887,43 +877,65 @@ def display_database_maintenance():
                     del st.session_state.health_check_db_path
                 st.rerun()
 
-    with st.expander("⚙️ Basic Database Operations", expanded=False):
-        st.subheader("Clear Ingestion Log")
-        st.info("This action allows all files to be scanned and re-ingested. Useful for rebuilding the knowledge base from scratch.")
-        
-        if st.button("Clear Ingestion Log..."):
-            st.session_state.show_confirm_clear_log = True
-            
-        if st.session_state.get("show_confirm_clear_log"):
-            st.warning(f"This will delete the **{INGESTED_FILES_LOG}** file. The system will then see all source files as new on the next scan. Are you sure?")
-            c1, c2 = st.columns(2)
-            if c1.button("YES, Clear the Log", use_container_width=True, type="primary"):
-                clear_ingestion_log_file()
-                st.session_state.show_confirm_clear_log = False
-                st.rerun()
-            if c2.button("Cancel", use_container_width=True):
-                st.session_state.show_confirm_clear_log = False
-                st.rerun()
-        
+    with st.expander("🧹 Reset & Recovery", expanded=False):
+        st.caption("Simplified maintenance flow: repair first, then reset only if needed.")
+
+        st.markdown("**Step 1: Optional log reset**")
+        st.caption(
+            f"Clears `{INGESTED_FILES_LOG}` so all source files are treated as new on the next ingest scan."
+        )
+        clear_log_confirm = st.checkbox(
+            "I understand this will cause full file re-scan",
+            key="maintenance_clear_log_confirm",
+        )
+        if st.button(
+            "🧾 Clear Ingestion Log",
+            use_container_width=True,
+            key="maintenance_clear_log_btn",
+            disabled=not clear_log_confirm,
+        ):
+            clear_ingestion_log_file()
+            st.rerun()
+
         st.divider()
-        
-        st.subheader("Delete Ingested Document Database")
-        st.error("⚠️ **DANGER:** This is the most destructive action.")
-        st.caption("This will delete the processed/ingested documents database, NOT your source Knowledge Base files.")
-        
-        if st.button("Permanently Delete Ingested Document Database...", type="primary"):
-            st.session_state.show_confirm_delete_kb = True
-            
-        if st.session_state.get("show_confirm_delete_kb"):
-            st.warning(f"This will permanently delete the **ingested document database** (ChromaDB + Collections + Knowledge Graph). Your source documents will NOT be affected. This action cannot be undone.")
-            c1, c2 = st.columns(2)
-            if c1.button("YES, DELETE INGESTED DATABASE", use_container_width=True):
-                delete_ingested_document_database(db_path)
-                st.session_state.show_confirm_delete_kb = False
-                st.rerun()
-            if c2.button("Cancel Deletion", use_container_width=True):
-                st.session_state.show_confirm_delete_kb = False
-                st.rerun()
+
+        st.markdown("**Step 2: Knowledge base reset**")
+        reset_scope = st.radio(
+            "Reset scope",
+            options=["Standard Reset", "Clean Start Reset"],
+            help=(
+                "Standard Reset deletes ChromaDB, graph, collections, and ingest state. "
+                "Clean Start also clears extended workspace/entity artifacts."
+            ),
+            horizontal=True,
+            key="maintenance_reset_scope",
+        )
+
+        if reset_scope == "Standard Reset":
+            st.info("Deletes KB artifacts: vector DB, graph, collections, ingest state files.")
+        else:
+            st.warning(
+                "Also deletes extended artifacts (workspaces/entity profiles/structured state) "
+                "in addition to standard KB artifacts."
+            )
+
+        reset_confirm = st.checkbox(
+            "I understand reset actions cannot be undone",
+            key="maintenance_reset_confirm",
+        )
+        if st.button(
+            "🚀 Run Reset",
+            use_container_width=True,
+            type="primary",
+            key="maintenance_run_reset",
+            disabled=not reset_confirm,
+        ):
+            fresh_path = st.session_state.get('maintenance_current_db_input', db_path)
+            if reset_scope == "Clean Start Reset":
+                perform_clean_start(fresh_path)
+            else:
+                delete_ingested_document_database(fresh_path)
+            st.rerun()
 
     # Add database deduplication section
     with st.expander("🔧 Database Deduplication & Optimization", expanded=False):
@@ -1081,58 +1093,7 @@ def display_database_maintenance():
             except Exception as e:
                 st.error(f"Could not access vector collection: {e}")
 
-    with st.expander("⚠️ Danger Zone - System Reset", expanded=False):
-        st.markdown("### ⚠️ **Complete System Reset**")
-        st.error("**This section contains destructive operations that cannot be undone!**")
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            st.markdown("""
-            **🚀 Clean Start Reset**
-            
-            Complete knowledge-base reset for the configured database path.
-            This removes persisted KB artifacts and ingestion state so you can re-ingest from a clean slate.
-            
-            **Clean Start will:**
-            - ✅ Delete entire knowledge base directory (ChromaDB)
-            - ✅ Delete knowledge graph file (.gpickle)  
-            - ✅ Reset working collections (`working_collections.json`)
-            - ✅ Clear staging, batch, and ingestion progress state files
-            - ✅ Clear ingestion recovery metadata
-            - ✅ Stop active ingest processes targeting the same DB path before cleanup
-            - ✅ Keep your configured DB path (no silent path reset)
-            
-            **Use Clean Start when:**
-            - Collection entries appear stale or orphaned
-            - Ingest state appears stuck
-            - ChromaDB schema/version conflicts are suspected
-            - You want to rebuild the KB from scratch
-            """)
-        
-        with col2:
-            st.warning("⚠️ **COMPLETE SYSTEM RESET**\n\nThis will delete ALL data and provide a completely fresh start. All knowledge base content, collections, and configurations will be lost.")
-            
-            if st.button("🚀 Clean Start Reset", use_container_width=True, type="secondary", help="⚠️ DANGER: This will delete everything!"):
-                st.session_state.show_confirm_clean_start = True
-                
-            if st.session_state.get("show_confirm_clean_start"):
-                st.error("⚠️ **FINAL WARNING - COMPLETE SYSTEM RESET**")
-                st.warning("This will delete ALL data and provide a completely fresh start. All knowledge base content, collections, and configurations will be lost.")
-                
-                c1, c2 = st.columns(2)
-                if c1.button("✅ YES, CLEAN START", use_container_width=True, type="primary"):
-                    # Use freshest input from the configuration block if available
-                    fresh_path = st.session_state.get('maintenance_current_db_input', db_path)
-                    perform_clean_start(fresh_path)
-                    st.session_state.show_confirm_clean_start = False
-                    st.rerun()
-                if c2.button("❌ Cancel", use_container_width=True):
-                    st.session_state.show_confirm_clean_start = False
-                    st.rerun()
-
-        st.markdown("---")
-        st.info("💡 **Tip:** For database health issues, orphaned entries, and collection repairs, use the **Database Health Check** section above.")
+    st.info("💡 Tip: Run **Database Health Check** first; use **Reset & Recovery** only when repair is insufficient.")
 
 def display_system_terminal():
     """Display system terminal and command execution interface"""
