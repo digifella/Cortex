@@ -473,3 +473,266 @@ def render_active_batch_management(
     if process_running and not batch_status.get("paused", False):
         time.sleep(1)
         st.rerun()
+
+
+def render_batch_processing_ui(
+    *,
+    get_runtime_db_path,
+    set_runtime_db_path,
+    batch_state_cls,
+    build_ingestion_command,
+    spawn_ingest,
+    start_ingest_reader,
+    auto_resume_from_batch_config,
+    initialize_state,
+    logger,
+) -> None:
+    """Render batch-processing mode UI and controls."""
+    st.header("Batch Processing Mode")
+    files_to_process = st.session_state.get("files_to_review", [])
+
+    container_db_path = get_runtime_db_path()
+    batch_manager = batch_state_cls(container_db_path)
+    set_runtime_db_path(str(batch_manager.db_path))
+    batch_status = batch_manager.get_status()
+
+    if batch_status["active"] and not files_to_process:
+        batch_state = batch_manager.load_state()
+        if batch_state:
+            files_to_process = batch_state.get("files_remaining", [])
+            st.session_state.files_to_review = files_to_process
+    elif not batch_status["active"] and not files_to_process and st.session_state.get("resume_mode_enabled"):
+        st.warning("⚠️ Resume mode is enabled but no files selected. Please go back and select your original directories.")
+        if st.button("⬅️ Back to Configuration", key="back_config_orphaned", use_container_width=True):
+            st.session_state.ingestion_stage = "config"
+            st.rerun()
+        return
+
+    total_files = len(files_to_process)
+
+    if batch_status["active"]:
+        st.subheader("📊 Batch Status")
+        if st.button("🔄 Refresh Progress", key="refresh_batch_progress"):
+            st.rerun()
+
+        if batch_status.get("is_chunked", False):
+            if batch_status.get("auto_pause_after_chunks"):
+                c1, c2, c3, c4, c5, c6 = st.columns(6)
+                with c1:
+                    st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
+                with c2:
+                    st.metric("Current Chunk", f"{batch_status['current_chunk']}/{batch_status['total_chunks']}")
+                with c3:
+                    st.metric(
+                        "Chunk Documents",
+                        f"{batch_status.get('current_chunk_progress', 0)}/{batch_status.get('current_chunk_total', batch_status.get('chunk_size', 0))}",
+                    )
+                with c4:
+                    st.metric(
+                        "Session Chunks",
+                        f"{batch_status['chunks_processed_in_session']}/{batch_status['auto_pause_after_chunks']}",
+                    )
+                with c5:
+                    st.metric("Remaining Files", batch_status["remaining"])
+                with c6:
+                    st.metric("Errors", batch_status["error_count"])
+            else:
+                c1, c2, c3, c4, c5, c6 = st.columns(6)
+                with c1:
+                    st.metric("Overall Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
+                with c2:
+                    st.metric("Current Chunk", f"{batch_status['current_chunk']}/{batch_status['total_chunks']}")
+                with c3:
+                    st.metric(
+                        "Chunk Documents",
+                        f"{batch_status.get('current_chunk_progress', 0)}/{batch_status.get('current_chunk_total', batch_status.get('chunk_size', 0))}",
+                    )
+                with c4:
+                    st.metric("Chunk Size", batch_status["chunk_size"])
+                with c5:
+                    st.metric("Remaining Files", batch_status["remaining"])
+                with c6:
+                    st.metric("Errors", batch_status["error_count"])
+        else:
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.metric("Progress", f"{batch_status['completed']}/{batch_status.get('total_files', 0)}")
+            with c2:
+                st.metric("Completed", f"{batch_status['progress_percent']}%")
+            with c3:
+                st.metric("Remaining", batch_status["remaining"])
+            with c4:
+                st.metric("Errors", batch_status["error_count"])
+
+        if batch_status.get("is_chunked", False):
+            st.markdown("**Overall Progress**")
+            st.progress(
+                batch_status["progress_percent"] / 100.0,
+                text=f"Total: {batch_status['completed']}/{batch_status.get('total_files', 0)} files ({batch_status['progress_percent']}%)",
+            )
+            st.markdown("**Current Chunk Progress**")
+            chunk_docs = batch_status.get("current_chunk_progress", 0)
+            chunk_total = batch_status.get("current_chunk_total", batch_status.get("chunk_size", 0))
+            st.progress(
+                batch_status.get("chunk_progress_percent", 0) / 100.0,
+                text=f"Chunk {batch_status['current_chunk']}: {chunk_docs}/{chunk_total} documents ({batch_status.get('chunk_progress_percent', 0)}%)",
+            )
+        else:
+            st.progress(
+                batch_status["progress_percent"] / 100.0,
+                text=f"Processing files... {batch_status['completed']}/{batch_status.get('total_files', 0)}",
+            )
+
+        if batch_status["paused"]:
+            if batch_status.get("auto_pause_after_chunks") and batch_status.get("chunks_processed_in_session", 0) >= batch_status.get("auto_pause_after_chunks", 0):
+                st.success(
+                    f"🎯 **Session Complete!** Processed {batch_status['chunks_processed_in_session']} chunks "
+                    f"({batch_status['chunks_processed_in_session'] * batch_status.get('chunk_size', 0)} files)"
+                )
+                st.info("Ready to start next session during your off-peak hours")
+            else:
+                st.warning("⏸️ Batch processing is **PAUSED**")
+        else:
+            st.info(f"🔄 Batch processing active (Started: {batch_status['started_at'][:19]})")
+        st.markdown("---")
+
+    if not files_to_process and not batch_status["active"]:
+        st.success("✅ Batch processing complete!")
+        st.info(
+            "Collection assignment is handled during finalization using persisted metadata. "
+            "No additional post-processing assignment is required."
+        )
+        st.session_state.last_ingested_doc_ids = []
+        st.session_state.target_collection_name = ""
+        st.markdown("---")
+        if st.button("⬅️ Back to Configuration", key="back_config_no_files", use_container_width=True):
+            initialize_state(force_reset=True)
+            st.rerun()
+        return
+
+    if batch_status["active"]:
+        st.info("🚀 **Batch Mode Active:** Resume processing or manage the current batch.")
+    else:
+        st.info(
+            f"🚀 **Batch Mode Enabled:** Processing all {total_files} files automatically. "
+            "Files with errors will be logged separately for later review."
+        )
+
+    if total_files > 500:
+        if total_files > 2000:
+            auto_chunk_size = 250
+        elif total_files > 1000:
+            auto_chunk_size = 500
+        else:
+            auto_chunk_size = 500
+        estimated_chunks = (total_files + auto_chunk_size - 1) // auto_chunk_size
+        st.session_state.use_chunked_processing = True
+        st.session_state.chunk_size = auto_chunk_size
+        st.info(
+            f"🔧 **Automatic Chunked Processing Enabled**: {total_files} files detected. "
+            f"Processing in {estimated_chunks} chunks of {auto_chunk_size} files each for optimal performance."
+        )
+        with st.expander("⚙️ **Customize Chunked Processing** (Optional)", expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                custom_chunk_size = st.selectbox(
+                    "Chunk Size:", options=[100, 250, 500, 1000],
+                    index=[100, 250, 500, 1000].index(auto_chunk_size) if auto_chunk_size in [100, 250, 500, 1000] else 1,
+                    key="custom_chunk_size",
+                )
+            with c2:
+                st.metric("Estimated Chunks", (total_files + custom_chunk_size - 1) // custom_chunk_size)
+            if st.button("✅ Apply Custom Chunk Size", key="apply_custom_chunk"):
+                st.session_state.chunk_size = custom_chunk_size
+                st.success(
+                    f"✅ Custom chunk size applied: {(total_files + custom_chunk_size - 1) // custom_chunk_size} "
+                    f"chunks of {custom_chunk_size} files each"
+                )
+                st.rerun()
+
+    with st.expander("📋 Files to Process", expanded=False):
+        for i, fp in enumerate(files_to_process[:10], 1):
+            st.write(f"{i}. {Path(fp).name}")
+        if total_files > 10:
+            st.write(f"... and {total_files - 10} more files")
+
+    st.markdown("---")
+    c1, c2, c3, c4 = st.columns(4)
+    process_running = st.session_state.get("ingestion_process") is not None
+
+    with c1:
+        if not process_running:
+            if batch_status["active"] and batch_status["remaining"] > 0:
+                if batch_status.get("has_scan_config", False):
+                    if st.button("▶️ Auto Resume", type="primary", use_container_width=True, key="auto_resume_batch"):
+                        if auto_resume_from_batch_config(batch_manager):
+                            st.rerun()
+                        else:
+                            st.error("❌ Auto-resume failed. Check logs.")
+                else:
+                    if st.button("▶️ Resume Processing", type="primary", use_container_width=True, key="resume_processing_fallback"):
+                        if not files_to_process:
+                            st.error("❌ No files to process. Please check your file selection or batch state.")
+                            return
+                        try:
+                            batch_manager.start_new_session()
+                        except Exception:
+                            pass
+                        st.session_state.log_messages = []
+                        st.session_state.ingestion_stage = "analysis_running"
+                        st.session_state.batch_mode_active = True
+                        st.session_state.batch_ingest_mode = False
+                        target_collection = st.session_state.get("target_collection_name", "")
+                        command = build_ingestion_command(container_db_path, files_to_process, target_collection, resume=True)
+                        logger.info(f"Starting batch processing with {len(files_to_process)} files")
+                        try:
+                            st.session_state.ingestion_process = spawn_ingest(command)
+                            start_ingest_reader(st.session_state.ingestion_process)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Failed to start batch processing: {e}")
+                            logger.error(f"Failed to start subprocess: {e}")
+            else:
+                if st.button("🚀 Start Batch Processing", type="primary", use_container_width=True, key="start_batch_processing"):
+                    if not files_to_process:
+                        st.error("❌ No files to process. Please check your file selection or batch state.")
+                        return
+                    st.session_state.log_messages = []
+                    st.session_state.ingestion_stage = "analysis_running"
+                    st.session_state.batch_mode_active = True
+                    st.session_state.batch_ingest_mode = False
+                    target_collection = st.session_state.get("target_collection_name", "")
+                    command = build_ingestion_command(container_db_path, files_to_process, target_collection)
+                    logger.info(f"Starting batch processing with {len(files_to_process)} files")
+                    try:
+                        st.session_state.ingestion_process = spawn_ingest(command)
+                        start_ingest_reader(st.session_state.ingestion_process)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Failed to start batch processing: {e}")
+                        logger.error(f"Failed to start subprocess: {e}")
+        else:
+            st.info("Processing is running...")
+
+    with c2:
+        if process_running and not batch_status.get("paused", False):
+            if st.button("⏸️ Pause", use_container_width=True):
+                batch_manager.pause_batch()
+                st.success("Pause request sent")
+                st.rerun()
+        elif batch_status.get("paused", False):
+            st.info("⏸️ Paused")
+
+    with c3:
+        if batch_status["active"]:
+            if st.button("🗑️ Clear Batch", key="clear_batch_processing", use_container_width=True):
+                batch_manager.clear_batch()
+                st.success("Batch cleared")
+                st.rerun()
+        else:
+            st.empty()
+
+    with c4:
+        if st.button("⬅️ Back to Config", key="back_config_batch_processing", use_container_width=True):
+            initialize_state(force_reset=True)
+            st.rerun()
