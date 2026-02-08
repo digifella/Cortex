@@ -221,3 +221,65 @@ def recover_collection_from_ingest_log(
         "recovered_doc_ids": len(added_docs),
         "sample_files": list((log_data or {}).keys())[-5:],
     }
+
+
+def render_recovery_quick_actions(
+    *,
+    config_manager_cls,
+    filter_valid_doc_ids_fn: Callable[[str, list], list],
+    collection_manager_cls,
+) -> None:
+    """Render quick recovery and ingestion status actions."""
+    st.markdown("---")
+    col1, col2, _ = st.columns([2, 2, 1])
+
+    with col1:
+        if st.button(
+            "🚀 **Quick Recovery: Create Collection from Recent Ingest**",
+            type="primary",
+            use_container_width=True,
+            key="quick_recovery_recent_ingest",
+        ):
+            try:
+                db_path = config_manager_cls().get_config().get("ai_database_path", "")
+                result = recover_collection_from_ingest_log(
+                    db_path=db_path,
+                    collection_name="recovered_recent_ingest",
+                    filter_valid_doc_ids_fn=filter_valid_doc_ids_fn,
+                    collection_manager_cls=collection_manager_cls,
+                )
+                if not result.get("ok"):
+                    st.error(result.get("error", "Recovery failed"))
+                else:
+                    if result.get("created"):
+                        st.success(f"Created collection '{result['collection_name']}'")
+                    st.success(
+                        f"✅ **SUCCESS!** Recovered {result['recovered_doc_ids']} valid documents "
+                        f"to '{result['collection_name']}' collection!"
+                    )
+                    if result.get("skipped_doc_ids", 0) > 0:
+                        st.warning(
+                            f"Skipped {result['skipped_doc_ids']} orphan/stale IDs that were not found in the vector store."
+                        )
+                    st.info("📌 Go to Collection Management or Knowledge Search to access your recovered documents.")
+            except Exception as e:
+                st.error(f"Recovery failed: {e}")
+
+    with col2:
+        if st.button("🔍 Check Ingestion Status", use_container_width=True):
+            try:
+                db_path = config_manager_cls().get_config().get("ai_database_path", "")
+                log_data, _, error = read_ingested_log(db_path)
+                if error:
+                    if "not found" in error.lower():
+                        st.warning(error)
+                    else:
+                        st.error(error)
+                else:
+                    st.success(f"📁 **{len(log_data)} files** have been ingested and are ready for recovery!")
+                    if log_data:
+                        st.markdown("**Sample files:**")
+                        for path in list(log_data.keys())[-5:]:
+                            st.caption(f"• {os.path.basename(path)}")
+            except Exception as e:
+                st.error(f"Status check failed: {e}")
