@@ -100,6 +100,9 @@ from pages.components._Ingest_DocTypes import (
 from pages.components._Ingest_Recovery import (
     render_recovery_panels as shared_render_recovery_panels,
 )
+from pages.components._Ingest_ServiceStatus import (
+    render_ollama_status_panel as shared_render_ollama_status_panel,
+)
 
 # Set up logging
 logger = get_logger(__name__)
@@ -2231,36 +2234,7 @@ st.caption(f"Manage the knowledge base by ingesting new documents. App Version: 
 # Add help system
 help_system.show_help_menu()
 
-# Check and display Ollama status (cached for 60 seconds to avoid slow UI)
-try:
-    from cortex_engine.utils.ollama_utils import check_ollama_service, get_ollama_status_message, get_ollama_instructions
-
-    # Cache Ollama status check to avoid network calls on every interaction
-    ollama_cache_key = "ollama_status_cache"
-    ollama_cache_time_key = "ollama_status_cache_time"
-    cache_ttl_seconds = 60  # Re-check every 60 seconds
-
-    current_time = time.time()
-    cached_time = st.session_state.get(ollama_cache_time_key, 0)
-
-    if current_time - cached_time > cache_ttl_seconds:
-        # Cache expired or first check - do the actual network call
-        is_running, error_msg, resolved_url = check_ollama_service()
-        st.session_state[ollama_cache_key] = (is_running, error_msg, resolved_url)
-        st.session_state[ollama_cache_time_key] = current_time
-    else:
-        # Use cached result
-        is_running, error_msg, resolved_url = st.session_state.get(ollama_cache_key, (False, "Not checked", None))
-
-    if not is_running:
-        st.warning(f"⚠️ {get_ollama_status_message(is_running, error_msg)}")
-        with st.expander("ℹ️ **Important: Limited AI Functionality**", expanded=False):
-            st.info("**Impact:** Documents will be processed with basic metadata only. AI-enhanced analysis, summaries, and tagging will be unavailable.")
-            st.markdown(get_ollama_instructions())
-    else:
-        st.success("✅ Ollama service is running - Full AI capabilities available")
-except Exception as e:
-    st.warning(f"Unable to check Ollama status: {e}")
+shared_render_ollama_status_panel(cache_ttl_seconds=60)
 
 shared_render_recovery_panels(
     config_manager_cls=ConfigManager,
