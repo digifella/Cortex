@@ -79,6 +79,11 @@ from pages.components._Ingest_Maintenance import (
     read_ingested_log,
     recover_collection_from_ingest_log,
 )
+from pages.components._Ingest_Workflow import (
+    detect_orphaned_session_from_log,
+    render_orphaned_session_notice,
+    render_stage as render_ingest_stage,
+)
 
 # Set up logging
 logger = get_logger(__name__)
@@ -4034,61 +4039,9 @@ if batch_status["active"] and stage not in {"analysis_running", "finalizing"}:
 else:
     # NO ACTIVE BATCH - Check for orphaned session first
     ingestion_log_path = Path(__file__).parent.parent / "logs" / "ingestion.log"
-    orphaned_session = None
-
-    if ingestion_log_path.exists():
-        try:
-            # Look for last progress indicator in log
-            with open(ingestion_log_path, 'r') as log_file:
-                lines = log_file.readlines()
-                for line in reversed(lines[-1000:]):  # Check last 1000 lines
-                    if "Analyzing:" in line and "(" in line and "/" in line:
-                        # Extract progress info: (282/3983) 
-                        import re
-                        match = re.search(r'\((\d+)/(\d+)\)', line)
-                        if match:
-                            completed = int(match.group(1))
-                            total = int(match.group(2))
-                            remaining = total - completed
-                            if remaining > 0:  # Only show if there are files remaining
-                                orphaned_session = {
-                                    'completed': completed,
-                                    'total': total,
-                                    'remaining': remaining,
-                                    'progress_percent': round((completed / total) * 100, 1)
-                                }
-                            break
-        except Exception as e:
-            logger.debug(f"Orphaned session detection log parse error: {e}")
-
+    orphaned_session = detect_orphaned_session_from_log(ingestion_log_path)
     if orphaned_session and stage in {"config", "pre_analysis"}:
-        st.warning("⚠️ **Interrupted Processing Detected**")
-        
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.markdown(f"""
-            **Previous Progress:** {orphaned_session['completed']}/{orphaned_session['total']} files ({orphaned_session['progress_percent']}%)  
-            **Estimated Remaining:** {orphaned_session['remaining']} files  
-            **Status:** Processing was interrupted - resume available with new batch system
-            """)
-        
-        with col2:
-            if st.button("🔄 Enable Resume Mode", type="primary", use_container_width=True, key="enable_resume_mode"):
-                st.warning("⚠️ **Manual Resume Required**")
-                st.info(f"""
-                The interrupted session ({orphaned_session['completed']}/{orphaned_session['total']} files) was from an older version.
-                
-                **To resume:**
-                1. Set up the same directories and filters below
-                2. The system will skip the {orphaned_session['completed']} already processed files
-                3. Future batches will have full automatic resume!
-                """)
-                
-                # Store info for manual resume
-                st.session_state.orphaned_session = orphaned_session
-                st.session_state.resume_mode_enabled = True
-        
-        st.markdown("---")
+        render_orphaned_session_notice(orphaned_session)
 
     # Add maintenance access button (shown at top of ingestion workflow)
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -4117,13 +4070,18 @@ else:
             batch_mode = st.session_state.get("batch_ingest_mode", False)
             st.info(f"🔍 **DEBUG:** Current stage: `{stage}` | Batch mode checkbox: `{batch_mode}`")
 
-        if stage == "config": render_config_and_scan_ui()
-        elif stage == "pre_analysis": render_pre_analysis_ui()
-        elif stage == "batch_processing": render_batch_processing_ui()
-        elif stage == "analysis_running": render_log_and_review_ui("Live Analysis Log", "metadata_review")
-        elif stage == "metadata_review": render_metadata_review_ui()
-        elif stage == "finalizing": render_log_and_review_ui("Live Finalization Log", "config_done")
-        elif stage == "config_done": render_completion_screen()
+        render_ingest_stage(
+            stage,
+            {
+                "config": render_config_and_scan_ui,
+                "pre_analysis": render_pre_analysis_ui,
+                "batch_processing": render_batch_processing_ui,
+                "analysis_running": lambda: render_log_and_review_ui("Live Analysis Log", "metadata_review"),
+                "metadata_review": render_metadata_review_ui,
+                "finalizing": lambda: render_log_and_review_ui("Live Finalization Log", "config_done"),
+                "config_done": render_completion_screen,
+            },
+        )
 
 # Consistent version footer
 try:
