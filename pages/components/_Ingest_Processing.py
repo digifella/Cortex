@@ -277,13 +277,10 @@ def render_log_and_review_ui(
             f"process_still_running={process_still_running}, should_finalize={should_finalize}, finalize_done={finalize_done}"
         )
 
-        debug_col1, debug_col2, debug_col3 = st.columns(3)
-        with debug_col1:
-            st.metric("Should Finalize", "✅ Yes" if should_finalize else "❌ No")
-        with debug_col2:
-            st.metric("Already Done", "✅ Yes" if finalize_done else "❌ No")
-        with debug_col3:
-            st.metric("Stage", on_complete_stage)
+        st.caption(
+            "Auto-finalize status: "
+            f"eligible={should_finalize}, already_done={finalize_done}, stage={on_complete_stage}"
+        )
 
         if should_finalize and not finalize_done:
             st.session_state.auto_finalize_retry_attempts = 0
