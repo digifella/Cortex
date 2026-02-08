@@ -23,6 +23,9 @@ from pathlib import Path
 from datetime import datetime
 import time
 import contextlib
+from pages.components._Maintenance_ResetRecovery import (
+    render_reset_recovery_section as shared_render_reset_recovery_section,
+)
 
 # Configure page
 st.set_page_config(
@@ -1254,43 +1257,14 @@ def display_database_maintenance():
                     del st.session_state.health_check_db_path
                 st.rerun()
 
-    with st.expander("⚙️ Basic Database Operations", expanded=False):
-        st.subheader("Clear Ingestion Log")
-        st.info("This action allows all files to be scanned and re-ingested. Useful for rebuilding the knowledge base from scratch.")
-        
-        if st.button("Clear Ingestion Log..."):
-            st.session_state.show_confirm_clear_log = True
-            
-        if st.session_state.get("show_confirm_clear_log"):
-            st.warning(f"This will delete the **{INGESTED_FILES_LOG}** file. The system will then see all source files as new on the next scan. Are you sure?")
-            c1, c2 = st.columns(2)
-            if c1.button("YES, Clear the Log", use_container_width=True, type="primary"):
-                clear_ingestion_log_file()
-                st.session_state.show_confirm_clear_log = False
-                st.rerun()
-            if c2.button("Cancel", use_container_width=True):
-                st.session_state.show_confirm_clear_log = False
-                st.rerun()
-        
-        st.divider()
-        
-        st.subheader("Delete Ingested Document Database")
-        st.error("⚠️ **DANGER:** This is the most destructive action.")
-        st.caption("This will delete the processed/ingested documents database, NOT your source Knowledge Base files.")
-        
-        if st.button("Permanently Delete Ingested Document Database...", type="primary"):
-            st.session_state.show_confirm_delete_kb = True
-            
-        if st.session_state.get("show_confirm_delete_kb"):
-            st.warning(f"This will permanently delete the **ingested document database** (ChromaDB + Collections + Knowledge Graph). Your source documents will NOT be affected. This action cannot be undone.")
-            c1, c2 = st.columns(2)
-            if c1.button("YES, DELETE INGESTED DATABASE", use_container_width=True):
-                delete_ingested_document_database(db_path)
-                st.session_state.show_confirm_delete_kb = False
-                st.rerun()
-            if c2.button("Cancel Deletion", use_container_width=True):
-                st.session_state.show_confirm_delete_kb = False
-                st.rerun()
+    shared_render_reset_recovery_section(
+        db_path=db_path,
+        ingested_files_log=INGESTED_FILES_LOG,
+        clear_ingestion_log_file_fn=clear_ingestion_log_file,
+        perform_clean_start_fn=perform_clean_start,
+        delete_ingested_document_database_fn=delete_ingested_document_database,
+        expander_title="🧹 Reset & Recovery",
+    )
 
     # Add database deduplication section
     with st.expander("🔧 Database Deduplication & Optimization", expanded=False):

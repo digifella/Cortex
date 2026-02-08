@@ -23,6 +23,9 @@ from pathlib import Path
 from datetime import datetime
 import time
 import contextlib
+from pages.components._Maintenance_ResetRecovery import (
+    render_reset_recovery_section as shared_render_reset_recovery_section,
+)
 
 # Configure page
 st.set_page_config(
@@ -877,65 +880,14 @@ def display_database_maintenance():
                     del st.session_state.health_check_db_path
                 st.rerun()
 
-    with st.expander("🧹 Reset & Recovery", expanded=False):
-        st.caption("Simplified maintenance flow: repair first, then reset only if needed.")
-
-        st.markdown("**Step 1: Optional log reset**")
-        st.caption(
-            f"Clears `{INGESTED_FILES_LOG}` so all source files are treated as new on the next ingest scan."
-        )
-        clear_log_confirm = st.checkbox(
-            "I understand this will cause full file re-scan",
-            key="maintenance_clear_log_confirm",
-        )
-        if st.button(
-            "🧾 Clear Ingestion Log",
-            use_container_width=True,
-            key="maintenance_clear_log_btn",
-            disabled=not clear_log_confirm,
-        ):
-            clear_ingestion_log_file()
-            st.rerun()
-
-        st.divider()
-
-        st.markdown("**Step 2: Knowledge base reset**")
-        reset_scope = st.radio(
-            "Reset scope",
-            options=["Standard Reset", "Clean Start Reset"],
-            help=(
-                "Standard Reset deletes ChromaDB, graph, collections, and ingest state. "
-                "Clean Start also clears extended workspace/entity artifacts."
-            ),
-            horizontal=True,
-            key="maintenance_reset_scope",
-        )
-
-        if reset_scope == "Standard Reset":
-            st.info("Deletes KB artifacts: vector DB, graph, collections, ingest state files.")
-        else:
-            st.warning(
-                "Also deletes extended artifacts (workspaces/entity profiles/structured state) "
-                "in addition to standard KB artifacts."
-            )
-
-        reset_confirm = st.checkbox(
-            "I understand reset actions cannot be undone",
-            key="maintenance_reset_confirm",
-        )
-        if st.button(
-            "🚀 Run Reset",
-            use_container_width=True,
-            type="primary",
-            key="maintenance_run_reset",
-            disabled=not reset_confirm,
-        ):
-            fresh_path = st.session_state.get('maintenance_current_db_input', db_path)
-            if reset_scope == "Clean Start Reset":
-                perform_clean_start(fresh_path)
-            else:
-                delete_ingested_document_database(fresh_path)
-            st.rerun()
+    shared_render_reset_recovery_section(
+        db_path=db_path,
+        ingested_files_log=INGESTED_FILES_LOG,
+        clear_ingestion_log_file_fn=clear_ingestion_log_file,
+        perform_clean_start_fn=perform_clean_start,
+        delete_ingested_document_database_fn=delete_ingested_document_database,
+        expander_title="🧹 Reset & Recovery",
+    )
 
     # Add database deduplication section
     with st.expander("🔧 Database Deduplication & Optimization", expanded=False):
