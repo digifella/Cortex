@@ -76,6 +76,8 @@ from pages.components._Ingest_Maintenance import (
     render_maintenance_link,
     check_recovery_needed as shared_check_recovery_needed,
     render_recovery_section as shared_render_recovery_section,
+    read_ingested_log,
+    recover_collection_from_ingest_log,
 )
 
 # Set up logging
@@ -4020,80 +4022,46 @@ col1, col2, col3 = st.columns([2, 2, 1])
 with col1:
     if st.button("🚀 **Quick Recovery: Create Collection from Recent Ingest**", type="primary", use_container_width=True, key="quick_recovery_recent_ingest"):
         try:
-            from cortex_engine.collection_manager import WorkingCollectionManager
-            from cortex_engine.config_manager import ConfigManager
-            import os
-            import json
-            
-            config_manager = ConfigManager()
-            config = config_manager.get_config()
-            db_path = config.get("ai_database_path", "")
-            
-            if db_path:
-                from cortex_engine.utils import convert_to_docker_mount_path
-                container_db_path = convert_to_docker_mount_path(db_path)
-                chroma_db_path = os.path.join(container_db_path, "knowledge_hub_db")
-                ingested_log_path = os.path.join(chroma_db_path, "ingested_files.log")
-                
-                if os.path.exists(ingested_log_path):
-                    with open(ingested_log_path, 'r') as f:
-                        log_data = json.load(f)
-                    
-                    doc_ids = []
-                    for file_path, metadata in log_data.items():
-                        if isinstance(metadata, dict) and 'doc_id' in metadata:
-                            doc_ids.append(metadata['doc_id'])
-                        elif isinstance(metadata, str):
-                            doc_ids.append(metadata)
-                    
-                    collection_mgr = WorkingCollectionManager()
-                    collection_name = "recovered_recent_ingest"
-                    
-                    if collection_mgr.create_collection(collection_name):
-                        st.success(f"Created collection '{collection_name}'")
-                    
-                    collection_mgr.add_docs_by_id_to_collection(collection_name, doc_ids)
-                    
-                    added_docs = collection_mgr.get_doc_ids_by_name(collection_name)
-                    st.success(f"✅ **SUCCESS!** Recovered {len(added_docs)} documents to '{collection_name}' collection!")
-                    st.info("📌 Go to Collection Management or Knowledge Search to access your recovered documents.")
-                else:
-                    st.error("No ingested files log found")
+            db_path = ConfigManager().get_config().get("ai_database_path", "")
+            result = recover_collection_from_ingest_log(
+                db_path=db_path,
+                collection_name="recovered_recent_ingest",
+                filter_valid_doc_ids_fn=filter_existing_doc_ids_for_collection,
+                collection_manager_cls=WorkingCollectionManager,
+            )
+            if not result.get("ok"):
+                st.error(result.get("error", "Recovery failed"))
             else:
-                st.error("Database path not configured")
+                if result.get("created"):
+                    st.success(f"Created collection '{result['collection_name']}'")
+                st.success(
+                    f"✅ **SUCCESS!** Recovered {result['recovered_doc_ids']} valid documents "
+                    f"to '{result['collection_name']}' collection!"
+                )
+                if result.get("skipped_doc_ids", 0) > 0:
+                    st.warning(
+                        f"Skipped {result['skipped_doc_ids']} orphan/stale IDs that were not found in the vector store."
+                    )
+                st.info("📌 Go to Collection Management or Knowledge Search to access your recovered documents.")
         except Exception as recovery_error:
             st.error(f"Recovery failed: {recovery_error}")
 
 with col2:
     if st.button("🔍 Check Ingestion Status", use_container_width=True):
         try:
-            from cortex_engine.config_manager import ConfigManager
-            config_manager = ConfigManager()
-            config = config_manager.get_config()
-            db_path = config.get("ai_database_path", "")
-            
-            if db_path:
-                from cortex_engine.utils import convert_windows_to_wsl_path
-                container_db_path = convert_to_docker_mount_path(db_path)
-                chroma_db_path = os.path.join(container_db_path, "knowledge_hub_db")
-                ingested_log_path = os.path.join(chroma_db_path, "ingested_files.log")
-                
-                if os.path.exists(ingested_log_path):
-                    with open(ingested_log_path, 'r') as f:
-                        log_data = json.load(f)
-                    
-                    st.success(f"📁 **{len(log_data)} files** have been ingested and are ready for recovery!")
-                    
-                    # Show sample of recent files
-                    if log_data:
-                        st.markdown("**Sample files:**")
-                        items = list(log_data.items())
-                        for i, (path, metadata) in enumerate(items[-5:]):
-                            st.caption(f"• {os.path.basename(path)}")
+            db_path = ConfigManager().get_config().get("ai_database_path", "")
+            log_data, _, error = read_ingested_log(db_path)
+            if error:
+                if "not found" in error.lower():
+                    st.warning(error)
                 else:
-                    st.warning("No ingested files log found")
+                    st.error(error)
             else:
-                st.error("Database path not configured")
+                st.success(f"📁 **{len(log_data)} files** have been ingested and are ready for recovery!")
+                if log_data:
+                    st.markdown("**Sample files:**")
+                    for path in list(log_data.keys())[-5:]:
+                        st.caption(f"• {os.path.basename(path)}")
         except Exception as e:
             st.error(f"Status check failed: {e}")
 
@@ -4109,46 +4077,26 @@ except Exception as e:
         st.warning("Advanced recovery features unavailable. Using basic recovery.")
         if st.button("🚀 Create Collection from All Recent Ingests"):
             try:
-                from cortex_engine.collection_manager import WorkingCollectionManager
-                from cortex_engine.config_manager import ConfigManager
-                import os
-                import json
-                
-                config_manager = ConfigManager()
-                config = config_manager.get_config()
-                db_path = config.get("ai_database_path", "")
-                
-                if db_path:
-                    from cortex_engine.utils import convert_to_docker_mount_path
-                    container_db_path = convert_to_docker_mount_path(db_path)
-                    chroma_db_path = os.path.join(container_db_path, "knowledge_hub_db")
-                    ingested_log_path = os.path.join(chroma_db_path, "ingested_files.log")
-                    
-                    if os.path.exists(ingested_log_path):
-                        with open(ingested_log_path, 'r') as f:
-                            log_data = json.load(f)
-                        
-                        doc_ids = []
-                        for file_path, metadata in log_data.items():
-                            if isinstance(metadata, dict) and 'doc_id' in metadata:
-                                doc_ids.append(metadata['doc_id'])
-                            elif isinstance(metadata, str):
-                                doc_ids.append(metadata)
-                        
-                        collection_mgr = WorkingCollectionManager()
-                        collection_name = "recovered_ingestion"
-                        
-                        if collection_mgr.create_collection(collection_name):
-                            st.success(f"Created collection '{collection_name}'")
-                        
-                        collection_mgr.add_docs_by_id_to_collection(collection_name, doc_ids)
-                        
-                        added_docs = collection_mgr.get_doc_ids_by_name(collection_name)
-                        st.success(f"✅ Recovered {len(added_docs)} documents to '{collection_name}' collection!")
-                    else:
-                        st.error("No ingested files log found")
+                db_path = ConfigManager().get_config().get("ai_database_path", "")
+                result = recover_collection_from_ingest_log(
+                    db_path=db_path,
+                    collection_name="recovered_ingestion",
+                    filter_valid_doc_ids_fn=filter_existing_doc_ids_for_collection,
+                    collection_manager_cls=WorkingCollectionManager,
+                )
+                if not result.get("ok"):
+                    st.error(result.get("error", "Basic recovery failed"))
                 else:
-                    st.error("Database path not configured")
+                    if result.get("created"):
+                        st.success(f"Created collection '{result['collection_name']}'")
+                    st.success(
+                        f"✅ Recovered {result['recovered_doc_ids']} valid documents "
+                        f"to '{result['collection_name']}' collection!"
+                    )
+                    if result.get("skipped_doc_ids", 0) > 0:
+                        st.warning(
+                            f"Skipped {result['skipped_doc_ids']} orphan/stale IDs that were not found in the vector store."
+                        )
             except Exception as recovery_error:
                 st.error(f"Basic recovery failed: {recovery_error}")
 
