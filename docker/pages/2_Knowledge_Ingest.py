@@ -97,6 +97,9 @@ from pages.components._Ingest_Review import (
 from pages.components._Ingest_DocTypes import (
     render_document_type_management as shared_render_document_type_management,
 )
+from pages.components._Ingest_Recovery import (
+    render_recovery_panels as shared_render_recovery_panels,
+)
 
 # Set up logging
 logger = get_logger(__name__)
@@ -2163,23 +2166,7 @@ def render_metadata_review_ui():
 
 def render_document_type_management():
     shared_render_document_type_management(
-        get_document_type_manager=get_document_type_manager,
-    )
 
-def check_recovery_needed():
-    """Check if recovery is actually needed and return issues found."""
-    return shared_check_recovery_needed(
-        config_manager_cls=ConfigManager,
-        recovery_manager_cls=IngestionRecoveryManager,
-        ttl_seconds=120,
-    )
-
-def render_recovery_section():
-    """Render the ingestion recovery and repair section only when needed."""
-    shared_render_recovery_section(
-        check_recovery_needed_fn=check_recovery_needed,
-        config_manager_cls=ConfigManager,
-        maintenance_page="pages/6_Maintenance.py",
         logger=logger,
     )
 
@@ -2222,46 +2209,17 @@ try:
 except Exception as e:
     st.warning(f"Unable to check Ollama status: {e}")
 
-render_recovery_quick_actions(
+shared_render_recovery_panels(
     config_manager_cls=ConfigManager,
+    recovery_manager_cls=IngestionRecoveryManager,
+    logger=logger,
+    shared_check_recovery_needed_fn=shared_check_recovery_needed,
+    shared_render_recovery_section_fn=shared_render_recovery_section,
+    render_recovery_quick_actions_fn=render_recovery_quick_actions,
+    recover_collection_from_ingest_log_fn=recover_collection_from_ingest_log,
     filter_valid_doc_ids_fn=filter_existing_doc_ids_for_collection,
     collection_manager_cls=WorkingCollectionManager,
 )
-
-st.markdown("---")
-
-# Add Ingestion Recovery & Repair Section
-try:
-    render_recovery_section()
-except Exception as e:
-    st.error(f"Recovery section failed to load: {e}")
-    # Provide a basic recovery option as fallback
-    with st.expander("🔧 Basic Recovery Tool", expanded=False):
-        st.warning("Advanced recovery features unavailable. Using basic recovery.")
-        if st.button("🚀 Create Collection from All Recent Ingests"):
-            try:
-                db_path = ConfigManager().get_config().get("ai_database_path", "")
-                result = recover_collection_from_ingest_log(
-                    db_path=db_path,
-                    collection_name="recovered_ingestion",
-                    filter_valid_doc_ids_fn=filter_existing_doc_ids_for_collection,
-                    collection_manager_cls=WorkingCollectionManager,
-                )
-                if not result.get("ok"):
-                    st.error(result.get("error", "Basic recovery failed"))
-                else:
-                    if result.get("created"):
-                        st.success(f"Created collection '{result['collection_name']}'")
-                    st.success(
-                        f"✅ Recovered {result['recovered_doc_ids']} valid documents "
-                        f"to '{result['collection_name']}' collection!"
-                    )
-                    if result.get("skipped_doc_ids", 0) > 0:
-                        st.warning(
-                            f"Skipped {result['skipped_doc_ids']} orphan/stale IDs that were not found in the vector store."
-                        )
-            except Exception as recovery_error:
-                st.error(f"Basic recovery failed: {recovery_error}")
 
 # Show help modal if requested
 if st.session_state.get("show_help_modal", False):
