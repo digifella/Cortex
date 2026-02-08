@@ -72,6 +72,11 @@ from cortex_engine.model_manager import (
     get_model_info_summary,
     get_pytorch_cuda_install_command
 )
+from pages.components._Ingest_Maintenance import (
+    render_maintenance_link,
+    check_recovery_needed as shared_check_recovery_needed,
+    render_recovery_section as shared_render_recovery_section,
+)
 
 # Set up logging
 logger = get_logger(__name__)
@@ -2822,9 +2827,10 @@ def render_config_and_scan_ui():
         # No files or directories selected - show disabled button
         st.button("🔎 Select files or directories above to enable scanning", type="primary", use_container_width=True, disabled=True)
 
-    st.caption("Maintenance, reset, and deep recovery actions are available on the Maintenance page.")
-    if st.button("🔧 Open Maintenance Page", use_container_width=True, type="secondary", key="ingest_open_maintenance_top"):
-        st.switch_page("pages/6_Maintenance.py")
+    render_maintenance_link(
+        "pages/6_Maintenance.py",
+        button_key="ingest_open_maintenance_top",
+    )
 
 def render_pre_analysis_ui():
     st.header("Pre-Analysis Review")
@@ -3856,145 +3862,21 @@ def render_document_type_management():
         st.rerun()
 
 def check_recovery_needed():
-    """Check if recovery is actually needed and return issues found.
-
-    Results are cached for 120 seconds to avoid expensive database analysis on every interaction.
-    """
-    # Check cache first
-    cache_key = "recovery_check_cache"
-    cache_time_key = "recovery_check_cache_time"
-    cache_ttl_seconds = 120  # Only re-check every 2 minutes
-
-    current_time = time.time()
-    cached_time = st.session_state.get(cache_time_key, 0)
-
-    if current_time - cached_time < cache_ttl_seconds and cache_key in st.session_state:
-        return st.session_state[cache_key]
-
-    try:
-        # Use cached config if available
-        config = st.session_state.get("cached_config")
-        if not config:
-            config_manager = ConfigManager()
-            config = config_manager.get_config()
-        db_path = config.get("ai_database_path", "")
-
-        if not db_path:
-            result = (False, [])
-            st.session_state[cache_key] = result
-            st.session_state[cache_time_key] = current_time
-            return result
-
-        # Check if we recently dismissed recovery warnings
-        dismiss_key = f"recovery_dismissed_{hash(db_path)}"
-        if st.session_state.get(dismiss_key, False):
-            result = (False, [])
-            st.session_state[cache_key] = result
-            st.session_state[cache_time_key] = current_time
-            return result
-        
-        recovery_manager = IngestionRecoveryManager(db_path)
-        analysis = recovery_manager.analyze_ingestion_state()
-        
-        issues = []
-        
-        # Only show orphaned documents warning if there are many (more than 10)
-        # Small numbers may be normal during batch processing
-        orphaned_count = analysis.get("statistics", {}).get("orphaned_count", 0)
-        if orphaned_count > 10:
-            issues.append(f"Found {orphaned_count} orphaned documents")
-        
-        # Only show broken collections if they actually exist
-        broken_collections = analysis.get("statistics", {}).get("broken_collections", 0)
-        if broken_collections > 0:
-            issues.append(f"Found {broken_collections} broken collections")
-        
-        # Only show high-priority recommendations
-        if "recommendations" in analysis and analysis["recommendations"]:
-            high_priority_recs = [rec for rec in analysis["recommendations"] 
-                                 if isinstance(rec, dict) and rec.get("priority") == "high"]
-            
-            for rec in high_priority_recs[:2]:  # Limit to 2 high-priority recommendations
-                issues.append(rec.get("description", "Recovery action needed"))
-        
-        # Don't show warnings if there are only minor issues and ChromaDB has documents
-        chromadb_count = analysis.get("statistics", {}).get("chromadb_docs_count", 0)
-        if len(issues) <= 1 and chromadb_count > 0 and orphaned_count < 50:
-            result = (False, [])
-            st.session_state[cache_key] = result
-            st.session_state[cache_time_key] = current_time
-            return result
-
-        result = (len(issues) > 0, issues)
-        st.session_state[cache_key] = result
-        st.session_state[cache_time_key] = current_time
-        return result
-
-    except Exception as e:
-        logger.error(f"Recovery check failed: {e}")
-        result = (False, [])
-        st.session_state[cache_key] = result
-        st.session_state[cache_time_key] = current_time
-        return result
+    """Check if recovery is actually needed and return issues found."""
+    return shared_check_recovery_needed(
+        config_manager_cls=ConfigManager,
+        recovery_manager_cls=IngestionRecoveryManager,
+        ttl_seconds=120,
+    )
 
 def render_recovery_section():
     """Render the ingestion recovery and repair section only when needed."""
-    try:
-        # Get database path
-        config_manager = ConfigManager()
-        config = config_manager.get_config()
-        db_path = config.get("ai_database_path", "")
-        
-        if not db_path:
-            return  # No database configured, skip recovery section
-        
-        # Check if recovery is needed or if user explicitly wants to see it
-        recovery_needed, issues = check_recovery_needed()
-        show_maintenance = st.session_state.get("show_recovery_maintenance", False)
-        
-        # Show alert if recovery is needed
-        if recovery_needed and not show_maintenance:
-            with st.container():
-                st.warning(f"⚠️ **Database maintenance may be needed:** {', '.join(issues[:2])}")
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    if st.button("🔧 **Open Recovery Tools**", type="primary", use_container_width=True):
-                        st.session_state.show_recovery_maintenance = True
-                        st.rerun()
-                with col2:
-                    if st.button("🚫 Dismiss (Hide Until Next Issue)", use_container_width=True):
-                        config_manager = ConfigManager()
-                        config = config_manager.get_config()
-                        db_path = config.get("ai_database_path", "")
-                        dismiss_key = f"recovery_dismissed_{hash(db_path)}"
-                        st.session_state[dismiss_key] = True
-                        st.rerun()
-        
-        # Show maintenance tools access when no issues but tools requested  
-        elif not recovery_needed and not show_maintenance:
-            st.caption("No critical recovery issues detected. Use Maintenance for optional repair/reset tools.")
-            if st.button("🔧 Open Maintenance Page", use_container_width=True, help="Open maintenance and recovery tools"):
-                st.switch_page("pages/6_Maintenance.py")
-        
-        # Show urgent recovery message if issues detected (already handled by check_recovery_needed dismiss logic)
-        if show_maintenance or recovery_needed:
-            st.warning("⚠️ **Database issues detected!** Advanced recovery tools are available on the **Maintenance** page.")
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🔧 Go to Maintenance", use_container_width=True, type="primary"):
-                    st.switch_page("pages/6_Maintenance.py")
-            with col2:
-                if st.button("Dismiss Warning", use_container_width=True):
-                    config_manager = ConfigManager()
-                    config = config_manager.get_config()
-                    db_path = config.get("ai_database_path", "")
-                    dismiss_key = f"recovery_dismissed_{hash(db_path)}"
-                    st.session_state[dismiss_key] = True
-                    st.rerun()
-    
-    except Exception as e:
-        logger.error(f"Recovery section render failed: {e}")
-        st.error(f"⚠️ Recovery section error: {e}")
+    shared_render_recovery_section(
+        check_recovery_needed_fn=check_recovery_needed,
+        config_manager_cls=ConfigManager,
+        maintenance_page="pages/6_Maintenance.py",
+        logger=logger,
+    )
 
 # --- Main App Logic ---
 initialize_state()
