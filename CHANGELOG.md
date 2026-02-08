@@ -5,6 +5,27 @@ All notable changes to the Cortex Suite project will be documented in this file.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### 🧩 Refactor Wave: Ingest + Maintenance Componentization
+
+Large UI refactor pass to reduce duplication between host and Docker pages, isolate critical workflows, and make future stabilization safer.
+
+### 🚀 Improvements
+- Knowledge Ingest page shell is now componentized with shared stage routing and top-level workflow orchestration.
+- Knowledge Ingest processing log/finalization UI moved to shared component.
+- Knowledge Ingest metadata review/finalization UI moved to shared component.
+- Knowledge Ingest document-type management UI moved to shared component.
+- Knowledge Ingest recovery panel and service-status panel moved to shared components.
+- Maintenance page reset/recovery controls moved to shared component (host + Docker aligned to one simplified flow).
+- Maintenance page database health check moved to shared component.
+- Maintenance page embedding model status panel moved to shared component.
+- Maintenance page embedding inspector panel moved to shared component.
+- Maintenance page DB path scan/save/discovery tools moved to shared component.
+- Maintenance page deduplication workflow moved to shared component.
+- Docker maintenance danger-zone clean-start panel moved to shared component.
+
+### 🔧 Internal
+- Added/maintained host+Docker component pairs under `pages/components/` and `docker/pages/components/` to prevent drift.
+- Reduced monolithic page complexity in `pages/2_Knowledge_Ingest.py`, `docker/pages/2_Knowledge_Ingest.py`, `pages/6_Maintenance.py`, and `docker/pages/6_Maintenance.py`.
 
 ## v6.0.2 - 2026-02-07
 
