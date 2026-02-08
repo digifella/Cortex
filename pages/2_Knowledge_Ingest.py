@@ -103,6 +103,9 @@ from pages.components._Ingest_Recovery import (
 from pages.components._Ingest_ServiceStatus import (
     render_ollama_status_panel as shared_render_ollama_status_panel,
 )
+from pages.components._Ingest_Shell import (
+    render_ingest_page_shell as shared_render_ingest_page_shell,
+)
 
 # Set up logging
 logger = get_logger(__name__)
@@ -2222,110 +2225,44 @@ def render_metadata_review_ui():
 
 def render_document_type_management():
     shared_render_document_type_management(
-
-        logger=logger,
+        get_document_type_manager=get_document_type_manager,
     )
 
 # --- Main App Logic ---
-initialize_state()
-st.title("2. Knowledge Ingest")
-st.caption(f"Manage the knowledge base by ingesting new documents. App Version: {VERSION_STRING}")
-
-# Add help system
-help_system.show_help_menu()
-
-shared_render_ollama_status_panel(cache_ttl_seconds=60)
-
-shared_render_recovery_panels(
-    config_manager_cls=ConfigManager,
-    recovery_manager_cls=IngestionRecoveryManager,
-    logger=logger,
-    shared_check_recovery_needed_fn=shared_check_recovery_needed,
-    shared_render_recovery_section_fn=shared_render_recovery_section,
-    render_recovery_quick_actions_fn=render_recovery_quick_actions,
-    recover_collection_from_ingest_log_fn=recover_collection_from_ingest_log,
-    filter_valid_doc_ids_fn=filter_existing_doc_ids_for_collection,
-    collection_manager_cls=WorkingCollectionManager,
+shared_render_ingest_page_shell(
+    initialize_state=initialize_state,
+    version_string=VERSION_STRING,
+    help_system=help_system,
+    render_ollama_status_panel=lambda: shared_render_ollama_status_panel(cache_ttl_seconds=60),
+    render_recovery_panels=lambda: shared_render_recovery_panels(
+        config_manager_cls=ConfigManager,
+        recovery_manager_cls=IngestionRecoveryManager,
+        logger=logger,
+        shared_check_recovery_needed_fn=shared_check_recovery_needed,
+        shared_render_recovery_section_fn=shared_render_recovery_section,
+        render_recovery_quick_actions_fn=render_recovery_quick_actions,
+        recover_collection_from_ingest_log_fn=recover_collection_from_ingest_log,
+        filter_valid_doc_ids_fn=filter_existing_doc_ids_for_collection,
+        collection_manager_cls=WorkingCollectionManager,
+    ),
+    get_runtime_db_path=get_runtime_db_path,
+    set_runtime_db_path=set_runtime_db_path,
+    batch_state_cls=BatchState,
+    render_active_batch_management=render_active_batch_management,
+    detect_orphaned_session_from_log=detect_orphaned_session_from_log,
+    render_orphaned_session_notice=render_orphaned_session_notice,
+    render_document_type_management=render_document_type_management,
+    show_collection_migration_healthcheck=show_collection_migration_healthcheck,
+    render_sidebar_model_config=render_sidebar_model_config,
+    render_ingest_stage=render_ingest_stage,
+    stage_handlers={
+        "config": render_config_and_scan_ui,
+        "pre_analysis": render_pre_analysis_ui,
+        "batch_processing": render_batch_processing_ui,
+        "analysis_running": lambda: render_log_and_review_ui("Live Analysis Log", "metadata_review"),
+        "metadata_review": render_metadata_review_ui,
+        "finalizing": lambda: render_log_and_review_ui("Live Finalization Log", "config_done"),
+        "config_done": render_completion_screen,
+    },
+    project_root=project_root,
 )
-
-# Show help modal if requested
-if st.session_state.get("show_help_modal", False):
-    help_topic = st.session_state.get("help_topic", "overview")
-    help_system.show_help_modal(help_topic)
-
-# Show contextual help for this page
-help_system.show_contextual_help("ingest")
-
-# Check for existing batch state and show resume option
-container_db_path = get_runtime_db_path()
-batch_manager = BatchState(container_db_path)
-set_runtime_db_path(str(batch_manager.db_path))
-batch_status = batch_manager.get_status()
-stage = st.session_state.get("ingestion_stage", "config")
-
-# When a batch is actively processing (analysis or finalization), prefer the
-# standard stage-based views so automatic progress/auto-finalize works.
-if batch_status["active"] and stage not in {"analysis_running", "finalizing"}:
-    # ACTIVE (BUT NOT CURRENTLY RUNNING) BATCH SECTION - management only
-    render_active_batch_management(batch_manager, batch_status)
-    
-    # Add "Start Fresh" option
-    st.markdown("---")
-    if st.button("🆕 Start Fresh Ingestion", key="start_fresh", help="Clear current batch and start new ingestion"):
-        batch_manager.clear_batch()
-        st.success("Batch cleared. You can now start a fresh ingestion.")
-        st.rerun()
-
-else:
-    # NO ACTIVE BATCH - Check for orphaned session first
-    ingestion_log_path = Path(__file__).parent.parent / "logs" / "ingestion.log"
-    orphaned_session = detect_orphaned_session_from_log(ingestion_log_path)
-    if orphaned_session and stage in {"config", "pre_analysis"}:
-        render_orphaned_session_notice(orphaned_session)
-
-    # Add maintenance access button (shown at top of ingestion workflow)
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("⚙️ Document Type Management", use_container_width=True, help="Manage document categories and type mappings"):
-            st.session_state.show_maintenance = not st.session_state.get("show_maintenance", False)
-            st.rerun()
-
-    st.markdown("---")
-
-    # Check if maintenance mode is active
-    if st.session_state.get("show_maintenance", False):
-        render_document_type_management()
-    else:
-        # Normal ingestion workflow
-        # Health check: prompt to migrate collections if needed
-        show_collection_migration_healthcheck()
-
-        # Render model configuration in sidebar
-        render_sidebar_model_config()
-
-        stage = st.session_state.get("ingestion_stage", "config")
-
-        # DEBUG: Show stage transition info (temporary for troubleshooting)
-        if stage in ["batch_processing", "analysis_running"]:
-            batch_mode = st.session_state.get("batch_ingest_mode", False)
-            st.info(f"🔍 **DEBUG:** Current stage: `{stage}` | Batch mode checkbox: `{batch_mode}`")
-
-        render_ingest_stage(
-            stage,
-            {
-                "config": render_config_and_scan_ui,
-                "pre_analysis": render_pre_analysis_ui,
-                "batch_processing": render_batch_processing_ui,
-                "analysis_running": lambda: render_log_and_review_ui("Live Analysis Log", "metadata_review"),
-                "metadata_review": render_metadata_review_ui,
-                "finalizing": lambda: render_log_and_review_ui("Live Finalization Log", "config_done"),
-                "config_done": render_completion_screen,
-            },
-        )
-
-# Consistent version footer
-try:
-    from cortex_engine.ui_components import render_version_footer
-    render_version_footer()
-except Exception:
-    pass
