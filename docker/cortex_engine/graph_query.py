@@ -99,7 +99,8 @@ def rerank_search_results(
             use_small_profile = False
             reranker_config = Qwen3VLRerankerConfig.for_model_size(Qwen3VLRerankerSize.LARGE)
         else:
-            use_small_profile = False
+            # AUTO/default follows the fast path (2B-first policy) for responsiveness.
+            use_small_profile = True
 
         # Bound reranker workload to avoid long UI stalls on large candidate sets.
         # 2B profile favors responsiveness on cold start.
