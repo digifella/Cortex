@@ -61,6 +61,7 @@ try:
     from cortex_engine.config_manager import ConfigManager
     from cortex_engine.utils import (
         get_logger,
+        convert_to_docker_mount_path,
         convert_windows_to_wsl_path,
         ensure_directory,
         resolve_db_root_path,
@@ -854,6 +855,196 @@ def display_header():
     
     st.divider()
 
+
+@st.cache_data(ttl=120)
+def _get_detected_db_dimension(db_path: str):
+    """Cache embedding-dimension detection for maintenance diagnostics."""
+    if not db_path:
+        return None
+    try:
+        from cortex_engine.utils.embedding_validator import get_database_embedding_dimension
+        return get_database_embedding_dimension(db_path)
+    except Exception as e:
+        logger.debug(f"Could not detect embedding dimension for maintenance diagnostics: {e}")
+        return None
+
+
+_CREDIBILITY_BY_VALUE = {
+    5: ("peer-reviewed", "Peer-Reviewed"),
+    4: ("institutional", "Institutional"),
+    3: ("pre-print", "Pre-Print"),
+    2: ("editorial", "Editorial"),
+    1: ("commentary", "Commentary"),
+    0: ("unclassified", "Unclassified"),
+}
+_CREDIBILITY_BY_KEY = {k: (v, label) for v, (k, label) in _CREDIBILITY_BY_VALUE.items()}
+_CREDIBILITY_BY_LABEL = {label.lower(): (v, key) for v, (key, label) in _CREDIBILITY_BY_VALUE.items()}
+
+
+def _normalize_credibility_tier(metadata_json: dict) -> None:
+    if not isinstance(metadata_json, dict):
+        return
+
+    default_value = 0
+    default_key, default_label = _CREDIBILITY_BY_VALUE[default_value]
+
+    raw_value = metadata_json.get("credibility_tier_value")
+    raw_key = str(metadata_json.get("credibility_tier_key", "")).strip().lower()
+    raw_label = str(metadata_json.get("credibility_tier_label", "")).strip().lower()
+
+    if raw_value is not None:
+        try:
+            value = int(raw_value)
+            if value in _CREDIBILITY_BY_VALUE:
+                key, label = _CREDIBILITY_BY_VALUE[value]
+                metadata_json["credibility_tier_value"] = value
+                metadata_json["credibility_tier_key"] = key
+                metadata_json["credibility_tier_label"] = label
+                return
+        except Exception:
+            pass
+
+    if raw_key in _CREDIBILITY_BY_KEY:
+        value, label = _CREDIBILITY_BY_KEY[raw_key]
+        metadata_json["credibility_tier_value"] = value
+        metadata_json["credibility_tier_key"] = raw_key
+        metadata_json["credibility_tier_label"] = label
+        return
+
+    if raw_label in _CREDIBILITY_BY_LABEL:
+        value, key = _CREDIBILITY_BY_LABEL[raw_label]
+        label = _CREDIBILITY_BY_VALUE[value][1]
+        metadata_json["credibility_tier_value"] = value
+        metadata_json["credibility_tier_key"] = key
+        metadata_json["credibility_tier_label"] = label
+        return
+
+    metadata_json["credibility_tier_value"] = default_value
+    metadata_json["credibility_tier_key"] = default_key
+    metadata_json["credibility_tier_label"] = default_label
+
+
+def _detect_document_stage(meta: dict, doc_text: str) -> str:
+    file_name = str(meta.get("file_name", "") or "")
+    source_type = str(meta.get("source_type", "") or "")
+    combined = f"{file_name}\n{source_type}\n{doc_text}".lower()
+    return "Draft" if "draft" in combined else "Final"
+
+
+def _detect_marker_credibility_value(meta: dict, doc_text: str) -> int:
+    source_type = str(meta.get("source_type", "") or "")
+    file_name = str(meta.get("file_name", "") or "")
+    publisher = str(meta.get("publisher", "") or "")
+    available_at = str(meta.get("available_at", "") or "")
+    summary = str(meta.get("summary", "") or "")
+    combined = f"{source_type}\n{file_name}\n{publisher}\n{available_at}\n{summary}\n{doc_text}".lower()
+
+    marker_map = {
+        5: ["pubmed", "nlm", "nature", "lancet", "jama", "bmj", "peer-reviewed", "peer reviewed"],
+        4: ["who", "un ", "ipcc", "oecd", "world bank", "government", "department", "ministry", "university", "institute", "centre", "center"],
+        3: ["arxiv", "ssrn", "biorxiv", "researchgate", "preprint", "pre-print"],
+        2: ["scientific american", "the conversation", "hbr", "harvard business review", "editorial"],
+        1: ["blog", "newsletter", "opinion", "consulting report", "whitepaper", "white paper"],
+    }
+    for tier in (5, 4, 3, 2, 1):
+        if any(marker in combined for marker in marker_map[tier]):
+            return tier
+    return 0
+
+
+def _enforce_credibility_policy_inplace(meta: dict, doc_text: str) -> bool:
+    if not isinstance(meta, dict):
+        return False
+
+    before = dict(meta)
+
+    if "credibility_tier_value" not in meta and "credibility_value" in meta:
+        meta["credibility_tier_value"] = meta.get("credibility_value")
+    if "credibility_tier_key" not in meta and "credibility_source" in meta:
+        meta["credibility_tier_key"] = str(meta.get("credibility_source", "")).strip().lower()
+
+    _normalize_credibility_tier(meta)
+
+    normalized_value = int(meta.get("credibility_tier_value", 0) or 0)
+    marker_value = _detect_marker_credibility_value(meta, doc_text)
+    source_type = str(meta.get("source_type", "") or "")
+    combined_lower = f"{meta.get('summary', '')}\n{doc_text}".lower()
+    ai_markers = ["ai generated report", "generated by ai", "chatgpt", "openai", "claude", "gemini", "perplexity"]
+    is_ai_generated = source_type.lower() == "ai generated report" or any(m in combined_lower for m in ai_markers)
+
+    if is_ai_generated:
+        final_value = 1
+    elif marker_value > 0:
+        final_value = marker_value
+    else:
+        final_value = normalized_value
+
+    key, label = _CREDIBILITY_BY_VALUE.get(final_value, _CREDIBILITY_BY_VALUE[0])
+    stage = _detect_document_stage(meta, doc_text)
+    meta["credibility_tier_value"] = final_value
+    meta["credibility_tier_key"] = key
+    meta["credibility_tier_label"] = label
+    meta["credibility"] = f"{stage} {label} Report"
+    return meta != before
+
+
+def _run_credibility_retrofit(db_path: str, selected_collections: list, dry_run: bool, include_docs: bool) -> dict:
+    client = init_chroma_client(db_path)
+    if not client:
+        raise RuntimeError("Could not connect to ChromaDB client.")
+
+    collection = client.get_collection(COLLECTION_NAME)
+    working_mgr = WorkingCollectionManager()
+    allowed_doc_ids = set()
+    for name in selected_collections:
+        allowed_doc_ids.update(working_mgr.get_doc_ids_by_name(name))
+
+    total = collection.count()
+    if total <= 0:
+        return {"processed": 0, "updated": 0, "skipped": 0, "errors": []}
+
+    processed = 0
+    updated = 0
+    skipped = 0
+    errors = []
+
+    include_fields = ["metadatas", "documents"] if include_docs else ["metadatas"]
+    batch_size = 300
+    for offset in range(0, total, batch_size):
+        batch = collection.get(limit=batch_size, offset=offset, include=include_fields)
+        ids = batch.get("ids", [])
+        metadatas = batch.get("metadatas", [])
+        documents = batch.get("documents", []) if include_docs else [""] * len(ids)
+
+        update_ids = []
+        update_metas = []
+
+        for cid, meta, doc in zip(ids, metadatas, documents):
+            if not isinstance(meta, dict):
+                skipped += 1
+                continue
+            doc_id = meta.get("doc_id")
+            if allowed_doc_ids and doc_id not in allowed_doc_ids:
+                skipped += 1
+                continue
+
+            processed += 1
+            safe_meta = dict(meta)
+            try:
+                changed = _enforce_credibility_policy_inplace(safe_meta, str(doc or ""))
+                if changed:
+                    updated += 1
+                    if not dry_run:
+                        update_ids.append(cid)
+                        update_metas.append(safe_meta)
+            except Exception as e:
+                errors.append(f"{cid}: {e}")
+
+        if update_ids and not dry_run:
+            collection.update(ids=update_ids, metadatas=update_metas)
+
+    return {"processed": processed, "updated": updated, "skipped": skipped, "errors": errors}
+
 def display_database_maintenance():
     """Display database maintenance and recovery functions"""
     st.header("🗄️ Database Maintenance")
@@ -887,6 +1078,14 @@ def display_database_maintenance():
             st.code(f"Resolved path: {preview}")
         except Exception:
             pass
+
+        runtime_root = resolve_db_root_path(current_input)
+        runtime_base = str(runtime_root) if runtime_root else (current_input or "")
+        runtime_path = convert_to_docker_mount_path(runtime_base) if runtime_base else ""
+        detected_dim = _get_detected_db_dimension(runtime_path) if runtime_path else None
+        dim_text = f"{detected_dim}D" if detected_dim else "unknown/new database"
+        path_text = runtime_path or "(not resolved)"
+        st.caption(f"🧪 Runtime DB path: `{path_text}` • detected embedding dimension: `{dim_text}`")
 
     # Embedding Model Status Display
     shared_render_embedding_model_status_panel()
@@ -934,6 +1133,55 @@ def display_database_maintenance():
         working_collection_manager_cls=WorkingCollectionManager,
         logger=logger,
     )
+
+    with st.expander("🏷️ Credibility Metadata Retrofit", expanded=False):
+        st.caption("Batch-apply canonical credibility metadata to existing Chroma documents.")
+        try:
+            mgr = WorkingCollectionManager()
+            collections = mgr.list_collections()
+        except Exception as e:
+            collections = []
+            st.warning(f"Could not load working collections: {e}")
+
+        selected_collections = st.multiselect(
+            "Collections to retrofit",
+            options=collections,
+            default=collections,
+            key="maintenance_credibility_collections",
+            help="Only documents belonging to selected collections will be updated.",
+        )
+        include_docs = st.checkbox(
+            "Use document text during classification",
+            value=False,
+            key="maintenance_credibility_include_docs",
+            help="Enables marker checks against chunk text. Slower on large databases.",
+        )
+        dry_run = st.checkbox(
+            "Dry run (show counts, do not write)",
+            value=True,
+            key="maintenance_credibility_dry_run",
+        )
+
+        if st.button("Run Credibility Retrofit", key="maintenance_run_credibility_retrofit", type="primary"):
+            if not selected_collections:
+                st.error("Select at least one collection.")
+            else:
+                with st.spinner("Applying credibility policy to collection metadata..."):
+                    try:
+                        result = _run_credibility_retrofit(
+                            db_path=db_path,
+                            selected_collections=selected_collections,
+                            dry_run=dry_run,
+                            include_docs=include_docs,
+                        )
+                        mode_text = "Dry run complete" if dry_run else "Retrofit complete"
+                        st.success(f"{mode_text}: processed={result['processed']} updated={result['updated']} skipped={result['skipped']}")
+                        if result["errors"]:
+                            st.warning(f"Completed with {len(result['errors'])} item errors. Showing first 10:")
+                            for err in result["errors"][:10]:
+                                st.code(err)
+                    except Exception as e:
+                        st.error(f"Retrofit failed: {e}")
 
     shared_render_clean_start_danger_zone(
         db_path=db_path,

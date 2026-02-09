@@ -5,6 +5,31 @@ All notable changes to the Cortex Suite project will be documented in this file.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### ✨ Ideation + Credibility Workflow Alignment (2-stage default)
+
+### 🚀 Improvements
+- Knowledge Synthesizer now runs in a **2-stage default flow**:
+  1) Discover Themes
+  2) Generate Ideas by Theme
+- Added optional **Classic 4-stage** mode in the Synthesizer UI for deeper sessions.
+- Added Synthesizer **minimum credibility tier** filter so ideation context respects source quality constraints.
+- Added markdown export for both 2-stage and 4-stage ideation outputs.
+
+### 🗄️ Maintenance
+- Added **Credibility Metadata Retrofit** batch tool in Maintenance (host + Docker):
+  - targets selected working collections
+  - dry-run support
+  - optional text-aware classification mode
+  - backfills canonical fields:
+    - `credibility_tier_value`
+    - `credibility_tier_key`
+    - `credibility_tier_label`
+    - `credibility`
+
+### 🔧 Bug Fixes
+- Restored `run_synthesis` compatibility shim in `cortex_engine/knowledge_synthesizer.py` to prevent breakage in legacy call paths.
+- Async ingestion metadata now always includes canonical credibility defaults, avoiding missing-tier records on alternate ingestion paths.
+
 ### 🔎 Knowledge Search Stabilization (WSL/CUDA cold-start + reranker reliability)
 
 ### 🚀 Improvements

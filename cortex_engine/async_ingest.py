@@ -250,6 +250,11 @@ class AsyncIngestionEngine:
             # Minimal rich fields to keep search filters stable
             "document_type": "Other",
             "proposal_outcome": "N/A",
+            # Canonical credibility fields for downstream filtering/retrofit consistency
+            "credibility_tier_value": 0,
+            "credibility_tier_key": "unclassified",
+            "credibility_tier_label": "Unclassified",
+            "credibility": "Final Unclassified Report",
         }
 
         # Add to vector store with explicit embedding
