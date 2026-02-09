@@ -999,7 +999,7 @@ def render_sidebar():
             reranker_size_labels = {
                 "2B": "2B (Faster, lower VRAM)",
                 "8B": "8B (Potentially more accurate, slower)",
-                "AUTO": "Auto-select",
+                "AUTO": "Auto-select (2B fast default)",
             }
             current_reranker_size = st.session_state.get("reranker_size", "AUTO")
             current_reranker_size = current_reranker_size if current_reranker_size in reranker_size_options else "AUTO"
@@ -1009,7 +1009,7 @@ def render_sidebar():
                 index=reranker_size_options.index(current_reranker_size),
                 format_func=lambda x: reranker_size_labels[x],
                 key="reranker_size_selector",
-                help="2B is best for responsiveness; 8B can improve ranking quality but is slower."
+                help="AUTO uses 2B by default for responsiveness. Choose 8B manually for potentially better ranking quality."
             )
             if selected_reranker_size != current_reranker_size:
                 st.session_state.reranker_size = selected_reranker_size

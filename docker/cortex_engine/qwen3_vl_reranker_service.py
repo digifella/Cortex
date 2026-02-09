@@ -68,7 +68,7 @@ class Qwen3VLRerankerSize(Enum):
 @dataclass
 class Qwen3VLRerankerConfig:
     """Configuration for Qwen3-VL reranker service."""
-    model_name: str = "Qwen/Qwen3-VL-Reranker-8B"
+    model_name: str = "Qwen/Qwen3-VL-Reranker-2B"
     use_flash_attention: bool = True
     torch_dtype: str = "bfloat16"
     max_batch_size: int = 4  # Reranker is more memory-intensive
@@ -98,8 +98,12 @@ class Qwen3VLRerankerConfig:
             )
 
     @classmethod
-    def auto_select(cls, prefer_quality: bool = True) -> "Qwen3VLRerankerConfig":
-        """Auto-select model based on available VRAM."""
+    def auto_select(cls, prefer_quality: bool = False) -> "Qwen3VLRerankerConfig":
+        """Auto-select model based on available VRAM.
+
+        Default behavior is responsiveness-first (2B). Callers can opt into
+        quality-first selection by passing prefer_quality=True.
+        """
         forced_size = os.getenv("QWEN3_VL_RERANKER_SIZE", "auto").strip().lower()
         if forced_size == "2b":
             logger.info("📦 Forced reranker size via config/env: 2B")
@@ -117,7 +121,9 @@ class Qwen3VLRerankerConfig:
                 logger.info(f"🚀 Auto-selected Qwen3-VL-Reranker-8B ({available_gb:.1f}GB free)")
                 return cls.for_model_size(Qwen3VLRerankerSize.LARGE)
             elif available_gb >= 8:
-                logger.info(f"📦 Auto-selected Qwen3-VL-Reranker-2B ({available_gb:.1f}GB free)")
+                logger.info(
+                    f"📦 Auto-selected Qwen3-VL-Reranker-2B ({available_gb:.1f}GB free, fast default)"
+                )
                 return cls.for_model_size(Qwen3VLRerankerSize.SMALL)
             else:
                 logger.warning(f"⚠️ Low VRAM ({available_gb:.1f}GB) - reranker may not fit")
