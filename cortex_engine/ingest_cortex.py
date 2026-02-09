@@ -270,6 +270,136 @@ class RichMetadata(BaseModel):
     proposal_outcome: Literal["Won", "Lost", "Pending", "N/A"] = Field(..., description="The outcome of the proposal, if applicable.")
     summary: str = Field(..., description="A concise, 1-3 sentence summary of the document's content and purpose.")
     thematic_tags: List[str] = Field(default_factory=list, description="A list of 3-5 key themes, topics, or technologies discussed.")
+    credibility_tier_value: Literal[0, 1, 2, 3, 4, 5] = Field(
+        0,
+        description="Credibility tier score: 5=peer-reviewed, 4=institutional, 3=pre-print, 2=editorial, 1=commentary, 0=unclassified."
+    )
+    credibility_tier_key: Literal["peer-reviewed", "institutional", "pre-print", "editorial", "commentary", "unclassified"] = Field(
+        "unclassified",
+        description="Normalized credibility key for filtering and reporting."
+    )
+    credibility_tier_label: Literal["Peer-Reviewed", "Institutional", "Pre-Print", "Editorial", "Commentary", "Unclassified"] = Field(
+        "Unclassified",
+        description="Human-readable credibility tier label."
+    )
+    credibility: str = Field(
+        "Final Unclassified Report",
+        description='Human-readable credibility summary in the format "{Draft|Final} {Label} Report".'
+    )
+
+
+_CREDIBILITY_BY_VALUE = {
+    5: ("peer-reviewed", "Peer-Reviewed"),
+    4: ("institutional", "Institutional"),
+    3: ("pre-print", "Pre-Print"),
+    2: ("editorial", "Editorial"),
+    1: ("commentary", "Commentary"),
+    0: ("unclassified", "Unclassified"),
+}
+_CREDIBILITY_BY_KEY = {k: (v, label) for v, (k, label) in _CREDIBILITY_BY_VALUE.items()}
+_CREDIBILITY_BY_LABEL = {label.lower(): (v, key) for v, (key, label) in _CREDIBILITY_BY_VALUE.items()}
+
+
+def _normalize_credibility_tier(metadata_json: Dict) -> None:
+    """Normalize credibility tier fields in-place so value/key/label are consistent."""
+    if not isinstance(metadata_json, dict):
+        return
+
+    default_value = 0
+    default_key, default_label = _CREDIBILITY_BY_VALUE[default_value]
+
+    raw_value = metadata_json.get("credibility_tier_value")
+    raw_key = str(metadata_json.get("credibility_tier_key", "")).strip().lower()
+    raw_label = str(metadata_json.get("credibility_tier_label", "")).strip()
+
+    if raw_value is not None:
+        try:
+            tier_value = int(raw_value)
+            if tier_value in _CREDIBILITY_BY_VALUE:
+                key, label = _CREDIBILITY_BY_VALUE[tier_value]
+                metadata_json["credibility_tier_value"] = tier_value
+                metadata_json["credibility_tier_key"] = key
+                metadata_json["credibility_tier_label"] = label
+                return
+        except (TypeError, ValueError):
+            pass
+
+    if raw_key in _CREDIBILITY_BY_KEY:
+        tier_value, label = _CREDIBILITY_BY_KEY[raw_key]
+        metadata_json["credibility_tier_value"] = tier_value
+        metadata_json["credibility_tier_key"] = raw_key
+        metadata_json["credibility_tier_label"] = label
+        return
+
+    if raw_label.lower() in _CREDIBILITY_BY_LABEL:
+        tier_value, key = _CREDIBILITY_BY_LABEL[raw_label.lower()]
+        metadata_json["credibility_tier_value"] = tier_value
+        metadata_json["credibility_tier_key"] = key
+        metadata_json["credibility_tier_label"] = _CREDIBILITY_BY_VALUE[tier_value][1]
+        return
+
+    metadata_json["credibility_tier_value"] = default_value
+    metadata_json["credibility_tier_key"] = default_key
+    metadata_json["credibility_tier_label"] = default_label
+
+
+def _detect_document_stage(file_path: str, text: str) -> str:
+    """Classify document stage for human-readable credibility field."""
+    full_text = f"{file_path}\n{text}".lower()
+    return "Draft" if "draft" in full_text else "Final"
+
+
+def _detect_marker_credibility_value(file_path: str, text: str) -> int:
+    """Find credibility tier from marker matches (priority 5->1)."""
+    haystack = f"{file_path}\n{text}".lower()
+    marker_map = {
+        5: ["pubmed", "nlm", "nature", "lancet", "jama", "bmj", "peer-reviewed", "peer reviewed"],
+        4: ["who", "un ", "ipcc", "oecd", "world bank", "government", "department", "ministry", "university", "institute", "centre", "center"],
+        3: ["arxiv", "ssrn", "biorxiv", "researchgate", "preprint", "pre-print"],
+        2: ["scientific american", "the conversation", "hbr", "harvard business review", "editorial"],
+        1: ["blog", "newsletter", "opinion", "consulting report", "whitepaper", "white paper"],
+    }
+    for tier in (5, 4, 3, 2, 1):
+        if any(marker in haystack for marker in marker_map[tier]):
+            return tier
+    return 0
+
+
+def _enforce_credibility_policy(metadata_json: Dict, file_path: str, text: str) -> None:
+    """Apply canonical credibility policy and emit all canonical fields."""
+    if not isinstance(metadata_json, dict):
+        return
+
+    # Legacy aliases.
+    if "credibility_tier_value" not in metadata_json and "credibility_value" in metadata_json:
+        metadata_json["credibility_tier_value"] = metadata_json.get("credibility_value")
+    if "credibility_tier_key" not in metadata_json and "credibility_source" in metadata_json:
+        metadata_json["credibility_tier_key"] = str(metadata_json.get("credibility_source", "")).strip().lower()
+
+    _normalize_credibility_tier(metadata_json)
+
+    normalized_value = int(metadata_json.get("credibility_tier_value", 0) or 0)
+    summary = str(metadata_json.get("summary", "") or "")
+    source_type = str(metadata_json.get("source_type", "") or "")
+    combined_text = f"{summary}\n{text}"
+
+    ai_markers = ["ai generated report", "generated by ai", "chatgpt", "openai", "claude", "gemini", "perplexity"]
+    is_ai_generated = source_type.lower() == "ai generated report" or any(m in combined_text.lower() for m in ai_markers)
+    marker_value = _detect_marker_credibility_value(file_path, combined_text)
+
+    if is_ai_generated:
+        final_value = 1
+    elif marker_value > 0:
+        final_value = marker_value
+    else:
+        final_value = normalized_value
+
+    key, label = _CREDIBILITY_BY_VALUE.get(final_value, _CREDIBILITY_BY_VALUE[0])
+    stage = _detect_document_stage(file_path, combined_text)
+    metadata_json["credibility_tier_value"] = final_value
+    metadata_json["credibility_tier_key"] = key
+    metadata_json["credibility_tier_label"] = label
+    metadata_json["credibility"] = f"{stage} {label} Report"
 
 class DocumentMetadata(BaseModel):
     doc_id: str
@@ -1009,6 +1139,16 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
         '- If the file is a `.pptx`, you **MUST** set `document_type` to "Presentation".',
         '- If the `file_path` contains "trophy" or the filename mentions "Case Study", you **MUST** set `document_type` to "Case Study / Trophy".',
         '- If the filename contains the word "Final", you should strongly prefer the "Final Report" type.', '- If the filename contains the word "Draft", you should strongly prefer the "Draft Report" type.',
+        '- You **MUST** classify source credibility using these exact tiers:',
+        '  - 5 / peer-reviewed / Peer-Reviewed: NLM/PubMed, Nature, The Lancet, JAMA, BMJ',
+        '  - 4 / institutional / Institutional: WHO, UN/IPCC, OECD, World Bank, ABS, government departments',
+        '  - 3 / pre-print / Pre-Print: arXiv, SSRN, bioRxiv, ResearchGate',
+        '  - 2 / editorial / Editorial: Scientific American, The Conversation, HBR',
+        '  - 1 / commentary / Commentary: blogs, newsletters, consulting reports, opinion',
+        '  - 0 / unclassified / Unclassified: not yet assessed (default)',
+        '- If source_type indicates AI-generated content, classify credibility as tier 1 (commentary).',
+        '- Populate all four fields consistently: `credibility_tier_value`, `credibility_tier_key`, `credibility_tier_label`, `credibility`.',
+        '- `credibility` format must be: "{Draft|Final} {Label} Report".',
         '- If no other category seems appropriate, you **MUST** use "Other" as a fallback.', "---", "File Path: {file_path}", "Source Type: {source_type}", "Document Content (first 8000 characters):",
         "-----------------", "{text}", "-----------------", "IMPORTANT: Your response must be ONLY the JSON object itself, with no extra text, explanations, or wrapper keys."
     ]
@@ -1094,6 +1234,7 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
                         # Normalize common validation fields before Pydantic
                         if 'proposal_outcome' in metadata_json and isinstance(metadata_json['proposal_outcome'], str):
                             metadata_json['proposal_outcome'] = metadata_json['proposal_outcome'].title()
+                        _enforce_credibility_policy(metadata_json, file_path_str, doc.get_content()[:8000])
 
                         try: 
                             rich_metadata = RichMetadata.model_validate(metadata_json)

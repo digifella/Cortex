@@ -14,6 +14,7 @@ import tempfile
 import time
 import zipfile
 import io
+import unicodedata
 from datetime import datetime
 from typing import List, Dict, Optional
 
@@ -130,6 +131,30 @@ def _clean_line(line: str) -> str:
     return re.sub(r"\s+", " ", (line or "").strip())
 
 
+def _ascii_fold(text: str) -> str:
+    """Fold unicode text to ASCII for robust search/parsing."""
+    if not text:
+        return ""
+    normalized = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def _normalize_ascii_text(text: str) -> str:
+    """Normalize arbitrary text to ASCII-safe form."""
+    cleaned = _clean_line(_ascii_fold(text))
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;:-")
+    return cleaned
+
+
+def _normalize_person_name_ascii(name: str) -> str:
+    """Normalize person names to ASCII-safe form while preserving punctuation."""
+    normalized = _normalize_ascii_text(name)
+    # Remove affiliation markers/superscripts commonly embedded in author lists.
+    normalized = re.sub(r"\b\d+\b", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip(" ,;:-*")
+    return normalized
+
+
 def _first_nonempty_lines(text: str, limit: int = 30) -> List[str]:
     lines = [_clean_line(x) for x in (text or "").splitlines()]
     lines = [x for x in lines if x]
@@ -137,7 +162,7 @@ def _first_nonempty_lines(text: str, limit: int = 30) -> List[str]:
 
 
 def _looks_like_person_name(candidate: str) -> bool:
-    c = _clean_line(re.sub(r"\d+", "", candidate))
+    c = _normalize_ascii_text(_clean_line(re.sub(r"\d+", "", candidate)))
     if not c or len(c) < 5 or len(c) > 80:
         return False
     low = c.lower()
@@ -146,6 +171,8 @@ def _looks_like_person_name(candidate: str) -> bool:
         "australia", "india", "srilanka", "melbourne", "brisbane", "gold coast", "corresponding author",
         "author:", "keywords", "abstract", "study", "comprehensive", "licensed", "creative commons",
         "lecturer", "postgraduate", "associate professor", "professor",
+        "management", "countries", "country", "licensee", "republic", "sciences",
+        "introduction", "change management",
     ]
     if any(x in low for x in disallow):
         return False
@@ -161,6 +188,34 @@ def _looks_like_person_name(candidate: str) -> bool:
         if not re.match(r"^(?:[A-Z]\.?|[A-Z][A-Za-z'\-]+)$", p):
             return False
     return True
+
+
+def _extract_names_from_author_block(raw: str) -> List[str]:
+    """Extract person-name candidates from a likely author block."""
+    text = _clean_line(raw)
+    if not text:
+        return []
+
+    # Remove common non-author prefixes and obvious affiliation tails.
+    text = re.sub(r"(?i)^authors?\s*[:\-]\s*", "", text)
+    text = re.sub(r"(?i)^for referencing,\s*please use:\s*", "", text)
+    text = re.sub(r"(?i)\b(university|department|faculty|institute|hospital)\b.*$", "", text)
+    text = re.sub(r"[*†‡§]", " ", text)
+    text = re.sub(r"\(\s*[^)]*\)", " ", text)
+    text = re.sub(r"\b\d+\b", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" ,;:-")
+
+    parts = [p.strip() for p in re.split(r",|;|\band\b", text, flags=re.IGNORECASE) if p.strip()]
+    names: List[str] = []
+    for part in parts:
+        cleaned = _normalize_ascii_text(part).strip(" ,;:-")
+        # Handle citation forms like "Surname, A.B." by flipping to "A.B. Surname".
+        m = re.match(r"^([A-Z][A-Za-z'\-]+)\s*,\s*([A-Z](?:\.[A-Z])*\.?)$", cleaned)
+        if m:
+            cleaned = f"{m.group(2)} {m.group(1)}"
+        if _looks_like_person_name(cleaned):
+            names.append(cleaned)
+    return list(dict.fromkeys(names))
 
 
 def _extract_available_at(md_content: str) -> str:
@@ -184,15 +239,53 @@ def _extract_available_at(md_content: str) -> str:
     return "Unknown"
 
 
+def _sanitize_markdown_for_preface(md_content: str) -> str:
+    """Remove known conversion-error boilerplate from markdown before LLM/keyword extraction."""
+    cleaned_lines = []
+    error_markers = [
+        "image could not be described",
+        "vision model",
+        "vlm processing failed",
+        "image processing failed",
+        "source_type': 'image_error'",
+        "source_type: image_error",
+    ]
+    for raw_line in (md_content or "").splitlines():
+        line = raw_line.strip()
+        low = line.lower()
+        if any(marker in low for marker in error_markers):
+            continue
+        # Drop markdown image embeds that mostly carry filenames/noise for metadata extraction.
+        if line.startswith("![") and "](" in line:
+            continue
+        cleaned_lines.append(raw_line)
+    return "\n".join(cleaned_lines)
+
+
 def _extract_authors_from_markdown(md_content: str) -> List[str]:
-    pre_abstract = re.split(r"(?im)^\s*abstract\b", md_content or "", maxsplit=1)[0][:9000]
+    pre_abstract = re.split(r"(?im)^\s*abstract\b", md_content or "", maxsplit=1)[0][:12000]
     lines = _first_nonempty_lines(pre_abstract, limit=120)
     authors: List[str] = []
 
+    # 1) Prefer explicit author/citation blocks first.
+    explicit_patterns = [
+        r"(?is)\bauthors?\b\s*[:\-]?\s*(.+?)(?=\n\s*(university|affiliations?|author contribution|doi|abstract|keywords?|for referencing|\Z))",
+        r"(?is)for referencing,\s*please use:\s*(.+?)(?=\n|$)",
+    ]
+    for pat in explicit_patterns:
+        for match in re.finditer(pat, pre_abstract, flags=re.IGNORECASE):
+            authors.extend(_extract_names_from_author_block(match.group(1)))
+    if authors:
+        return list(dict.fromkeys(authors))[:12]
+
+    # 2) Fall back to line-based heuristics.
     for line in lines:
         if len(line) > 260:
             continue
         if re.match(r"^\d+\s", line):
+            continue
+        # Skip likely title/topic lines unless they look like a name list delimiter line.
+        if "," not in line and ";" not in line and " and " not in line.lower():
             continue
         cleaned = re.sub(r"([A-Za-z])\d+\b", r"\1", line)
         cleaned = re.sub(r"\band\b", ",", cleaned, flags=re.IGNORECASE)
@@ -304,7 +397,7 @@ def _extract_preface_metadata_with_llm(file_path: str, md_content: str, source_h
         logger.warning(f"Could not initialize LLM for preface extraction: {e}")
         return None
 
-    snippet = md_content[:18000]
+    snippet = _sanitize_markdown_for_preface(md_content)[:18000]
     prompt = f"""
 You extract publication metadata from markdown content.
 Return STRICT JSON only with keys:
@@ -316,6 +409,10 @@ Return STRICT JSON only with keys:
 - available_at (string)
 - abstract (string)
 - keywords (array of strings)
+- credibility_tier_value (integer: 0..5)
+- credibility_tier_key (one of: peer-reviewed, institutional, pre-print, editorial, commentary, unclassified)
+- credibility_tier_label (one of: Peer-Reviewed, Institutional, Pre-Print, Editorial, Commentary, Unclassified)
+- credibility (human-readable string, e.g. "Draft Institutional Report")
 
 Rules:
 - Use source hint: "{source_hint}" unless content strongly indicates a different source_type.
@@ -325,7 +422,14 @@ Rules:
 - For authors, include only person names and exclude affiliations/locations/institutions.
 - For title, prefer the document title and never use abstract opening text.
 - For available_at, prefer DOI URL if present, else canonical report URL, else "Unknown".
-- Provide 5-12 useful keywords.
+- Provide 5-12 useful keywords, with each keyword at most TWO WORDS.
+- Credibility tiers:
+  5 / peer-reviewed / Peer-Reviewed: NLM/PubMed, Nature, The Lancet, JAMA, BMJ
+  4 / institutional / Institutional: WHO, UN/IPCC, OECD, World Bank, ABS, government depts, universities/institutes
+  3 / pre-print / Pre-Print: arXiv, SSRN, bioRxiv, ResearchGate
+  2 / editorial / Editorial: Scientific American, The Conversation, HBR
+  1 / commentary / Commentary: blogs, newsletters, consulting reports, opinion
+  0 / unclassified / Unclassified: not yet assessed
 - If a field is unknown use "Unknown" (or [] for authors/keywords).
 
 File name: {Path(file_path).name}
@@ -341,10 +445,79 @@ Markdown content:
         return None
 
 
+_CREDIBILITY_TIERS = {
+    5: ("peer-reviewed", "Peer-Reviewed"),
+    4: ("institutional", "Institutional"),
+    3: ("pre-print", "Pre-Print"),
+    2: ("editorial", "Editorial"),
+    1: ("commentary", "Commentary"),
+    0: ("unclassified", "Unclassified"),
+}
+
+
+def _detect_document_stage(file_path: str, title: str, md_content: str) -> str:
+    text = f"{Path(file_path).name}\n{title}\n{md_content[:30000]}".lower()
+    return "Draft" if re.search(r"\bdraft\b", text) else "Final"
+
+
+def _classify_credibility_tier(file_path: str, source_type: str, publisher: str, available_at: str, md_content: str) -> Dict[str, str]:
+    text = f"{Path(file_path).name}\n{publisher}\n{available_at}\n{md_content[:50000]}".lower()
+    marker_map = {
+        5: ["pubmed", "nlm", "nature", "lancet", "jama", "bmj", "peer-reviewed", "peer reviewed"],
+        4: ["who", "un ", "ipcc", "oecd", "world bank", "government", "department", "ministry", "university", "institute", "centre", "center"],
+        3: ["arxiv", "ssrn", "biorxiv", "researchgate", "preprint", "pre-print"],
+        2: ["scientific american", "the conversation", "hbr", "harvard business review", "editorial"],
+        1: ["blog", "newsletter", "opinion", "consulting report", "whitepaper", "white paper"],
+    }
+    if source_type == "AI Generated Report":
+        tier_value = 1
+    else:
+        tier_value = 0
+        for value in (5, 4, 3, 2, 1):
+            if any(marker in text for marker in marker_map[value]):
+                tier_value = value
+                break
+
+    key, label = _CREDIBILITY_TIERS[tier_value]
+    stage = _detect_document_stage(file_path, "", md_content)
+    return {
+        "credibility_tier_value": tier_value,
+        "credibility_tier_key": key,
+        "credibility_tier_label": label,
+        "credibility": f"{stage} {label} Report",
+    }
+
+
+def _clean_keywords(keywords: List[str]) -> List[str]:
+    banned = {
+        "image", "vision", "model", "error", "could", "described", "failed",
+        "processing", "source", "type", "unknown", "document",
+    }
+    cleaned: List[str] = []
+    for keyword in keywords:
+        k = re.sub(r"\s+", " ", str(keyword or "").strip().lower())
+        if not k or len(k) < 3:
+            continue
+        if k in banned:
+            continue
+        if len(k) > 60:
+            continue
+        if len(k.split()) > 2:
+            continue
+        if "image" in k and "health" not in k:
+            continue
+        if "error" in k or "vision model" in k:
+            continue
+        cleaned.append(k)
+    # preserve order while deduping
+    return list(dict.fromkeys(cleaned))[:8]
+
+
 def _fallback_preface_metadata(file_path: str, md_content: str, source_hint: str) -> dict:
-    title = _guess_title_from_markdown(md_content, file_path)
-    lines = _first_nonempty_lines(md_content, limit=120)
-    text_lower = md_content.lower()
+    md_clean = _sanitize_markdown_for_preface(md_content)
+    title = _guess_title_from_markdown(md_clean, file_path)
+    lines = _first_nonempty_lines(md_clean, limit=120)
+    text_lower = md_clean.lower()
 
     publisher = "Unknown"
     if source_hint == "AI Generated Report":
@@ -356,16 +529,16 @@ def _fallback_preface_metadata(file_path: str, md_content: str, source_hint: str
             publisher = marker.title() if marker != "pwc" else "PwC"
             break
 
-    date_match = re.search(r"(20\d{2}[-/][01]?\d[-/][0-3]?\d|[0-3]?\d\s+[A-Za-z]{3,9}\s+20\d{2}|[A-Za-z]{3,9}\s+[0-3]?\d,\s+20\d{2}|20\d{2})", md_content[:10000])
+    date_match = re.search(r"(20\d{2}[-/][01]?\d[-/][0-3]?\d|[0-3]?\d\s+[A-Za-z]{3,9}\s+20\d{2}|[A-Za-z]{3,9}\s+[0-3]?\d,\s+20\d{2}|20\d{2})", md_clean[:10000])
     publishing_date = date_match.group(1) if date_match else "Unknown"
-    available_at = _extract_available_at(md_content)
+    available_at = _extract_available_at(md_clean)
 
-    authors = _extract_authors_from_markdown(md_content)
+    authors = _extract_authors_from_markdown(md_clean)
 
     abstract = ""
     abstract_match = re.search(
         r"(?is)\babstract\b\s*[:\-]?\s*(.+?)(?=\n\s*(keywords?|key words?|introduction|background|methods?|j\s+med|doi:|##\s*page|\Z))",
-        md_content,
+        md_clean,
     )
     if abstract_match:
         abstract = _clean_line(abstract_match.group(1))
@@ -383,7 +556,7 @@ def _fallback_preface_metadata(file_path: str, md_content: str, source_hint: str
         kw_raw = _clean_line(kw_match.group(1))
         keywords = [k.strip().lower() for k in re.split(r",|;|\|", kw_raw) if k.strip()][:12]
     if not keywords:
-        tokens = re.findall(r"\b[A-Za-z][A-Za-z\-]{3,}\b", md_content[:8000])
+        tokens = re.findall(r"\b[A-Za-z][A-Za-z\-]{3,}\b", md_clean[:8000])
         freq = {}
         stop = {
             "this", "that", "with", "from", "were", "have", "been", "into", "their", "about", "which",
@@ -397,6 +570,14 @@ def _fallback_preface_metadata(file_path: str, md_content: str, source_hint: str
             freq[low] = freq.get(low, 0) + 1
         keywords = [k for k, _ in sorted(freq.items(), key=lambda kv: kv[1], reverse=True)[:10]]
 
+    credibility = _classify_credibility_tier(
+        file_path=file_path,
+        source_type=source_hint or "Other",
+        publisher=publisher,
+        available_at=available_at,
+        md_content=md_clean,
+    )
+
     return {
         "title": title or Path(file_path).stem,
         "source_type": source_hint or "Other",
@@ -405,18 +586,24 @@ def _fallback_preface_metadata(file_path: str, md_content: str, source_hint: str
         "authors": authors,
         "available_at": available_at,
         "abstract": abstract,
-        "keywords": keywords,
+        "keywords": _clean_keywords(keywords),
+        **credibility,
     }
 
 
-def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Optional[dict], fallback_meta: dict) -> dict:
+def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Optional[dict], fallback_meta: dict, md_content: str) -> dict:
     data = raw_meta or {}
-    title = _clean_line(str(data.get("title", ""))) or fallback_meta["title"]
+    # Back-compat aliases from older systems.
+    if "credibility_tier_value" not in data and "credibility_value" in data:
+        data["credibility_tier_value"] = data.get("credibility_value")
+    if "credibility_tier_key" not in data and "credibility_source" in data:
+        data["credibility_tier_key"] = str(data.get("credibility_source", "")).strip().lower()
+    title = _normalize_ascii_text(_clean_line(str(data.get("title", "")))) or _normalize_ascii_text(fallback_meta["title"])
     source_type = _clean_line(str(data.get("source_type", ""))) or source_hint or fallback_meta["source_type"]
     if source_type not in {"Academic", "Consulting Company", "AI Generated Report", "Other"}:
         source_type = source_hint if source_hint in {"Academic", "Consulting Company", "AI Generated Report", "Other"} else "Other"
 
-    publisher = _clean_line(str(data.get("publisher", ""))) or fallback_meta["publisher"]
+    publisher = _normalize_ascii_text(_clean_line(str(data.get("publisher", "")))) or _normalize_ascii_text(fallback_meta["publisher"])
     if source_type == "AI Generated Report" and (not publisher or publisher.lower() == "unknown"):
         publisher = "Unknown AI"
 
@@ -434,7 +621,9 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         authors = []
     if not authors:
         authors = fallback_meta.get("authors", [])
+    authors = [_normalize_person_name_ascii(a) for a in authors if _looks_like_person_name(a)]
     authors = [a for a in authors if _looks_like_person_name(a)]
+    authors = list(dict.fromkeys(authors))
 
     keywords_raw = data.get("keywords", fallback_meta.get("keywords", []))
     if isinstance(keywords_raw, str):
@@ -445,9 +634,31 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         keywords = []
     if not keywords:
         keywords = fallback_meta.get("keywords", [])
-    keywords = [k.lower() for k in keywords if k]
+    keywords = _clean_keywords([_normalize_ascii_text(k.lower()) for k in keywords if k])
 
     abstract = _clean_line(str(data.get("abstract", ""))) or fallback_meta["abstract"] or "Summary not available."
+
+    cred_value_raw = data.get("credibility_tier_value", fallback_meta.get("credibility_tier_value", 0))
+    try:
+        cred_value = int(cred_value_raw)
+    except Exception:
+        cred_value = int(fallback_meta.get("credibility_tier_value", 0))
+    if cred_value not in _CREDIBILITY_TIERS:
+        cred_value = int(fallback_meta.get("credibility_tier_value", 0))
+    # Deterministic policy alignment with credibility_spec.md.
+    deterministic = _classify_credibility_tier(
+        file_path=file_path,
+        source_type=source_type,
+        publisher=publisher,
+        available_at=available_at,
+        md_content=_sanitize_markdown_for_preface(md_content),
+    )
+    det_value = int(deterministic.get("credibility_tier_value", 0))
+    if source_type == "AI Generated Report" or det_value > 0:
+        cred_value = det_value
+    cred_key, cred_label = _CREDIBILITY_TIERS.get(cred_value, _CREDIBILITY_TIERS[0])
+    stage = _detect_document_stage(file_path, title, _sanitize_markdown_for_preface(md_content))
+    credibility_text = f"{stage} {cred_label} Report"
 
     return {
         "title": title or Path(file_path).stem,
@@ -458,6 +669,10 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         "available_at": available_at or "Unknown",
         "keywords": keywords[:8],
         "abstract": abstract,
+        "credibility_tier_value": cred_value,
+        "credibility_tier_key": cred_key,
+        "credibility_tier_label": cred_label,
+        "credibility": credibility_text,
     }
 
 
@@ -480,6 +695,10 @@ def _build_preface(md_meta: dict) -> str:
         f"publishing_date: {_yaml_escape(md_meta['publishing_date'])}",
         f"authors: {authors_yaml}",
         f"available_at: {_yaml_escape(md_meta.get('available_at', 'Unknown'))}",
+        f"credibility_tier_value: {_yaml_escape(md_meta.get('credibility_tier_value', 0))}",
+        f"credibility_tier_key: {_yaml_escape(md_meta.get('credibility_tier_key', 'unclassified'))}",
+        f"credibility_tier_label: {_yaml_escape(md_meta.get('credibility_tier_label', 'Unclassified'))}",
+        f"credibility: {_yaml_escape(md_meta.get('credibility', 'Unclassified Report'))}",
         f"keywords: {keywords_yaml}",
         f"abstract: {_yaml_escape(md_meta['abstract'])}",
         "---",
@@ -492,7 +711,7 @@ def _add_document_preface(file_path: str, md_content: str) -> str:
     source_hint = _detect_source_type_hint(file_path, md_content)
     raw_meta = _extract_preface_metadata_with_llm(file_path, md_content, source_hint)
     fallback_meta = _fallback_preface_metadata(file_path, md_content, source_hint)
-    meta = _normalize_preface_metadata(file_path, source_hint, raw_meta, fallback_meta)
+    meta = _normalize_preface_metadata(file_path, source_hint, raw_meta, fallback_meta, md_content)
     preface = _build_preface(meta)
     return preface + md_content
 
