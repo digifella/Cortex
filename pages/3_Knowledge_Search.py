@@ -47,11 +47,17 @@ import pandas as pd
 from pathlib import Path
 import re
 import threading
+import concurrent.futures
 from typing import Optional
 
 # Thread-safe debug log buffer (avoids writing to session_state from background threads)
 _debug_log_lock = threading.Lock()
 _debug_log_buffer: list = []
+_chroma_client_lock = threading.Lock()
+_chroma_client_cache: dict[str, object] = {}
+_preload_state_lock = threading.Lock()
+_embedding_preload_in_progress = False
+_reranker_preload_in_progress = False
 
 # Import only ChromaDB components needed for direct search
 import chromadb
@@ -67,7 +73,8 @@ warnings.filterwarnings("ignore", message=".*Failed to send telemetry.*")
 # Import project modules
 from cortex_engine.config import (
     EMBED_MODEL, COLLECTION_NAME, KB_LLM_MODEL,
-    QWEN3_VL_RERANKER_ENABLED, QWEN3_VL_RERANKER_TOP_K, QWEN3_VL_RERANKER_CANDIDATES
+    QWEN3_VL_RERANKER_ENABLED, QWEN3_VL_RERANKER_TOP_K, QWEN3_VL_RERANKER_CANDIDATES,
+    QWEN3_VL_RERANKER_SIZE,
 )
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.collection_manager import WorkingCollectionManager
@@ -81,7 +88,7 @@ from cortex_engine.utils.default_paths import get_default_ai_database_path
 from cortex_engine.embedding_service import embed_query
 from cortex_engine.version_config import VERSION_STRING
 from cortex_engine.ui_theme import apply_theme, section_header
-from cortex_engine.async_query import get_model_aware_threshold
+from cortex_engine.utils.search_threshold import get_model_aware_threshold
 
 # Set up logging
 logger = get_logger(__name__)
@@ -92,6 +99,17 @@ def _get_chroma_client(chroma_db_path: str):
     """Return a cached ChromaDB PersistentClient for the given path."""
     db_settings = ChromaSettings(anonymized_telemetry=False)
     return chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+
+
+def _get_chroma_client_threadsafe(chroma_db_path: str):
+    """Thread-safe client cache for worker threads (avoids Streamlit context calls)."""
+    with _chroma_client_lock:
+        client = _chroma_client_cache.get(chroma_db_path)
+        if client is None:
+            db_settings = ChromaSettings(anonymized_telemetry=False)
+            client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+            _chroma_client_cache[chroma_db_path] = client
+        return client
 
 
 # Page configuration
@@ -106,13 +124,23 @@ apply_theme()
 # =============================================================================
 # Reranker Background Preload
 # =============================================================================
-def _preload_reranker_model():
+def _preload_reranker_model(reranker_size: str = "AUTO"):
     """Background task to preload the Qwen3-VL reranker model into GPU memory."""
     try:
-        from cortex_engine.qwen3_vl_reranker_service import _load_reranker, Qwen3VLRerankerConfig
+        from cortex_engine.qwen3_vl_reranker_service import (
+            _load_reranker,
+            Qwen3VLRerankerConfig,
+            Qwen3VLRerankerSize,
+        )
 
         logger.info("🔄 Background preload: Loading Qwen3-VL reranker model...")
-        config = Qwen3VLRerankerConfig.auto_select()
+        size = (reranker_size or "AUTO").upper()
+        if size == "2B":
+            config = Qwen3VLRerankerConfig.for_model_size(Qwen3VLRerankerSize.SMALL)
+        elif size == "8B":
+            config = Qwen3VLRerankerConfig.for_model_size(Qwen3VLRerankerSize.LARGE)
+        else:
+            config = Qwen3VLRerankerConfig.auto_select()
         _load_reranker(config)
         logger.info("✅ Background preload: Reranker model ready")
 
@@ -122,14 +150,44 @@ def _preload_reranker_model():
         logger.warning(f"Background preload failed (will load on first search): {e}")
 
 
+def _preload_reranker_model_guarded(reranker_size: str = "AUTO"):
+    """Guarded wrapper to avoid duplicate reranker preload threads."""
+    global _reranker_preload_in_progress
+    try:
+        _preload_reranker_model(reranker_size)
+    finally:
+        with _preload_state_lock:
+            _reranker_preload_in_progress = False
+
+
 def start_reranker_preload():
     """Start background preload of reranker model if enabled and not already loading."""
+    global _reranker_preload_in_progress
     # Check if reranker is enabled (from session state or config default)
     reranker_enabled = st.session_state.get('reranker_enabled', QWEN3_VL_RERANKER_ENABLED)
+    reranker_health = _get_reranker_health()
+
+    if reranker_enabled and not reranker_health.get("can_attempt_load", True):
+        logger.debug(
+            f"Skipping reranker preload during cooldown ({reranker_health.get('cooldown_remaining_seconds', 0)}s)"
+        )
+        return
+
+    if reranker_enabled and _is_reranker_model_ready():
+        return
+
+    # If global warmup already started in this process, avoid duplicate page preload threads.
+    if reranker_enabled and os.environ.get("CORTEX_GLOBAL_WARMUP_STARTED") == "1":
+        return
 
     if reranker_enabled and 'reranker_preload_started' not in st.session_state:
+        with _preload_state_lock:
+            if _reranker_preload_in_progress:
+                return
+            _reranker_preload_in_progress = True
         st.session_state.reranker_preload_started = True
-        thread = threading.Thread(target=_preload_reranker_model, daemon=True)
+        reranker_size = st.session_state.get('reranker_size', str(QWEN3_VL_RERANKER_SIZE).upper())
+        thread = threading.Thread(target=_preload_reranker_model_guarded, args=(reranker_size,), daemon=True)
         thread.start()
         logger.info("🚀 Started background reranker model preload")
 
@@ -158,11 +216,33 @@ def _preload_embedding_model():
         logger.warning(f"Background embedding preload failed (will load on first search): {e}")
 
 
+def _preload_embedding_model_guarded():
+    """Guarded wrapper to avoid duplicate embedding preload threads."""
+    global _embedding_preload_in_progress
+    try:
+        _preload_embedding_model()
+    finally:
+        with _preload_state_lock:
+            _embedding_preload_in_progress = False
+
+
 def start_embedding_preload():
     """Start background preload of embedding model if not already loading."""
+    global _embedding_preload_in_progress
+    if _is_embedding_model_ready():
+        return
+
+    # If global warmup already started in this process, avoid duplicate page preload threads.
+    if os.environ.get("CORTEX_GLOBAL_WARMUP_STARTED") == "1":
+        return
+
     if 'embedding_preload_started' not in st.session_state:
+        with _preload_state_lock:
+            if _embedding_preload_in_progress:
+                return
+            _embedding_preload_in_progress = True
         st.session_state.embedding_preload_started = True
-        thread = threading.Thread(target=_preload_embedding_model, daemon=True)
+        thread = threading.Thread(target=_preload_embedding_model_guarded, daemon=True)
         thread.start()
         logger.info("🚀 Started background embedding model preload")
 
@@ -209,6 +289,97 @@ def get_candidate_db_paths(db_path: str):
         _add("normalized", convert_windows_to_wsl_path(raw_value))
 
     return candidates
+
+
+def _is_embedding_model_ready() -> bool:
+    """Check whether the embedding model is loaded in-process."""
+    try:
+        import cortex_engine.qwen3_vl_embedding_service as embedding_svc
+        return embedding_svc._embedding_model is not None
+    except Exception:
+        return False
+
+
+def _is_reranker_model_ready() -> bool:
+    """Check whether the reranker model is loaded in-process."""
+    try:
+        import cortex_engine.qwen3_vl_reranker_service as reranker_svc
+        return reranker_svc._reranker_model is not None
+    except Exception:
+        return False
+
+
+def _get_reranker_health() -> dict:
+    """Get reranker load health/cooldown state."""
+    try:
+        import cortex_engine.qwen3_vl_reranker_service as reranker_svc
+        if hasattr(reranker_svc, "get_reranker_health"):
+            return reranker_svc.get_reranker_health()
+    except Exception:
+        pass
+    return {
+        "loaded": _is_reranker_model_ready(),
+        "last_error": None,
+        "cooldown_remaining_seconds": 0,
+        "can_attempt_load": True,
+    }
+
+
+def _run_with_timeout(task_fn, timeout_seconds: float):
+    """
+    Run a task in a worker thread with a non-blocking timeout.
+
+    IMPORTANT: Do not use ThreadPoolExecutor as a context manager for timeouts
+    here, because context manager shutdown waits for running tasks and defeats
+    fast timeout returns in Streamlit UI flows.
+    """
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(task_fn)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        raise
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+@st.cache_data(ttl=120)
+def _get_detected_db_dimension(db_path: str) -> Optional[int]:
+    """Cache embedding-dimension detection for a specific database root path."""
+    if not db_path:
+        return None
+    try:
+        from cortex_engine.utils.embedding_validator import get_database_embedding_dimension
+        return get_database_embedding_dimension(db_path)
+    except Exception as e:
+        logger.debug(f"Could not detect embedding dimension for diagnostics: {e}")
+        return None
+
+
+def _runtime_db_diagnostics(db_path: str) -> tuple[str, Optional[int]]:
+    """Resolve runtime database path and detect stored embedding dimension."""
+    resolved_root = resolve_db_root_path(db_path)
+    base_path = str(resolved_root) if resolved_root else (db_path or "")
+    runtime_path = convert_to_docker_mount_path(base_path) if base_path else ""
+    dimension = _get_detected_db_dimension(runtime_path) if runtime_path else None
+    return runtime_path, dimension
+
+
+@st.cache_data(ttl=120)
+def _get_torch_cuda_status() -> tuple[bool, int, str]:
+    """Return basic CUDA health used to avoid silent CPU-heavy cold starts."""
+    try:
+        import torch
+        is_available = bool(torch.cuda.is_available())
+        try:
+            device_count = int(torch.cuda.device_count())
+        except Exception:
+            device_count = 0
+        detail = "CUDA available" if is_available else "CUDA unavailable to PyTorch (running on CPU)"
+        return is_available, device_count, detail
+    except Exception as e:
+        return False, 0, f"CUDA check failed: {e}"
 
 
 def get_document_type_options():
@@ -462,6 +633,9 @@ def initialize_search_state():
         st.session_state.reranker_enabled = QWEN3_VL_RERANKER_ENABLED
     if 'reranker_top_k' not in st.session_state:
         st.session_state.reranker_top_k = QWEN3_VL_RERANKER_TOP_K
+    if 'reranker_size' not in st.session_state:
+        configured_size = str(QWEN3_VL_RERANKER_SIZE or "AUTO").upper()
+        st.session_state.reranker_size = configured_size if configured_size in ("AUTO", "2B", "8B") else "AUTO"
 
 
 def render_sidebar():
@@ -798,6 +972,11 @@ def render_sidebar():
 
         # Reranker toggle control
         st.sidebar.markdown("---")
+        cuda_ok, cuda_count, cuda_detail = _get_torch_cuda_status()
+        if is_multimodal and QWEN3_VL_ENABLED and not cuda_ok:
+            st.sidebar.warning(f"⚠️ {cuda_detail}")
+            st.sidebar.caption("Search will use text fallback while embeddings warm up on CPU.")
+
         reranker_toggle = st.sidebar.checkbox(
             "🎯 Neural Reranking",
             value=st.session_state.reranker_enabled,
@@ -808,6 +987,39 @@ def render_sidebar():
         st.session_state.reranker_enabled = reranker_toggle
 
         if reranker_toggle:
+            reranker_size_options = ["2B", "8B", "AUTO"]
+            reranker_size_labels = {
+                "2B": "2B (Faster, lower VRAM)",
+                "8B": "8B (Potentially more accurate, slower)",
+                "AUTO": "Auto-select",
+            }
+            current_reranker_size = st.session_state.get("reranker_size", "AUTO")
+            current_reranker_size = current_reranker_size if current_reranker_size in reranker_size_options else "AUTO"
+            selected_reranker_size = st.sidebar.selectbox(
+                "Reranker Model:",
+                options=reranker_size_options,
+                index=reranker_size_options.index(current_reranker_size),
+                format_func=lambda x: reranker_size_labels[x],
+                key="reranker_size_selector",
+                help="2B is best for responsiveness; 8B can improve ranking quality but is slower."
+            )
+            if selected_reranker_size != current_reranker_size:
+                st.session_state.reranker_size = selected_reranker_size
+                os.environ["QWEN3_VL_RERANKER_SIZE"] = selected_reranker_size
+                try:
+                    import cortex_engine.qwen3_vl_reranker_service as reranker_svc
+                    reranker_svc.reset_reranker_service()
+                except Exception as reranker_reset_e:
+                    logger.warning(f"Could not reset reranker service after size change: {reranker_reset_e}")
+                st.session_state.pop('reranker_preload_started', None)
+                st.sidebar.success(f"✅ Reranker set to {selected_reranker_size}")
+                st.rerun()
+
+            st.sidebar.caption(
+                "2B is recommended for interactive search. "
+                "8B may improve precision but can add significant latency."
+            )
+
             # Add slider for controlling number of results
             reranker_top_k = st.sidebar.slider(
                 "Results to return:",
@@ -819,7 +1031,10 @@ def render_sidebar():
                 help="Number of top results after neural reranking"
             )
             st.session_state.reranker_top_k = reranker_top_k
-            st.sidebar.caption(f"✅ Active (top-{reranker_top_k} from {QWEN3_VL_RERANKER_CANDIDATES} candidates)")
+            st.sidebar.caption(
+                f"✅ Active: {st.session_state.get('reranker_size', 'AUTO')} "
+                f"(top-{reranker_top_k} from {QWEN3_VL_RERANKER_CANDIDATES} candidates)"
+            )
 
             # Check if model is already loaded
             # Must import module and access attribute dynamically (not `from x import var`)
@@ -836,6 +1051,37 @@ def render_sidebar():
                 st.sidebar.caption("⚠️ First search loads model (~3 min)")
         else:
             st.sidebar.caption("📊 Standard embedding search")
+
+        # Warmup readiness panel
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("🔥 Warmup Status")
+        embedding_ready = _is_embedding_model_ready()
+        reranker_ready = _is_reranker_model_ready() if reranker_toggle else True
+        embedding_started = st.session_state.get('embedding_preload_started', False)
+        reranker_started = st.session_state.get('reranker_preload_started', False) if reranker_toggle else False
+
+        st.sidebar.caption(f"Embedding model: {'🟢 Ready' if embedding_ready else '🟡 Warming'}")
+        if reranker_toggle:
+            reranker_health = _get_reranker_health()
+            if reranker_ready:
+                st.sidebar.caption("Reranker model: 🟢 Ready")
+            elif not reranker_health.get("can_attempt_load", True):
+                cooldown = reranker_health.get("cooldown_remaining_seconds", 0)
+                st.sidebar.caption(f"Reranker model: 🔴 Failed (retry in {cooldown}s)")
+                last_error = reranker_health.get("last_error")
+                if last_error:
+                    st.sidebar.caption(f"Reason: {str(last_error)[:120]}")
+            else:
+                st.sidebar.caption("Reranker model: 🟡 Warming")
+
+        should_autorefresh = (
+            (embedding_started and not embedding_ready) or
+            (reranker_toggle and reranker_started and not reranker_ready)
+        )
+        if should_autorefresh:
+            st.sidebar.info("Models are still warming up. You can refresh status manually.")
+        if st.sidebar.button("🔄 Refresh Warmup Status", key="refresh_warmup_status_btn"):
+            st.rerun()
 
     except Exception as e:
         logger.debug(f"Could not get embedding info: {e}")
@@ -950,8 +1196,6 @@ def graphrag_enhanced_search(db_path, query, filters, top_k=20, strict_mode=Fals
     Strategy: Use direct_chromadb_search for vector retrieval (reliable),
     then enhance results with GraphRAG entity/relationship context.
     """
-    import concurrent.futures
-
     def graphrag_search_with_timeout():
         try:
             add_search_debug("Starting GraphRAG Enhanced search...")
@@ -1017,34 +1261,32 @@ def graphrag_enhanced_search(db_path, query, filters, top_k=20, strict_mode=Fals
             return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
 
     # Run GraphRAG search with timeout protection
-    # Longer timeout when reranker enabled (first model load takes 3-4 minutes)
+    # Longer timeout when reranker or first-time embedding load is involved.
     use_reranker = st.session_state.get('reranker_enabled', QWEN3_VL_RERANKER_ENABLED)
-    graphrag_timeout = 300 if use_reranker else 45
+    graphrag_timeout = 300 if use_reranker else 90
     try:
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(graphrag_search_with_timeout)
-            try:
-                results = future.result(timeout=graphrag_timeout)
+        try:
+            results = _run_with_timeout(graphrag_search_with_timeout, graphrag_timeout)
 
-                # Debug logging AFTER thread completes (session_state safe here)
-                add_search_debug(f"GraphRAG thread returned {len(results) if results else 0} results")
-                if results and len(results) > 0:
-                    first = results[0]
-                    add_search_debug(f"First result keys: {list(first.keys()) if isinstance(first, dict) else 'not a dict'}")
-                    if isinstance(first, dict):
-                        add_search_debug(f"First result file_name: {first.get('file_name', 'MISSING')}")
-                        add_search_debug(f"First result file_path: {first.get('file_path', 'MISSING')}")
-                        text_preview = first.get('text', '')[:100] if first.get('text') else 'NO TEXT'
-                        add_search_debug(f"First result text preview: {text_preview}...")
+            # Debug logging AFTER thread completes (session_state safe here)
+            add_search_debug(f"GraphRAG thread returned {len(results) if results else 0} results")
+            if results and len(results) > 0:
+                first = results[0]
+                add_search_debug(f"First result keys: {list(first.keys()) if isinstance(first, dict) else 'not a dict'}")
+                if isinstance(first, dict):
+                    add_search_debug(f"First result file_name: {first.get('file_name', 'MISSING')}")
+                    add_search_debug(f"First result file_path: {first.get('file_path', 'MISSING')}")
+                    text_preview = first.get('text', '')[:100] if first.get('text') else 'NO TEXT'
+                    add_search_debug(f"First result text preview: {text_preview}...")
 
-                return results
-            except concurrent.futures.TimeoutError:
-                logger.error(f"GraphRAG search timed out after {graphrag_timeout} seconds")
-                if use_reranker:
-                    st.error("⏱️ GraphRAG search timed out. The reranker model may still be loading - try again.")
-                else:
-                    st.error("⏱️ GraphRAG search timed out. Falling back to traditional search.")
-                return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
+            return results
+        except concurrent.futures.TimeoutError:
+            logger.error(f"GraphRAG search timed out after {graphrag_timeout} seconds")
+            if use_reranker:
+                st.error("⏱️ GraphRAG search timed out. The reranker model may still be loading - try again.")
+            else:
+                st.error("⏱️ GraphRAG search timed out. Falling back to traditional search.")
+            return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
     except Exception as e:
         logger.error(f"GraphRAG search wrapper failed: {e}")
         return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
@@ -1052,8 +1294,6 @@ def graphrag_enhanced_search(db_path, query, filters, top_k=20, strict_mode=Fals
 
 def hybrid_search(db_path, query, filters, top_k=20, strict_mode=False):
     """Hybrid search combining vector and GraphRAG results"""
-    import concurrent.futures
-
     def hybrid_search_with_timeout():
         try:
             from cortex_engine.graphrag_integration import get_graphrag_integration
@@ -1149,22 +1389,19 @@ def hybrid_search(db_path, query, filters, top_k=20, strict_mode=False):
             return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
     
     # Run hybrid search with timeout protection
-    # Longer timeout when reranker enabled (first model load takes 3-4 minutes)
+    # Longer timeout when reranker or first-time embedding load is involved.
     use_reranker = st.session_state.get('reranker_enabled', QWEN3_VL_RERANKER_ENABLED)
-    hybrid_timeout = 300 if use_reranker else 60
+    hybrid_timeout = 300 if use_reranker else 90
     try:
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(hybrid_search_with_timeout)
-            try:
-                results = future.result(timeout=hybrid_timeout)
-                return results
-            except concurrent.futures.TimeoutError:
-                logger.error(f"Hybrid search timed out after {hybrid_timeout} seconds")
-                if use_reranker:
-                    st.error("⏱️ Hybrid search timed out. The reranker model may still be loading - try again.")
-                else:
-                    st.error("⏱️ Hybrid search timed out. Falling back to traditional search.")
-                return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
+        try:
+            return _run_with_timeout(hybrid_search_with_timeout, hybrid_timeout)
+        except concurrent.futures.TimeoutError:
+            logger.error(f"Hybrid search timed out after {hybrid_timeout} seconds")
+            if use_reranker:
+                st.error("⏱️ Hybrid search timed out. The reranker model may still be loading - try again.")
+            else:
+                st.error("⏱️ Hybrid search timed out. Falling back to traditional search.")
+            return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
     except Exception as e:
         logger.error(f"Hybrid search wrapper failed: {e}")
         return direct_chromadb_search(db_path, query, filters, top_k, strict_mode=strict_mode)
@@ -1352,7 +1589,6 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
         List of search result dicts
     """
     import time
-    import concurrent.futures
 
     # Determine reranking behavior: UI toggle > explicit param > config default
     if use_reranker is None:
@@ -1361,6 +1597,7 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
 
     # Get reranker settings from session state (UI slider) or config
     reranker_top_k = st.session_state.get('reranker_top_k', QWEN3_VL_RERANKER_TOP_K)
+    reranker_size = st.session_state.get('reranker_size', str(QWEN3_VL_RERANKER_SIZE).upper())
 
     # Fetch many more candidates to ensure diversity after per-document limiting
     # With MAX_CHUNKS_PER_DOC=5 and wanting ~20 unique docs, need 100+ candidates
@@ -1376,12 +1613,13 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
             chroma_db_path = os.path.join(wsl_db_path, "knowledge_hub_db")
             
             if not os.path.isdir(chroma_db_path):
-                st.error(f"Database not found: {chroma_db_path}")
+                logger.error(f"Database not found: {chroma_db_path}")
+                add_search_debug(f"Database not found: {chroma_db_path}")
                 return []
             
-            # Direct ChromaDB client (cached)
+            # Direct ChromaDB client (thread-safe cache for worker path)
             logger.info("Connecting to ChromaDB client...")
-            client = _get_chroma_client(chroma_db_path)
+            client = _get_chroma_client_threadsafe(chroma_db_path)
             collection = client.get_collection(COLLECTION_NAME)
             logger.info(f"Connected to collection '{COLLECTION_NAME}'")
 
@@ -1406,9 +1644,9 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
                 if not validation_result["compatible"]:
                     for error in validation_result["errors"]:
                         logger.error(error)
-                        st.warning(error)
-                    st.warning("⚠️ **Embedding model mismatch detected!** Search results may be unreliable.")
-                    st.info("💡 **Solution:** Set `CORTEX_EMBED_MODEL` environment variable or delete database and re-ingest.")
+                        add_search_debug(error)
+                    add_search_debug("Embedding model mismatch detected; search results may be unreliable.")
+                    add_search_debug("Set CORTEX_EMBED_MODEL or re-ingest database to resolve mismatch.")
                 elif validation_result["warnings"]:
                     for warning in validation_result["warnings"]:
                         logger.warning(warning)
@@ -1420,7 +1658,15 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
             logger.info("Testing collection access...")
             try:
                 peek = collection.peek(limit=1)
-                logger.info(f"Collection peek successful, has embeddings: {bool(peek.get('embeddings'))}")
+                peek_embeddings = peek.get('embeddings')
+                if peek_embeddings is None:
+                    has_embeddings = False
+                else:
+                    try:
+                        has_embeddings = len(peek_embeddings) > 0
+                    except TypeError:
+                        has_embeddings = bool(peek_embeddings)
+                logger.info(f"Collection peek successful, has embeddings: {has_embeddings}")
             except Exception as peek_e:
                 logger.warning(f"Collection peek failed: {peek_e}")
             
@@ -1432,10 +1678,15 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
             search_strategy = "vector"
             
             try:
-                q_emb = embed_query(query)
-                results = collection.query(
-                    query_embeddings=[q_emb],
-                    n_results=candidate_count
+                # Bound embedding cold-start latency so fallback can activate quickly.
+                embed_timeout = 15 if use_reranker else 20
+                q_emb = _run_with_timeout(lambda: embed_query(query), embed_timeout)
+                results = _run_with_timeout(
+                    lambda: collection.query(
+                        query_embeddings=[q_emb],
+                        n_results=candidate_count
+                    ),
+                    15
                 )
                 logger.info("ChromaDB vector query completed successfully (embeddings)")
                 
@@ -1445,6 +1696,10 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
                 else:
                     results = None  # Try other strategies
                     
+            except concurrent.futures.TimeoutError:
+                logger.warning("Vector embedding/query exceeded time budget - switching to text fallback")
+                add_search_debug("Vector step timed out; using text fallback while embeddings finish loading")
+                results = None
             except Exception as vector_e:
                 logger.warning(f"Vector search failed (embedding mismatch?): {vector_e}")
                 # Skip vector search if embedding dimensions don't match
@@ -1549,8 +1804,9 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
             wsl_db_path = convert_windows_to_wsl_path(db_path)
             similarity_threshold = get_model_aware_threshold(wsl_db_path)
 
-            # Store threshold in session state for UI display
-            st.session_state['_search_similarity_threshold'] = similarity_threshold
+            # Store threshold in session state only on main thread.
+            if threading.current_thread() is threading.main_thread():
+                st.session_state['_search_similarity_threshold'] = similarity_threshold
 
             if results and results.get('documents'):
                 documents = results['documents'][0] if results['documents'] else []
@@ -1686,6 +1942,11 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
 
             # Apply neural reranking for precision boost
             if use_reranker and formatted_results:
+                if search_strategy != "vector":
+                    logger.info(
+                        f"Skipping reranker for '{search_strategy}' results to keep search responsive"
+                    )
+                    return formatted_results[:final_top_k]
                 try:
                     from cortex_engine.graph_query import rerank_search_results
 
@@ -1694,14 +1955,15 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
                         query=query,
                         results=formatted_results,
                         top_k=final_top_k,
-                        text_key="text"
+                        text_key="text",
+                        reranker_size=reranker_size,
                     )
 
                     # Update ranks after reranking
                     for i, result in enumerate(reranked_results):
                         result['rank'] = i + 1
 
-                    logger.info(f"Neural reranking complete: {len(reranked_results)} results")
+                    logger.info(f"Reranker stage returned {len(reranked_results)} results")
                     return reranked_results
 
                 except ImportError as e:
@@ -1716,21 +1978,18 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
             return []
     
     try:
-        # Run search with timeout to prevent hanging
-        # Longer timeout when reranker enabled (first model load takes 3-4 minutes)
-        search_timeout = 300 if use_reranker else 30
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(search_with_timeout)
-            try:
-                results = future.result(timeout=search_timeout)
-                return results
-            except concurrent.futures.TimeoutError:
-                logger.error(f"Search timed out after {search_timeout} seconds")
-                if use_reranker:
-                    st.error("Search timed out. The reranker model may still be loading - try again in a moment.")
-                else:
-                    st.error("Search timed out. The database may be large or there may be connectivity issues.")
-                return []
+        # Run search with timeout to prevent hanging.
+        # Non-reranker searches still need a longer first-run budget for embedding model cold-start.
+        search_timeout = 300 if use_reranker else 90
+        try:
+            return _run_with_timeout(search_with_timeout, search_timeout)
+        except concurrent.futures.TimeoutError:
+            logger.error(f"Search timed out after {search_timeout} seconds")
+            if use_reranker:
+                st.error("Search timed out. The reranker model may still be loading - try again in a moment.")
+            else:
+                st.error("Search timed out. First search may still be loading embeddings; try once more in a moment.")
+            return []
                 
     except Exception as e:
         logger.error(f"Search executor failed: {e}")
@@ -2222,6 +2481,11 @@ def main():
     if not db_path:
         st.error("❌ Database path not configured. Please set it in the sidebar.")
         return
+
+    runtime_db_path, detected_dim = _runtime_db_diagnostics(db_path)
+    dim_text = f"{detected_dim}D" if detected_dim else "unknown/new database"
+    path_text = runtime_db_path or "(not resolved)"
+    st.caption(f"🧪 Runtime DB path: `{path_text}` • detected embedding dimension: `{dim_text}`")
     
     db_info = validate_database(db_path)
     

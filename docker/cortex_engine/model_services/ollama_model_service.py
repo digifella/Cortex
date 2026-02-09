@@ -51,36 +51,37 @@ class OllamaModelService(ModelServiceInterface):
             return []
         
         try:
-            session = await self._get_session()
-            async with session.get(f"{self.base_url}/api/tags") as response:
-                if response.status != 200:
-                    logger.error(f"Failed to list Ollama models: {response.status}")
-                    return []
-                
-                data = await response.json()
-                models = []
-                
-                for model_data in data.get("models", []):
-                    name = model_data.get("name", "")
-                    parts = name.split(":")
-                    model_name = parts[0]
-                    tag = parts[1] if len(parts) > 1 else "latest"
-                    
-                    # Convert size from bytes to GB
-                    size_bytes = model_data.get("size", 0)
-                    size_gb = size_bytes / (1024**3)
-                    
-                    models.append(ModelInfo(
-                        name=model_name,
-                        tag=tag,
-                        size_gb=size_gb,
-                        status=ModelStatus.AVAILABLE,
-                        backend=self.backend_name,
-                        description=f"Ollama model: {name}",
-                        performance_tier="standard"
-                    ))
-                
-                return models
+            # Use a short-lived session here to avoid leaking sessions during app reruns.
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.base_url}/api/tags") as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to list Ollama models: {response.status}")
+                        return []
+
+                    data = await response.json()
+                    models = []
+
+                    for model_data in data.get("models", []):
+                        name = model_data.get("name", "")
+                        parts = name.split(":")
+                        model_name = parts[0]
+                        tag = parts[1] if len(parts) > 1 else "latest"
+
+                        # Convert size from bytes to GB
+                        size_bytes = model_data.get("size", 0)
+                        size_gb = size_bytes / (1024**3)
+
+                        models.append(ModelInfo(
+                            name=model_name,
+                            tag=tag,
+                            size_gb=size_gb,
+                            status=ModelStatus.AVAILABLE,
+                            backend=self.backend_name,
+                            description=f"Ollama model: {name}",
+                            performance_tier="standard"
+                        ))
+
+                    return models
                 
         except RuntimeError as e:
             if "Event loop is closed" in str(e):

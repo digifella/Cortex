@@ -5,8 +5,10 @@
 
 import streamlit as st
 import sys
+import os
 from pathlib import Path
 import time
+import threading
 
 # Add the project root to the Python path for imports
 project_root = Path(__file__).parent
@@ -17,6 +19,71 @@ from cortex_engine.system_status import system_status
 from cortex_engine.version_config import get_version_display, VERSION_METADATA
 from cortex_engine.utils.model_checker import model_checker
 from cortex_engine.help_system import help_system
+from cortex_engine.utils import get_logger
+from cortex_engine.config import QWEN3_VL_RERANKER_ENABLED, QWEN3_VL_RERANKER_SIZE
+
+logger = get_logger(__name__)
+
+
+def _warmup_embedding_model():
+    """Background warmup for embedding model at app startup."""
+    try:
+        from cortex_engine.embedding_service import embed_query
+        logger.info("🔄 Global warmup: Loading embedding model from Cortex_Suite...")
+        _ = embed_query("global warmup")
+        logger.info("✅ Global warmup: Embedding model ready")
+    except Exception as e:
+        logger.warning(f"Global embedding warmup failed: {e}")
+
+
+def _warmup_reranker_model():
+    """Background warmup for reranker model at app startup."""
+    try:
+        from cortex_engine.qwen3_vl_reranker_service import (
+            _load_reranker,
+            Qwen3VLRerankerConfig,
+            Qwen3VLRerankerSize,
+            get_reranker_health,
+        )
+
+        health = get_reranker_health()
+        if not health.get("can_attempt_load", True):
+            logger.warning(
+                f"Skipping global reranker warmup during cooldown ({health.get('cooldown_remaining_seconds', 0)}s)"
+            )
+            return
+
+        size = str(QWEN3_VL_RERANKER_SIZE or "AUTO").upper()
+        if size == "2B":
+            config = Qwen3VLRerankerConfig.for_model_size(Qwen3VLRerankerSize.SMALL)
+        elif size == "8B":
+            config = Qwen3VLRerankerConfig.for_model_size(Qwen3VLRerankerSize.LARGE)
+        else:
+            config = Qwen3VLRerankerConfig.auto_select()
+
+        logger.info(f"🔄 Global warmup: Loading reranker model from Cortex_Suite ({size})...")
+        _load_reranker(config)
+        logger.info("✅ Global warmup: Reranker model ready")
+    except Exception as e:
+        logger.warning(f"Global reranker warmup failed: {e}")
+
+
+def start_global_model_warmup():
+    """Kick off one-time background model warmup when app starts."""
+    if os.environ.get("CORTEX_GLOBAL_WARMUP_STARTED") == "1":
+        return
+
+    os.environ["CORTEX_GLOBAL_WARMUP_STARTED"] = "1"
+
+    if not st.session_state.get("global_embedding_warmup_started"):
+        st.session_state.global_embedding_warmup_started = True
+        threading.Thread(target=_warmup_embedding_model, daemon=True).start()
+        logger.info("🚀 Started global embedding warmup thread")
+
+    if QWEN3_VL_RERANKER_ENABLED and not st.session_state.get("global_reranker_warmup_started"):
+        st.session_state.global_reranker_warmup_started = True
+        threading.Thread(target=_warmup_reranker_model, daemon=True).start()
+        logger.info("🚀 Started global reranker warmup thread")
 
 def load_recent_changelog_entries(max_versions=3):
     """Load recent changelog entries for What's New section"""
@@ -95,6 +162,9 @@ try:
 except Exception:
     setup_complete = False
     setup_info = {"progress_percent": 0, "status_message": "⚠️ System status check failed"}
+
+if setup_complete:
+    start_global_model_warmup()
 
 if not setup_complete:
     # Show setup progress page

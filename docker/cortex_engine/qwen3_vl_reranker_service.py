@@ -38,6 +38,8 @@ Usage:
 from __future__ import annotations
 
 import threading
+import os
+import time
 from pathlib import Path
 from typing import List, Dict, Optional, Union, Any, Tuple
 from dataclasses import dataclass, field
@@ -98,6 +100,14 @@ class Qwen3VLRerankerConfig:
     @classmethod
     def auto_select(cls, prefer_quality: bool = True) -> "Qwen3VLRerankerConfig":
         """Auto-select model based on available VRAM."""
+        forced_size = os.getenv("QWEN3_VL_RERANKER_SIZE", "auto").strip().lower()
+        if forced_size == "2b":
+            logger.info("📦 Forced reranker size via config/env: 2B")
+            return cls.for_model_size(Qwen3VLRerankerSize.SMALL)
+        if forced_size == "8b":
+            logger.info("🚀 Forced reranker size via config/env: 8B")
+            return cls.for_model_size(Qwen3VLRerankerSize.LARGE)
+
         gpu_info = get_gpu_memory_info()
 
         if gpu_info.is_cuda:
@@ -161,6 +171,28 @@ _reranker_model: Optional[Any] = None
 _reranker_processor: Optional[Any] = None
 _score_linear: Optional[Any] = None  # Linear layer for yes/no scoring
 _current_config: Optional[Qwen3VLRerankerConfig] = None
+_last_load_error: Optional[str] = None
+_last_failed_at: float = 0.0
+_retry_after_ts: float = 0.0
+_hard_disabled_reason: Optional[str] = None
+
+# Cooldown windows to prevent endless reload loops when environment is incompatible.
+_IMPORT_ERROR_COOLDOWN_SECONDS = 1800  # 30 min
+_GENERIC_ERROR_COOLDOWN_SECONDS = 300  # 5 min
+
+
+def get_reranker_health() -> Dict[str, Any]:
+    """Return lightweight reranker health/cooldown state for UI and warmup guards."""
+    now = time.time()
+    cooldown_remaining = max(0.0, _retry_after_ts - now)
+    return {
+        "loaded": _reranker_model is not None,
+        "last_error": _last_load_error,
+        "cooldown_remaining_seconds": int(cooldown_remaining),
+        "can_attempt_load": (cooldown_remaining <= 0.0) and (_hard_disabled_reason is None),
+        "hard_disabled": _hard_disabled_reason is not None,
+        "hard_disabled_reason": _hard_disabled_reason,
+    }
 
 
 def _get_device() -> str:
@@ -215,6 +247,7 @@ def _load_reranker(config: Optional[Qwen3VLRerankerConfig] = None) -> tuple:
         Tuple of (model, processor, config)
     """
     global _reranker_model, _reranker_processor, _score_linear, _current_config
+    global _last_load_error, _last_failed_at, _retry_after_ts, _hard_disabled_reason
 
     if config is None:
         config = Qwen3VLRerankerConfig.auto_select()
@@ -224,13 +257,26 @@ def _load_reranker(config: Optional[Qwen3VLRerankerConfig] = None) -> tuple:
         return _reranker_model, _reranker_processor, _current_config
 
     with _model_lock:
+        if _hard_disabled_reason:
+            raise RuntimeError(f"Reranker disabled for this session: {_hard_disabled_reason}")
+
+        health = get_reranker_health()
+        if not health["can_attempt_load"]:
+            raise RuntimeError(
+                f"Reranker load suppressed during cooldown ({health['cooldown_remaining_seconds']}s remaining). "
+                f"Last error: {health['last_error'] or 'unknown'}"
+            )
+
         if _reranker_model is not None and _current_config == config:
             return _reranker_model, _reranker_processor, _current_config
 
         logger.info(f"Loading Qwen3-VL reranker: {config.model_name}")
 
         try:
-            from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
+            from transformers.models.auto.processing_auto import AutoProcessor
+            from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+                Qwen3VLForConditionalGeneration,
+            )
 
             device = config.device or _get_device()
             dtype = torch.bfloat16 if config.torch_dtype == "bfloat16" else torch.float16
@@ -244,7 +290,9 @@ def _load_reranker(config: Optional[Qwen3VLRerankerConfig] = None) -> tuple:
 
             model_kwargs = {
                 "trust_remote_code": config.trust_remote_code,
-                "torch_dtype": dtype,
+                "dtype": dtype,
+                # Avoid meta-tensor initialization path that breaks `.to(device)` on some torch/transformers combos.
+                "low_cpu_mem_usage": False,
             }
 
             # Only enable Flash Attention 2 if the package is actually installed
@@ -257,10 +305,25 @@ def _load_reranker(config: Optional[Qwen3VLRerankerConfig] = None) -> tuple:
                     logger.info("📝 Flash Attention 2 not installed - using default attention")
 
             # Load full model (need lm_head for scoring)
-            full_model = Qwen3VLForConditionalGeneration.from_pretrained(
-                config.model_name,
-                **model_kwargs
-            ).to(device)
+            try:
+                full_model = Qwen3VLForConditionalGeneration.from_pretrained(
+                    config.model_name,
+                    **model_kwargs
+                ).to(device)
+            except Exception as model_load_error:
+                # Some torch/transformers builds load weights on meta tensors and fail on `.to(device)`.
+                # Retry with explicit device_map so weights are materialized directly on target device.
+                if "meta tensor" in str(model_load_error).lower() and device in ("cuda", "cpu"):
+                    logger.warning(f"Meta-tensor load path detected, retrying with device_map on {device}")
+                    retry_kwargs = dict(model_kwargs)
+                    retry_kwargs["low_cpu_mem_usage"] = True
+                    retry_kwargs["device_map"] = {"": device}
+                    full_model = Qwen3VLForConditionalGeneration.from_pretrained(
+                        config.model_name,
+                        **retry_kwargs
+                    )
+                else:
+                    raise
 
             # Create scoring linear layer from lm_head weights
             _score_linear = _create_score_linear(full_model, _reranker_processor.tokenizer)
@@ -272,15 +335,35 @@ def _load_reranker(config: Optional[Qwen3VLRerankerConfig] = None) -> tuple:
             _reranker_model.eval()
 
             _current_config = config
+            _last_load_error = None
+            _last_failed_at = 0.0
+            _retry_after_ts = 0.0
+            _hard_disabled_reason = None
 
             logger.info(f"✅ Qwen3-VL reranker loaded on {device}")
 
             return _reranker_model, _reranker_processor, _current_config
 
         except ImportError as e:
+            error_text = str(e)
+            _last_load_error = error_text
+            _last_failed_at = time.time()
+            _retry_after_ts = _last_failed_at + _IMPORT_ERROR_COOLDOWN_SECONDS
+            if (
+                "Qwen3VLForConditionalGeneration" in error_text
+                or "AutoProcessor" in error_text
+                or "cannot import name" in error_text
+            ):
+                _hard_disabled_reason = (
+                    "Required transformers Qwen3-VL imports failed. "
+                    "Reranker disabled for this session."
+                )
             logger.error(f"❌ Missing dependencies: {e}")
             raise
         except Exception as e:
+            _last_load_error = str(e)
+            _last_failed_at = time.time()
+            _retry_after_ts = _last_failed_at + _GENERIC_ERROR_COOLDOWN_SECONDS
             logger.error(f"❌ Failed to load reranker: {e}")
             raise
 

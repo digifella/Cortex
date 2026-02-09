@@ -5,6 +5,22 @@ All notable changes to the Cortex Suite project will be documented in this file.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### 🔎 Knowledge Search Stabilization (WSL/CUDA cold-start + reranker reliability)
+
+### 🚀 Improvements
+- Added global model warmup kickoff from `Cortex_Suite.py` so embedding/reranker warmup can start at app launch instead of waiting for Knowledge Search page entry.
+- Added `Reranker Model` selector in Knowledge Search sidebar (`2B`, `8B`, `Auto`) with explicit speed/quality guidance.
+- Improved search responsiveness by skipping reranker on `text-fallback` strategy and tightening vector warmup timeout behavior.
+- Added warmup status panel in Knowledge Search with manual `Refresh Warmup Status` control.
+- Reduced preload churn by preventing duplicate page-level preload threads when global warmup is already active.
+
+### 🔧 Bug Fixes
+- Removed Search-page import dependency on `async_query`/LlamaIndex by introducing lightweight threshold helper (`cortex_engine/utils/search_threshold.py`), avoiding NumPy/SciPy import-chain crashes on page load.
+- Fixed worker-thread Streamlit context noise and collection peek ambiguity in Knowledge Search threaded paths.
+- Added reranker health/cooldown circuit breaker to prevent endless failed reload loops and surfaced failure state in UI.
+- Hardened reranker imports against fragile top-level `transformers` exports by using stable submodule import paths.
+- Fixed Ollama model-service session handling to avoid unclosed aiohttp session warnings.
+
 ### 🧩 Refactor Wave: Ingest + Maintenance Componentization
 
 Large UI refactor pass to reduce duplication between host and Docker pages, isolate critical workflows, and make future stabilization safer.

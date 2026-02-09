@@ -11,11 +11,17 @@ import networkx as nx
 import threading
 import hashlib
 import json
+import concurrent.futures
 from cortex_engine.graph_manager import EnhancedGraphManager
 from cortex_engine.utils import get_logger
 from cortex_engine.utils.performance_monitor import record_operation
 from cortex_engine.utils.persistent_cache import get_persistent_cache
-from cortex_engine.config import QWEN3_VL_RERANKER_ENABLED, QWEN3_VL_RERANKER_TOP_K, QWEN3_VL_RERANKER_CANDIDATES
+from cortex_engine.config import (
+    QWEN3_VL_RERANKER_ENABLED,
+    QWEN3_VL_RERANKER_TOP_K,
+    QWEN3_VL_RERANKER_CANDIDATES,
+    QWEN3_VL_RERANKER_SIZE,
+)
 
 logger = get_logger(__name__)
 
@@ -41,7 +47,8 @@ def rerank_search_results(
     query: str,
     results: List[Dict],
     top_k: Optional[int] = None,
-    text_key: str = "content"
+    text_key: str = "content",
+    reranker_size: Optional[str] = None,
 ) -> List[Dict]:
     """
     Apply Qwen3-VL neural reranking to search results.
@@ -70,18 +77,73 @@ def rerank_search_results(
         top_k = QWEN3_VL_RERANKER_TOP_K
 
     try:
-        from cortex_engine.qwen3_vl_reranker_service import rerank_hybrid_results
-
-        logger.info(f"🔄 Applying Qwen3-VL reranker to {len(results)} results (top_k={top_k})")
-        reranked = rerank_hybrid_results(
-            query=query,
-            results=results,
-            text_key=text_key,
-            top_k=top_k
+        from cortex_engine.qwen3_vl_reranker_service import (
+            rerank_hybrid_results,
+            Qwen3VLRerankerConfig,
+            Qwen3VLRerankerSize,
+            get_reranker_health,
         )
+
+        health = get_reranker_health()
+        if not health.get("can_attempt_load", True):
+            reason = health.get("hard_disabled_reason") or health.get("last_error") or "reranker unavailable"
+            logger.warning(f"Skipping reranker due to health state: {reason}")
+            return results[:top_k]
+
+        requested_size = str(reranker_size or QWEN3_VL_RERANKER_SIZE).strip().lower()
+        reranker_config = None
+        if requested_size == "2b":
+            use_small_profile = True
+            reranker_config = Qwen3VLRerankerConfig.for_model_size(Qwen3VLRerankerSize.SMALL)
+        elif requested_size == "8b":
+            use_small_profile = False
+            reranker_config = Qwen3VLRerankerConfig.for_model_size(Qwen3VLRerankerSize.LARGE)
+        else:
+            use_small_profile = False
+
+        # Bound reranker workload to avoid long UI stalls on large candidate sets.
+        # 2B profile favors responsiveness on cold start.
+        if use_small_profile:
+            max_candidates = min(QWEN3_VL_RERANKER_CANDIDATES, max(top_k + 10, 30))
+            rerank_timeout = 45
+        else:
+            max_candidates = max(QWEN3_VL_RERANKER_CANDIDATES, top_k * 3)
+            rerank_timeout = 90
+
+        max_candidates = min(max_candidates, len(results))
+        rerank_input = results[:max_candidates]
+        if len(results) > max_candidates:
+            logger.info(f"Reranker input capped: {len(results)} -> {max_candidates} candidates")
+
+        logger.info(
+            f"🔄 Applying Qwen3-VL reranker to {len(rerank_input)} results "
+            f"(top_k={top_k}, profile={'2B' if use_small_profile else 'default'})"
+        )
+
+        # Time-box reranker to preserve responsiveness without blocking UI on executor shutdown.
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(
+            rerank_hybrid_results,
+            query=query,
+            results=rerank_input,
+            text_key=text_key,
+            top_k=top_k,
+            config=reranker_config,
+        )
+        try:
+            reranked = future.result(timeout=rerank_timeout)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
         logger.info(f"✅ Reranking complete: {len(reranked)} results returned")
         return reranked
 
+    except concurrent.futures.TimeoutError:
+        logger.warning(f"Reranking timed out after {rerank_timeout}s; returning original results")
+        return results[:top_k]
     except ImportError as e:
         logger.warning(f"Qwen3-VL reranker not available: {e}")
         return results
@@ -119,7 +181,7 @@ def _get_cache_key(query: str, db_path: str, collection_name: Optional[str], top
         top_k: Number of results
 
     Returns:
-        MD5 hash of query parameters
+        SHA-256 hash of query parameters
     """
     cache_data = {
         'query': query.lower().strip(),  # Normalize query
@@ -128,7 +190,7 @@ def _get_cache_key(query: str, db_path: str, collection_name: Optional[str], top
         'top_k': top_k
     }
     cache_str = json.dumps(cache_data, sort_keys=True)
-    return hashlib.md5(cache_str.encode()).hexdigest()
+    return hashlib.sha256(cache_str.encode()).hexdigest()
 
 
 def clear_query_cache():

@@ -53,6 +53,7 @@ from .utils.gpu_monitor import get_gpu_memory_info, clear_gpu_cache
 from .utils.resource_throttler import (
     ResourceThrottler, ThrottleConfig, ThrottleLevel, log_resource_status
 )
+from .utils import convert_windows_to_wsl_path
 
 logger = get_logger(__name__)
 
@@ -126,22 +127,16 @@ class Qwen3VLConfig:
         try:
             from .utils.embedding_validator import get_database_embedding_dimension
             from .utils.default_paths import get_default_ai_database_path
+            from .config_manager import ConfigManager
 
-            # Also check cortex_config.json for user-configured path
-            db_path = None
+            db_path = get_default_ai_database_path()
             try:
-                import json
-                from pathlib import Path
-                config_file = Path(__file__).parent.parent / "cortex_config.json"
-                if config_file.exists():
-                    with open(config_file) as f:
-                        config = json.load(f)
-                        db_path = config.get("ai_database_path")
-            except Exception:
-                pass
-
-            if not db_path:
-                db_path = get_default_ai_database_path()
+                config = ConfigManager().get_config()
+                configured_db_path = (config.get("ai_database_path") or "").strip()
+                if configured_db_path:
+                    db_path = configured_db_path if os.path.exists("/.dockerenv") else convert_windows_to_wsl_path(configured_db_path)
+            except Exception as config_error:
+                logger.debug(f"Could not read configured database path, using fallback: {config_error}")
 
             db_dim = get_database_embedding_dimension(db_path)
             if db_dim is not None:
@@ -285,7 +280,9 @@ def _load_model(config: Optional[Qwen3VLConfig] = None) -> tuple:
                 # Load model with optimizations
                 model_kwargs = {
                     "trust_remote_code": config.trust_remote_code,
-                    "torch_dtype": dtype,
+                    "dtype": dtype,
+                    # Avoid meta-tensor initialization path that breaks `.to(device)` on some torch/transformers combos.
+                    "low_cpu_mem_usage": False,
                 }
 
                 # Add Flash Attention 2 if available and requested
@@ -298,10 +295,25 @@ def _load_model(config: Optional[Qwen3VLConfig] = None) -> tuple:
                         logger.info("📝 Flash Attention 2 not installed - using default attention")
 
                 # Use custom Qwen3VLForEmbedding class that properly loads the checkpoint
-                _embedding_model = Qwen3VLForEmbedding.from_pretrained(
-                    config.model_name,
-                    **model_kwargs
-                ).to(device).eval()
+                try:
+                    _embedding_model = Qwen3VLForEmbedding.from_pretrained(
+                        config.model_name,
+                        **model_kwargs
+                    ).to(device).eval()
+                except Exception as model_load_error:
+                    # Some torch/transformers builds load weights on meta tensors and fail on `.to(device)`.
+                    # Retry with explicit device_map so weights are materialized directly on target device.
+                    if "meta tensor" in str(model_load_error).lower() and device in ("cuda", "cpu"):
+                        logger.warning(f"Meta-tensor load path detected, retrying with device_map on {device}")
+                        retry_kwargs = dict(model_kwargs)
+                        retry_kwargs["low_cpu_mem_usage"] = True
+                        retry_kwargs["device_map"] = {"": device}
+                        _embedding_model = Qwen3VLForEmbedding.from_pretrained(
+                            config.model_name,
+                            **retry_kwargs
+                        ).eval()
+                    else:
+                        raise
 
             # Try loading in offline mode first (respects HF_HUB_OFFLINE env var)
             try:
