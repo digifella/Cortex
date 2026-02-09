@@ -353,15 +353,18 @@ def _load_model(config: Optional[Qwen3VLConfig] = None) -> tuple:
                     raise
 
             _current_config = config
+            os.environ["CORTEX_EMBED_READY"] = "1"
             logger.info(f"✅ Qwen3-VL ready on {device} ({config.embedding_dim}D embeddings)")
 
             return _embedding_model, _processor, _current_config
 
         except ImportError as e:
+            os.environ["CORTEX_EMBED_READY"] = "0"
             logger.error(f"❌ Missing dependencies for Qwen3-VL: {e}")
             logger.error("Install with: pip install transformers>=4.57.0 qwen-vl-utils>=0.0.14")
             raise
         except Exception as e:
+            os.environ["CORTEX_EMBED_READY"] = "0"
             logger.error(f"❌ Failed to load Qwen3-VL model: {e}")
             raise
 
@@ -378,6 +381,7 @@ def unload_model():
             del _processor
             _processor = None
         _current_config = None
+        os.environ["CORTEX_EMBED_READY"] = "0"
 
         clear_gpu_cache()
         logger.info("🧹 Qwen3-VL model unloaded, GPU cache cleared")

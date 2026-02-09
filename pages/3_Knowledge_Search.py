@@ -293,6 +293,8 @@ def get_candidate_db_paths(db_path: str):
 
 def _is_embedding_model_ready() -> bool:
     """Check whether the embedding model is loaded in-process."""
+    if os.environ.get("CORTEX_EMBED_READY") == "1":
+        return True
     try:
         import cortex_engine.qwen3_vl_embedding_service as embedding_svc
         return embedding_svc._embedding_model is not None
@@ -302,8 +304,14 @@ def _is_embedding_model_ready() -> bool:
 
 def _is_reranker_model_ready() -> bool:
     """Check whether the reranker model is loaded in-process."""
+    if os.environ.get("CORTEX_RERANK_READY") == "1":
+        return True
     try:
         import cortex_engine.qwen3_vl_reranker_service as reranker_svc
+        if hasattr(reranker_svc, "get_reranker_health"):
+            health = reranker_svc.get_reranker_health()
+            if isinstance(health, dict):
+                return bool(health.get("loaded", False))
         return reranker_svc._reranker_model is not None
     except Exception:
         return False

@@ -185,8 +185,9 @@ def get_reranker_health() -> Dict[str, Any]:
     """Return lightweight reranker health/cooldown state for UI and warmup guards."""
     now = time.time()
     cooldown_remaining = max(0.0, _retry_after_ts - now)
+    env_ready = os.environ.get("CORTEX_RERANK_READY") == "1"
     return {
-        "loaded": _reranker_model is not None,
+        "loaded": (_reranker_model is not None) or env_ready,
         "last_error": _last_load_error,
         "cooldown_remaining_seconds": int(cooldown_remaining),
         "can_attempt_load": (cooldown_remaining <= 0.0) and (_hard_disabled_reason is None),
@@ -339,6 +340,7 @@ def _load_reranker(config: Optional[Qwen3VLRerankerConfig] = None) -> tuple:
             _last_failed_at = 0.0
             _retry_after_ts = 0.0
             _hard_disabled_reason = None
+            os.environ["CORTEX_RERANK_READY"] = "1"
 
             logger.info(f"✅ Qwen3-VL reranker loaded on {device}")
 
@@ -358,12 +360,14 @@ def _load_reranker(config: Optional[Qwen3VLRerankerConfig] = None) -> tuple:
                     "Required transformers Qwen3-VL imports failed. "
                     "Reranker disabled for this session."
                 )
+            os.environ["CORTEX_RERANK_READY"] = "0"
             logger.error(f"❌ Missing dependencies: {e}")
             raise
         except Exception as e:
             _last_load_error = str(e)
             _last_failed_at = time.time()
             _retry_after_ts = _last_failed_at + _GENERIC_ERROR_COOLDOWN_SECONDS
+            os.environ["CORTEX_RERANK_READY"] = "0"
             logger.error(f"❌ Failed to load reranker: {e}")
             raise
 
@@ -383,6 +387,7 @@ def unload_reranker():
             del _score_linear
             _score_linear = None
         _current_config = None
+        os.environ["CORTEX_RERANK_READY"] = "0"
 
         clear_gpu_cache()
         logger.info("🧹 Qwen3-VL reranker unloaded")
