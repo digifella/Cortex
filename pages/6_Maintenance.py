@@ -20,9 +20,12 @@ import json
 import subprocess
 import shutil
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import contextlib
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 from pages.components._Maintenance_ResetRecovery import (
     render_reset_recovery_section as shared_render_reset_recovery_section,
 )
@@ -772,6 +775,290 @@ def _run_credibility_retrofit(db_path: str, selected_collections: list, dry_run:
 
     return {"processed": processed, "updated": updated, "skipped": skipped, "errors": errors}
 
+
+def _check_source_url(url: str, timeout: float = 8.0) -> dict:
+    checked_at = datetime.now().strftime("%Y-%m-%d")
+    if not url or url == "Unknown":
+        return {"status": "unknown", "http_code": "", "checked_at": checked_at, "note": "No canonical source URL provided."}
+    parsed = urlparse(str(url).strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return {"status": "unknown", "http_code": "", "checked_at": checked_at, "note": f"URL appears invalid: {url}"}
+
+    headers = {"User-Agent": "CortexSuite/SourceIntegrityScanner", "Accept": "*/*"}
+    for method in ("HEAD", "GET"):
+        req_headers = dict(headers)
+        if method == "GET":
+            req_headers["Range"] = "bytes=0-0"
+        req = Request(url, headers=req_headers, method=method)
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                code = int(getattr(resp, "status", 200) or 200)
+            if code == 404:
+                return {"status": "not_found", "http_code": "404", "checked_at": checked_at, "note": f"Previously available at: {url} but no longer available as at: {checked_at}."}
+            if code == 410:
+                return {"status": "gone", "http_code": "410", "checked_at": checked_at, "note": f"Previously available at: {url} but has been removed (HTTP 410) as at: {checked_at}."}
+            if 200 <= code < 400:
+                return {"status": "available", "http_code": str(code), "checked_at": checked_at, "note": f"Available as at {checked_at}."}
+            if 400 <= code < 500:
+                return {"status": "client_error", "http_code": str(code), "checked_at": checked_at, "note": f"Source URL returned HTTP {code} as at {checked_at}."}
+            return {"status": "server_error", "http_code": str(code), "checked_at": checked_at, "note": f"Source URL returned HTTP {code} as at {checked_at}."}
+        except HTTPError as e:
+            code = int(e.code)
+            if code == 405 and method == "HEAD":
+                continue
+            if code == 404:
+                return {"status": "not_found", "http_code": "404", "checked_at": checked_at, "note": f"Previously available at: {url} but no longer available as at: {checked_at}."}
+            if code == 410:
+                return {"status": "gone", "http_code": "410", "checked_at": checked_at, "note": f"Previously available at: {url} but has been removed (HTTP 410) as at: {checked_at}."}
+            if 400 <= code < 500:
+                return {"status": "client_error", "http_code": str(code), "checked_at": checked_at, "note": f"Source URL returned HTTP {code} as at {checked_at}."}
+            return {"status": "server_error", "http_code": str(code), "checked_at": checked_at, "note": f"Source URL returned HTTP {code} as at {checked_at}."}
+        except URLError as e:
+            return {"status": "unreachable", "http_code": "", "checked_at": checked_at, "note": f"Source URL could not be reached as at {checked_at}: {e.reason}"}
+        except Exception as e:
+            return {"status": "unreachable", "http_code": "", "checked_at": checked_at, "note": f"Source URL check failed as at {checked_at}: {e}"}
+
+    return {"status": "unknown", "http_code": "", "checked_at": checked_at, "note": f"Source URL availability is unknown as at {checked_at}."}
+
+
+def _derive_source_integrity(meta: dict) -> dict:
+    flag = str(meta.get("source_integrity_flag", "") or "").strip().lower()
+    status = str(meta.get("availability_status", "") or "").strip().lower()
+    note = str(meta.get("availability_note", "") or "").strip()
+    url = str(meta.get("available_at", "") or "").strip()
+
+    if not flag:
+        if status in {"not_found", "gone"}:
+            flag = "deprecated_or_removed"
+        elif status in {"client_error", "server_error", "unreachable", "unknown"}:
+            flag = "unverified"
+        elif status == "available":
+            flag = "ok"
+        elif url and url != "Unknown":
+            flag = "unverified"
+        else:
+            flag = "unknown"
+
+    return {"flag": flag, "status": status, "url": url, "note": note}
+
+
+def _run_source_integrity_scan(
+    db_path: str,
+    selected_collections: list,
+    include_unverified: bool,
+    recheck_urls: bool,
+    cleanup_action: str,
+    dry_run: bool,
+) -> dict:
+    client = init_chroma_client(db_path)
+    if not client:
+        raise RuntimeError("Could not connect to ChromaDB client.")
+
+    collection = client.get_collection(COLLECTION_NAME)
+    working_mgr = WorkingCollectionManager()
+    requested_ids = set()
+    for name in selected_collections:
+        requested_ids.update(working_mgr.get_doc_ids_by_name(name))
+
+    allowed_doc_ids = set(requested_ids)
+    allowed_chunk_ids = set()
+    if requested_ids:
+        ids_list = list(requested_ids)
+        for i in range(0, len(ids_list), 200):
+            probe_ids = ids_list[i:i + 200]
+            try:
+                resolved = collection.get(ids=probe_ids, include=["metadatas"])
+                for rid, rmeta in zip(resolved.get("ids", []), resolved.get("metadatas", [])):
+                    allowed_chunk_ids.add(rid)
+                    if isinstance(rmeta, dict) and rmeta.get("doc_id"):
+                        allowed_doc_ids.add(str(rmeta.get("doc_id")))
+            except Exception:
+                continue
+
+    total = collection.count()
+    if total <= 0:
+        return {
+            "processed_chunks": 0,
+            "processed_documents": 0,
+            "suspect_documents": 0,
+            "suspect_unavailable": 0,
+            "suspect_unverified": 0,
+            "metadata_updates": 0,
+            "collection_refs_removed": 0,
+            "suspect_rows": [],
+            "errors": [],
+        }
+
+    checked_url_cache = {}
+    today = datetime.now().strftime("%Y-%m-%d")
+    processed_chunks = 0
+    errors = []
+    metadata_updates = []
+    suspect_doc_rows = {}
+    suspect_doc_remove_ids = {}
+    suspect_unavailable_keys = set()
+    suspect_unverified_keys = set()
+    scanned_doc_keys = set()
+
+    batch_size = 300
+    for offset in range(0, total, batch_size):
+        batch = collection.get(limit=batch_size, offset=offset, include=["metadatas"])
+        ids = batch.get("ids", [])
+        metadatas = batch.get("metadatas", [])
+        for cid, meta in zip(ids, metadatas):
+            if not isinstance(meta, dict):
+                continue
+            if requested_ids:
+                doc_candidates = _extract_candidate_doc_ids(meta)
+                in_scope = (
+                    bool(doc_candidates.intersection(allowed_doc_ids))
+                    or (cid in allowed_chunk_ids)
+                    or (cid in requested_ids)
+                )
+                if not in_scope:
+                    continue
+
+            processed_chunks += 1
+            safe_meta = dict(meta)
+            integrity = _derive_source_integrity(safe_meta)
+            flag = integrity["flag"]
+            availability_status = integrity["status"]
+            availability_note = integrity["note"]
+            available_at = integrity["url"]
+
+            if recheck_urls and available_at and available_at != "Unknown":
+                check = checked_url_cache.get(available_at)
+                if check is None:
+                    check = _check_source_url(available_at)
+                    checked_url_cache[available_at] = check
+                availability_status = check.get("status", availability_status)
+                availability_note = check.get("note", availability_note)
+                if availability_status in {"not_found", "gone"}:
+                    flag = "deprecated_or_removed"
+                elif availability_status in {"client_error", "server_error", "unreachable", "unknown"} and flag == "ok":
+                    flag = "unverified"
+                safe_meta["availability_status"] = availability_status
+                safe_meta["availability_http_code"] = check.get("http_code", "")
+                safe_meta["availability_checked_at"] = check.get("checked_at", today)
+                safe_meta["availability_note"] = availability_note
+
+            is_unavailable = flag == "deprecated_or_removed" or availability_status in {"not_found", "gone"}
+            is_unverified = flag == "unverified" or availability_status in {"client_error", "server_error", "unreachable", "unknown"}
+            is_suspect = is_unavailable or (include_unverified and is_unverified)
+            doc_key = _extract_primary_doc_key(safe_meta, cid)
+            scanned_doc_keys.add(doc_key)
+            if not is_suspect:
+                continue
+
+            source_doc_ids = set(_extract_candidate_doc_ids(safe_meta))
+            remove_ids = set(source_doc_ids)
+            remove_ids.add(cid)
+            suspect_doc_remove_ids.setdefault(doc_key, set()).update(remove_ids)
+
+            reason = "Unavailable source URL (404/410 or removed)" if is_unavailable else "Source URL could not be verified"
+            risk = "high" if is_unavailable else "medium"
+            if is_unavailable:
+                suspect_unavailable_keys.add(doc_key)
+            elif is_unverified:
+                suspect_unverified_keys.add(doc_key)
+
+            row = suspect_doc_rows.get(doc_key)
+            if row is None:
+                suspect_doc_rows[doc_key] = {
+                    "doc_key": doc_key,
+                    "doc_id": sorted(source_doc_ids)[0] if source_doc_ids else "",
+                    "file_name": str(safe_meta.get("file_name", "") or ""),
+                    "source_integrity_flag": "deprecated_or_removed" if is_unavailable else "unverified",
+                    "availability_status": availability_status or "",
+                    "available_at": available_at or "",
+                    "reason": reason,
+                    "chunk_count": 1,
+                }
+            else:
+                row["chunk_count"] += 1
+
+            safe_meta["source_integrity_flag"] = "deprecated_or_removed" if is_unavailable else "unverified"
+            safe_meta["source_integrity_risk"] = risk
+            safe_meta["source_integrity_last_scan_at"] = today
+            safe_meta["source_integrity_cleanup_note"] = reason
+            if availability_note:
+                safe_meta["availability_note"] = availability_note
+
+            metadata_updates.append((cid, safe_meta))
+
+    collection_refs_removed = 0
+    if cleanup_action in {"remove_from_collections", "tag_and_remove"}:
+        remove_ids = set()
+        for ids_set in suspect_doc_remove_ids.values():
+            remove_ids.update(ids_set)
+        remove_ids_list = sorted(remove_ids)
+        if remove_ids_list:
+            for cname in selected_collections:
+                existing = set(working_mgr.get_doc_ids_by_name(cname))
+                would_remove = len(existing.intersection(remove_ids))
+                collection_refs_removed += would_remove
+                if would_remove > 0 and not dry_run:
+                    working_mgr.remove_from_collection(cname, remove_ids_list)
+
+    applied_metadata_updates = 0
+    if cleanup_action in {"tag_metadata", "tag_and_remove"} and metadata_updates:
+        applied_metadata_updates = len(metadata_updates)
+        if not dry_run:
+            ids_to_update = [cid for cid, _ in metadata_updates]
+            metas_to_update = [meta for _, meta in metadata_updates]
+            for i in range(0, len(ids_to_update), 300):
+                try:
+                    collection.update(ids=ids_to_update[i:i + 300], metadatas=metas_to_update[i:i + 300])
+                except Exception as e:
+                    errors.append(f"metadata update batch {i // 300 + 1}: {e}")
+
+    return {
+        "processed_chunks": processed_chunks,
+        "processed_documents": len(scanned_doc_keys),
+        "suspect_documents": len(suspect_doc_rows),
+        "suspect_unavailable": len(suspect_unavailable_keys),
+        "suspect_unverified": len(suspect_unverified_keys),
+        "metadata_updates": applied_metadata_updates,
+        "collection_refs_removed": collection_refs_removed,
+        "suspect_rows": sorted(suspect_doc_rows.values(), key=lambda x: (x["source_integrity_flag"], x["file_name"]))[:500],
+        "errors": errors,
+    }
+
+
+def _source_integrity_report_dir(db_path: str) -> Path:
+    root = resolve_db_root_path(db_path)
+    base = Path(str(root)) if root else Path(convert_windows_to_wsl_path(db_path))
+    report_dir = base / "source_integrity"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    return report_dir
+
+
+def _load_source_integrity_schedule_state(db_path: str) -> dict:
+    state_path = _source_integrity_report_dir(db_path) / "schedule_state.json"
+    if not state_path.exists():
+        return {}
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_source_integrity_schedule_state(db_path: str, state: dict) -> None:
+    state_path = _source_integrity_report_dir(db_path) / "schedule_state.json"
+    with open(state_path, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+
+
+def _save_source_integrity_report(db_path: str, payload: dict) -> str:
+    report_dir = _source_integrity_report_dir(db_path)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_path = report_dir / f"source_integrity_scan_{ts}.json"
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    return str(report_path)
+
 def display_database_maintenance():
     """Display database maintenance and recovery functions"""
     st.header("🗄️ Database Maintenance")
@@ -909,6 +1196,196 @@ def display_database_maintenance():
                                 st.code(err)
                     except Exception as e:
                         st.error(f"Retrofit failed: {e}")
+
+    with st.expander("🧪 Source Integrity Scan & Cleanup", expanded=False):
+        st.caption("Scan selected collections for potentially obsolete/unavailable sources and optionally clean them up.")
+        try:
+            mgr = WorkingCollectionManager()
+            collections = mgr.list_collections()
+        except Exception as e:
+            collections = []
+            st.warning(f"Could not load working collections: {e}")
+
+        selected_collections = st.multiselect(
+            "Collections to scan",
+            options=collections,
+            default=collections,
+            key="maintenance_integrity_collections",
+            help="Only documents belonging to selected collections will be scanned.",
+        )
+        include_unverified = st.checkbox(
+            "Flag unverified/unreachable sources too",
+            value=False,
+            key="maintenance_integrity_include_unverified",
+            help="When enabled, also flags client/server errors and unreachable URLs (not just 404/410).",
+        )
+        recheck_urls = st.checkbox(
+            "Recheck source URLs live during scan",
+            value=False,
+            key="maintenance_integrity_recheck_urls",
+            help="Performs live HTTP checks and updates availability metadata. Slower on large collections.",
+        )
+        cleanup_action = st.selectbox(
+            "Cleanup action",
+            options=[
+                ("scan_only", "Scan only (no writes)"),
+                ("tag_metadata", "Tag suspect documents in metadata"),
+                ("remove_from_collections", "Remove suspect docs from selected collections"),
+                ("tag_and_remove", "Tag metadata + remove from selected collections"),
+            ],
+            format_func=lambda x: x[1],
+            key="maintenance_integrity_cleanup_action",
+        )[0]
+        dry_run = st.checkbox(
+            "Dry run (show impact, do not write)",
+            value=True,
+            key="maintenance_integrity_dry_run",
+        )
+
+        if st.button("Run Source Integrity Scan", key="maintenance_run_integrity_scan", type="primary"):
+            if not selected_collections:
+                st.error("Select at least one collection.")
+            else:
+                with st.spinner("Scanning source integrity across selected collections..."):
+                    try:
+                        result = _run_source_integrity_scan(
+                            db_path=db_path,
+                            selected_collections=selected_collections,
+                            include_unverified=include_unverified,
+                            recheck_urls=recheck_urls,
+                            cleanup_action=cleanup_action,
+                            dry_run=dry_run or cleanup_action == "scan_only",
+                        )
+                        st.success(
+                            f"Scan complete: chunks={result['processed_chunks']} suspect_docs={result['suspect_documents']} "
+                            f"metadata_updates={result['metadata_updates']} removed_refs={result['collection_refs_removed']}"
+                        )
+                        m1, m2, m3, m4 = st.columns(4)
+                        m1.metric("Suspect Docs", result["suspect_documents"])
+                        m2.metric("Unavailable (404/410)", result["suspect_unavailable"])
+                        m3.metric("Unverified", result["suspect_unverified"])
+                        m4.metric("Collection Refs Removed", result["collection_refs_removed"])
+
+                        suspect_rows = result.get("suspect_rows", [])
+                        if suspect_rows:
+                            st.dataframe(suspect_rows, use_container_width=True)
+                            st.download_button(
+                                "Download Scan Report (JSON)",
+                                data=json.dumps(suspect_rows, indent=2),
+                                file_name=f"source_integrity_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                                mime="application/json",
+                                use_container_width=True,
+                            )
+                        else:
+                            st.info("No suspect documents were found for the selected scan criteria.")
+
+                        if result["errors"]:
+                            st.warning(f"Completed with {len(result['errors'])} errors. Showing first 10:")
+                            for err in result["errors"][:10]:
+                                st.code(err)
+                    except Exception as e:
+                        st.error(f"Source integrity scan failed: {e}")
+
+    with st.expander("⏱️ Scheduled Weekly Source Scan", expanded=False):
+        st.caption("Run a periodic source integrity scan and keep timestamped reports in your external database path.")
+        schedule_state = _load_source_integrity_schedule_state(db_path)
+        today_dt = datetime.now()
+        today_str = today_dt.strftime("%Y-%m-%d")
+        last_scan_at = str(schedule_state.get("last_scan_at", "") or "").strip()
+        next_due = "now"
+        is_due = True
+        if last_scan_at:
+            try:
+                last_dt = datetime.strptime(last_scan_at, "%Y-%m-%d")
+                due_dt = last_dt + timedelta(days=7)
+                next_due = due_dt.strftime("%Y-%m-%d")
+                is_due = today_dt >= due_dt
+            except Exception:
+                next_due = "unknown"
+                is_due = True
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Last Scheduled Scan", last_scan_at or "Never")
+        c2.metric("Next Due", next_due)
+        c3.metric("Status", "Due" if is_due else "Not Due")
+
+        weekly_recheck_urls = st.checkbox(
+            "Recheck URLs during scheduled scan",
+            value=True,
+            key="maintenance_weekly_recheck_urls",
+        )
+        weekly_include_unverified = st.checkbox(
+            "Include unverified/unreachable in scheduled report",
+            value=True,
+            key="maintenance_weekly_include_unverified",
+        )
+        weekly_cleanup_action = st.selectbox(
+            "Scheduled action",
+            options=[
+                ("scan_only", "Scan only"),
+                ("tag_metadata", "Tag suspect metadata"),
+            ],
+            format_func=lambda x: x[1],
+            key="maintenance_weekly_cleanup_action",
+        )[0]
+
+        if st.button("Run Scheduled Scan Now", key="maintenance_run_weekly_integrity_scan", type="primary"):
+            try:
+                mgr = WorkingCollectionManager()
+                all_collections = mgr.list_collections()
+            except Exception as e:
+                all_collections = []
+                st.error(f"Could not load collections for scheduled scan: {e}")
+
+            if not all_collections:
+                st.warning("No collections available for scheduled scan.")
+            else:
+                with st.spinner("Running scheduled source integrity scan across all collections..."):
+                    try:
+                        result = _run_source_integrity_scan(
+                            db_path=db_path,
+                            selected_collections=all_collections,
+                            include_unverified=weekly_include_unverified,
+                            recheck_urls=weekly_recheck_urls,
+                            cleanup_action=weekly_cleanup_action,
+                            dry_run=False,
+                        )
+                        report_payload = {
+                            "scan_type": "scheduled_weekly",
+                            "executed_at": datetime.now().isoformat(),
+                            "db_path": db_path,
+                            "collections": all_collections,
+                            "include_unverified": weekly_include_unverified,
+                            "recheck_urls": weekly_recheck_urls,
+                            "cleanup_action": weekly_cleanup_action,
+                            "summary": {
+                                "processed_chunks": result.get("processed_chunks", 0),
+                                "processed_documents": result.get("processed_documents", 0),
+                                "suspect_documents": result.get("suspect_documents", 0),
+                                "suspect_unavailable": result.get("suspect_unavailable", 0),
+                                "suspect_unverified": result.get("suspect_unverified", 0),
+                                "metadata_updates": result.get("metadata_updates", 0),
+                                "collection_refs_removed": result.get("collection_refs_removed", 0),
+                                "error_count": len(result.get("errors", [])),
+                            },
+                            "suspect_rows": result.get("suspect_rows", []),
+                            "errors": result.get("errors", []),
+                        }
+                        report_path = _save_source_integrity_report(db_path, report_payload)
+                        _save_source_integrity_schedule_state(
+                            db_path,
+                            {
+                                "last_scan_at": today_str,
+                                "last_scan_report": report_path,
+                                "last_scan_summary": report_payload["summary"],
+                            },
+                        )
+                        st.success(
+                            f"Scheduled scan complete: suspect_docs={result['suspect_documents']} "
+                            f"unavailable={result['suspect_unavailable']} unverified={result['suspect_unverified']}"
+                        )
+                        st.caption(f"Report saved to: {report_path}")
+                    except Exception as e:
+                        st.error(f"Scheduled scan failed: {e}")
 
     st.info("💡 Tip: Run **Database Health Check** first; use **Reset & Recovery** only when repair is insufficient.")
 

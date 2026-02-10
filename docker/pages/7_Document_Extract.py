@@ -17,6 +17,9 @@ import io
 import unicodedata
 from datetime import datetime
 from typing import List, Dict, Optional
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -129,6 +132,17 @@ def _file_input_widget(key_prefix: str, allowed_types: List[str], label: str = "
 
 def _clean_line(line: str) -> str:
     return re.sub(r"\s+", " ", (line or "").strip())
+
+
+def _user_visible_filename(file_path: str) -> str:
+    """Strip internal upload prefixes from temp files for display/metadata."""
+    name = Path(file_path).name
+    m = re.match(r"^upload_\d+_(.+)$", name)
+    return m.group(1) if m else name
+
+
+def _user_visible_stem(file_path: str) -> str:
+    return Path(_user_visible_filename(file_path)).stem
 
 
 def _ascii_fold(text: str) -> str:
@@ -353,7 +367,7 @@ def _guess_title_from_markdown(md_content: str, file_path: str) -> str:
 
 
 def _detect_source_type_hint(file_path: str, md_content: str) -> str:
-    text = f"{Path(file_path).name}\n{md_content[:16000]}".lower()
+    text = f"{_user_visible_filename(file_path)}\n{md_content[:16000]}".lower()
     if any(k in text for k in ["elsevier", "springer", "wiley", "ieee", "doi", "journal", "proceedings", "abstract", "keywords"]):
         return "Academic"
     consulting_markers = [
@@ -432,7 +446,7 @@ Rules:
   0 / unclassified / Unclassified: not yet assessed
 - If a field is unknown use "Unknown" (or [] for authors/keywords).
 
-File name: {Path(file_path).name}
+File name: {_user_visible_filename(file_path)}
 
 Markdown content:
 {snippet}
@@ -456,12 +470,140 @@ _CREDIBILITY_TIERS = {
 
 
 def _detect_document_stage(file_path: str, title: str, md_content: str) -> str:
-    text = f"{Path(file_path).name}\n{title}\n{md_content[:30000]}".lower()
+    text = f"{_user_visible_filename(file_path)}\n{title}\n{md_content[:30000]}".lower()
     return "Draft" if re.search(r"\bdraft\b", text) else "Final"
 
 
-def _classify_credibility_tier(file_path: str, source_type: str, publisher: str, available_at: str, md_content: str) -> Dict[str, str]:
-    text = f"{Path(file_path).name}\n{publisher}\n{available_at}\n{md_content[:50000]}".lower()
+def _check_url_availability(url: str, timeout: float = 8.0) -> Dict[str, str]:
+    """Probe URL availability without downloading full content."""
+    checked_at = datetime.now().strftime("%Y-%m-%d")
+    if not url or url == "Unknown":
+        return {
+            "availability_status": "unknown",
+            "availability_http_code": "",
+            "availability_checked_at": checked_at,
+            "availability_note": "No canonical source URL provided.",
+        }
+
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return {
+            "availability_status": "unknown",
+            "availability_http_code": "",
+            "availability_checked_at": checked_at,
+            "availability_note": f"URL appears invalid: {url}",
+        }
+
+    headers = {
+        "User-Agent": "CortexSuite/DocumentExtract (+source-integrity-check)",
+        "Accept": "*/*",
+    }
+    methods = ("HEAD", "GET")
+    last_http_error = None
+
+    for method in methods:
+        req_headers = dict(headers)
+        if method == "GET":
+            req_headers["Range"] = "bytes=0-0"
+        req = Request(url, headers=req_headers, method=method)
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                code = int(getattr(resp, "status", 200) or 200)
+            if 200 <= code < 400:
+                return {
+                    "availability_status": "available",
+                    "availability_http_code": str(code),
+                    "availability_checked_at": checked_at,
+                    "availability_note": f"Available as at {checked_at}.",
+                }
+            if code == 404:
+                return {
+                    "availability_status": "not_found",
+                    "availability_http_code": "404",
+                    "availability_checked_at": checked_at,
+                    "availability_note": f"Previously available at: {url} but no longer available as at: {checked_at}.",
+                }
+            if code == 410:
+                return {
+                    "availability_status": "gone",
+                    "availability_http_code": "410",
+                    "availability_checked_at": checked_at,
+                    "availability_note": f"Previously available at: {url} but has been removed (HTTP 410) as at: {checked_at}.",
+                }
+            if 400 <= code < 500:
+                return {
+                    "availability_status": "client_error",
+                    "availability_http_code": str(code),
+                    "availability_checked_at": checked_at,
+                    "availability_note": f"Source URL returned HTTP {code} as at {checked_at}; verify whether the source moved, is access-restricted, or withdrawn.",
+                }
+            if code >= 500:
+                return {
+                    "availability_status": "server_error",
+                    "availability_http_code": str(code),
+                    "availability_checked_at": checked_at,
+                    "availability_note": f"Source host returned HTTP {code} as at {checked_at}; availability could not be confirmed.",
+                }
+        except HTTPError as e:
+            code = int(e.code)
+            if code == 404:
+                return {
+                    "availability_status": "not_found",
+                    "availability_http_code": "404",
+                    "availability_checked_at": checked_at,
+                    "availability_note": f"Previously available at: {url} but no longer available as at: {checked_at}.",
+                }
+            if code == 410:
+                return {
+                    "availability_status": "gone",
+                    "availability_http_code": "410",
+                    "availability_checked_at": checked_at,
+                    "availability_note": f"Previously available at: {url} but has been removed (HTTP 410) as at: {checked_at}.",
+                }
+            if code == 405 and method == "HEAD":
+                # Some hosts disallow HEAD; retry with ranged GET.
+                continue
+            last_http_error = e
+        except URLError as e:
+            return {
+                "availability_status": "unreachable",
+                "availability_http_code": "",
+                "availability_checked_at": checked_at,
+                "availability_note": f"Source URL could not be reached as at {checked_at}: {e.reason}",
+            }
+        except Exception as e:
+            return {
+                "availability_status": "unreachable",
+                "availability_http_code": "",
+                "availability_checked_at": checked_at,
+                "availability_note": f"Source URL check failed as at {checked_at}: {e}",
+            }
+
+    if last_http_error is not None:
+        code = int(last_http_error.code)
+        return {
+            "availability_status": "client_error" if 400 <= code < 500 else "server_error",
+            "availability_http_code": str(code),
+            "availability_checked_at": checked_at,
+            "availability_note": f"Source URL returned HTTP {code} as at {checked_at}; verify whether the source moved, is access-restricted, or withdrawn.",
+        }
+    return {
+        "availability_status": "unknown",
+        "availability_http_code": "",
+        "availability_checked_at": checked_at,
+        "availability_note": f"Source URL availability is unknown as at {checked_at}.",
+    }
+
+
+def _classify_credibility_tier(
+    file_path: str,
+    source_type: str,
+    publisher: str,
+    available_at: str,
+    md_content: str,
+    availability_status: str = "unknown",
+) -> Dict[str, str]:
+    text = f"{_user_visible_filename(file_path)}\n{publisher}\n{available_at}\n{md_content[:50000]}".lower()
     marker_map = {
         5: ["pubmed", "nlm", "nature", "lancet", "jama", "bmj", "peer-reviewed", "peer reviewed"],
         4: ["who", "un ", "ipcc", "oecd", "world bank", "government", "department", "ministry", "university", "institute", "centre", "center"],
@@ -478,13 +620,23 @@ def _classify_credibility_tier(file_path: str, source_type: str, publisher: str,
                 tier_value = value
                 break
 
+    # Dead/removed sources are significantly higher poisoning risk.
+    if availability_status in {"not_found", "gone"}:
+        tier_value = max(0, tier_value - 2)
+
     key, label = _CREDIBILITY_TIERS[tier_value]
     stage = _detect_document_stage(file_path, "", md_content)
+    if availability_status in {"not_found", "gone"}:
+        credibility_text = f"{stage} {label} Report (Source Link Unavailable)"
+    elif availability_status in {"client_error", "server_error", "unreachable"}:
+        credibility_text = f"{stage} {label} Report (Source Link Unverified)"
+    else:
+        credibility_text = f"{stage} {label} Report"
     return {
         "credibility_tier_value": tier_value,
         "credibility_tier_key": key,
         "credibility_tier_label": label,
-        "credibility": f"{stage} {label} Report",
+        "credibility": credibility_text,
     }
 
 
@@ -570,21 +722,27 @@ def _fallback_preface_metadata(file_path: str, md_content: str, source_hint: str
             freq[low] = freq.get(low, 0) + 1
         keywords = [k for k, _ in sorted(freq.items(), key=lambda kv: kv[1], reverse=True)[:10]]
 
+    availability = _check_url_availability(available_at)
     credibility = _classify_credibility_tier(
         file_path=file_path,
         source_type=source_hint or "Other",
         publisher=publisher,
         available_at=available_at,
+        availability_status=availability.get("availability_status", "unknown"),
         md_content=md_clean,
     )
 
     return {
-        "title": title or Path(file_path).stem,
+        "title": title or _user_visible_stem(file_path),
         "source_type": source_hint or "Other",
         "publisher": publisher,
         "publishing_date": publishing_date,
         "authors": authors,
         "available_at": available_at,
+        "availability_status": availability.get("availability_status", "unknown"),
+        "availability_http_code": availability.get("availability_http_code", ""),
+        "availability_checked_at": availability.get("availability_checked_at", ""),
+        "availability_note": availability.get("availability_note", ""),
         "abstract": abstract,
         "keywords": _clean_keywords(keywords),
         **credibility,
@@ -611,6 +769,7 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
     available_at = _clean_line(str(data.get("available_at", ""))) or fallback_meta.get("available_at", "Unknown")
     if available_at != "Unknown":
         available_at = _extract_available_at(available_at)
+    availability = _check_url_availability(available_at)
 
     authors_raw = data.get("authors", fallback_meta.get("authors", []))
     if isinstance(authors_raw, str):
@@ -651,6 +810,7 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         source_type=source_type,
         publisher=publisher,
         available_at=available_at,
+        availability_status=availability.get("availability_status", "unknown"),
         md_content=_sanitize_markdown_for_preface(md_content),
     )
     det_value = int(deterministic.get("credibility_tier_value", 0))
@@ -658,15 +818,32 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         cred_value = det_value
     cred_key, cred_label = _CREDIBILITY_TIERS.get(cred_value, _CREDIBILITY_TIERS[0])
     stage = _detect_document_stage(file_path, title, _sanitize_markdown_for_preface(md_content))
-    credibility_text = f"{stage} {cred_label} Report"
+    availability_status = availability.get("availability_status", "unknown")
+    if availability_status in {"not_found", "gone"}:
+        credibility_text = f"{stage} {cred_label} Report (Source Link Unavailable)"
+    elif availability_status in {"client_error", "server_error", "unreachable"}:
+        credibility_text = f"{stage} {cred_label} Report (Source Link Unverified)"
+    else:
+        credibility_text = f"{stage} {cred_label} Report"
+
+    source_integrity_flag = "ok"
+    if availability_status in {"not_found", "gone"}:
+        source_integrity_flag = "deprecated_or_removed"
+    elif availability_status in {"client_error", "server_error", "unreachable", "unknown"}:
+        source_integrity_flag = "unverified"
 
     return {
-        "title": title or Path(file_path).stem,
+        "title": title or _user_visible_stem(file_path),
         "source_type": source_type,
         "publisher": publisher or "Unknown",
         "publishing_date": publishing_date,
         "authors": authors[:20],
         "available_at": available_at or "Unknown",
+        "availability_status": availability_status,
+        "availability_http_code": availability.get("availability_http_code", ""),
+        "availability_checked_at": availability.get("availability_checked_at", ""),
+        "availability_note": availability.get("availability_note", ""),
+        "source_integrity_flag": source_integrity_flag,
         "keywords": keywords[:8],
         "abstract": abstract,
         "credibility_tier_value": cred_value,
@@ -695,6 +872,11 @@ def _build_preface(md_meta: dict) -> str:
         f"publishing_date: {_yaml_escape(md_meta['publishing_date'])}",
         f"authors: {authors_yaml}",
         f"available_at: {_yaml_escape(md_meta.get('available_at', 'Unknown'))}",
+        f"availability_status: {_yaml_escape(md_meta.get('availability_status', 'unknown'))}",
+        f"availability_http_code: {_yaml_escape(md_meta.get('availability_http_code', ''))}",
+        f"availability_checked_at: {_yaml_escape(md_meta.get('availability_checked_at', ''))}",
+        f"availability_note: {_yaml_escape(md_meta.get('availability_note', ''))}",
+        f"source_integrity_flag: {_yaml_escape(md_meta.get('source_integrity_flag', 'unverified'))}",
         f"credibility_tier_value: {_yaml_escape(md_meta.get('credibility_tier_value', 0))}",
         f"credibility_tier_key: {_yaml_escape(md_meta.get('credibility_tier_key', 'unclassified'))}",
         f"credibility_tier_label: {_yaml_escape(md_meta.get('credibility_tier_label', 'Unclassified'))}",
@@ -767,17 +949,17 @@ def _render_textifier_tab():
                 status_text = st.empty()
 
                 for file_idx, fpath in enumerate(files_to_process):
-                    fname = Path(fpath).stem
+                    fname = _user_visible_stem(fpath)
                     file_base = file_idx / total_files
                     file_span = 1.0 / total_files
 
-                    def _on_progress(frac, msg, _base=file_base, _span=file_span, _name=Path(fpath).name):
+                    def _on_progress(frac, msg, _base=file_base, _span=file_span, _name=_user_visible_filename(fpath)):
                         overall = min(_base + frac * _span, 1.0)
                         label = f"[{_name}] {msg}" if total_files > 1 else msg
                         progress.progress(overall, label)
 
                     if total_files > 1:
-                        status_text.info(f"File {file_idx + 1}/{total_files}: {Path(fpath).name}")
+                        status_text.info(f"File {file_idx + 1}/{total_files}: {_user_visible_filename(fpath)}")
 
                     textifier = DocumentTextifier(use_vision=use_vision, on_progress=_on_progress)
                     try:
@@ -785,7 +967,7 @@ def _render_textifier_tab():
                         md_content = _add_document_preface(fpath, md_content)
                         results[f"{fname}_textified.md"] = md_content
                     except Exception as e:
-                        st.error(f"Failed to convert {Path(fpath).name}: {e}")
+                        st.error(f"Failed to convert {_user_visible_filename(fpath)}: {e}")
                         logger.error(f"Textifier error for {fpath}: {e}", exc_info=True)
 
                 progress.progress(1.0, "Done!")

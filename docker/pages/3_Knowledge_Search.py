@@ -636,6 +636,8 @@ def initialize_search_state():
         st.session_state.search_scope = "Entire Knowledge Base"
     if 'selected_collection' not in st.session_state:
         st.session_state.selected_collection = "default"
+    if 'include_unavailable_sources' not in st.session_state:
+        st.session_state.include_unavailable_sources = True
     # Reranker toggle - defaults to config value
     if 'reranker_enabled' not in st.session_state:
         st.session_state.reranker_enabled = QWEN3_VL_RERANKER_ENABLED
@@ -815,6 +817,13 @@ def render_sidebar():
         options=tag_options,
         key="thematic_tag_filter",
         help="Filter by one or more metadata tags."
+    )
+
+    st.sidebar.checkbox(
+        "Include sources with unavailable URLs (404/410)",
+        value=True,
+        key="include_unavailable_sources",
+        help="When disabled, documents flagged as unavailable/removed sources are excluded from results.",
     )
     
     # Boolean operator (only show if multiple filters are active)
@@ -1100,6 +1109,7 @@ def render_sidebar():
         'doc_type_filter': st.session_state.doc_type_filter,
         'outcome_filter': st.session_state.outcome_filter,
         'thematic_tag_filter': st.session_state.thematic_tag_filter,
+        'include_unavailable_sources': st.session_state.include_unavailable_sources,
         'filter_operator': st.session_state.filter_operator,
         'search_scope': st.session_state.search_scope,
         'selected_collection': st.session_state.selected_collection,
@@ -1425,6 +1435,13 @@ def apply_post_search_filters(result, filters):
     outcome_filter = filters.get('outcome_filter')
     filter_operator = filters.get('filter_operator', 'AND')
     tag_filter = filters.get('thematic_tag_filter', [])
+    include_unavailable = bool(filters.get('include_unavailable_sources', True))
+
+    if not include_unavailable:
+        integrity_flag = str(result.get('source_integrity_flag', '') or '').strip().lower()
+        availability_status = str(result.get('availability_status', '') or '').strip().lower()
+        if integrity_flag == "deprecated_or_removed" or availability_status in {"not_found", "gone"}:
+            return False
     
     # Check individual filter conditions
     doc_type_match = (doc_type_filter == "Any" or 
@@ -1855,7 +1872,9 @@ def direct_chromadb_search(db_path, query, filters, top_k=20, use_reranker=None,
                         'proposal_outcome': metadata.get('proposal_outcome', 'N/A'),
                         'thematic_tags': metadata.get('thematic_tags', metadata.get('tags', [])),
                         'chunk_id': metadata.get('chunk_id', f'chunk_{i}'),
-                        'doc_id': metadata.get('doc_id', f'doc_{i}')
+                        'doc_id': metadata.get('doc_id', f'doc_{i}'),
+                        'source_integrity_flag': metadata.get('source_integrity_flag', ''),
+                        'availability_status': metadata.get('availability_status', ''),
                     }
 
                     # Collection scope filter
@@ -2147,6 +2166,8 @@ def render_search_results(results, filters):
         active_filters.append(f"Outcome: {filters['outcome_filter']}")
     if filters.get('thematic_tag_filter'):
         active_filters.append("Tags: " + ", ".join(filters['thematic_tag_filter']))
+    if not filters.get('include_unavailable_sources', True):
+        active_filters.append("Unavailable Sources: Excluded")
     if filters.get('search_scope', 'Entire Knowledge Base') == 'Active Collection':
         active_filters.append(f"Collection: {filters.get('selected_collection', 'default')}")
     
