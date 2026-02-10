@@ -988,6 +988,49 @@ def _enforce_credibility_policy_inplace(meta: dict, doc_text: str) -> bool:
     return meta != before
 
 
+def _extract_candidate_doc_ids(meta: dict) -> set[str]:
+    candidates = set()
+    if not isinstance(meta, dict):
+        return candidates
+
+    for key in ("doc_id", "document_id", "ref_doc_id"):
+        value = meta.get(key)
+        if value:
+            candidates.add(str(value))
+
+    node_content = meta.get("_node_content")
+    if isinstance(node_content, str) and node_content.strip():
+        try:
+            parsed = json.loads(node_content)
+            md = parsed.get("metadata", {}) if isinstance(parsed, dict) else {}
+            nested_doc_id = md.get("doc_id") if isinstance(md, dict) else None
+            if nested_doc_id:
+                candidates.add(str(nested_doc_id))
+        except Exception:
+            pass
+
+    return candidates
+
+
+def _extract_primary_doc_key(meta: dict, chunk_id: str) -> str:
+    candidates = _extract_candidate_doc_ids(meta)
+    if candidates:
+        # Prefer deterministic lexical choice for stable grouping.
+        return sorted(candidates)[0]
+    doc_path = str(meta.get("doc_posix_path", "") or "").strip()
+    if doc_path:
+        return f"path:{doc_path}"
+    file_name = str(meta.get("file_name", "") or "").strip()
+    if file_name:
+        return f"file:{file_name}"
+    return f"chunk:{chunk_id}"
+
+
+def _extract_stage_from_credibility(credibility_text: str) -> str:
+    text = str(credibility_text or "").strip().lower()
+    return "Draft" if text.startswith("draft ") else "Final"
+
+
 def _run_credibility_retrofit(db_path: str, selected_collections: list, dry_run: bool, include_docs: bool) -> dict:
     client = init_chroma_client(db_path)
     if not client:
@@ -995,9 +1038,27 @@ def _run_credibility_retrofit(db_path: str, selected_collections: list, dry_run:
 
     collection = client.get_collection(COLLECTION_NAME)
     working_mgr = WorkingCollectionManager()
-    allowed_doc_ids = set()
+    requested_ids = set()
     for name in selected_collections:
-        allowed_doc_ids.update(working_mgr.get_doc_ids_by_name(name))
+        requested_ids.update(working_mgr.get_doc_ids_by_name(name))
+
+    # Collections can contain either canonical doc_id values or chunk IDs.
+    # Resolve both so retrofit scope behaves as users expect.
+    allowed_doc_ids = set(requested_ids)
+    allowed_chunk_ids = set()
+    if requested_ids:
+        ids_list = list(requested_ids)
+        for i in range(0, len(ids_list), 200):
+            probe_ids = ids_list[i:i + 200]
+            try:
+                resolved = collection.get(ids=probe_ids, include=["metadatas"])
+                for rid, rmeta in zip(resolved.get("ids", []), resolved.get("metadatas", [])):
+                    allowed_chunk_ids.add(rid)
+                    if isinstance(rmeta, dict) and rmeta.get("doc_id"):
+                        allowed_doc_ids.add(str(rmeta.get("doc_id")))
+            except Exception:
+                # Ignore probe failures and keep best-effort scope matching.
+                continue
 
     total = collection.count()
     if total <= 0:
@@ -1010,38 +1071,84 @@ def _run_credibility_retrofit(db_path: str, selected_collections: list, dry_run:
 
     include_fields = ["metadatas", "documents"] if include_docs else ["metadatas"]
     batch_size = 300
+    scoped_records = []
     for offset in range(0, total, batch_size):
         batch = collection.get(limit=batch_size, offset=offset, include=include_fields)
         ids = batch.get("ids", [])
         metadatas = batch.get("metadatas", [])
         documents = batch.get("documents", []) if include_docs else [""] * len(ids)
 
-        update_ids = []
-        update_metas = []
-
         for cid, meta, doc in zip(ids, metadatas, documents):
             if not isinstance(meta, dict):
                 skipped += 1
                 continue
-            doc_id = meta.get("doc_id")
-            if allowed_doc_ids and doc_id not in allowed_doc_ids:
-                skipped += 1
-                continue
+            if requested_ids:
+                doc_candidates = _extract_candidate_doc_ids(meta)
+                in_scope = (
+                    bool(doc_candidates.intersection(allowed_doc_ids))
+                    or (cid in allowed_chunk_ids)
+                    or (cid in requested_ids)
+                )
+                if not in_scope:
+                    skipped += 1
+                    continue
 
             processed += 1
-            safe_meta = dict(meta)
-            try:
-                changed = _enforce_credibility_policy_inplace(safe_meta, str(doc or ""))
-                if changed:
-                    updated += 1
-                    if not dry_run:
-                        update_ids.append(cid)
-                        update_metas.append(safe_meta)
-            except Exception as e:
-                errors.append(f"{cid}: {e}")
+            scoped_records.append((cid, dict(meta), str(doc or "")))
 
-        if update_ids and not dry_run:
-            collection.update(ids=update_ids, metadatas=update_metas)
+    # First pass: per-chunk classification
+    classified = []
+    groups = {}
+    for cid, safe_meta, doc_text in scoped_records:
+        try:
+            _enforce_credibility_policy_inplace(safe_meta, doc_text)
+            doc_key = _extract_primary_doc_key(safe_meta, cid)
+            tier_value = int(safe_meta.get("credibility_tier_value", 0) or 0)
+            stage = _extract_stage_from_credibility(safe_meta.get("credibility", ""))
+            classified.append((cid, safe_meta, doc_key, tier_value, stage))
+            groups.setdefault(doc_key, {"tiers": {}, "stages": {"Final": 0, "Draft": 0}})
+            groups[doc_key]["tiers"][tier_value] = groups[doc_key]["tiers"].get(tier_value, 0) + 1
+            groups[doc_key]["stages"][stage] = groups[doc_key]["stages"].get(stage, 0) + 1
+        except Exception as e:
+            errors.append(f"{cid}: {e}")
+
+    # Choose one credibility tier per document (majority vote; tie -> higher tier).
+    group_choice = {}
+    for doc_key, payload in groups.items():
+        tier_counts = payload["tiers"]
+        chosen_tier = sorted(tier_counts.items(), key=lambda x: (x[1], x[0]), reverse=True)[0][0]
+        chosen_stage = "Draft" if payload["stages"].get("Draft", 0) > 0 else "Final"
+        group_choice[doc_key] = (chosen_tier, chosen_stage)
+
+    update_ids = []
+    update_metas = []
+    for cid, safe_meta, doc_key, _, _ in classified:
+        chosen_tier, chosen_stage = group_choice[doc_key]
+        chosen_key, chosen_label = _CREDIBILITY_BY_VALUE.get(chosen_tier, _CREDIBILITY_BY_VALUE[0])
+        final_cred = f"{chosen_stage} {chosen_label} Report"
+
+        before_tuple = (
+            safe_meta.get("credibility_tier_value"),
+            safe_meta.get("credibility_tier_key"),
+            safe_meta.get("credibility_tier_label"),
+            safe_meta.get("credibility"),
+        )
+        after_tuple = (chosen_tier, chosen_key, chosen_label, final_cred)
+
+        safe_meta["credibility_tier_value"] = chosen_tier
+        safe_meta["credibility_tier_key"] = chosen_key
+        safe_meta["credibility_tier_label"] = chosen_label
+        safe_meta["credibility"] = final_cred
+
+        if before_tuple != after_tuple:
+            updated += 1
+            if not dry_run:
+                update_ids.append(cid)
+                update_metas.append(safe_meta)
+
+    if update_ids and not dry_run:
+        for i in range(0, len(update_ids), 300):
+            collection.update(ids=update_ids[i:i + 300], metadatas=update_metas[i:i + 300])
 
     return {"processed": processed, "updated": updated, "skipped": skipped, "errors": errors}
 

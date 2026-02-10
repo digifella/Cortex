@@ -29,6 +29,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### 🔧 Bug Fixes
 - Restored `run_synthesis` compatibility shim in `cortex_engine/knowledge_synthesizer.py` to prevent breakage in legacy call paths.
 - Async ingestion metadata now always includes canonical credibility defaults, avoiding missing-tier records on alternate ingestion paths.
+- Credibility retrofit scope matching now supports mixed collection identifier formats (`doc_id` hashes, UUID chunk IDs, nested `_node_content.metadata.doc_id`).
+- Credibility retrofit now enforces a single credibility classification per document (majority tier across chunks, deterministic tie-breaking).
+- Ingestion now applies hard duplicate guards against existing Chroma `doc_id`s in both analysis and finalize stages (host + Docker), preventing duplicate document indexing.
+- Async ingestion path now performs the same `doc_id` duplicate guard before `collection.add`.
 
 ### 🔎 Knowledge Search Stabilization (WSL/CUDA cold-start + reranker reliability)
 

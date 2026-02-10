@@ -213,6 +213,23 @@ class AsyncIngestionEngine:
     
     def _process_file_sync(self, file_path: str) -> Dict:
         """Synchronous file processing (runs in executor)"""
+        doc_id = get_file_hash(file_path)
+
+        # Hard duplicate guard: skip if doc_id already exists in vector store.
+        if self.collection:
+            try:
+                existing = self.collection.get(where={"doc_id": doc_id}, limit=1, include=["metadatas"])
+                if existing and existing.get("ids"):
+                    logger.info(f"⏭️ Skipping duplicate document: {os.path.basename(file_path)} [{doc_id[:12]}...]")
+                    return {
+                        'file_path': file_path,
+                        'doc_id': doc_id,
+                        'skipped': True,
+                        'reason': 'duplicate_doc_id'
+                    }
+            except Exception as e:
+                logger.warning(f"Duplicate check failed for {file_path}: {e}")
+
         # Get document content
         content_result = get_document_content(file_path)
         if not content_result or not content_result.get('content'):
@@ -231,7 +248,7 @@ class AsyncIngestionEngine:
         
         # Create document with metadata
         doc_metadata = DocumentMetadata(
-            doc_id=get_file_hash(file_path),
+            doc_id=doc_id,
             doc_posix_path=str(Path(file_path).as_posix()),
             file_name=os.path.basename(file_path),
             last_modified_date=datetime.fromtimestamp(

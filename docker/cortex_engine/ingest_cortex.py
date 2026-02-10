@@ -438,6 +438,54 @@ def write_to_processed_log(log_path: str, file_path: str, doc_id: str):
     except IOError as e:
         logging.error(f"Failed to write to processed log: {e}")
 
+
+def _get_existing_doc_ids_in_collection(chroma_db_path: str, candidate_doc_ids: set[str]) -> set[str]:
+    """
+    Return candidate doc_ids that already exist in the vector collection.
+    This is a hard duplicate gate independent of ingestion logs/path history.
+    """
+    existing: set[str] = set()
+    if not candidate_doc_ids:
+        return existing
+    if not os.path.isdir(chroma_db_path):
+        return existing
+
+    try:
+        db_settings = ChromaSettings(anonymized_telemetry=False)
+        chroma_client = chromadb.PersistentClient(path=chroma_db_path, settings=db_settings)
+        collections = chroma_client.list_collections()
+        if not any(c.name == COLLECTION_NAME for c in collections):
+            return existing
+        collection = chroma_client.get_collection(COLLECTION_NAME)
+    except Exception as e:
+        logging.warning(f"Could not open Chroma collection for duplicate check: {e}")
+        return existing
+
+    ids_list = list(candidate_doc_ids)
+    batch_size = 200
+    for i in range(0, len(ids_list), batch_size):
+        batch = ids_list[i:i + batch_size]
+        try:
+            # Fast path: query all candidates in one where-clause.
+            res = collection.get(where={"doc_id": {"$in": batch}}, include=["metadatas"])
+            for meta in res.get("metadatas", []) or []:
+                if isinstance(meta, dict):
+                    value = meta.get("doc_id")
+                    if value in candidate_doc_ids:
+                        existing.add(value)
+        except Exception:
+            # Fallback path for backends that don't support $in.
+            for doc_id in batch:
+                try:
+                    res = collection.get(where={"doc_id": doc_id}, limit=1, include=["metadatas"])
+                    metas = res.get("metadatas", []) or []
+                    if metas:
+                        existing.add(doc_id)
+                except Exception:
+                    continue
+
+    return existing
+
 def get_document_content(file_path: str, skip_image_processing: bool = False) -> Dict:
     """Extract content from a single document file
     
@@ -1120,6 +1168,29 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
     logging.info(f"Loaded {len(docs)} document objects from {len(include_paths)} files.")
     unique_docs = list({doc.metadata['file_path']: doc for doc in docs}.values())
     logging.info(f"--- Found {len(unique_docs)} unique files to process. ---")
+
+    # Hard duplicate guard: skip documents already present in vector DB by doc_id hash.
+    chroma_db_path = os.path.join(args.db_path, "knowledge_hub_db") if args and getattr(args, "db_path", None) else ""
+    processed_log_path = os.path.join(chroma_db_path, INGESTED_FILES_LOG) if chroma_db_path else ""
+    path_to_doc_id = {}
+    for doc in unique_docs:
+        fp = doc.metadata.get('file_path', '')
+        if fp:
+            path_to_doc_id[fp] = get_file_hash(fp)
+
+    existing_doc_ids = set()
+    try:
+        if processed_log_path:
+            existing_doc_ids.update(load_processed_files_log(processed_log_path).values())
+    except Exception as e:
+        logging.warning(f"Could not load processed log for duplicate guard: {e}")
+    try:
+        existing_doc_ids.update(_get_existing_doc_ids_in_collection(chroma_db_path, set(path_to_doc_id.values())))
+    except Exception as e:
+        logging.warning(f"Could not perform vector-store duplicate check: {e}")
+
+    if existing_doc_ids:
+        logging.info(f"Duplicate guard active: {len(existing_doc_ids)} known doc_ids already in DB/log")
     
     # Memory check
     try:
@@ -1167,6 +1238,17 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
         rich_metadata = None
         file_path_str, file_name = doc.metadata.get('file_path', ''), doc.metadata.get('file_name', 'Unknown File')
         source_type = doc.metadata.get('source_type', 'document')
+        existing_doc_id = path_to_doc_id.get(file_path_str) or get_file_hash(file_path_str)
+
+        # Skip if this exact document hash already exists in DB/log.
+        if existing_doc_id in existing_doc_ids:
+            logging.info(f"Skipping duplicate document (already ingested): {file_name} [{existing_doc_id[:12]}...]")
+            if processed_log_path and file_path_str:
+                write_to_processed_log(processed_log_path, file_path_str, existing_doc_id)
+            if batch_manager:
+                batch_manager.update_progress(file_path_str)
+            continue
+
         logging.info(f"--- ({i+1}/{len(unique_docs)}) Analyzing: {file_name} ({source_type.upper()}) ---")
         
         # Print machine-readable progress for the UI
@@ -1296,7 +1378,7 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
             relationships_dict = []
 
         doc_meta = DocumentMetadata(
-            doc_id=get_file_hash(file_path_str), 
+            doc_id=existing_doc_id,
             doc_posix_path=Path(file_path_str).as_posix(),
             file_name=doc.metadata.get('file_name'), 
             last_modified_date=str(datetime.fromtimestamp(os.path.getmtime(file_path_str))),
@@ -1401,10 +1483,20 @@ def finalize_ingestion(db_path: str, args=None):
     
     logging.info(f"Target collection for finalization: {target_collection or 'default'}")
 
+    # Finalize-stage duplicate guard in case staged data predates checks above.
+    staged_doc_ids = {d.doc_id for d in docs_to_process if d and d.doc_id}
+    already_in_db_doc_ids = _get_existing_doc_ids_in_collection(chroma_db_path, staged_doc_ids)
+    if already_in_db_doc_ids:
+        logging.info(f"Finalize duplicate guard: {len(already_in_db_doc_ids)} staged documents already exist in DB")
+
     docs_to_index_paths, metadata_map, doc_ids_to_add_to_default = [], {}, []
     processed_log_path = os.path.join(chroma_db_path, INGESTED_FILES_LOG)
     
     for doc_meta in docs_to_process:
+        if doc_meta.doc_id in already_in_db_doc_ids:
+            logging.info(f"Skipping duplicate during finalize: {doc_meta.file_name} [{doc_meta.doc_id[:12]}...]")
+            write_to_processed_log(processed_log_path, doc_meta.doc_posix_path, doc_meta.doc_id)
+            continue
         if doc_meta.exclude_from_final:
             logging.info(f"User excluded {doc_meta.file_name}. Skipping.")
             write_to_processed_log(processed_log_path, doc_meta.doc_posix_path, doc_meta.doc_id)
