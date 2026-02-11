@@ -911,6 +911,71 @@ class DocumentTextifier:
             logger.warning(f"LLM keyword anonymization failed: {e}")
             return keywords
 
+    def _hybrid_filter_sensitive_keywords(
+        self, keywords: List[str], blocked_keywords: Optional[List[str]] = None
+    ) -> Tuple[List[str], List[str]]:
+        """Hybrid privacy filter: LLM intent filter + deterministic blocked-list/handle filter."""
+        llm_kept_keywords = self._llm_filter_sensitive_keywords(keywords)
+        llm_removed = [k for k in keywords if k.lower() not in {x.lower() for x in llm_kept_keywords}]
+        final_kept, blocked_removed = self._filter_sensitive_keywords(
+            llm_kept_keywords, blocked_keywords=blocked_keywords
+        )
+        removed = list(dict.fromkeys([x.lower() for x in llm_removed] + blocked_removed))
+        return final_kept, removed
+
+    @staticmethod
+    def clear_exif_keyword_tags_only(file_path: str) -> bool:
+        """Remove only keyword tag fields, preserving captions/descriptions."""
+        import shutil
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return False
+        try:
+            result = subprocess.run(
+                [exiftool_path, "-overwrite_original", "-XMP-dc:Subject=", "-IPTC:Keywords=", file_path],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return result.returncode == 0
+        except Exception as e:
+            logger.warning(f"Clear keyword tags failed: {e}")
+            return False
+
+    def anonymize_existing_photo_keywords(
+        self, file_path: str, blocked_keywords: Optional[List[str]] = None
+    ) -> Dict[str, any]:
+        """Anonymize existing keyword tags on a photo without running image description."""
+        existing_keywords = self.read_exif_keywords(file_path)
+        filtered_existing, removed_existing = self._hybrid_filter_sensitive_keywords(
+            existing_keywords, blocked_keywords=blocked_keywords
+        )
+        if not removed_existing:
+            return {
+                "success": True,
+                "existing_keywords": existing_keywords,
+                "kept_keywords": filtered_existing,
+                "removed_keywords": [],
+                "message": "No sensitive keywords found to remove",
+            }
+
+        if not self.clear_exif_keyword_tags_only(file_path):
+            return {
+                "success": False,
+                "existing_keywords": existing_keywords,
+                "kept_keywords": existing_keywords,
+                "removed_keywords": [],
+                "message": "Failed to clear keyword fields before anonymization",
+            }
+        write_result = self.write_exif_keywords(file_path, filtered_existing, "")
+        return {
+            "success": bool(write_result.get("success")),
+            "existing_keywords": existing_keywords,
+            "kept_keywords": filtered_existing,
+            "removed_keywords": removed_existing,
+            "message": write_result.get("message", ""),
+        }
+
     def keyword_image(self, file_path: str, city_radius_km: float = 5.0,
                       clear_keywords: bool = False,
                       clear_location: bool = False,
@@ -985,22 +1050,33 @@ class DocumentTextifier:
             if "nogps" not in keywords:
                 keywords.append("nogps")
 
+        existing_keywords_for_merge = existing_keywords
+        removed_existing_sensitive: List[str] = []
         if anonymize_keywords:
-            llm_kept_keywords = self._llm_filter_sensitive_keywords(keywords)
-            llm_removed = [k for k in keywords if k.lower() not in {x.lower() for x in llm_kept_keywords}]
-            keywords, blocked_removed = self._filter_sensitive_keywords(
-                llm_kept_keywords, blocked_keywords=blocked_keywords
+            # Sanitize generated keywords and existing metadata keywords.
+            keywords, removed_generated_sensitive = self._hybrid_filter_sensitive_keywords(
+                keywords, blocked_keywords=blocked_keywords
+            )
+            existing_keywords_for_merge, removed_existing_sensitive = self._hybrid_filter_sensitive_keywords(
+                existing_keywords, blocked_keywords=blocked_keywords
             )
             removed_sensitive_keywords = list(dict.fromkeys(
-                [x.lower() for x in llm_removed] + blocked_removed
+                removed_generated_sensitive + removed_existing_sensitive
             ))
 
         # Deduplicate: only write keywords that aren't already in EXIF
-        existing_lower = {k.lower() for k in existing_keywords}
+        existing_lower = {k.lower() for k in existing_keywords_for_merge}
         new_keywords = [k for k in keywords if k.lower() not in existing_lower]
 
         self._report(0.8, "Writing keywords to EXIF...")
-        write_result = self.write_exif_keywords(file_path, new_keywords, description)
+        if anonymize_keywords:
+            # Replace existing keyword set with sanitized + generated keywords.
+            combined_target_keywords = sorted(set(existing_keywords_for_merge + keywords))
+            self.clear_exif_keyword_tags_only(file_path)
+            write_result = self.write_exif_keywords(file_path, combined_target_keywords, description)
+            new_keywords = [k for k in combined_target_keywords if k.lower() not in {x.lower() for x in existing_keywords}]
+        else:
+            write_result = self.write_exif_keywords(file_path, new_keywords, description)
 
         # Write location EXIF fields
         if location and any(location.values()):
@@ -1014,7 +1090,11 @@ class DocumentTextifier:
             ownership_result = self.write_ownership_metadata(file_path, ownership_notice.strip())
 
         # Combined set for display (existing + new)
-        combined_keywords = sorted(set(existing_keywords + keywords))
+        combined_keywords = (
+            sorted(set(existing_keywords_for_merge + keywords))
+            if anonymize_keywords
+            else sorted(set(existing_keywords + keywords))
+        )
 
         self._report(1.0, "Done")
         return {

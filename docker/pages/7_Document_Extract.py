@@ -15,6 +15,7 @@ import time
 import zipfile
 import io
 import unicodedata
+import subprocess
 from datetime import datetime
 from typing import List, Dict, Optional
 from urllib.parse import urlparse
@@ -143,6 +144,138 @@ def _user_visible_filename(file_path: str) -> str:
 
 def _user_visible_stem(file_path: str) -> str:
     return Path(_user_visible_filename(file_path)).stem
+
+
+def _read_photo_metadata_preview(file_path: str) -> dict:
+    """Read existing photo metadata fields for preview (keywords/description/location)."""
+    exiftool_path = shutil.which("exiftool")
+    if not exiftool_path:
+        return {"available": False, "reason": "exiftool not found on PATH"}
+    try:
+        result = subprocess.run(
+            [
+                exiftool_path,
+                "-json",
+                "-XMP-dc:Subject",
+                "-IPTC:Keywords",
+                "-XMP-dc:Description",
+                "-IPTC:Caption-Abstract",
+                "-EXIF:ImageDescription",
+                "-XMP-photoshop:City",
+                "-IPTC:City",
+                "-XMP-photoshop:State",
+                "-IPTC:Province-State",
+                "-XMP-photoshop:Country",
+                "-IPTC:Country-PrimaryLocationName",
+                "-GPSLatitude",
+                "-GPSLongitude",
+                file_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return {"available": False, "reason": result.stderr.strip() or "exiftool read failed"}
+
+        payload = json.loads(result.stdout)
+        if not payload:
+            return {"available": False, "reason": "No metadata found"}
+        row = payload[0]
+
+        keywords = []
+        for field in ("Subject", "Keywords"):
+            val = row.get(field, [])
+            if isinstance(val, str):
+                val = [val]
+            for item in val:
+                v = (item or "").strip()
+                if v:
+                    keywords.append(v)
+        keywords = list(dict.fromkeys(keywords))
+
+        description = (
+            (row.get("Description") or "").strip()
+            or (row.get("Caption-Abstract") or "").strip()
+            or (row.get("ImageDescription") or "").strip()
+        )
+        city = (row.get("City") or "").strip()
+        state = (row.get("State") or row.get("Province-State") or "").strip()
+        country = (row.get("Country") or row.get("Country-PrimaryLocationName") or "").strip()
+
+        gps_lat = row.get("GPSLatitude")
+        gps_lon = row.get("GPSLongitude")
+        gps = None
+        if gps_lat not in (None, "") and gps_lon not in (None, ""):
+            gps = f"{gps_lat}, {gps_lon}"
+
+        return {
+            "available": True,
+            "keywords": keywords,
+            "description": description,
+            "city": city,
+            "state": state,
+            "country": country,
+            "gps": gps,
+        }
+    except Exception as e:
+        return {"available": False, "reason": str(e)}
+
+
+def _write_photo_metadata_quick_edit(
+    file_path: str,
+    keywords: List[str],
+    description: str,
+    city: str,
+    state: str,
+    country: str,
+) -> dict:
+    """Apply quick metadata edits (replace keywords/description/location fields)."""
+    exiftool_path = shutil.which("exiftool")
+    if not exiftool_path:
+        return {"success": False, "message": "exiftool not found on PATH"}
+    try:
+        cmd = [
+            exiftool_path,
+            "-overwrite_original",
+            # Clear existing keyword/caption/location fields so this acts as an explicit edit.
+            "-XMP-dc:Subject=",
+            "-IPTC:Keywords=",
+            "-XMP-dc:Description=",
+            "-IPTC:Caption-Abstract=",
+            "-EXIF:ImageDescription=",
+            "-IPTC:Country-PrimaryLocationName=",
+            "-XMP-photoshop:Country=",
+            "-IPTC:Province-State=",
+            "-XMP-photoshop:State=",
+            "-IPTC:City=",
+            "-XMP-photoshop:City=",
+        ]
+        for kw in keywords:
+            cmd.append(f"-XMP-dc:Subject+={kw}")
+            cmd.append(f"-IPTC:Keywords+={kw}")
+        desc = (description or "").strip()
+        if desc:
+            cmd.append(f"-XMP-dc:Description={desc}")
+            cmd.append(f"-IPTC:Caption-Abstract={desc}")
+            cmd.append(f"-EXIF:ImageDescription={desc}")
+        if country.strip():
+            cmd.append(f"-IPTC:Country-PrimaryLocationName={country.strip()}")
+            cmd.append(f"-XMP-photoshop:Country={country.strip()}")
+        if state.strip():
+            cmd.append(f"-IPTC:Province-State={state.strip()}")
+            cmd.append(f"-XMP-photoshop:State={state.strip()}")
+        if city.strip():
+            cmd.append(f"-IPTC:City={city.strip()}")
+            cmd.append(f"-XMP-photoshop:City={city.strip()}")
+        cmd.append(file_path)
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        if result.returncode == 0:
+            return {"success": True, "message": result.stdout.strip()}
+        return {"success": False, "message": result.stderr.strip() or "metadata write failed"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 
 def _ascii_fold(text: str) -> str:
@@ -1413,6 +1546,102 @@ def _render_photo_keywords_tab():
             total = len(uploaded)
             st.info(f"{total} photo(s) selected")
 
+            # Single-photo metadata preview for quick testing before processing.
+            if total == 1:
+                preview_photo = uploaded[0]
+                preview_bytes = preview_photo.getvalue()
+                preview_temp_dir = Path(tempfile.gettempdir()) / "cortex_photokw_preview"
+                preview_temp_dir.mkdir(exist_ok=True, mode=0o755)
+
+                # Keep a stable working copy path for this uploaded file across reruns,
+                # so quick metadata edits are not lost.
+                import hashlib
+                preview_sig = f"{preview_photo.name}:{len(preview_bytes)}:{hashlib.md5(preview_bytes).hexdigest()}"
+                existing_sig = st.session_state.get("photokw_single_upload_sig")
+                existing_path = st.session_state.get("photokw_single_working_path")
+                if preview_sig != existing_sig or not existing_path or not Path(existing_path).exists():
+                    preview_path = preview_temp_dir / preview_photo.name
+                    with open(preview_path, "wb") as f:
+                        f.write(preview_bytes)
+                    os.chmod(str(preview_path), 0o644)
+                    st.session_state["photokw_single_upload_sig"] = preview_sig
+                    st.session_state["photokw_single_working_path"] = str(preview_path)
+                else:
+                    preview_path = Path(existing_path)
+
+                if st.button("Refresh Preview", key="photokw_preview_refresh", use_container_width=False):
+                    st.rerun()
+
+                preview_meta = _read_photo_metadata_preview(str(preview_path))
+
+                with st.expander("Single Photo Metadata Preview", expanded=True):
+                    st.image(preview_photo, caption=preview_photo.name, width=420)
+                    if preview_meta.get("available"):
+                        description = preview_meta.get("description", "")
+                        keywords = preview_meta.get("keywords", [])
+                        city = preview_meta.get("city", "")
+                        state = preview_meta.get("state", "")
+                        country = preview_meta.get("country", "")
+                        gps = preview_meta.get("gps")
+
+                        if description:
+                            st.markdown(f"**Description:** {description}")
+                        else:
+                            st.caption("No existing description found in metadata.")
+
+                        if keywords:
+                            st.markdown(f"**Keywords ({len(keywords)}):** {', '.join(keywords)}")
+                        else:
+                            st.caption("No existing keywords found in metadata.")
+
+                        location_parts = [v for v in [city, state, country] if v]
+                        if location_parts:
+                            st.markdown(f"**Location fields:** {', '.join(location_parts)}")
+                        else:
+                            st.caption("No existing City/State/Country metadata found.")
+                        if gps:
+                            st.caption(f"GPS: {gps}")
+
+                        st.divider()
+                        st.markdown("**Quick Edit Metadata**")
+                        edit_keywords = st.text_area(
+                            "Edit keywords (comma-separated)",
+                            value=", ".join(keywords),
+                            key="photokw_edit_keywords",
+                            height=90,
+                        )
+                        edit_description = st.text_area(
+                            "Edit description",
+                            value=description,
+                            key="photokw_edit_description",
+                            height=90,
+                        )
+                        ec1, ec2, ec3 = st.columns(3)
+                        with ec1:
+                            edit_city = st.text_input("City", value=city, key="photokw_edit_city")
+                        with ec2:
+                            edit_state = st.text_input("State", value=state, key="photokw_edit_state")
+                        with ec3:
+                            edit_country = st.text_input("Country", value=country, key="photokw_edit_country")
+
+                        if st.button("Apply Quick Metadata Edits", key="photokw_apply_quick_edit", use_container_width=True):
+                            edited_keywords = [k.strip() for k in edit_keywords.split(",") if k.strip()]
+                            write_result = _write_photo_metadata_quick_edit(
+                                str(preview_path),
+                                keywords=edited_keywords,
+                                description=edit_description,
+                                city=edit_city,
+                                state=edit_state,
+                                country=edit_country,
+                            )
+                            if write_result.get("success"):
+                                st.success("Metadata edits applied.")
+                                st.rerun()
+                            else:
+                                st.error(f"Could not apply metadata edits: {write_result.get('message', 'Unknown error')}")
+                    else:
+                        st.info(f"Metadata preview unavailable: {preview_meta.get('reason', 'Unknown reason')}")
+
             resolution_map = {
                 "Low (1920 x 1080)": (1920, 1080),
                 "Medium (2560 x 1440)": (2560, 1440),
@@ -1430,12 +1659,27 @@ def _render_photo_keywords_tab():
                 temp_dir = Path(tempfile.gettempdir()) / "cortex_photokw"
                 temp_dir.mkdir(exist_ok=True, mode=0o755)
                 file_paths = []
-                for uf in uploaded:
-                    dest = temp_dir / uf.name
-                    with open(dest, "wb") as f:
-                        f.write(uf.getvalue())
-                    os.chmod(str(dest), 0o644)
-                    file_paths.append(str(dest))
+                if total == 1 and st.session_state.get("photokw_single_working_path"):
+                    working_path = st.session_state.get("photokw_single_working_path")
+                    if working_path and Path(working_path).exists():
+                        dest = temp_dir / uploaded[0].name
+                        shutil.copy2(working_path, dest)
+                        os.chmod(str(dest), 0o644)
+                        file_paths.append(str(dest))
+                    else:
+                        uf = uploaded[0]
+                        dest = temp_dir / uf.name
+                        with open(dest, "wb") as f:
+                            f.write(uf.getvalue())
+                        os.chmod(str(dest), 0o644)
+                        file_paths.append(str(dest))
+                else:
+                    for uf in uploaded:
+                        dest = temp_dir / uf.name
+                        with open(dest, "wb") as f:
+                            f.write(uf.getvalue())
+                        os.chmod(str(dest), 0o644)
+                        file_paths.append(str(dest))
 
                 textifier = DocumentTextifier(use_vision=True)
                 results = []
@@ -1456,6 +1700,10 @@ def _render_photo_keywords_tab():
                             result = textifier.resize_image_only(
                                 fpath, max_width=max_width, max_height=max_height
                             )
+                            if anonymize_keywords:
+                                result["keyword_anonymize_result"] = textifier.anonymize_existing_photo_keywords(
+                                    fpath, blocked_keywords=blocked_keywords
+                                )
                             if apply_ownership and ownership_notice.strip():
                                 result["ownership_result"] = textifier.write_ownership_metadata(
                                     fpath, ownership_notice.strip()
@@ -1494,16 +1742,19 @@ def _render_photo_keywords_tab():
 
             if photokw_mode == "resize_only":
                 resized_count = sum(1 for r in results if r.get("resize_info", {}).get("resized"))
+                total_removed = sum(len(r.get("keyword_anonymize_result", {}).get("removed_keywords", [])) for r in results)
                 ownership_ok = sum(
                     1 for r in results
                     if not r.get("ownership_result") or r.get("ownership_result", {}).get("success")
                 )
-                mc1, mc2, mc3 = st.columns(3)
+                mc1, mc2, mc3, mc4 = st.columns(4)
                 with mc1:
                     st.metric("Photos Processed", len(results))
                 with mc2:
                     st.metric("Resized", f"{resized_count}/{len(results)}")
                 with mc3:
+                    st.metric("Sensitive Tags Removed", total_removed)
+                with mc4:
                     st.metric("Ownership Written", f"{ownership_ok}/{len(results)}")
             else:
                 # Summary metrics
@@ -1672,6 +1923,18 @@ def _render_photo_keywords_tab():
                                 "Metadata preserved after resize: "
                                 f"{'Yes' if resize_info.get('metadata_preserved') else 'Partial/Unknown'}"
                             )
+                            anon_result = r.get("keyword_anonymize_result")
+                            if anon_result:
+                                if anon_result.get("success"):
+                                    removed = anon_result.get("removed_keywords", [])
+                                    if removed:
+                                        st.caption(f"Removed sensitive tags: {', '.join(removed)}")
+                                    else:
+                                        st.caption("No sensitive tags removed.")
+                                else:
+                                    st.warning(
+                                        f"Keyword anonymization failed: {anon_result.get('message', 'Unknown error')}"
+                                    )
                         else:
                             st.markdown(f"**Description:** {r.get('description') or '(no description)'}")
                             if loc and any(loc.values()):
