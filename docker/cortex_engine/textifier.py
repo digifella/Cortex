@@ -5,6 +5,7 @@ vision-model descriptions of images and tables.
 """
 
 import os
+import re
 import base64
 import subprocess
 import tempfile
@@ -76,12 +77,18 @@ class DocumentTextifier:
                 model=self._vlm_model,
                 messages=[{
                     "role": "user",
-                    "content": "Describe this image concisely. Focus on key content, text, data, or diagrams visible.",
+                    "content": "Describe this photograph in 2-4 plain sentences. Identify the main subject, setting, and colours. Do not use markdown, headings, or bullet points. /no_think",
                     "images": [encoded],
                 }],
-                options={"temperature": 0.1, "num_predict": 300},
+                options={"temperature": 0.1, "num_predict": 600},
             )
-            return response["message"]["content"].strip()
+            result = response["message"]["content"].strip()
+            # Qwen3-VL may wrap output in <think>...</think> tags
+            result = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
+            if not result:
+                logger.warning(f"VLM returned empty description (model: {self._vlm_model})")
+                return "[Image: vision model returned empty description]"
+            return result
         except Exception as e:
             logger.warning(f"VLM describe failed: {e}")
             return "[Image: could not be described — vision model error]"
@@ -373,6 +380,10 @@ class DocumentTextifier:
         Uses a text model (Mistral etc.) rather than the VLM, because VLMs
         like Qwen3-VL return empty responses for text-only prompts.
         """
+        # Don't hallucinate keywords from empty/failed descriptions
+        if not description or description.startswith("[Image:"):
+            logger.warning("No valid description available — skipping keyword extraction")
+            return []
         try:
             import ollama
             client = ollama.Client(timeout=30)
@@ -396,10 +407,14 @@ class DocumentTextifier:
                 messages=[{
                     "role": "user",
                     "content": (
-                        "Extract 10-20 descriptive keywords from this image description. "
-                        "Return ONLY a comma-separated list of lowercase keywords. "
-                        "Include: subjects, actions, mood, lighting, colours, setting, "
-                        "composition style, and any notable objects or people.\n\n"
+                        "Extract 10-15 photo tags from this image description. "
+                        "Return ONLY a comma-separated list. Each tag should be 1-2 "
+                        "simple lowercase words (no underscores, no hyphens). "
+                        "Good tags: specific subjects, species, colours, season, "
+                        "location type, weather. "
+                        "Do NOT include photography jargon (bokeh, depth of field, "
+                        "backlit, composition, close up) or vague words (atmosphere, "
+                        "mood, scene, tones). Maximum 15 tags.\n\n"
                         f"Description: {description}"
                     ),
                 }],
@@ -408,7 +423,22 @@ class DocumentTextifier:
             raw = response["message"]["content"].strip()
             # Parse comma-separated keywords, clean up
             keywords = [k.strip().lower().strip('"\'') for k in raw.split(",")]
-            keywords = [k for k in keywords if k and len(k) > 1 and len(k) < 50]
+            # Replace underscores with spaces
+            keywords = [k.replace("_", " ") for k in keywords]
+            # Filter out photography jargon and empty/too-long entries
+            _jargon = {
+                "bokeh", "bokeh effect", "depth of field", "shallow depth of field",
+                "backlit", "backlighting", "side lit", "composition", "close up",
+                "blurred background", "out of focus", "warm tones", "cool tones",
+                "atmosphere", "mood", "ambiance", "scene", "tones", "texture",
+                "glossy texture", "gradient",
+            }
+            keywords = [
+                k for k in keywords
+                if k and len(k) > 1 and len(k) < 50 and k not in _jargon
+            ]
+            # Cap at 15
+            keywords = keywords[:15]
             if keywords:
                 return keywords
             # If LLM returned something unparseable, fall back
@@ -443,9 +473,42 @@ class DocumentTextifier:
         return keywords[:20]
 
     @staticmethod
+    def read_exif_keywords(file_path: str) -> List[str]:
+        """Read existing XMP Subject / IPTC Keywords from image."""
+        import shutil
+        import json
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return []
+        try:
+            result = subprocess.run(
+                [exiftool_path, "-json", "-XMP-dc:Subject", "-IPTC:Keywords",
+                 file_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return []
+            data = json.loads(result.stdout)
+            if not data:
+                return []
+            existing = set()
+            for field in ("Subject", "Keywords"):
+                val = data[0].get(field, [])
+                if isinstance(val, str):
+                    val = [val]
+                for v in val:
+                    existing.add(v.strip().lower())
+            return sorted(existing)
+        except Exception as e:
+            logger.warning(f"Read existing keywords failed: {e}")
+            return []
+
+    @staticmethod
     def write_exif_keywords(file_path: str, keywords: List[str],
                             description: str = "") -> Dict[str, any]:
         """Write keywords and description to image EXIF/XMP using exiftool.
+
+        Merges with existing keywords (uses += to append, not replace).
 
         Writes to:
           - XMP:dc:subject (Keywords — read by Lightroom, Bridge, etc.)
@@ -466,13 +529,13 @@ class DocumentTextifier:
 
         cmd = [exiftool_path, "-overwrite_original"]
 
-        # Use fully-qualified tag names to avoid ambiguity.
+        # Use += to ADD to existing keywords rather than replacing them.
         # XMP-dc:Subject is the keyword list that Lightroom Classic,
         # Bridge, Capture One, and other DAMs read as "Keywords".
         # IPTC:Keywords provides legacy compatibility.
         for kw in keywords:
-            cmd.append(f"-XMP-dc:Subject={kw}")
-            cmd.append(f"-IPTC:Keywords={kw}")
+            cmd.append(f"-XMP-dc:Subject+={kw}")
+            cmd.append(f"-IPTC:Keywords+={kw}")
 
         # Write description/caption to the correct fields:
         # - XMP-dc:Description → LRC "Caption" in metadata panel
@@ -509,32 +572,412 @@ class DocumentTextifier:
         except Exception as e:
             return {"success": False, "message": str(e), "keywords_written": 0}
 
-    def keyword_image(self, file_path: str) -> Dict[str, any]:
-        """Full pipeline: describe image, extract keywords, write to EXIF.
+    @staticmethod
+    def clear_exif_keywords(file_path: str) -> bool:
+        """Remove all existing XMP Subject, IPTC Keywords, and description fields."""
+        import shutil
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return False
+        try:
+            result = subprocess.run(
+                [exiftool_path, "-overwrite_original",
+                 "-XMP-dc:Subject=", "-IPTC:Keywords=",
+                 "-XMP-dc:Description=", "-IPTC:Caption-Abstract=",
+                 "-EXIF:ImageDescription=",
+                 file_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            return result.returncode == 0
+        except Exception as e:
+            logger.warning(f"Clear keywords failed: {e}")
+            return False
 
-        Returns dict with description, keywords, and write result.
+    @staticmethod
+    def clear_exif_location(file_path: str) -> bool:
+        """Remove existing IPTC/XMP location fields (Country, State, City)."""
+        import shutil
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return False
+        try:
+            result = subprocess.run(
+                [exiftool_path, "-overwrite_original",
+                 "-IPTC:Country-PrimaryLocationName=",
+                 "-XMP-photoshop:Country=",
+                 "-IPTC:Province-State=",
+                 "-XMP-photoshop:State=",
+                 "-IPTC:City=",
+                 "-XMP-photoshop:City=",
+                 file_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            return result.returncode == 0
+        except Exception as e:
+            logger.warning(f"Clear location failed: {e}")
+            return False
+
+    @staticmethod
+    def read_gps(file_path: str) -> Optional[Tuple[float, float]]:
+        """Read GPS coordinates from image EXIF. Returns (lat, lon) or None."""
+        import shutil
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return None
+        try:
+            import json
+            result = subprocess.run(
+                [exiftool_path, "-json", "-n", "-GPSLatitude", "-GPSLongitude",
+                 file_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return None
+            data = json.loads(result.stdout)
+            if not data:
+                return None
+            lat = data[0].get("GPSLatitude")
+            lon = data[0].get("GPSLongitude")
+            if lat is not None and lon is not None:
+                return (float(lat), float(lon))
+        except Exception as e:
+            logger.warning(f"GPS read failed for {file_path}: {e}")
+        return None
+
+    @staticmethod
+    def reverse_geocode(lat: float, lon: float) -> Dict[str, str]:
+        """Reverse-geocode GPS coordinates to country/state/city.
+
+        Returns dict with 'country', 'state', 'city' keys (empty string if
+        not found).
+        """
+        try:
+            from geopy.geocoders import Nominatim
+            g = Nominatim(user_agent="cortex_suite", timeout=10)
+            loc = g.reverse((lat, lon), exactly_one=True, language="en")
+            if loc is None:
+                return {"country": "", "state": "", "city": ""}
+            addr = loc.raw.get("address", {})
+            country = addr.get("country", "")
+            state = addr.get("state", "") or addr.get("region", "")
+            city = (addr.get("city", "")
+                    or addr.get("town", "")
+                    or addr.get("village", "")
+                    or addr.get("suburb", ""))
+            return {"country": country, "state": state, "city": city}
+        except Exception as e:
+            logger.warning(f"Reverse geocode failed for ({lat}, {lon}): {e}")
+            return {"country": "", "state": "", "city": ""}
+
+    @staticmethod
+    def write_exif_location(file_path: str, country: str, state: str,
+                            city: str) -> bool:
+        """Write IPTC/XMP location fields to image using exiftool."""
+        import shutil
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return False
+        cmd = [exiftool_path, "-overwrite_original"]
+        if country:
+            cmd.append(f"-IPTC:Country-PrimaryLocationName={country}")
+            cmd.append(f"-XMP-photoshop:Country={country}")
+        if state:
+            cmd.append(f"-IPTC:Province-State={state}")
+            cmd.append(f"-XMP-photoshop:State={state}")
+        if city:
+            cmd.append(f"-IPTC:City={city}")
+            cmd.append(f"-XMP-photoshop:City={city}")
+        cmd.append(file_path)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            return result.returncode == 0
+        except Exception as e:
+            logger.warning(f"EXIF location write failed: {e}")
+            return False
+
+    @staticmethod
+    def write_ownership_metadata(file_path: str, ownership_notice: str) -> Dict[str, any]:
+        """Write ownership/copyright metadata fields using exiftool."""
+        import shutil
+
+        notice = (ownership_notice or "").strip()
+        if not notice:
+            return {"success": True, "message": "No ownership notice provided", "fields_written": 0}
+
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return {"success": False, "message": "exiftool not found on system PATH", "fields_written": 0}
+
+        cmd = [
+            exiftool_path,
+            "-overwrite_original",
+            f"-EXIF:Copyright={notice}",
+            f"-IPTC:CopyrightNotice={notice}",
+            f"-XMP-dc:Rights={notice}",
+            "-XMP-xmpRights:Marked=True",
+            file_path,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+            if result.returncode == 0:
+                return {"success": True, "message": result.stdout.strip(), "fields_written": 4}
+            return {"success": False, "message": result.stderr.strip(), "fields_written": 0}
+        except Exception as e:
+            return {"success": False, "message": str(e), "fields_written": 0}
+
+    @staticmethod
+    def _resize_image_preserving_metadata(
+        file_path: str, max_width: int = 1920, max_height: int = 1080
+    ) -> Dict[str, any]:
+        """Downsample oversized images in-place and copy metadata from original."""
+        from PIL import Image
+        import shutil
+
+        suffix = Path(file_path).suffix.lower()
+        format_map = {
+            ".jpg": "JPEG",
+            ".jpeg": "JPEG",
+            ".png": "PNG",
+            ".tif": "TIFF",
+            ".tiff": "TIFF",
+            ".webp": "WEBP",
+            ".bmp": "BMP",
+            ".gif": "GIF",
+        }
+
+        original_copy = None
+        try:
+            with Image.open(file_path) as img:
+                original_width, original_height = img.size
+                image_format = img.format or format_map.get(suffix, "JPEG")
+
+            if original_width <= max_width and original_height <= max_height:
+                return {
+                    "resized": False,
+                    "original_width": original_width,
+                    "original_height": original_height,
+                    "new_width": original_width,
+                    "new_height": original_height,
+                    "metadata_preserved": True,
+                }
+
+            scale = min(max_width / float(original_width), max_height / float(original_height))
+            new_width = max(1, int(original_width * scale))
+            new_height = max(1, int(original_height * scale))
+
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                original_copy = tmp.name
+            shutil.copy2(file_path, original_copy)
+
+            with Image.open(file_path) as img:
+                if image_format == "JPEG" and img.mode in ("RGBA", "LA", "P"):
+                    img = img.convert("RGB")
+                resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                save_kwargs: Dict[str, any] = {}
+                if image_format == "JPEG":
+                    save_kwargs["quality"] = 90
+                    save_kwargs["optimize"] = True
+                resized.save(file_path, format=image_format, **save_kwargs)
+
+            metadata_preserved = False
+            exiftool_path = shutil.which("exiftool")
+            if exiftool_path:
+                copy_result = subprocess.run(
+                    [
+                        exiftool_path,
+                        "-overwrite_original",
+                        "-TagsFromFile",
+                        original_copy,
+                        "-all:all",
+                        "-unsafe",
+                        file_path,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                metadata_preserved = copy_result.returncode == 0
+                if not metadata_preserved:
+                    logger.warning(
+                        f"Metadata copy after resize failed for {Path(file_path).name}: {copy_result.stderr}"
+                    )
+            else:
+                logger.warning("exiftool not found; metadata copy after resize skipped")
+
+            return {
+                "resized": True,
+                "original_width": original_width,
+                "original_height": original_height,
+                "new_width": new_width,
+                "new_height": new_height,
+                "metadata_preserved": metadata_preserved,
+            }
+        except Exception as e:
+            logger.warning(f"Resize failed for {Path(file_path).name}: {e}")
+            if original_copy and Path(original_copy).exists():
+                try:
+                    shutil.copy2(original_copy, file_path)
+                except Exception as restore_err:
+                    logger.warning(f"Could not restore original image after resize failure: {restore_err}")
+            return {"resized": False, "error": str(e), "metadata_preserved": False}
+        finally:
+            if original_copy and Path(original_copy).exists():
+                try:
+                    os.remove(original_copy)
+                except Exception:
+                    pass
+
+    def resize_image_only(
+        self, file_path: str, max_width: int = 1920, max_height: int = 1080
+    ) -> Dict[str, any]:
+        """Resize photo only (no keyword generation), preserving metadata when possible."""
+        self._report(0.0, "Checking image dimensions...")
+        resize_info = self._resize_image_preserving_metadata(
+            file_path, max_width=max_width, max_height=max_height
+        )
+        self._report(1.0, "Done")
+        return {
+            "file_name": Path(file_path).name,
+            "resize_info": resize_info,
+        }
+
+    @staticmethod
+    def _filter_sensitive_keywords(
+        keywords: List[str], blocked_keywords: Optional[List[str]] = None
+    ) -> Tuple[List[str], List[str]]:
+        """Remove blocked/sensitive keywords while preserving other tags."""
+        blocked_set = {k.strip().lower() for k in (blocked_keywords or []) if k and k.strip()}
+        filtered: List[str] = []
+        removed: List[str] = []
+
+        for keyword in keywords:
+            kw = (keyword or "").strip()
+            if not kw:
+                continue
+            kw_lower = kw.lower()
+            is_handle = kw_lower.startswith("@") or ("_" in kw_lower)
+            if kw_lower in blocked_set or is_handle:
+                removed.append(kw_lower)
+                continue
+            filtered.append(kw_lower)
+
+        dedup_filtered = list(dict.fromkeys(filtered))
+        dedup_removed = list(dict.fromkeys(removed))
+        return dedup_filtered, dedup_removed
+
+    def keyword_image(self, file_path: str, city_radius_km: float = 5.0,
+                      clear_keywords: bool = False,
+                      clear_location: bool = False,
+                      force_resize_max_1080: bool = False,
+                      anonymize_keywords: bool = False,
+                      blocked_keywords: Optional[List[str]] = None,
+                      ownership_notice: str = "") -> Dict[str, any]:
+        """Full pipeline: describe image, extract keywords, resolve GPS location, write to EXIF.
+
+        Args:
+            file_path: Path to image file.
+            city_radius_km: Reserved for future proximity grouping.
+            clear_keywords: If True, strip existing keywords/description before writing.
+            clear_location: If True, strip existing location fields before writing.
+
+        Returns dict with description, keywords, location, and write result.
         """
         self._report(0.0, "Reading image...")
         file_name = Path(file_path).name
+        resize_info = {
+            "resized": False,
+            "metadata_preserved": True,
+        }
+
+        if force_resize_max_1080:
+            self._report(0.01, "Checking image dimensions...")
+            resize_info = self._resize_image_preserving_metadata(
+                file_path, max_width=1920, max_height=1080
+            )
+            if resize_info.get("resized"):
+                self._report(0.06, "Downsampled to gallery size")
+
+        # Clear existing fields if requested
+        if clear_keywords:
+            self._report(0.02, "Clearing existing keywords...")
+            self.clear_exif_keywords(file_path)
+        if clear_location:
+            self._report(0.04, "Clearing existing location fields...")
+            self.clear_exif_location(file_path)
+
+        # Read existing keywords so we can merge (after any clear)
+        existing_keywords = self.read_exif_keywords(file_path)
 
         with open(file_path, "rb") as f:
             image_bytes = f.read()
+
+        # GPS location lookup
+        self._report(0.1, "Reading GPS data...")
+        gps = self.read_gps(file_path)
+        location = None
+        has_gps = gps is not None
+        if has_gps:
+            self._report(0.15, "Reverse-geocoding location...")
+            location = self.reverse_geocode(gps[0], gps[1])
+            logger.info(f"GPS location for {file_name}: {location}")
 
         self._report(0.2, "Describing image with vision model...")
         description = self.describe_image(image_bytes)
 
         self._report(0.5, "Extracting keywords...")
         keywords = self.extract_keywords(description)
+        removed_sensitive_keywords: List[str] = []
+
+        # Add location tags to keywords
+        if location:
+            for field in ("city", "state", "country"):
+                val = location.get(field, "")
+                if val and val.lower() not in [k.lower() for k in keywords]:
+                    keywords.append(val.lower())
+        elif not has_gps:
+            # Mark as no GPS in batch mode
+            if "nogps" not in keywords:
+                keywords.append("nogps")
+
+        if anonymize_keywords:
+            keywords, removed_sensitive_keywords = self._filter_sensitive_keywords(
+                keywords, blocked_keywords=blocked_keywords
+            )
+
+        # Deduplicate: only write keywords that aren't already in EXIF
+        existing_lower = {k.lower() for k in existing_keywords}
+        new_keywords = [k for k in keywords if k.lower() not in existing_lower]
 
         self._report(0.8, "Writing keywords to EXIF...")
-        write_result = self.write_exif_keywords(file_path, keywords, description)
+        write_result = self.write_exif_keywords(file_path, new_keywords, description)
+
+        # Write location EXIF fields
+        if location and any(location.values()):
+            self.write_exif_location(
+                file_path, location.get("country", ""),
+                location.get("state", ""), location.get("city", ""),
+            )
+
+        ownership_result = None
+        if ownership_notice.strip():
+            ownership_result = self.write_ownership_metadata(file_path, ownership_notice.strip())
+
+        # Combined set for display (existing + new)
+        combined_keywords = sorted(set(existing_keywords + keywords))
 
         self._report(1.0, "Done")
         return {
             "file_name": file_name,
             "description": description,
-            "keywords": keywords,
+            "keywords": combined_keywords,
+            "new_keywords": new_keywords,
+            "existing_keywords": existing_keywords,
+            "removed_sensitive_keywords": removed_sensitive_keywords,
+            "has_gps": has_gps,
+            "location": location,
             "exif_result": write_result,
+            "ownership_result": ownership_result,
+            "resize_info": resize_info,
         }
 
     # ------------------------------------------------------------------

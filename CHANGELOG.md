@@ -72,6 +72,30 @@ Large UI refactor pass to reduce duplication between host and Docker pages, isol
 - Added/maintained host+Docker component pairs under `pages/components/` and `docker/pages/components/` to prevent drift.
 - Reduced monolithic page complexity in `pages/2_Knowledge_Ingest.py`, `docker/pages/2_Knowledge_Ingest.py`, `pages/6_Maintenance.py`, and `docker/pages/6_Maintenance.py`.
 
+## v6.0.3 - 2026-02-11
+
+### Document and Photo Processing Upgrade
+
+Renames Document Extract and expands Photo Processor with independent resize, metadata ownership, and keyword anonymization controls.
+
+### ✨ New Features
+- `Document Extract` page is now labeled `Document & Photo Processing` with heading `Document or Photo Processing`.
+- `Photo Keywords` tab is now `Photo Processor`.
+- Added independent `Resize Photos Only` action with resolution profiles:
+  - `Low (1920 x 1080)` max
+  - `Medium (2560 x 1440)` max
+- Added ownership metadata writing with editable prefilled notice:
+  - `All rights (c) Longboardfella. Contact longboardfella.com for info on use of photos.`
+- Added keyword anonymization option with editable blocked keyword list (default includes `friends`, `family`, `paul`, `paul_c`, `jacqui`).
+
+### 🚀 Improvements
+- Photo workflow now separates resize-only and keyword/metadata operations to avoid unnecessary AI description runs.
+- Photo results now report resize details, ownership write status, and removed sensitive tags.
+- Host and Docker copies for Document Extract and textifier are synchronized for this feature set.
+
+### 🔧 Bug Fixes
+- Fixed prior coupling where photo resize required the keyword generation path.
+
 ## v6.0.2 - 2026-02-07
 
 ### Extraction Metadata Accuracy and Path Consistency

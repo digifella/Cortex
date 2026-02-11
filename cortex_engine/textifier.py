@@ -695,9 +695,183 @@ class DocumentTextifier:
             logger.warning(f"EXIF location write failed: {e}")
             return False
 
+    @staticmethod
+    def write_ownership_metadata(file_path: str, ownership_notice: str) -> Dict[str, any]:
+        """Write ownership/copyright metadata fields using exiftool."""
+        import shutil
+
+        notice = (ownership_notice or "").strip()
+        if not notice:
+            return {"success": True, "message": "No ownership notice provided", "fields_written": 0}
+
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return {"success": False, "message": "exiftool not found on system PATH", "fields_written": 0}
+
+        cmd = [
+            exiftool_path,
+            "-overwrite_original",
+            f"-EXIF:Copyright={notice}",
+            f"-IPTC:CopyrightNotice={notice}",
+            f"-XMP-dc:Rights={notice}",
+            "-XMP-xmpRights:Marked=True",
+            file_path,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+            if result.returncode == 0:
+                return {"success": True, "message": result.stdout.strip(), "fields_written": 4}
+            return {"success": False, "message": result.stderr.strip(), "fields_written": 0}
+        except Exception as e:
+            return {"success": False, "message": str(e), "fields_written": 0}
+
+    @staticmethod
+    def _resize_image_preserving_metadata(
+        file_path: str, max_width: int = 1920, max_height: int = 1080
+    ) -> Dict[str, any]:
+        """Downsample oversized images in-place and copy metadata from original."""
+        from PIL import Image
+        import shutil
+
+        suffix = Path(file_path).suffix.lower()
+        format_map = {
+            ".jpg": "JPEG",
+            ".jpeg": "JPEG",
+            ".png": "PNG",
+            ".tif": "TIFF",
+            ".tiff": "TIFF",
+            ".webp": "WEBP",
+            ".bmp": "BMP",
+            ".gif": "GIF",
+        }
+
+        original_copy = None
+        try:
+            with Image.open(file_path) as img:
+                original_width, original_height = img.size
+                image_format = img.format or format_map.get(suffix, "JPEG")
+
+            if original_width <= max_width and original_height <= max_height:
+                return {
+                    "resized": False,
+                    "original_width": original_width,
+                    "original_height": original_height,
+                    "new_width": original_width,
+                    "new_height": original_height,
+                    "metadata_preserved": True,
+                }
+
+            scale = min(max_width / float(original_width), max_height / float(original_height))
+            new_width = max(1, int(original_width * scale))
+            new_height = max(1, int(original_height * scale))
+
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                original_copy = tmp.name
+            shutil.copy2(file_path, original_copy)
+
+            with Image.open(file_path) as img:
+                if image_format == "JPEG" and img.mode in ("RGBA", "LA", "P"):
+                    img = img.convert("RGB")
+                resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                save_kwargs: Dict[str, any] = {}
+                if image_format == "JPEG":
+                    save_kwargs["quality"] = 90
+                    save_kwargs["optimize"] = True
+                resized.save(file_path, format=image_format, **save_kwargs)
+
+            metadata_preserved = False
+            exiftool_path = shutil.which("exiftool")
+            if exiftool_path:
+                copy_result = subprocess.run(
+                    [
+                        exiftool_path,
+                        "-overwrite_original",
+                        "-TagsFromFile",
+                        original_copy,
+                        "-all:all",
+                        "-unsafe",
+                        file_path,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                metadata_preserved = copy_result.returncode == 0
+                if not metadata_preserved:
+                    logger.warning(
+                        f"Metadata copy after resize failed for {Path(file_path).name}: {copy_result.stderr}"
+                    )
+            else:
+                logger.warning("exiftool not found; metadata copy after resize skipped")
+
+            return {
+                "resized": True,
+                "original_width": original_width,
+                "original_height": original_height,
+                "new_width": new_width,
+                "new_height": new_height,
+                "metadata_preserved": metadata_preserved,
+            }
+        except Exception as e:
+            logger.warning(f"Resize failed for {Path(file_path).name}: {e}")
+            if original_copy and Path(original_copy).exists():
+                try:
+                    shutil.copy2(original_copy, file_path)
+                except Exception as restore_err:
+                    logger.warning(f"Could not restore original image after resize failure: {restore_err}")
+            return {"resized": False, "error": str(e), "metadata_preserved": False}
+        finally:
+            if original_copy and Path(original_copy).exists():
+                try:
+                    os.remove(original_copy)
+                except Exception:
+                    pass
+
+    def resize_image_only(
+        self, file_path: str, max_width: int = 1920, max_height: int = 1080
+    ) -> Dict[str, any]:
+        """Resize photo only (no keyword generation), preserving metadata when possible."""
+        self._report(0.0, "Checking image dimensions...")
+        resize_info = self._resize_image_preserving_metadata(
+            file_path, max_width=max_width, max_height=max_height
+        )
+        self._report(1.0, "Done")
+        return {
+            "file_name": Path(file_path).name,
+            "resize_info": resize_info,
+        }
+
+    @staticmethod
+    def _filter_sensitive_keywords(
+        keywords: List[str], blocked_keywords: Optional[List[str]] = None
+    ) -> Tuple[List[str], List[str]]:
+        """Remove blocked/sensitive keywords while preserving other tags."""
+        blocked_set = {k.strip().lower() for k in (blocked_keywords or []) if k and k.strip()}
+        filtered: List[str] = []
+        removed: List[str] = []
+
+        for keyword in keywords:
+            kw = (keyword or "").strip()
+            if not kw:
+                continue
+            kw_lower = kw.lower()
+            is_handle = kw_lower.startswith("@") or ("_" in kw_lower)
+            if kw_lower in blocked_set or is_handle:
+                removed.append(kw_lower)
+                continue
+            filtered.append(kw_lower)
+
+        dedup_filtered = list(dict.fromkeys(filtered))
+        dedup_removed = list(dict.fromkeys(removed))
+        return dedup_filtered, dedup_removed
+
     def keyword_image(self, file_path: str, city_radius_km: float = 5.0,
                       clear_keywords: bool = False,
-                      clear_location: bool = False) -> Dict[str, any]:
+                      clear_location: bool = False,
+                      force_resize_max_1080: bool = False,
+                      anonymize_keywords: bool = False,
+                      blocked_keywords: Optional[List[str]] = None,
+                      ownership_notice: str = "") -> Dict[str, any]:
         """Full pipeline: describe image, extract keywords, resolve GPS location, write to EXIF.
 
         Args:
@@ -710,6 +884,18 @@ class DocumentTextifier:
         """
         self._report(0.0, "Reading image...")
         file_name = Path(file_path).name
+        resize_info = {
+            "resized": False,
+            "metadata_preserved": True,
+        }
+
+        if force_resize_max_1080:
+            self._report(0.01, "Checking image dimensions...")
+            resize_info = self._resize_image_preserving_metadata(
+                file_path, max_width=1920, max_height=1080
+            )
+            if resize_info.get("resized"):
+                self._report(0.06, "Downsampled to gallery size")
 
         # Clear existing fields if requested
         if clear_keywords:
@@ -740,6 +926,7 @@ class DocumentTextifier:
 
         self._report(0.5, "Extracting keywords...")
         keywords = self.extract_keywords(description)
+        removed_sensitive_keywords: List[str] = []
 
         # Add location tags to keywords
         if location:
@@ -751,6 +938,11 @@ class DocumentTextifier:
             # Mark as no GPS in batch mode
             if "nogps" not in keywords:
                 keywords.append("nogps")
+
+        if anonymize_keywords:
+            keywords, removed_sensitive_keywords = self._filter_sensitive_keywords(
+                keywords, blocked_keywords=blocked_keywords
+            )
 
         # Deduplicate: only write keywords that aren't already in EXIF
         existing_lower = {k.lower() for k in existing_keywords}
@@ -766,6 +958,10 @@ class DocumentTextifier:
                 location.get("state", ""), location.get("city", ""),
             )
 
+        ownership_result = None
+        if ownership_notice.strip():
+            ownership_result = self.write_ownership_metadata(file_path, ownership_notice.strip())
+
         # Combined set for display (existing + new)
         combined_keywords = sorted(set(existing_keywords + keywords))
 
@@ -776,9 +972,12 @@ class DocumentTextifier:
             "keywords": combined_keywords,
             "new_keywords": new_keywords,
             "existing_keywords": existing_keywords,
+            "removed_sensitive_keywords": removed_sensitive_keywords,
             "has_gps": has_gps,
             "location": location,
             "exif_result": write_result,
+            "ownership_result": ownership_result,
+            "resize_info": resize_info,
         }
 
     # ------------------------------------------------------------------
