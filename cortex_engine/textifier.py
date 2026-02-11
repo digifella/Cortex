@@ -865,6 +865,52 @@ class DocumentTextifier:
         dedup_removed = list(dict.fromkeys(removed))
         return dedup_filtered, dedup_removed
 
+    def _llm_filter_sensitive_keywords(self, keywords: List[str]) -> List[str]:
+        """Use a text LLM to remove personal/sensitive tags while keeping neutral content tags."""
+        if not keywords:
+            return []
+        try:
+            import ollama
+            client = ollama.Client(timeout=30)
+
+            text_model = None
+            for model in self.TEXT_MODELS:
+                try:
+                    client.show(model)
+                    text_model = model
+                    break
+                except Exception:
+                    continue
+
+            if not text_model:
+                logger.warning("No text model available for keyword anonymization; using deterministic filtering only")
+                return keywords
+
+            payload = ", ".join(keywords)
+            response = client.chat(
+                model=text_model,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "You are cleaning photo keywords for privacy. "
+                        "Remove personal names, usernames/handles, nicknames, and relationship words "
+                        "like friends/family/partner/mum/dad. "
+                        "Keep non-person subject/location/object tags unchanged. "
+                        "Return ONLY a comma-separated list of kept keywords in lowercase.\n\n"
+                        f"Keywords: {payload}"
+                    ),
+                }],
+                options={"temperature": 0.0, "num_predict": 200},
+            )
+            raw = (response.get("message", {}) or {}).get("content", "").strip()
+            if not raw:
+                return keywords
+            kept = [k.strip().lower() for k in raw.split(",") if k.strip()]
+            return list(dict.fromkeys(kept))
+        except Exception as e:
+            logger.warning(f"LLM keyword anonymization failed: {e}")
+            return keywords
+
     def keyword_image(self, file_path: str, city_radius_km: float = 5.0,
                       clear_keywords: bool = False,
                       clear_location: bool = False,
@@ -940,9 +986,14 @@ class DocumentTextifier:
                 keywords.append("nogps")
 
         if anonymize_keywords:
-            keywords, removed_sensitive_keywords = self._filter_sensitive_keywords(
-                keywords, blocked_keywords=blocked_keywords
+            llm_kept_keywords = self._llm_filter_sensitive_keywords(keywords)
+            llm_removed = [k for k in keywords if k.lower() not in {x.lower() for x in llm_kept_keywords}]
+            keywords, blocked_removed = self._filter_sensitive_keywords(
+                llm_kept_keywords, blocked_keywords=blocked_keywords
             )
+            removed_sensitive_keywords = list(dict.fromkeys(
+                [x.lower() for x in llm_removed] + blocked_removed
+            ))
 
         # Deduplicate: only write keywords that aren't already in EXIF
         existing_lower = {k.lower() for k in existing_keywords}
