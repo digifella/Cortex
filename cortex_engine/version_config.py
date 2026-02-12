@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.0.3"
+CORTEX_VERSION = "6.0.4"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 0,
-    "patch": 3,
+    "patch": 4,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,24 +24,21 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-02-11",
-    "release_name": "Document and Photo Processing Upgrade",
-    "description": "Renames Document Extract and expands Photo Processor with independent resize, metadata ownership, and keyword anonymization controls.",
+    "release_date": "2026-02-12",
+    "release_name": "Metadata Extraction Reliability Update",
+    "description": "Improves document preface extraction reliability for publication dates/titles and suppresses logo-icon image noise in metadata workflows.",
     "breaking_changes": [],
     "new_features": [
-        "Document Extract page is now labeled `Document & Photo Processing` with heading `Document or Photo Processing`",
-        "Photo tab renamed to `Photo Processor` with independent `Resize Photos Only` action",
-        "Photo resize profiles now support `Low (1920x1080)` and `Medium (2560x1440)` maximum bounds",
-        "Photo metadata workflow now supports ownership notice writing to EXIF/IPTC/XMP rights fields",
-        "Photo keyword workflow now supports optional sensitive-keyword anonymization using a blocked terms list"
+        "Document preface extraction now prioritizes citation/publishing-line date patterns (e.g., `(2024)` and `Revised version, November 2024`)",
+        "Textifier now suppresses logo/icon-only image descriptions with a deterministic placeholder to reduce metadata noise"
     ],
     "improvements": [
-        "Photo Processor splits resize-only and keyword/metadata actions to avoid unnecessary AI processing",
-        "Photo result panels now report resize dimensions, ownership-write status, and removed sensitive tags",
-        "Keyword anonymization defaults now include social tags like `friends` and `family` via editable blocked list"
+        "Title extraction now skips citation boilerplate lines such as `Please cite this publication as`",
+        "Preface metadata extraction prompt now explicitly ignores tiny/logo/icon figure captions"
     ],
     "bug_fixes": [
-        "Resolved coupling where resize was previously tied to keyword-generation flow"
+        "Reduced false `Unknown` publishing dates for institutional reports with citation-style metadata blocks",
+        "Reduced pollution of abstract/keyword metadata from decorative logo/icon figure captions"
     ],
     "performance": []
 }

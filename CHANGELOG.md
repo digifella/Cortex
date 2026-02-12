@@ -72,6 +72,24 @@ Large UI refactor pass to reduce duplication between host and Docker pages, isol
 - Added/maintained host+Docker component pairs under `pages/components/` and `docker/pages/components/` to prevent drift.
 - Reduced monolithic page complexity in `pages/2_Knowledge_Ingest.py`, `docker/pages/2_Knowledge_Ingest.py`, `pages/6_Maintenance.py`, and `docker/pages/6_Maintenance.py`.
 
+## v6.0.4 - 2026-02-12
+
+### Metadata Extraction Reliability Update
+
+Improves document preface extraction reliability for publication dates/titles and suppresses logo/icon image noise in metadata workflows.
+
+### ✨ New Features
+- Document preface extraction now prioritizes citation/publishing-line date patterns, including `(YYYY)` citation years and `Revised version, <Month YYYY>` forms.
+- Textifier now suppresses logo/icon-only image descriptions with a deterministic placeholder (`[Image: logo/icon omitted]`) to reduce metadata noise.
+
+### 🚀 Improvements
+- Title extraction now skips citation boilerplate such as `Please cite this publication as`.
+- LLM preface metadata instructions now explicitly ignore tiny/logo/icon figure captions for title/date/source/abstract/keywords decisions.
+
+### 🔧 Bug Fixes
+- Reduced false `publishing_date: Unknown` outcomes on institutional reports where publication year appears in citation blocks.
+- Reduced abstract/keyword contamination from decorative figure descriptions (logos/icons/watermarks).
+
 ## v6.0.3 - 2026-02-11
 
 ### Document and Photo Processing Upgrade

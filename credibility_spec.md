@@ -123,6 +123,12 @@ If present, map these aliases to canonical fields before normalization:
 - Invalid or missing values default to Tier 0.
 - Normalize author names and metadata to ASCII-safe text for robust searching/parsing.
 - Remove affiliation superscripts/index markers from author names.
+- Title extraction must ignore citation boilerplate headers (e.g., `Please cite this publication as`).
+- Publishing date extraction must prefer citation/publication context before generic year detection:
+  - citation-line patterns like `(2024)`
+  - revised/publication labels like `Revised version, November 2024`
+  - publication context lines containing `published|publication|issued|ISBN|ISSN|DOI`
+- Preface sanitization should remove logo/icon-only image captions before LLM or deterministic metadata extraction.
 
 ## Keyword Rules (Document Preface)
 - Target count: 5-12 keywords.

@@ -64,6 +64,24 @@ class DocumentTextifier:
             self._vlm_client = None
             self._vlm_model = None
 
+    @staticmethod
+    def _looks_like_logo_icon_description(text: str) -> bool:
+        """Heuristic: detect short logo/icon-only descriptions that add metadata noise."""
+        t = (text or "").strip().lower()
+        if not t:
+            return False
+        logo_markers = [
+            "logo", "icon", "icons", "emblem", "symbol", "badge", "watermark",
+            "seal", "silhouette", "initials", "letters",
+        ]
+        visual_markers = [
+            "left icon", "right icon", "circular", "circle", "black and white",
+            "background", "strip", "main colors", "main colours",
+        ]
+        marker_hits = sum(1 for m in logo_markers if m in t)
+        visual_hits = sum(1 for m in visual_markers if m in t)
+        return (marker_hits >= 1 and visual_hits >= 1) or marker_hits >= 2
+
     def describe_image(self, image_bytes: bytes) -> str:
         """Describe an image using the VLM. Returns placeholder on failure."""
         if not self.use_vision:
@@ -77,7 +95,12 @@ class DocumentTextifier:
                 model=self._vlm_model,
                 messages=[{
                     "role": "user",
-                    "content": "Describe this photograph in 2-4 plain sentences. Identify the main subject, setting, and colours. Do not use markdown, headings, or bullet points. /no_think",
+                    "content": (
+                        "Describe this photograph in 2-4 plain sentences. Identify main subject, setting, and colours. "
+                        "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
+                        "return exactly: [Image: logo/icon omitted]. "
+                        "Do not use markdown, headings, or bullet points. /no_think"
+                    ),
                     "images": [encoded],
                 }],
                 options={"temperature": 0.1, "num_predict": 600},
@@ -88,6 +111,8 @@ class DocumentTextifier:
             if not result:
                 logger.warning(f"VLM returned empty description (model: {self._vlm_model})")
                 return "[Image: vision model returned empty description]"
+            if self._looks_like_logo_icon_description(result):
+                return "[Image: logo/icon omitted]"
             return result
         except Exception as e:
             logger.warning(f"VLM describe failed: {e}")

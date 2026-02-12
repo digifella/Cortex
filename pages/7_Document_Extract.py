@@ -389,6 +389,29 @@ def _extract_available_at(md_content: str) -> str:
 
 def _sanitize_markdown_for_preface(md_content: str) -> str:
     """Remove known conversion-error boilerplate from markdown before LLM/keyword extraction."""
+    def _is_logo_or_icon_caption(caption_text: str) -> bool:
+        c = _clean_line(caption_text)
+        if not c:
+            return True
+        low = c.lower()
+        marker_hits = sum(
+            1
+            for marker in [
+                "logo", "icon", "icons", "watermark", "emblem", "symbol",
+                "badge", "seal", "silhouette", "letters", "initials",
+            ]
+            if marker in low
+        )
+        visual_hits = sum(
+            1
+            for marker in [
+                "black and white", "circular", "circle", "strip", "background",
+                "left icon", "right icon", "main colors", "main colours",
+            ]
+            if marker in low
+        )
+        return (marker_hits >= 1 and visual_hits >= 1) or marker_hits >= 2
+
     cleaned_lines = []
     error_markers = [
         "image could not be described",
@@ -403,6 +426,12 @@ def _sanitize_markdown_for_preface(md_content: str) -> str:
         low = line.lower()
         if any(marker in low for marker in error_markers):
             continue
+        # Drop inline image-caption blocks that are logo/icon noise.
+        image_caption_match = re.match(r"^\s*>\s*\*\*\[Image[^\]]*\]\*\*:\s*(.+)$", line, flags=re.IGNORECASE)
+        if image_caption_match:
+            caption_body = image_caption_match.group(1).strip()
+            if _is_logo_or_icon_caption(caption_body):
+                continue
         # Drop markdown image embeds that mostly carry filenames/noise for metadata extraction.
         if line.startswith("![") and "](" in line:
             continue
@@ -455,6 +484,13 @@ def _guess_title_from_markdown(md_content: str, file_path: str) -> str:
     skip_exact = {
         "viewpoint", "introduction", "abstract", "background", "keywords", "key words"
     }
+    skip_contains = [
+        "please cite this publication as",
+        "this work is published under",
+        "opinions expressed and arguments employed",
+        "revised version",
+        "corrigenda",
+    ]
     # Academic fallback: title is often the line immediately before author names.
     for i in range(1, min(80, len(lines))):
         if _extract_authors_from_markdown(lines[i]):
@@ -464,6 +500,7 @@ def _guess_title_from_markdown(md_content: str, file_path: str) -> str:
                 and not re.match(r"^page\s+\d+", prev, flags=re.IGNORECASE)
                 and "licensed" not in prev.lower()
                 and "creative commons" not in prev.lower()
+                and not any(s in prev.lower() for s in skip_contains)
             ):
                 return prev[:180]
     for i, line in enumerate(lines[:40]):
@@ -487,6 +524,8 @@ def _guess_title_from_markdown(md_content: str, file_path: str) -> str:
         if len(line) < 15:
             continue
         if len(line) > 180:
+            continue
+        if any(x in low for x in skip_contains):
             continue
         if any(x in low for x in ["university", "hospital", "school of", "email:", "doi:", "journal", "www."]):
             continue
@@ -583,20 +622,80 @@ def _infer_publisher_from_text(md_text: str, source_hint: str) -> str:
 
 def _extract_publishing_date(md_text: str, file_path: str) -> str:
     text = (md_text or "")[:12000]
+    text_ascii = _ascii_fold(text)
+
+    # Strong citation-line signal, e.g. "... (2024), ... DOI ..."
+    citation_line = re.search(
+        r"(?is)\bplease\s+cite\b[^\n]{0,300}?\((19|20)\d{2}\)",
+        text_ascii,
+        flags=re.IGNORECASE,
+    )
+    if citation_line:
+        m = re.search(r"\((19|20)\d{2}\)", citation_line.group(0))
+        if m:
+            return m.group(0).strip("()")
+
+    revised_pattern = re.search(
+        r"(?i)\brevised\s+version\b[^A-Za-z0-9]{0,8}(?:,\s*)?([A-Za-z]{3,9}\s+20\d{2}|20\d{2})",
+        text_ascii,
+    )
+    if revised_pattern:
+        return _clean_line(revised_pattern.group(1))
+
     # Prefer explicitly labeled publication/update lines before generic year-only matches.
     label_pattern = (
         r"(?i)\b(?:published|publication date|date published|released|issued|last updated|updated)\b"
         r"[^A-Za-z0-9]{0,12}"
         r"(20\d{2}[-/][01]?\d[-/][0-3]?\d|[0-3]?\d\s+[A-Za-z]{3,9}\s+20\d{2}|[A-Za-z]{3,9}\s+[0-3]?\d,\s+20\d{2}|20\d{2})"
     )
-    m = re.search(label_pattern, text)
+    m = re.search(label_pattern, text_ascii)
     if m:
         return _clean_line(m.group(1))
 
+    # Context-aware year extraction from citation/publication lines.
+    scored_year = ""
+    scored_value = -999
+    for raw_line in text_ascii.splitlines():
+        line = _clean_line(raw_line)
+        if not line:
+            continue
+        years = re.findall(r"\b((?:19|20)\d{2})\b", line)
+        if not years:
+            continue
+
+        low = line.lower()
+        score = 0
+        if "please cite" in low or "cite this publication" in low:
+            score += 8
+        if "revised version" in low:
+            score += 7
+        if any(k in low for k in ["published", "publication", "issued", "release", "copyright"]):
+            score += 6
+        if any(k in low for k in ["isbn", "issn", "doi"]):
+            score += 5
+        if re.search(r"\((?:19|20)\d{2}\)", line):
+            score += 4
+        if low.startswith("> **[image"):
+            score -= 5
+        if "photo credits" in low:
+            score -= 3
+
+        candidate_year = years[0]
+        if score > scored_value:
+            scored_value = score
+            scored_year = candidate_year
+
+    if scored_year and scored_value >= 3:
+        return scored_year
+
     generic_pattern = r"(20\d{2}[-/][01]?\d[-/][0-3]?\d|[0-3]?\d\s+[A-Za-z]{3,9}\s+20\d{2}|[A-Za-z]{3,9}\s+[0-3]?\d,\s+20\d{2})"
-    m = re.search(generic_pattern, text)
+    m = re.search(generic_pattern, text_ascii)
     if m:
         return _clean_line(m.group(1))
+
+    year_match = re.search(r"\b((?:19|20)\d{2})\b", text_ascii)
+    if year_match:
+        return year_match.group(1)
 
     # Last fallback: year in filename.
     filename = _user_visible_filename(file_path)
@@ -657,8 +756,9 @@ Rules:
 - If abstract is not explicitly present, generate a concise abstract from the document.
 - If abstract exists, extract the full abstract paragraph(s), not just one line.
 - For authors, include only person names and exclude affiliations/locations/institutions.
-- For title, prefer the document title and never use abstract opening text.
+- For title, prefer the document title and never use abstract opening text or citation boilerplate (e.g. "Please cite this publication as").
 - For available_at, prefer DOI URL if present, else canonical report URL, else "Unknown".
+- For publishing_date, prioritize explicit year/date from citation/publishing lines, including patterns like "(2024)" and "Revised version, November 2024".
 - Provide 5-12 useful keywords, with each keyword at most TWO WORDS.
 - Credibility tiers:
   5 / peer-reviewed / Peer-Reviewed: NLM/PubMed, Nature, The Lancet, JAMA, BMJ
@@ -669,6 +769,7 @@ Rules:
   0 / unclassified / Unclassified: not yet assessed
 - If source_type is AI Generated Report, default to 0 / unclassified.
 - Treat titles like "Deep report into..." and strongly AI-styled writing (frequent em-dashes) as AI-generated unless clear human institutional/academic markers are present.
+- Ignore tiny/logo/icon-only figure captions when determining title, abstract, keywords, source_type, and date.
 - If a field is unknown use "Unknown" (or [] for authors/keywords).
 
 File name: {_user_visible_filename(file_path)}
