@@ -143,7 +143,7 @@ for /f "tokens=1* delims==" %%A in ('findstr /B "EXTERNAL_KNOWLEDGE_PATH=" .env 
 if not defined EXTERNAL_AI_PATH (
     echo EXTERNAL_AI_DATABASE_PATH not set in .env
     echo.
-    set /p "EXTERNAL_AI_PATH=Enter path for AI databases (e.g., C:\ai_databases): "
+    set /p "EXTERNAL_AI_PATH=Enter path for AI databases, for example C:\ai_databases: "
 
     if not defined EXTERNAL_AI_PATH (
         echo ERROR: Path required for external storage mode
@@ -168,7 +168,7 @@ if not defined EXTERNAL_AI_PATH (
 
 if not defined EXTERNAL_KB_PATH (
     echo.
-    set /p "EXTERNAL_KB_PATH=Enter path for knowledge source (e.g., C:\KB_Test) [optional]: "
+    set /p "EXTERNAL_KB_PATH=Enter path for knowledge source, for example C:\KB_Test [optional]: "
 
     if defined EXTERNAL_KB_PATH (
         if not exist "!EXTERNAL_KB_PATH!" (
@@ -204,7 +204,7 @@ if /I "%EXECUTION_MODE%"=="cpu" (
 )
 
 if /I "%EXECUTION_MODE%"=="gpu" (
-    echo GPU mode requested (--gpu). Validating NVIDIA runtime...
+    echo GPU mode requested --gpu. Validating NVIDIA runtime...
     if /I not "%HAS_GPU_CLI%"=="true" (
         echo ERROR: GPU mode failed: nvidia-smi not available or GPU not detected.
         echo Install NVIDIA drivers ^(or run with --cpu^).
@@ -279,9 +279,9 @@ echo   Stop:          %~nx0 --stop
 echo   Remove:        %~nx0 --down
 echo.
 if "%STORAGE_MODE%"=="portable" (
-    echo Storage: PORTABLE (Docker volumes)
+    echo Storage: PORTABLE - Docker volumes
 ) else (
-    echo Storage: EXTERNAL (!EXTERNAL_AI_PATH!)
+    echo Storage: EXTERNAL - !EXTERNAL_AI_PATH!
 )
 echo.
 pause
