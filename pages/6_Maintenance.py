@@ -596,7 +596,7 @@ def _enforce_credibility_policy_inplace(meta: dict, doc_text: str) -> bool:
     is_ai_generated = source_type.lower() == "ai generated report" or any(m in combined_lower for m in ai_markers)
 
     if is_ai_generated:
-        final_value = 1
+        final_value = 0
     elif marker_value > 0:
         final_value = marker_value
     else:

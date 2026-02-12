@@ -577,6 +577,7 @@ Rules:
   2 / editorial / Editorial: Scientific American, The Conversation, HBR
   1 / commentary / Commentary: blogs, newsletters, consulting reports, opinion
   0 / unclassified / Unclassified: not yet assessed
+- If source_type is AI Generated Report, default to 0 / unclassified.
 - If a field is unknown use "Unknown" (or [] for authors/keywords).
 
 File name: {_user_visible_filename(file_path)}
@@ -745,7 +746,7 @@ def _classify_credibility_tier(
         1: ["blog", "newsletter", "opinion", "consulting report", "whitepaper", "white paper"],
     }
     if source_type == "AI Generated Report":
-        tier_value = 1
+        tier_value = 0
     else:
         tier_value = 0
         for value in (5, 4, 3, 2, 1):

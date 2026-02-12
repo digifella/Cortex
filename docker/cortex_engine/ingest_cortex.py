@@ -388,7 +388,7 @@ def _enforce_credibility_policy(metadata_json: Dict, file_path: str, text: str) 
     marker_value = _detect_marker_credibility_value(file_path, combined_text)
 
     if is_ai_generated:
-        final_value = 1
+        final_value = 0
     elif marker_value > 0:
         final_value = marker_value
     else:
@@ -1217,7 +1217,7 @@ def analyze_documents(include_paths: List[str], fresh_start: bool, args=None, ta
         '  - 2 / editorial / Editorial: Scientific American, The Conversation, HBR',
         '  - 1 / commentary / Commentary: blogs, newsletters, consulting reports, opinion',
         '  - 0 / unclassified / Unclassified: not yet assessed (default)',
-        '- If source_type indicates AI-generated content, classify credibility as tier 1 (commentary).',
+        '- If source_type indicates AI-generated content, classify credibility as tier 0 (unclassified).',
         '- Populate all four fields consistently: `credibility_tier_value`, `credibility_tier_key`, `credibility_tier_label`, `credibility`.',
         '- `credibility` format must be: "{Draft|Final} {Label} Report".',
         '- If no other category seems appropriate, you **MUST** use "Other" as a fallback.', "---", "File Path: {file_path}", "Source Type: {source_type}", "Document Content (first 8000 characters):",

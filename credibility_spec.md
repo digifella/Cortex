@@ -44,12 +44,13 @@ Status: Active
   - uncertain links (`client_error|server_error|unreachable`): append `"(Source Link Unverified)"`
 
 ## Deterministic Policy
-1. If `source_type == "AI Generated Report"` then force Tier 1 (`commentary`).
+1. If `source_type == "AI Generated Report"` then force Tier 0 (`unclassified`).
 2. Else apply marker matching in priority order: `5 -> 4 -> 3 -> 2 -> 1`.
 3. If no marker matched, keep valid model-provided tier if present; otherwise Tier 0.
 4. If source availability is confirmed dead (`404`/`410`), reduce tier by 2 (floor at 0).
 5. Do not tier-downgrade for temporary connectivity states (`client_error|server_error|unreachable`).
 6. Always emit all canonical fields consistently.
+7. AI-generated material should still be separately identifiable via `source_type = "AI Generated Report"` for filtering/analysis.
 
 ## URL Availability Rules
 - Preferred check flow: `HEAD`, then fallback to ranged `GET` (`bytes=0-0`) if required.
