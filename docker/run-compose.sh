@@ -5,6 +5,8 @@
 # Usage:
 #   ./run-compose.sh              # Portable mode (default)
 #   ./run-compose.sh --external   # External storage mode
+#   ./run-compose.sh --gpu        # Force GPU profile (fail-fast if unavailable)
+#   ./run-compose.sh --cpu        # Force CPU profile
 #   ./run-compose.sh --stop       # Stop all services
 #   ./run-compose.sh --down       # Stop and remove containers
 
@@ -30,6 +32,7 @@ echo ""
 # Parse arguments
 STORAGE_MODE="portable"
 ACTION="start"
+EXECUTION_MODE="auto"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -45,11 +48,21 @@ while [[ $# -gt 0 ]]; do
             ACTION="down"
             shift
             ;;
+        --gpu)
+            EXECUTION_MODE="gpu"
+            shift
+            ;;
+        --cpu)
+            EXECUTION_MODE="cpu"
+            shift
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
             echo "  --external, -e    Use external storage (host filesystem)"
+            echo "  --gpu             Force GPU profile (fail-fast if unavailable)"
+            echo "  --cpu             Force CPU profile"
             echo "  --stop            Stop all services"
             echo "  --down            Stop and remove containers"
             echo "  --help, -h        Show this help"
@@ -169,14 +182,47 @@ else
     COMPOSE_CMD="docker compose"
 fi
 
-# Check for NVIDIA GPU
-echo "Checking for NVIDIA GPU..."
+# Resolve CPU/GPU profile with explicit runtime checks.
+has_gpu_cli=false
+has_gpu_runtime=false
 if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
-    echo -e "${GREEN}NVIDIA GPU detected${NC}"
+    has_gpu_cli=true
+fi
+if docker info 2>/dev/null | grep -qi "nvidia"; then
+    has_gpu_runtime=true
+fi
+
+if [ "$EXECUTION_MODE" = "cpu" ]; then
+    echo -e "${BLUE}CPU mode forced by --cpu${NC}"
+    PROFILE="--profile cpu"
+elif [ "$EXECUTION_MODE" = "gpu" ]; then
+    echo "GPU mode requested (--gpu). Validating NVIDIA runtime..."
+    if [ "$has_gpu_cli" != "true" ]; then
+        echo -e "${RED}GPU mode failed: nvidia-smi not available or GPU not detected.${NC}"
+        echo "Install NVIDIA drivers (or run with --cpu)."
+        exit 1
+    fi
+    if [ "$has_gpu_runtime" != "true" ]; then
+        echo -e "${RED}GPU mode failed: Docker NVIDIA runtime is not detected.${NC}"
+        echo "Install/configure NVIDIA Container Toolkit, then retry (or run with --cpu)."
+        exit 1
+    fi
+    echo -e "${GREEN}NVIDIA GPU + Docker runtime detected${NC}"
     PROFILE="--profile gpu"
 else
-    echo -e "${BLUE}No NVIDIA GPU - using CPU mode${NC}"
-    PROFILE="--profile cpu"
+    echo "Checking for NVIDIA GPU..."
+    if [ "$has_gpu_cli" = "true" ] && [ "$has_gpu_runtime" = "true" ]; then
+        echo -e "${GREEN}NVIDIA GPU + Docker runtime detected${NC}"
+        PROFILE="--profile gpu"
+    else
+        if [ "$has_gpu_cli" = "true" ] && [ "$has_gpu_runtime" != "true" ]; then
+            echo -e "${YELLOW}NVIDIA GPU detected but Docker NVIDIA runtime missing; falling back to CPU.${NC}"
+            echo -e "${YELLOW}Tip: install NVIDIA Container Toolkit or use --gpu after setup.${NC}"
+        else
+            echo -e "${BLUE}No NVIDIA GPU detected - using CPU mode${NC}"
+        fi
+        PROFILE="--profile cpu"
+    fi
 fi
 
 # Build and start services

@@ -11,6 +11,7 @@ echo.
 REM Parse arguments
 set "STORAGE_MODE=portable"
 set "ACTION=start"
+set "EXECUTION_MODE=auto"
 
 :parse_args
 if "%~1"=="" goto done_parsing
@@ -34,6 +35,16 @@ if /I "%~1"=="--down" (
     shift
     goto parse_args
 )
+if /I "%~1"=="--gpu" (
+    set "EXECUTION_MODE=gpu"
+    shift
+    goto parse_args
+)
+if /I "%~1"=="--cpu" (
+    set "EXECUTION_MODE=cpu"
+    shift
+    goto parse_args
+)
 if /I "%~1"=="--help" goto show_help
 if /I "%~1"=="-h" goto show_help
 echo Unknown option: %~1
@@ -45,6 +56,8 @@ echo Usage: %~nx0 [OPTIONS]
 echo.
 echo Options:
 echo   --external, -e    Use external storage (host filesystem)
+echo   --gpu             Force GPU profile (fail-fast if unavailable)
+echo   --cpu             Force CPU profile
 echo   --stop            Stop all services
 echo   --down            Stop and remove containers
 echo   --help, -h        Show this help
@@ -175,16 +188,55 @@ echo.
 set "COMPOSE_CMD=docker compose -f docker-compose.yml -f docker-compose.external.yml"
 
 :check_gpu
-REM Check for NVIDIA GPU
-echo Checking for NVIDIA GPU...
+set "HAS_GPU_CLI=false"
+set "HAS_GPU_RUNTIME=false"
+
 nvidia-smi >nul 2>&1
-if not errorlevel 1 (
-    echo OK: NVIDIA GPU detected
+if not errorlevel 1 set "HAS_GPU_CLI=true"
+
+docker info 2>nul | findstr /I "nvidia" >nul
+if not errorlevel 1 set "HAS_GPU_RUNTIME=true"
+
+if /I "%EXECUTION_MODE%"=="cpu" (
+    echo INFO: CPU mode forced by --cpu
+    set "PROFILE=--profile cpu"
+    goto run_compose
+)
+
+if /I "%EXECUTION_MODE%"=="gpu" (
+    echo GPU mode requested (--gpu). Validating NVIDIA runtime...
+    if /I not "%HAS_GPU_CLI%"=="true" (
+        echo ERROR: GPU mode failed: nvidia-smi not available or GPU not detected.
+        echo Install NVIDIA drivers ^(or run with --cpu^).
+        pause
+        exit /b 1
+    )
+    if /I not "%HAS_GPU_RUNTIME%"=="true" (
+        echo ERROR: GPU mode failed: Docker NVIDIA runtime is not detected.
+        echo Install/configure NVIDIA Container Toolkit, then retry ^(or run with --cpu^).
+        pause
+        exit /b 1
+    )
+    echo OK: NVIDIA GPU + Docker runtime detected
+    set "PROFILE=--profile gpu"
+    goto run_compose
+)
+
+echo Checking for NVIDIA GPU...
+if /I "%HAS_GPU_CLI%"=="true" if /I "%HAS_GPU_RUNTIME%"=="true" (
+    echo OK: NVIDIA GPU + Docker runtime detected
     set "PROFILE=--profile gpu"
 ) else (
-    echo INFO: No NVIDIA GPU - using CPU mode
+    if /I "%HAS_GPU_CLI%"=="true" if /I not "%HAS_GPU_RUNTIME%"=="true" (
+        echo WARN: NVIDIA GPU detected but Docker NVIDIA runtime missing; falling back to CPU.
+        echo Tip: install NVIDIA Container Toolkit or use --gpu after setup.
+    ) else (
+        echo INFO: No NVIDIA GPU - using CPU mode
+    )
     set "PROFILE=--profile cpu"
 )
+
+:run_compose
 
 REM Build and start services
 echo.

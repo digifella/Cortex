@@ -31,6 +31,8 @@ All data is stored inside Docker volumes, making the entire setup **fully transp
 # Start in portable mode (default)
 ./run-compose.sh                    # Linux/Mac
 run-compose.bat                     # Windows
+./run-compose.sh --gpu              # Force GPU profile (fails fast if NVIDIA runtime missing)
+./run-compose.sh --cpu              # Force CPU profile
 
 # Or with docker compose directly
 docker compose up -d
