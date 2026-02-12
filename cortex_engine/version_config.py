@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.0.5"
+CORTEX_VERSION = "6.0.6"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 0,
-    "patch": 5,
+    "patch": 6,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,19 +25,18 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-02-12",
-    "release_name": "PDF Table Parsing Safety Update",
-    "description": "Adds conservative PDF table-to-Markdown extraction for simple tables and replaces unreliable figure parsing with explicit placeholders.",
+    "release_name": "PDF Strict Text-Only Mode",
+    "description": "Switches PDF textifier to strict text-only extraction, ignoring tables/figures/images to avoid unreliable pseudo-structured output.",
     "breaking_changes": [],
     "new_features": [
-        "PDF textifier now extracts simple high-confidence tables and emits Markdown ASCII-style tables",
-        "PDF visuals that are not reliably machine-parseable are now explicitly marked as unavailable rather than loosely described"
+        "PDF textifier now runs in strict text-only mode and excludes table/figure/image extraction blocks"
     ],
     "improvements": [
-        "Table extraction now uses quality gating (shape/completeness/length checks) to avoid noisy table output",
-        "Figure handling now prefers deterministic placeholders for charts/infographics/logos in PDF workflows"
+        "Document markdown output is now cleaner and more stable for downstream metadata extraction/classification",
+        "Removes malformed table-like fragments caused by unreliable layout reconstruction"
     ],
     "bug_fixes": [
-        "Reduced ingestion noise caused by OCR-like numeric fragments from unstructured figure parsing in reports"
+        "Eliminated noisy figure/table artefacts in converted markdown from complex report graphics"
     ],
     "performance": []
 }

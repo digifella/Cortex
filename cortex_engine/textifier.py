@@ -275,32 +275,8 @@ class DocumentTextifier:
                 md_parts.append(text)
                 md_parts.append("")
 
-            table_results = self._extract_pdf_tables(page)
-            for t in table_results:
-                table_idx = int(t.get("index", 0))
-                if t.get("status") == "parsed":
-                    rows = t.get("rows", [])
-                    md_parts.append(f"**Table {table_idx}:**")
-                    md_parts.append(self.table_to_markdown(rows))
-                    md_parts.append("")
-                else:
-                    md_parts.append(f"> **[Table {table_idx}]**: unable to be reliably parsed.")
-                    md_parts.append("")
-
-            image_list = page.get_images(full=True)
-            for img_idx, img_info in enumerate(image_list):
-                xref = img_info[0]
-                try:
-                    base_image = doc.extract_image(xref)
-                    if base_image and base_image.get("image"):
-                        self._report(
-                            (page_num + (img_idx + 1) / max(len(image_list), 1)) / total_pages,
-                            f"Page {page_num + 1} — scanning figure {img_idx + 1}/{len(image_list)}",
-                        )
-                        md_parts.append(f"> **[Figure {img_idx + 1}]**: unable to be reliably parsed.")
-                        md_parts.append("")
-                except Exception as e:
-                    logger.debug(f"Could not extract image xref={xref}: {e}")
+            # Strict text-only PDF mode:
+            # intentionally ignore embedded tables/figures/images to avoid noisy pseudo-structured output.
 
             # Explicit page break marker for downstream parsers.
             if page_num < total_pages - 1:

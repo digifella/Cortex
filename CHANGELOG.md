@@ -72,6 +72,22 @@ Large UI refactor pass to reduce duplication between host and Docker pages, isol
 - Added/maintained host+Docker component pairs under `pages/components/` and `docker/pages/components/` to prevent drift.
 - Reduced monolithic page complexity in `pages/2_Knowledge_Ingest.py`, `docker/pages/2_Knowledge_Ingest.py`, `pages/6_Maintenance.py`, and `docker/pages/6_Maintenance.py`.
 
+## v6.0.6 - 2026-02-12
+
+### PDF Strict Text-Only Mode
+
+Switches PDF textifier to strict text-only extraction, ignoring tables/figures/images to avoid unreliable pseudo-structured output.
+
+### ✨ New Features
+- PDF textifier now runs in strict text-only mode and excludes table/figure/image extraction blocks.
+
+### 🚀 Improvements
+- Converted markdown is cleaner and more stable for downstream metadata extraction/classification.
+- Removes malformed table-like fragments caused by unreliable layout reconstruction.
+
+### 🔧 Bug Fixes
+- Eliminated noisy figure/table artefacts in converted markdown from complex report graphics.
+
 ## v6.0.5 - 2026-02-12
 
 ### PDF Table Parsing Safety Update
