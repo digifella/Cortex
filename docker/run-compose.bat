@@ -223,16 +223,17 @@ if /I "%EXECUTION_MODE%"=="gpu" (
 )
 
 echo Checking for NVIDIA GPU...
-if /I "%HAS_GPU_CLI%"=="true" if /I "%HAS_GPU_RUNTIME%"=="true" (
-    echo OK: NVIDIA GPU + Docker runtime detected
-    set "PROFILE=--profile gpu"
-) else (
-    if /I "%HAS_GPU_CLI%"=="true" if /I not "%HAS_GPU_RUNTIME%"=="true" (
+if /I "%HAS_GPU_CLI%"=="true" (
+    if /I "%HAS_GPU_RUNTIME%"=="true" (
+        echo OK: NVIDIA GPU + Docker runtime detected
+        set "PROFILE=--profile gpu"
+    ) else (
         echo WARN: NVIDIA GPU detected but Docker NVIDIA runtime missing; falling back to CPU.
         echo Tip: install NVIDIA Container Toolkit or use --gpu after setup.
-    ) else (
-        echo INFO: No NVIDIA GPU - using CPU mode
+        set "PROFILE=--profile cpu"
     )
+) else (
+    echo INFO: No NVIDIA GPU - using CPU mode
     set "PROFILE=--profile cpu"
 )
 
