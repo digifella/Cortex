@@ -46,6 +46,22 @@ is_port_in_use() {
     return 1
 }
 
+find_next_free_port() {
+    local start_port="$1"
+    local label="$2"
+    local candidate=$((start_port + 1))
+    local max_port=$((start_port + 200))
+    while [ "$candidate" -le "$max_port" ]; do
+        if ! is_port_in_use "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+        candidate=$((candidate + 1))
+    done
+    echo -e "${RED}Could not find free port for $label near $start_port.${NC}" >&2
+    return 1
+}
+
 echo ""
 echo "==============================================="
 echo "   CORTEX SUITE - Docker Compose Launcher"
@@ -210,6 +226,9 @@ fi
 UI_PORT="$(get_env_from_dotenv CORTEX_UI_PORT)"; UI_PORT="${UI_PORT:-8501}"
 API_PORT="$(get_env_from_dotenv CORTEX_API_PORT)"; API_PORT="${API_PORT:-8000}"
 OLLAMA_PORT="$(get_env_from_dotenv CORTEX_OLLAMA_PORT)"; OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+export CORTEX_UI_PORT="$UI_PORT"
+export CORTEX_API_PORT="$API_PORT"
+export CORTEX_OLLAMA_PORT="$OLLAMA_PORT"
 
 # Resolve CPU/GPU profile with explicit runtime checks.
 has_gpu_cli=false
@@ -266,10 +285,18 @@ for pair in "$UI_PORT:Streamlit UI" "$API_PORT:API" "$OLLAMA_PORT:Ollama"; do
     p="${pair%%:*}"
     label="${pair#*:}"
     if is_port_in_use "$p"; then
-        echo -e "${RED}Cannot start: host port $p ($label) is already in use.${NC}"
-        echo "Free the port, or set one of these in .env: CORTEX_UI_PORT, CORTEX_API_PORT, CORTEX_OLLAMA_PORT."
-        echo "Current mapping vars: CORTEX_UI_PORT=$UI_PORT, CORTEX_API_PORT=$API_PORT, CORTEX_OLLAMA_PORT=$OLLAMA_PORT"
-        exit 1
+        next_port="$(find_next_free_port "$p" "$label")" || exit 1
+        echo -e "${YELLOW}$label port $p is busy; using $next_port instead.${NC}"
+        if [ "$label" = "Streamlit UI" ]; then
+            UI_PORT="$next_port"
+            export CORTEX_UI_PORT="$UI_PORT"
+        elif [ "$label" = "API" ]; then
+            API_PORT="$next_port"
+            export CORTEX_API_PORT="$API_PORT"
+        else
+            OLLAMA_PORT="$next_port"
+            export CORTEX_OLLAMA_PORT="$OLLAMA_PORT"
+        fi
     fi
 done
 
@@ -277,6 +304,7 @@ done
 echo ""
 echo "Starting Cortex Suite services..."
 echo "Command: $COMPOSE_CMD $PROFILE up -d --build"
+echo "Host ports: UI=$CORTEX_UI_PORT API=$CORTEX_API_PORT OLLAMA=$CORTEX_OLLAMA_PORT"
 echo ""
 
 $COMPOSE_CMD $PROFILE up -d --build
@@ -296,8 +324,8 @@ echo -e "${GREEN}   Cortex Suite is starting!${NC}"
 echo "==============================================="
 echo ""
 echo "Access your Cortex Suite at:"
-echo "  Main Application: http://localhost:8501"
-echo "  API Documentation: http://localhost:8000/docs"
+echo "  Main Application: http://localhost:$CORTEX_UI_PORT"
+echo "  API Documentation: http://localhost:$CORTEX_API_PORT/docs"
 echo ""
 echo "Useful commands:"
 echo "  View logs:     docker compose logs -f"

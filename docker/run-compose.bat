@@ -255,21 +255,17 @@ if "%PROFILE%"=="--profile gpu" (
 )
 
 call :check_port_in_use "%UI_PORT%" "Streamlit UI"
-if errorlevel 1 goto port_in_use
+if errorlevel 1 call :find_next_free_port "%UI_PORT%" UI_PORT "Streamlit UI"
 call :check_port_in_use "%API_PORT%" "API"
-if errorlevel 1 goto port_in_use
+if errorlevel 1 call :find_next_free_port "%API_PORT%" API_PORT "API"
 call :check_port_in_use "%OLLAMA_PORT%" "Ollama"
-if errorlevel 1 goto port_in_use
+if errorlevel 1 call :find_next_free_port "%OLLAMA_PORT%" OLLAMA_PORT "Ollama"
 goto after_port_checks
 
-:port_in_use
-echo ERROR: One or more required ports are in use.
-echo Set CORTEX_UI_PORT, CORTEX_API_PORT, and/or CORTEX_OLLAMA_PORT in .env to free ports.
-echo Current mappings: UI=%UI_PORT% API=%API_PORT% OLLAMA=%OLLAMA_PORT%
-pause
-exit /b 1
-
 :after_port_checks
+set "CORTEX_UI_PORT=%UI_PORT%"
+set "CORTEX_API_PORT=%API_PORT%"
+set "CORTEX_OLLAMA_PORT=%OLLAMA_PORT%"
 
 REM Build and start services
 echo.
@@ -302,8 +298,8 @@ echo    Cortex Suite is starting!
 echo ===============================================
 echo.
 echo Access your Cortex Suite at:
-echo   Main Application: http://localhost:8501
-echo   API Documentation: http://localhost:8000/docs
+echo   Main Application: http://localhost:%UI_PORT%
+echo   API Documentation: http://localhost:%API_PORT%/docs
 echo.
 echo Useful commands:
 echo   View logs:     docker compose logs -f
@@ -327,4 +323,29 @@ if not errorlevel 1 (
     echo ERROR: Cannot start: host port %_CHK_PORT% (%_CHK_LABEL%) is already in use.
     exit /b 1
 )
+exit /b 0
+
+:find_next_free_port
+set "_START_PORT=%~1"
+set "_TARGET_VAR=%~2"
+set "_TARGET_LABEL=%~3"
+set /a "_CANDIDATE=%_START_PORT%+1"
+set /a "_MAX_PORT=%_START_PORT%+200"
+
+:find_next_free_port_loop
+if %_CANDIDATE% GTR %_MAX_PORT% (
+    echo ERROR: Could not find free port for %_TARGET_LABEL% near %_START_PORT%.
+    echo Please set CORTEX_UI_PORT / CORTEX_API_PORT / CORTEX_OLLAMA_PORT manually in .env
+    pause
+    exit /b 1
+)
+
+call :check_port_in_use "%_CANDIDATE%" "%_TARGET_LABEL%"
+if errorlevel 1 (
+    set /a "_CANDIDATE+=1"
+    goto find_next_free_port_loop
+)
+
+for %%V in ("%_TARGET_VAR%") do set "%%~V=%_CANDIDATE%"
+echo WARN: %_TARGET_LABEL% port %_START_PORT% is busy; using %_CANDIDATE% instead.
 exit /b 0

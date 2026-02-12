@@ -43,6 +43,8 @@ If host ports are already in use, set in `.env`:
 - `CORTEX_API_PORT` (default `8000`)
 - `CORTEX_OLLAMA_PORT` (default `11434`)
 
+The launchers also auto-select the next free port when a configured port is busy.
+
 **Benefits:**
 - Zero configuration required
 - Export entire setup with `docker save` + volume export
