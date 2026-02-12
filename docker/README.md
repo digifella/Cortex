@@ -1,29 +1,21 @@
 # **`README.md`**
 
-**Version:** v5.2.0 (Intelligent Proposal Completion Overhaul)
-**Date:** 2026-01-20
+**Version:** v6.0.7 (Docker Alignment Refresh)
+**Date:** 2026-02-12
 
 ---
-## ⚠️ DOCKER INSTALLATION STATUS: TESTING IN PROGRESS
+## Docker Status
 
-**Last Updated:** 2026-01-28
+**Last Updated:** 2026-02-12
 
-The Docker installation is currently under **active testing and debugging**. Recent changes include:
+Docker launchers are now aligned around a single maintained Compose workflow:
+- `run-compose.sh` (Linux/macOS)
+- `run-compose.bat` (Windows)
+- `run-cortex.sh` / `run-cortex.bat` remain backward-compatible aliases.
 
-- **Dependency Resolution:** Fixed multiple llama-index package version conflicts
-- **Docling Removed:** Docker uses legacy ingestion mode (docling packages removed to avoid conflicts)
-- **PyTorch Updated:** Upgraded to 2.5.1+cu121 for stable package hashes
-- **Ollama Installation:** Updated to handle new .tar.zst release format
-- **Batch Installer:** Added path validation before build to prevent wasted time
-
-**Known Issues Being Addressed:**
-- Ollama installation and service startup
-- Dependency version conflicts between packages
-
-**If you encounter issues:**
-1. Run `docker system prune -a -f` and `docker builder prune -a -f`
-2. Pull the latest code from git
-3. Rebuild the Docker image
+Compose now uses the existing Dockerfiles in this folder:
+- CPU: `Dockerfile`
+- GPU: `Dockerfile.gpu`
 
 ---
 

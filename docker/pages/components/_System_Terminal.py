@@ -8,6 +8,7 @@ All system terminal functionality is now available under Maintenance > Terminal 
 """
 
 import streamlit as st
+from cortex_engine.version_config import VERSION_STRING
 
 # Configure page
 st.set_page_config(
@@ -17,7 +18,7 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = "v4.4.1"
+PAGE_VERSION = VERSION_STRING
 
 def main():
     """Main function displaying redirect information"""

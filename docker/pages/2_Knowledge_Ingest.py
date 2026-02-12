@@ -25,6 +25,7 @@ import subprocess
 import sys
 import shutil
 import re
+import shlex
 from pathlib import Path
 from fnmatch import fnmatch
 from collections import defaultdict
@@ -126,12 +127,12 @@ def install_missing_models(missing_models: list) -> bool:
         return False
 
     try:
-        commands = model_checker.get_model_installation_commands(missing_models)
         with st.status("Installing models...", expanded=True) as status:
-            for cmd in commands:
-                status.write(f"$ {cmd}")
+            for model_name in missing_models:
+                cmd = ["ollama", "pull", model_name]
+                status.write(f"$ {' '.join(shlex.quote(part) for part in cmd)}")
                 try:
-                    result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+                    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
                     if result.stdout:
                         status.write(result.stdout)
                     if result.stderr:
@@ -220,6 +221,40 @@ def set_runtime_db_path(resolved_path: Optional[str] = None) -> str:
     else:
         st.session_state.pop("db_path_runtime", None)
     return resolved_path
+
+
+def filter_existing_doc_ids_for_collection(db_root_path: str, candidate_doc_ids: List[str]) -> List[str]:
+    """Return only doc_ids that currently exist in the vector store metadata."""
+    if not db_root_path or not candidate_doc_ids:
+        return []
+    try:
+        import chromadb
+        from chromadb.config import Settings as ChromaSettings
+
+        chroma_db_path = Path(db_root_path) / "knowledge_hub_db"
+        if not chroma_db_path.exists():
+            return []
+
+        client = chromadb.PersistentClient(
+            path=str(chroma_db_path),
+            settings=ChromaSettings(anonymized_telemetry=False),
+        )
+        collection = client.get_collection(COLLECTION_NAME)
+        results = collection.get(where={"doc_id": {"$in": candidate_doc_ids}}, include=["metadatas"])
+
+        valid_ids = []
+        seen = set()
+        for meta in results.get("metadatas", []):
+            if not isinstance(meta, dict):
+                continue
+            doc_id = meta.get("doc_id")
+            if doc_id and doc_id not in seen:
+                valid_ids.append(doc_id)
+                seen.add(doc_id)
+        return valid_ids
+    except Exception as e:
+        logger.warning(f"Could not validate candidate doc IDs against vector store: {e}")
+        return []
 
 # --- Constants & State ---
 REVIEW_PAGE_SIZE = 10
@@ -346,8 +381,8 @@ def _reader_to_queue(pipe, q: queue.Queue, stop_event: threading.Event):
                 # EOF reached
                 break
             q.put(line)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Reader thread ended: {e}")
 
 def start_ingest_reader(proc: subprocess.Popen) -> None:
     """Start a background thread that enqueues stdout lines for non-blocking UI reads."""
@@ -512,21 +547,22 @@ def show_collection_migration_healthcheck():
                         st.error(f"Failed to migrate collections: {me}")
             with col_b:
                 st.caption(f"Project file: {project_collections}\nExternal file: {external_path}")
-    except Exception:
+    except Exception as e:
         # Non-fatal; just skip if anything goes wrong
-        pass
+        logger.debug(f"Collection migration healthcheck skipped: {e}")
 
 def initialize_state(force_reset: bool = False):
-    # Cache config to avoid file reads on every interaction
-    if "cached_config" not in st.session_state or force_reset:
-        config_manager = ConfigManager()
-        st.session_state.cached_config = config_manager.get_config()
-    config = st.session_state.cached_config
-
+    # On force_reset, clear all session state first, then re-read config
     if force_reset:
         keys_to_reset = list(st.session_state.keys())
         for key in keys_to_reset:
             del st.session_state[key]
+
+    # Cache config to avoid file reads on every interaction
+    if "cached_config" not in st.session_state:
+        config_manager = ConfigManager()
+        st.session_state.cached_config = config_manager.get_config()
+    config = st.session_state.cached_config
 
     # Always sync with config - update session state if config has different values
     config_knowledge_path = config.get("knowledge_source_path", "")
@@ -749,7 +785,9 @@ def scan_for_files(selected_dirs: List[str]):
     filter_progress_container = st.empty()
     filter_progress_container.info("🔍 **Applying filters and exclusions...**")
     
-    candidate_files = [f.as_posix() for f in all_files if f.as_posix() not in ingested_files and f.suffix.lower() not in UNSUPPORTED_EXTENSIONS]
+    # Normalize ingested_files keys to POSIX format for consistent comparison
+    ingested_posix = {Path(k).as_posix() for k in ingested_files}
+    candidate_files = [f.as_posix() for f in all_files if f.as_posix() not in ingested_posix and f.suffix.lower() not in UNSUPPORTED_EXTENSIONS]
     filter_progress_container.text(f"📋 After excluding unsupported formats: {len(candidate_files)} files")
 
     if st.session_state.filter_exclude_common:
@@ -1024,12 +1062,15 @@ def render_model_status_bar():
     # Build embedding model display name
     embed_approach = embed_strategy.get('approach', '')
     if embed_approach == 'qwen3vl':
-        # Show clean Qwen3-VL name with size - derive dims from config, not stale cache
+        # Show clean Qwen3-VL name with size
+        # PRIORITY: Use effective size from session state (set by sidebar after compatibility check)
+        # This ensures the display matches the sidebar selection, not stale config
         from cortex_engine.config import QWEN3_VL_MODEL_SIZE
+        effective_size = st.session_state.get('effective_qwen3vl_size', QWEN3_VL_MODEL_SIZE)
         size_to_dims = {"2B": 2048, "8B": 4096}
-        if QWEN3_VL_MODEL_SIZE in size_to_dims:
-            embed_dims = size_to_dims[QWEN3_VL_MODEL_SIZE]
-            size_display = QWEN3_VL_MODEL_SIZE.upper()
+        if effective_size in size_to_dims:
+            embed_dims = size_to_dims[effective_size]
+            size_display = effective_size.upper()
         else:
             # "auto" - derive from what the GPU would select
             vram_gb = gpu_info.get('memory_total_gb', 0)
@@ -1217,6 +1258,9 @@ def render_sidebar_model_config():
                     current_size = size_options[0]
                     st.sidebar.warning(f"⚠️ Switched to {current_size} (previous selection incompatible)")
 
+            # Store effective model size in session state for display consistency
+            st.session_state['effective_qwen3vl_size'] = current_size
+
             try:
                 current_index = size_options.index(current_size)
             except ValueError:
@@ -1274,6 +1318,9 @@ def render_sidebar_model_config():
 
                 if 'model_info_cache' in st.session_state:
                     del st.session_state.model_info_cache
+
+                # Update session state for display consistency
+                st.session_state['effective_qwen3vl_size'] = selected_size
 
                 st.sidebar.success(f"✅ Changed to {size_labels[selected_size]}")
                 st.rerun()
@@ -1382,7 +1429,54 @@ def render_sidebar_model_config():
         st.rerun()
 
 
+def init_effective_model_size():
+    """
+    Initialize the effective Qwen3-VL model size based on database compatibility.
+    This must be called BEFORE render_model_status_bar() to ensure display consistency.
+    Recomputes when the database path changes.
+    """
+    # Get current config
+    from cortex_engine.config import QWEN3_VL_MODEL_SIZE
+    from cortex_engine.utils.embedding_validator import get_compatible_qwen3vl_sizes
+
+    db_path = st.session_state.get('db_path', '')
+
+    # Recompute if db_path changed since last calculation
+    last_db_path = st.session_state.get('_effective_size_db_path', None)
+    if 'effective_qwen3vl_size' in st.session_state and last_db_path == db_path:
+        return
+
+    # Track which db_path we computed for
+    st.session_state['_effective_size_db_path'] = db_path
+
+    if not db_path:
+        # No database path yet, use config value
+        st.session_state['effective_qwen3vl_size'] = QWEN3_VL_MODEL_SIZE
+        return
+
+    # Check database compatibility
+    db_compat = get_compatible_qwen3vl_sizes(db_path)
+
+    if db_compat["is_new_database"]:
+        # New database - use config value
+        st.session_state['effective_qwen3vl_size'] = QWEN3_VL_MODEL_SIZE
+    else:
+        # Existing database - check if config size is compatible
+        current_size = QWEN3_VL_MODEL_SIZE
+        if current_size not in db_compat["compatible_sizes"] and current_size != "auto":
+            # Config size is incompatible - switch to first compatible
+            if db_compat["compatible_sizes"]:
+                st.session_state['effective_qwen3vl_size'] = db_compat["compatible_sizes"][0]
+            else:
+                st.session_state['effective_qwen3vl_size'] = QWEN3_VL_MODEL_SIZE
+        else:
+            st.session_state['effective_qwen3vl_size'] = QWEN3_VL_MODEL_SIZE
+
+
 def render_config_and_scan_ui():
+    # Initialize effective model size before rendering status bar
+    init_effective_model_size()
+
     # Render model status bar at top
     render_model_status_bar()
 
@@ -1779,7 +1873,7 @@ def render_config_and_scan_ui():
                 if st.session_state.get("batch_ingest_mode", False):
                     files_to_process = st.session_state.files_to_review
                     if files_to_process:
-                        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                        container_db_path = get_runtime_db_path()
                         batch_manager = BatchState(container_db_path)
                         batch_manager.create_batch(files_to_process, scan_config)
 
@@ -1887,7 +1981,7 @@ def render_config_and_scan_ui():
                     files_to_process = st.session_state.get("files_to_review", [])
                     if files_to_process:
                         # Initialize batch state
-                        container_db_path = convert_to_docker_mount_path(st.session_state.db_path)
+                        container_db_path = get_runtime_db_path()
                         batch_manager = BatchState(container_db_path)
                         batch_manager.create_batch(files_to_process, scan_config)
 
@@ -1947,7 +2041,12 @@ def render_pre_analysis_ui():
     with st.container(border=True):
         sc1, sc2 = st.columns(2)
         def sort_by_name(): st.session_state.files_to_review.sort(key=lambda f: Path(f).name)
-        def sort_by_date(): st.session_state.files_to_review.sort(key=lambda f: Path(f).stat().st_mtime, reverse=True)
+        def _safe_mtime(f):
+            try:
+                return Path(f).stat().st_mtime
+            except OSError:
+                return 0.0
+        def sort_by_date(): st.session_state.files_to_review.sort(key=_safe_mtime, reverse=True)
         sc1.button("Sort by Name (A-Z)", on_click=sort_by_name, use_container_width=True)
         sc2.button("Sort by Date (Newest First)", on_click=sort_by_date, use_container_width=True)
 
@@ -1968,7 +2067,10 @@ def render_pre_analysis_ui():
     st.markdown("---")
 
     for fp in paginated_files:
-        mod_time = datetime.fromtimestamp(Path(fp).stat().st_mtime)
+        try:
+            mod_time = datetime.fromtimestamp(Path(fp).stat().st_mtime)
+        except OSError:
+            mod_time = datetime.min
         label = f"**{Path(fp).name}** (`{mod_time.strftime('%Y-%m-%d %H:%M:%S')}`)"
         is_selected = st.session_state.file_selections.get(fp, False)
         new_selection = st.checkbox(label, value=is_selected, key=f"cb_{fp}")
@@ -2026,7 +2128,6 @@ def render_pre_analysis_ui():
         start_ingest_reader(st.session_state.ingestion_process)
         st.rerun()
 
-
 def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
     shared_render_log_and_review_ui(
         stage_title=stage_title,
@@ -2043,6 +2144,7 @@ def render_log_and_review_ui(stage_title: str, on_complete_stage: str):
         max_auto_finalize_retries=MAX_AUTO_FINALIZE_RETRIES,
         logger=logger,
     )
+
 def render_completion_screen():
     st.success("✅ Finalization complete! Your knowledge base is up to date.")
 
@@ -2073,60 +2175,12 @@ def render_completion_screen():
         logger.warning(f"Could not retrieve document count: {e}")
         pass
     
-    # Check if documents should be automatically assigned to a target collection
-    target_collection = st.session_state.get('target_collection_name', '')
-    doc_ids = st.session_state.get('last_ingested_doc_ids', [])
-    
-    if doc_ids and target_collection:
-        try:
-            collection_mgr = WorkingCollectionManager()
-            
-            # Check if target collection needs to be created or already exists
-            existing_collections = collection_mgr.get_collection_names()
-            
-            if target_collection not in existing_collections:
-                # Create new collection
-                if collection_mgr.create_collection(target_collection):
-                    st.success(f"✅ Created new collection: **{target_collection}**")
-                else:
-                    st.error(f"❌ Failed to create collection: {target_collection}")
-                    target_collection = ""  # Fall back to manual assignment
-            
-            if target_collection:
-                # Assign documents to the target collection
-                collection_mgr.add_docs_by_id_to_collection(target_collection, doc_ids)
-                st.success(f"🎯 **{len(doc_ids)} documents automatically assigned** to collection: **{target_collection}**")
-                st.session_state.last_ingested_doc_ids = []  # Clear after successful assignment
-                st.session_state.target_collection_name = ""  # Clear target collection
-                
-        except Exception as e:
-            st.error(f"❌ Failed to assign documents to collection '{target_collection}': {e}")
-            logger.error(f"Collection assignment failed: {e}")
-            # Fall through to manual assignment option
-    
-    # Manual collection creation option (if no automatic assignment or if it failed)
-    if st.session_state.get('last_ingested_doc_ids'):
-        with st.form("new_collection_from_ingest"):
-            st.markdown("---")
-            st.subheader("📂 Manual Collection Assignment")
-            
-            if target_collection:
-                st.info(f"Collection assignment to '{target_collection}' failed. You can manually create a different collection below.")
-            else:
-                st.info(f"You've just added {len(st.session_state.last_ingested_doc_ids)} new documents. Save them as a new collection for easy access later.")
-                
-            collection_name = st.text_input("New Collection Name", placeholder="e.g., Project Phoenix Discovery")
-            if st.form_submit_button("Create Collection", type="primary"):
-                if collection_name:
-                    collection_mgr = WorkingCollectionManager()
-                    if collection_name in collection_mgr.get_collection_names():
-                        st.error(f"Collection '{collection_name}' already exists.")
-                    else:
-                        collection_mgr.add_docs_by_id_to_collection(collection_name, st.session_state.last_ingested_doc_ids)
-                        st.success(f"Successfully created collection '{collection_name}'!")
-                        st.session_state.last_ingested_doc_ids = []
-                else:
-                    st.warning("Please provide a name for the collection.")
+    st.info(
+        "Collection assignment is finalized inside the ingestion engine from staged metadata. "
+        "Post-finalization UI reassignment is disabled to prevent orphan references."
+    )
+    st.session_state.last_ingested_doc_ids = []
+    st.session_state.target_collection_name = ""
     st.markdown("---")
     # Collections file quick access and preview
     try:

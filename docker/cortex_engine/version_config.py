@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.0.3"
+CORTEX_VERSION = "6.0.7"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 0,
-    "patch": 3,
+    "patch": 7,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,24 +24,19 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-02-11",
-    "release_name": "Document and Photo Processing Upgrade",
-    "description": "Renames Document Extract and expands Photo Processor with independent resize, metadata ownership, and keyword anonymization controls.",
+    "release_date": "2026-02-12",
+    "release_name": "PDF Infographic Noise Filtering",
+    "description": "Improves strict PDF text extraction by removing infographic/chart label noise from text-layer output.",
     "breaking_changes": [],
     "new_features": [
-        "Document Extract page is now labeled `Document & Photo Processing` with heading `Document or Photo Processing`",
-        "Photo tab renamed to `Photo Processor` with independent `Resize Photos Only` action",
-        "Photo resize profiles now support `Low (1920x1080)` and `Medium (2560x1440)` maximum bounds",
-        "Photo metadata workflow now supports ownership notice writing to EXIF/IPTC/XMP rights fields",
-        "Photo keyword workflow now supports optional sensitive-keyword anonymization using a blocked terms list"
+        "Strict PDF text mode now strips infographic/chart text-layer noise and inserts a single omission marker when detected"
     ],
     "improvements": [
-        "Photo Processor splits resize-only and keyword/metadata actions to avoid unnecessary AI processing",
-        "Photo result panels now report resize dimensions, ownership-write status, and removed sensitive tags",
-        "Keyword anonymization defaults now include social tags like `friends` and `family` via editable blocked list"
+        "Chart axis/tick/value fragments from infographic pages are now filtered out of markdown output",
+        "Textifier reduces false numeric clutter on visual-heavy report pages"
     ],
     "bug_fixes": [
-        "Resolved coupling where resize was previously tied to keyword-generation flow"
+        "Fixed residual infographic text leakage in strict text-only PDF conversion"
     ],
     "performance": []
 }

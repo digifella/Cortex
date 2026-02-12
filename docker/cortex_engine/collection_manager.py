@@ -308,6 +308,63 @@ class WorkingCollectionManager:
             logger.error(f"Collection ZIP failed: {e}")
             raise CollectionError(f"Failed to create ZIP for collection '{name}'", str(e))
 
+    def prune_missing_doc_references(self, name: str, vector_collection) -> dict:
+        """
+        Remove doc_ids from a collection when they no longer exist in the vector store.
+
+        Returns:
+            Dict with summary keys:
+            - collection
+            - total_before
+            - existing_count
+            - removed_count
+            - removed_doc_ids
+        """
+        if name not in self.collections:
+            return {
+                "collection": name,
+                "total_before": 0,
+                "existing_count": 0,
+                "removed_count": 0,
+                "removed_doc_ids": [],
+            }
+
+        doc_ids = self.get_doc_ids_by_name(name)
+        if not doc_ids:
+            return {
+                "collection": name,
+                "total_before": 0,
+                "existing_count": 0,
+                "removed_count": 0,
+                "removed_doc_ids": [],
+            }
+
+        try:
+            results = vector_collection.get(
+                where={"doc_id": {"$in": doc_ids}},
+                include=["metadatas"],
+            )
+            metadatas = results.get("metadatas", []) if isinstance(results, dict) else []
+            existing_ids = {meta.get("doc_id") for meta in metadatas if isinstance(meta, dict) and meta.get("doc_id")}
+            missing_doc_ids = [doc_id for doc_id in doc_ids if doc_id not in existing_ids]
+
+            if missing_doc_ids:
+                self.remove_from_collection(name, missing_doc_ids)
+                logger.info(
+                    f"Pruned {len(missing_doc_ids)} invalid doc references from collection '{name}'"
+                )
+
+            return {
+                "collection": name,
+                "total_before": len(doc_ids),
+                "existing_count": len(existing_ids),
+                "removed_count": len(missing_doc_ids),
+                "removed_doc_ids": missing_doc_ids,
+            }
+        except Exception as e:
+            logger.error(f"Failed pruning collection references for '{name}': {e}")
+            raise CollectionError(f"Failed to prune missing references for '{name}'", str(e))
+
     def deduplicate_vector_store(self, vector_collection, dry_run: bool = True) -> dict:
         """
         Identify and optionally remove duplicate documents from the vector store.

@@ -22,6 +22,7 @@ from cortex_engine.document_summarizer import SUMMARIZER_MODELS
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.config import QWEN3_VL_RERANKER_ENABLED
+from cortex_engine.version_config import VERSION_STRING
 from cortex_engine.utils import get_logger
 
 # Set up logging
@@ -35,7 +36,7 @@ st.set_page_config(
 )
 
 # Page metadata
-PAGE_VERSION = "v5.6.0"
+PAGE_VERSION = VERSION_STRING
 
 
 def get_installed_ollama_models() -> set:

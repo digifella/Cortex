@@ -31,6 +31,7 @@ from cortex_engine.anonymizer import DocumentAnonymizer, AnonymizationMapping
 from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.version_config import VERSION_STRING
+from cortex_engine.journal_authority import classify_journal_authority
 
 # Set up logging
 logger = get_logger(__name__)
@@ -388,6 +389,29 @@ def _extract_available_at(md_content: str) -> str:
 
 def _sanitize_markdown_for_preface(md_content: str) -> str:
     """Remove known conversion-error boilerplate from markdown before LLM/keyword extraction."""
+    def _is_logo_or_icon_caption(caption_text: str) -> bool:
+        c = _clean_line(caption_text)
+        if not c:
+            return True
+        low = c.lower()
+        marker_hits = sum(
+            1
+            for marker in [
+                "logo", "icon", "icons", "watermark", "emblem", "symbol",
+                "badge", "seal", "silhouette", "letters", "initials",
+            ]
+            if marker in low
+        )
+        visual_hits = sum(
+            1
+            for marker in [
+                "black and white", "circular", "circle", "strip", "background",
+                "left icon", "right icon", "main colors", "main colours",
+            ]
+            if marker in low
+        )
+        return (marker_hits >= 1 and visual_hits >= 1) or marker_hits >= 2
+
     cleaned_lines = []
     error_markers = [
         "image could not be described",
@@ -402,6 +426,12 @@ def _sanitize_markdown_for_preface(md_content: str) -> str:
         low = line.lower()
         if any(marker in low for marker in error_markers):
             continue
+        # Drop inline image-caption blocks that are logo/icon noise.
+        image_caption_match = re.match(r"^\s*>\s*\*\*\[Image[^\]]*\]\*\*:\s*(.+)$", line, flags=re.IGNORECASE)
+        if image_caption_match:
+            caption_body = image_caption_match.group(1).strip()
+            if _is_logo_or_icon_caption(caption_body):
+                continue
         # Drop markdown image embeds that mostly carry filenames/noise for metadata extraction.
         if line.startswith("![") and "](" in line:
             continue
@@ -454,6 +484,13 @@ def _guess_title_from_markdown(md_content: str, file_path: str) -> str:
     skip_exact = {
         "viewpoint", "introduction", "abstract", "background", "keywords", "key words"
     }
+    skip_contains = [
+        "please cite this publication as",
+        "this work is published under",
+        "opinions expressed and arguments employed",
+        "revised version",
+        "corrigenda",
+    ]
     # Academic fallback: title is often the line immediately before author names.
     for i in range(1, min(80, len(lines))):
         if _extract_authors_from_markdown(lines[i]):
@@ -463,6 +500,7 @@ def _guess_title_from_markdown(md_content: str, file_path: str) -> str:
                 and not re.match(r"^page\s+\d+", prev, flags=re.IGNORECASE)
                 and "licensed" not in prev.lower()
                 and "creative commons" not in prev.lower()
+                and not any(s in prev.lower() for s in skip_contains)
             ):
                 return prev[:180]
     for i, line in enumerate(lines[:40]):
@@ -487,6 +525,8 @@ def _guess_title_from_markdown(md_content: str, file_path: str) -> str:
             continue
         if len(line) > 180:
             continue
+        if any(x in low for x in skip_contains):
+            continue
         if any(x in low for x in ["university", "hospital", "school of", "email:", "doi:", "journal", "www."]):
             continue
         if any(x in low for x in ["licensed", "creative commons", "corresponding author"]):
@@ -500,20 +540,169 @@ def _guess_title_from_markdown(md_content: str, file_path: str) -> str:
 
 
 def _detect_source_type_hint(file_path: str, md_content: str) -> str:
-    text = f"{_user_visible_filename(file_path)}\n{md_content[:16000]}".lower()
-    if any(k in text for k in ["elsevier", "springer", "wiley", "ieee", "doi", "journal", "proceedings", "abstract", "keywords"]):
+    text = f"{_user_visible_filename(file_path)}\n{md_content[:20000]}".lower()
+
+    academic_patterns = [
+        r"\belsevier\b", r"\bspringer\b", r"\bwiley\b", r"\bieee\b",
+        r"\bdoi\b", r"\bjournal\b", r"\bproceedings\b",
+    ]
+    consulting_patterns = [
+        r"\bdeloitte\b", r"\bmckinsey\b", r"\bbain\b", r"\bbcg\b",
+        r"\bkpmg\b", r"\bpwc\b", r"\baccenture\b", r"\bconsulting\b",
+        r"\bernst\s*&\s*young\b", r"\bey\b",
+    ]
+    institutional_patterns = [
+        r"\badha\b", r"\baidh\b", r"\baustralian digital health agency\b",
+        r"\baustralasian institute of digital health\b",
+        r"\bdepartment of health\b", r"\bministry\b", r"\bgovernment\b",
+        r"\bwho\b", r"\boecd\b", r"\bworld bank\b", r"\bunited nations\b",
+        r"\bnhs\b", r"\bcdc\b", r"\buniversity\b", r"\binstitute\b",
+    ]
+    ai_patterns = [
+        r"\bperplexity\b", r"\bchatgpt\b", r"\bopenai\b", r"\bclaude\b", r"\bgemini\b",
+        r"\bdeep research\b", r"\bdeep report\b", r"\bdeep report into\b",
+        r"\bgenerated by ai\b", r"\bai-generated\b",
+    ]
+
+    def _has_any(patterns: List[str]) -> bool:
+        return any(re.search(p, text, flags=re.IGNORECASE) for p in patterns)
+
+    has_academic = _has_any(academic_patterns)
+    has_consulting = _has_any(consulting_patterns)
+    has_institutional = _has_any(institutional_patterns)
+    has_ai_markers = _has_any(ai_patterns)
+    em_dash_count = text.count("—") + text.count("–")
+
+    if has_academic:
         return "Academic"
-    consulting_markers = [
-        "deloitte", "mckinsey", "bain", "bcg", "kpmg", "ey", "pwc", "accenture", "consulting"
-    ]
-    if any(k in text for k in consulting_markers):
+    # Explicit institutional signals should not be overwritten by consulting hints.
+    if has_institutional and not has_consulting:
+        return "Other"
+    if has_consulting:
         return "Consulting Company"
-    ai_markers = [
-        "perplexity", "chatgpt", "openai", "claude", "gemini", "deep research", "generated by ai", "ai-generated"
-    ]
-    if any(k in text for k in ai_markers):
+    # If not strongly human-sourced, bias toward AI when AI-style signals are present.
+    if has_ai_markers or (em_dash_count >= 8 and not (has_academic or has_institutional or has_consulting)):
         return "AI Generated Report"
     return "Other"
+
+
+def _infer_publisher_from_text(md_text: str, source_hint: str) -> str:
+    text = (md_text or "").lower()
+    publisher_patterns = [
+        (r"\baustralian digital health agency\b|\badha\b", "Australian Digital Health Agency"),
+        (r"\baustralasian institute of digital health\b|\baidh\b", "Australasian Institute of Digital Health"),
+        (r"\bworld health organization\b|\bwho\b", "World Health Organization"),
+        (r"\boecd\b", "OECD"),
+        (r"\bworld bank\b", "World Bank"),
+        (r"\bunited nations\b|\bun\b", "United Nations"),
+        (r"\belsevier\b", "Elsevier"),
+        (r"\bspringer\b", "Springer"),
+        (r"\bwiley\b", "Wiley"),
+        (r"\bieee\b", "IEEE"),
+        (r"\bdeloitte\b", "Deloitte"),
+        (r"\bmckinsey\b", "McKinsey"),
+        (r"\bbain\b", "Bain"),
+        (r"\bbcg\b", "BCG"),
+        (r"\bkpmg\b", "KPMG"),
+        (r"\bernst\s*&\s*young\b|\bey\b", "EY"),
+        (r"\bpwc\b", "PwC"),
+        (r"\baccenture\b", "Accenture"),
+        (r"\bperplexity\b", "Perplexity"),
+        (r"\bopenai\b", "OpenAI"),
+        (r"\bclaude\b|\banthropic\b", "Anthropic"),
+        (r"\bgemini\b|\bgoogle\b", "Google"),
+    ]
+    for pattern, label in publisher_patterns:
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            return label
+    if source_hint == "AI Generated Report":
+        return "Unknown AI"
+    return "Unknown"
+
+
+def _extract_publishing_date(md_text: str, file_path: str) -> str:
+    text = (md_text or "")[:12000]
+    text_ascii = _ascii_fold(text)
+
+    # Strong citation-line signal, e.g. "... (2024), ... DOI ..."
+    citation_line = re.search(
+        r"(?is)\bplease\s+cite\b[^\n]{0,300}?\((19|20)\d{2}\)",
+        text_ascii,
+        flags=re.IGNORECASE,
+    )
+    if citation_line:
+        m = re.search(r"\((19|20)\d{2}\)", citation_line.group(0))
+        if m:
+            return m.group(0).strip("()")
+
+    revised_pattern = re.search(
+        r"(?i)\brevised\s+version\b[^A-Za-z0-9]{0,8}(?:,\s*)?([A-Za-z]{3,9}\s+20\d{2}|20\d{2})",
+        text_ascii,
+    )
+    if revised_pattern:
+        return _clean_line(revised_pattern.group(1))
+
+    # Prefer explicitly labeled publication/update lines before generic year-only matches.
+    label_pattern = (
+        r"(?i)\b(?:published|publication date|date published|released|issued|last updated|updated)\b"
+        r"[^A-Za-z0-9]{0,12}"
+        r"(20\d{2}[-/][01]?\d[-/][0-3]?\d|[0-3]?\d\s+[A-Za-z]{3,9}\s+20\d{2}|[A-Za-z]{3,9}\s+[0-3]?\d,\s+20\d{2}|20\d{2})"
+    )
+    m = re.search(label_pattern, text_ascii)
+    if m:
+        return _clean_line(m.group(1))
+
+    # Context-aware year extraction from citation/publication lines.
+    scored_year = ""
+    scored_value = -999
+    for raw_line in text_ascii.splitlines():
+        line = _clean_line(raw_line)
+        if not line:
+            continue
+        years = re.findall(r"\b((?:19|20)\d{2})\b", line)
+        if not years:
+            continue
+
+        low = line.lower()
+        score = 0
+        if "please cite" in low or "cite this publication" in low:
+            score += 8
+        if "revised version" in low:
+            score += 7
+        if any(k in low for k in ["published", "publication", "issued", "release", "copyright"]):
+            score += 6
+        if any(k in low for k in ["isbn", "issn", "doi"]):
+            score += 5
+        if re.search(r"\((?:19|20)\d{2}\)", line):
+            score += 4
+        if low.startswith("> **[image"):
+            score -= 5
+        if "photo credits" in low:
+            score -= 3
+
+        candidate_year = years[0]
+        if score > scored_value:
+            scored_value = score
+            scored_year = candidate_year
+
+    if scored_year and scored_value >= 3:
+        return scored_year
+
+    generic_pattern = r"(20\d{2}[-/][01]?\d[-/][0-3]?\d|[0-3]?\d\s+[A-Za-z]{3,9}\s+20\d{2}|[A-Za-z]{3,9}\s+[0-3]?\d,\s+20\d{2})"
+    m = re.search(generic_pattern, text_ascii)
+    if m:
+        return _clean_line(m.group(1))
+
+    year_match = re.search(r"\b((?:19|20)\d{2})\b", text_ascii)
+    if year_match:
+        return year_match.group(1)
+
+    # Last fallback: year in filename.
+    filename = _user_visible_filename(file_path)
+    m = re.search(r"\b(19|20)\d{2}\b", filename)
+    if m:
+        return m.group(0)
+    return "Unknown"
 
 
 def _extract_json_block(raw: str) -> Optional[dict]:
@@ -567,8 +756,9 @@ Rules:
 - If abstract is not explicitly present, generate a concise abstract from the document.
 - If abstract exists, extract the full abstract paragraph(s), not just one line.
 - For authors, include only person names and exclude affiliations/locations/institutions.
-- For title, prefer the document title and never use abstract opening text.
+- For title, prefer the document title and never use abstract opening text or citation boilerplate (e.g. "Please cite this publication as").
 - For available_at, prefer DOI URL if present, else canonical report URL, else "Unknown".
+- For publishing_date, prioritize explicit year/date from citation/publishing lines, including patterns like "(2024)" and "Revised version, November 2024".
 - Provide 5-12 useful keywords, with each keyword at most TWO WORDS.
 - Credibility tiers:
   5 / peer-reviewed / Peer-Reviewed: NLM/PubMed, Nature, The Lancet, JAMA, BMJ
@@ -578,6 +768,8 @@ Rules:
   1 / commentary / Commentary: blogs, newsletters, consulting reports, opinion
   0 / unclassified / Unclassified: not yet assessed
 - If source_type is AI Generated Report, default to 0 / unclassified.
+- Treat titles like "Deep report into..." and strongly AI-styled writing (frequent em-dashes) as AI-generated unless clear human institutional/academic markers are present.
+- Ignore tiny/logo/icon-only figure captions when determining title, abstract, keywords, source_type, and date.
 - If a field is unknown use "Unknown" (or [] for authors/keywords).
 
 File name: {_user_visible_filename(file_path)}
@@ -805,18 +997,8 @@ def _fallback_preface_metadata(file_path: str, md_content: str, source_hint: str
     lines = _first_nonempty_lines(md_clean, limit=120)
     text_lower = md_clean.lower()
 
-    publisher = "Unknown"
-    if source_hint == "AI Generated Report":
-        publisher = "Unknown AI"
-
-    publisher_markers = ["elsevier", "springer", "wiley", "ieee", "deloitte", "mckinsey", "bain", "bcg", "kpmg", "ey", "pwc", "accenture", "perplexity", "openai"]
-    for marker in publisher_markers:
-        if marker in text_lower:
-            publisher = marker.title() if marker != "pwc" else "PwC"
-            break
-
-    date_match = re.search(r"(20\d{2}[-/][01]?\d[-/][0-3]?\d|[0-3]?\d\s+[A-Za-z]{3,9}\s+20\d{2}|[A-Za-z]{3,9}\s+[0-3]?\d,\s+20\d{2}|20\d{2})", md_clean[:10000])
-    publishing_date = date_match.group(1) if date_match else "Unknown"
+    publisher = _infer_publisher_from_text(md_clean, source_hint)
+    publishing_date = _extract_publishing_date(md_clean, file_path)
     available_at = _extract_available_at(md_clean)
 
     authors = _extract_authors_from_markdown(md_clean)
@@ -896,14 +1078,28 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         source_type = source_hint if source_hint in {"Academic", "Consulting Company", "AI Generated Report", "Other"} else "Other"
 
     publisher = _normalize_ascii_text(_clean_line(str(data.get("publisher", "")))) or _normalize_ascii_text(fallback_meta["publisher"])
+    if not publisher or publisher.lower() == "unknown":
+        publisher = _infer_publisher_from_text(_sanitize_markdown_for_preface(md_content), source_type)
     if source_type == "AI Generated Report" and (not publisher or publisher.lower() == "unknown"):
         publisher = "Unknown AI"
 
     publishing_date = _clean_line(str(data.get("publishing_date", ""))) or fallback_meta["publishing_date"] or "Unknown"
+    if not publishing_date or publishing_date == "Unknown":
+        publishing_date = _extract_publishing_date(_sanitize_markdown_for_preface(md_content), file_path)
     available_at = _clean_line(str(data.get("available_at", ""))) or fallback_meta.get("available_at", "Unknown")
     if available_at != "Unknown":
         available_at = _extract_available_at(available_at)
     availability = _check_url_availability(available_at)
+
+    # Final deterministic source-type pass using consolidated title/publisher/content.
+    # This guards against LLM drift and false consulting classifications.
+    consolidated_text = f"{title}\n{publisher}\n{_sanitize_markdown_for_preface(md_content)}"
+    deterministic_source = _detect_source_type_hint(file_path, consolidated_text)
+    if deterministic_source == "AI Generated Report":
+        source_type = "AI Generated Report"
+    elif source_type == "Consulting Company" and deterministic_source == "Other":
+        # Prefer neutral "Other" when strong consulting markers are absent.
+        source_type = "Other"
 
     authors_raw = data.get("authors", fallback_meta.get("authors", []))
     if isinstance(authors_raw, str):
@@ -960,6 +1156,11 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
     else:
         credibility_text = f"{stage} {cred_label} Report"
 
+    journal_authority = classify_journal_authority(
+        title=title,
+        text=_sanitize_markdown_for_preface(md_content),
+    )
+
     source_integrity_flag = "ok"
     if availability_status in {"not_found", "gone"}:
         source_integrity_flag = "deprecated_or_removed"
@@ -984,6 +1185,7 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         "credibility_tier_key": cred_key,
         "credibility_tier_label": cred_label,
         "credibility": credibility_text,
+        **journal_authority,
     }
 
 
@@ -1015,6 +1217,18 @@ def _build_preface(md_meta: dict) -> str:
         f"credibility_tier_key: {_yaml_escape(md_meta.get('credibility_tier_key', 'unclassified'))}",
         f"credibility_tier_label: {_yaml_escape(md_meta.get('credibility_tier_label', 'Unclassified'))}",
         f"credibility: {_yaml_escape(md_meta.get('credibility', 'Unclassified Report'))}",
+        f"journal_ranking_source: {_yaml_escape(md_meta.get('journal_ranking_source', 'scimagojr_2024'))}",
+        f"journal_sourceid: {_yaml_escape(md_meta.get('journal_sourceid', ''))}",
+        f"journal_title: {_yaml_escape(md_meta.get('journal_title', ''))}",
+        f"journal_issn: {_yaml_escape(md_meta.get('journal_issn', ''))}",
+        f"journal_sjr: {_yaml_escape(md_meta.get('journal_sjr', 0.0))}",
+        f"journal_quartile: {_yaml_escape(md_meta.get('journal_quartile', ''))}",
+        f"journal_rank_global: {_yaml_escape(md_meta.get('journal_rank_global', 0))}",
+        f"journal_categories: {_yaml_escape(md_meta.get('journal_categories', ''))}",
+        f"journal_areas: {_yaml_escape(md_meta.get('journal_areas', ''))}",
+        f"journal_high_ranked: {_yaml_escape(md_meta.get('journal_high_ranked', False))}",
+        f"journal_match_method: {_yaml_escape(md_meta.get('journal_match_method', 'none'))}",
+        f"journal_match_confidence: {_yaml_escape(md_meta.get('journal_match_confidence', 0.0))}",
         f"keywords: {keywords_yaml}",
         f"abstract: {_yaml_escape(md_meta['abstract'])}",
         "---",

@@ -118,6 +118,7 @@ except Exception:
 logger = get_logger(__name__)
 from cortex_engine.query_cortex import describe_image_with_vlm_for_ingestion, describe_image_with_vlm_async
 from cortex_engine.embedding_adapters import EmbeddingServiceAdapter
+from cortex_engine.journal_authority import classify_journal_authority
 from cortex_engine.entity_extractor import EntityExtractor, ExtractedEntity, ExtractedRelationship
 from cortex_engine.graph_manager import EnhancedGraphManager
 from cortex_engine.batch_manager import BatchState
@@ -286,6 +287,30 @@ class RichMetadata(BaseModel):
         "Final Unclassified Report",
         description='Human-readable credibility summary in the format "{Draft|Final} {Label} Report".'
     )
+    journal_ranking_source: str = Field(
+        "scimagojr_2024",
+        description="Journal ranking dataset identifier used for authority enrichment."
+    )
+    journal_sourceid: str = Field("", description="SCImago source ID when journal is matched.")
+    journal_title: str = Field("", description="Matched journal title from ranking source.")
+    journal_issn: str = Field("", description="Matched ISSN from ranking source.")
+    journal_sjr: float = Field(0.0, description="SCImago SJR score for matched journal.")
+    journal_quartile: str = Field("", description="SCImago best quartile (Q1..Q4).")
+    journal_rank_global: int = Field(0, description="Global journal rank from ranking source.")
+    journal_categories: str = Field("", description="Journal category string from ranking source.")
+    journal_areas: str = Field("", description="Journal areas string from ranking source.")
+    journal_high_ranked: bool = Field(
+        False,
+        description="True when journal is considered highly ranked (currently quartile Q1)."
+    )
+    journal_match_method: str = Field(
+        "none",
+        description="Matching method used for journal enrichment: issn_exact|title_exact|title_fuzzy|none."
+    )
+    journal_match_confidence: float = Field(
+        0.0,
+        description="Confidence score for journal match in range 0..1."
+    )
 
 
 _CREDIBILITY_BY_VALUE = {
@@ -400,6 +425,8 @@ def _enforce_credibility_policy(metadata_json: Dict, file_path: str, text: str) 
     metadata_json["credibility_tier_key"] = key
     metadata_json["credibility_tier_label"] = label
     metadata_json["credibility"] = f"{stage} {label} Report"
+    title_hint = str(metadata_json.get("title", "") or Path(file_path).stem)
+    metadata_json.update(classify_journal_authority(title=title_hint, text=combined_text))
 
 class DocumentMetadata(BaseModel):
     doc_id: str

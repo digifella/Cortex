@@ -1,29 +1,18 @@
-# Docker Compose Override for External Storage Mode
+# Docker Compose override for external host storage mode.
 #
-# This override file enables external/host storage instead of containerized volumes.
-# Use this when you want to:
-#   - Access your databases from the host filesystem
-#   - Use existing databases from a previous installation
-#   - Easily backup data by copying folders
+# Usage:
+#   docker compose --profile cpu -f docker-compose.yml -f docker-compose.external.yml up -d
+#   docker compose --profile gpu -f docker-compose.yml -f docker-compose.external.yml up -d
 #
-# USAGE:
-#   docker compose -f docker-compose.yml -f docker-compose.external.yml up -d
-#
-# Or use the helper scripts:
-#   Windows: run-cortex-external.bat
-#   Linux/Mac: ./run-cortex-external.sh
-#
-# REQUIRED: Set these environment variables in your .env file:
-#   EXTERNAL_AI_DATABASE_PATH=C:\ai_databases        (Windows)
-#   EXTERNAL_AI_DATABASE_PATH=/mnt/f/ai_databases    (WSL/Linux)
-#   EXTERNAL_KNOWLEDGE_PATH=C:\KB_Test               (Windows)
-#   EXTERNAL_KNOWLEDGE_PATH=/mnt/e/KB_Test           (WSL/Linux)
+# Required in .env:
+#   EXTERNAL_AI_DATABASE_PATH=<host path>
+# Optional in .env:
+#   EXTERNAL_KNOWLEDGE_PATH=<host path>
 
 version: '3.8'
 
 services:
-  # Override cortex-api volumes to use external storage
-  cortex-api:
+  cortex-suite-cpu:
     volumes:
       - type: bind
         source: ${EXTERNAL_AI_DATABASE_PATH:?Please set EXTERNAL_AI_DATABASE_PATH in .env}
@@ -32,10 +21,10 @@ services:
         source: ${EXTERNAL_KNOWLEDGE_PATH:-./knowledge_base}
         target: /data/knowledge_base
         read_only: true
-      - cortex_logs:/app/logs
+      - ollama_data:/home/cortex/.ollama
+      - cortex_logs:/home/cortex/app/logs
 
-  # Override cortex-ui volumes to use external storage
-  cortex-ui:
+  cortex-suite-gpu:
     volumes:
       - type: bind
         source: ${EXTERNAL_AI_DATABASE_PATH:?Please set EXTERNAL_AI_DATABASE_PATH in .env}
@@ -44,19 +33,11 @@ services:
         source: ${EXTERNAL_KNOWLEDGE_PATH:-./knowledge_base}
         target: /data/knowledge_base
         read_only: true
-      - cortex_logs:/app/logs
-
-  # Override backup-service to use external storage
-  backup-service:
-    volumes:
-      - type: bind
-        source: ${EXTERNAL_AI_DATABASE_PATH:?Please set EXTERNAL_AI_DATABASE_PATH in .env}
-        target: /data/ai_databases
-        read_only: true
-      - backup_data:/backups
+      - ollama_data:/home/cortex/.ollama
+      - cortex_logs:/home/cortex/app/logs
 
 volumes:
-  cortex_logs:
+  ollama_data:
     driver: local
-  backup_data:
+  cortex_logs:
     driver: local

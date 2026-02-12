@@ -23,6 +23,7 @@ from cortex_engine.document_summarizer import (
 )
 from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 from cortex_engine.config_manager import ConfigManager
+from cortex_engine.version_config import VERSION_STRING
 
 # Set up logging
 logger = get_logger(__name__)
@@ -31,7 +32,7 @@ logger = get_logger(__name__)
 st.set_page_config(page_title="Document Summarizer", layout="wide", page_icon="📄")
 
 # Page metadata
-PAGE_VERSION = "v5.6.0"
+PAGE_VERSION = VERSION_STRING
 
 def get_installed_ollama_models() -> set:
     """Get set of actually installed Ollama models."""

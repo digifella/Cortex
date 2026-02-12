@@ -64,6 +64,24 @@ class DocumentTextifier:
             self._vlm_client = None
             self._vlm_model = None
 
+    @staticmethod
+    def _looks_like_logo_icon_description(text: str) -> bool:
+        """Heuristic: detect short logo/icon-only descriptions that add metadata noise."""
+        t = (text or "").strip().lower()
+        if not t:
+            return False
+        logo_markers = [
+            "logo", "icon", "icons", "emblem", "symbol", "badge", "watermark",
+            "seal", "silhouette", "initials", "letters",
+        ]
+        visual_markers = [
+            "left icon", "right icon", "circular", "circle", "black and white",
+            "background", "strip", "main colors", "main colours",
+        ]
+        marker_hits = sum(1 for m in logo_markers if m in t)
+        visual_hits = sum(1 for m in visual_markers if m in t)
+        return (marker_hits >= 1 and visual_hits >= 1) or marker_hits >= 2
+
     def describe_image(self, image_bytes: bytes) -> str:
         """Describe an image using the VLM. Returns placeholder on failure."""
         if not self.use_vision:
@@ -77,7 +95,12 @@ class DocumentTextifier:
                 model=self._vlm_model,
                 messages=[{
                     "role": "user",
-                    "content": "Describe this photograph in 2-4 plain sentences. Identify the main subject, setting, and colours. Do not use markdown, headings, or bullet points. /no_think",
+                    "content": (
+                        "Describe this photograph in 2-4 plain sentences. Identify main subject, setting, and colours. "
+                        "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
+                        "return exactly: [Image: logo/icon omitted]. "
+                        "Do not use markdown, headings, or bullet points. /no_think"
+                    ),
                     "images": [encoded],
                 }],
                 options={"temperature": 0.1, "num_predict": 600},
@@ -88,6 +111,8 @@ class DocumentTextifier:
             if not result:
                 logger.warning(f"VLM returned empty description (model: {self._vlm_model})")
                 return "[Image: vision model returned empty description]"
+            if self._looks_like_logo_icon_description(result):
+                return "[Image: logo/icon omitted]"
             return result
         except Exception as e:
             logger.warning(f"VLM describe failed: {e}")
@@ -107,6 +132,118 @@ class DocumentTextifier:
         for row in normalised[1:]:
             lines.append("| " + " | ".join(row) + " |")
         return "\n".join(lines)
+
+    @staticmethod
+    def _clean_table_rows(rows: List[List[str]]) -> List[List[str]]:
+        cleaned_rows: List[List[str]] = []
+        for row in rows or []:
+            cleaned_row = []
+            for cell in row or []:
+                text = re.sub(r"\s+", " ", str(cell or "")).strip()
+                cleaned_row.append(text)
+            cleaned_rows.append(cleaned_row)
+        return cleaned_rows
+
+    @staticmethod
+    def _is_chart_noise_line(line: str) -> bool:
+        s = (line or "").strip()
+        if not s:
+            return False
+        low = s.lower()
+        if re.fullmatch(r"\d+(?:\.\d+)?%?", s):
+            return True
+        if re.fullmatch(r"(?:19|20)\d{2}", s):
+            return True
+        if re.search(r"\bvs\b", low) and len(s) <= 10:
+            return True
+        if re.fullmatch(r"[0-9%\s\.\-–—]+", s):
+            return True
+        if re.search(r"\b(life expectancy|key facts|key figures|infographic|chart)\b", low):
+            return True
+        tokens = s.split()
+        if 2 <= len(tokens) <= 8:
+            numeric_like = sum(1 for t in tokens if re.fullmatch(r"\d+(?:\.\d+)?%?", t))
+            if numeric_like >= max(2, len(tokens) // 2):
+                return True
+        return False
+
+    def _strip_infographic_noise(self, lines: List[str]) -> List[str]:
+        if not lines:
+            return []
+        marker_idx = -1
+        for i, line in enumerate(lines):
+            if re.search(r"\b(infographic|figure|chart)\b", line, flags=re.IGNORECASE):
+                marker_idx = i
+                break
+
+        if marker_idx >= 0:
+            # For infographic/chart pages, keep preface text only and drop the visual payload lines.
+            kept_prefix = [
+                ln for ln in lines[:marker_idx]
+                if ln and not self._is_chart_noise_line(ln)
+            ]
+            kept_prefix.append("[Infographic/Figure content omitted in strict text-only mode.]")
+            return kept_prefix
+
+        return [ln for ln in lines if not self._is_chart_noise_line(ln)]
+
+    @staticmethod
+    def _is_simple_table_quality(rows: List[List[str]]) -> bool:
+        if not rows or len(rows) < 2:
+            return False
+        col_count = max((len(r) for r in rows), default=0)
+        if col_count < 2:
+            return False
+        if col_count > 12:
+            return False
+
+        total_cells = len(rows) * col_count
+        filled_cells = 0
+        long_cell_count = 0
+        for row in rows:
+            normalized = row + [""] * (col_count - len(row))
+            for cell in normalized:
+                if cell:
+                    filled_cells += 1
+                if len(cell) > 140:
+                    long_cell_count += 1
+
+        fill_ratio = (filled_cells / total_cells) if total_cells else 0.0
+        if fill_ratio < 0.35:
+            return False
+        if long_cell_count > max(2, int(total_cells * 0.15)):
+            return False
+
+        header = rows[0] + [""] * (col_count - len(rows[0]))
+        header_nonempty = sum(1 for c in header if c)
+        if header_nonempty < 1:
+            return False
+        return True
+
+    def _extract_pdf_tables(self, page) -> List[Dict[str, object]]:
+        """Extract simple tables from a PDF page, returning parsed/failed statuses."""
+        results: List[Dict[str, object]] = []
+        if not hasattr(page, "find_tables"):
+            return results
+        try:
+            found = page.find_tables()
+            table_objs = list(getattr(found, "tables", []) or [])
+        except Exception as e:
+            logger.debug(f"PDF table detection failed on page {page.number + 1}: {e}")
+            return results
+
+        for idx, table_obj in enumerate(table_objs, 1):
+            try:
+                raw_rows = table_obj.extract() or []
+                rows = self._clean_table_rows(raw_rows)
+                if self._is_simple_table_quality(rows):
+                    results.append({"status": "parsed", "index": idx, "rows": rows})
+                else:
+                    results.append({"status": "unreliable", "index": idx, "rows": []})
+            except Exception as e:
+                logger.debug(f"Table extraction failed for table {idx} on page {page.number + 1}: {e}")
+                results.append({"status": "unreliable", "index": idx, "rows": []})
+        return results
 
     # ------------------------------------------------------------------
     # Dispatcher
@@ -175,27 +312,15 @@ class DocumentTextifier:
                 if in_header_footer_zone and line in repeated_boilerplate:
                     continue
                 filtered_lines.append(line)
+            filtered_lines = self._strip_infographic_noise(filtered_lines)
 
             text = "\n".join(filtered_lines).strip()
             if text:
                 md_parts.append(text)
                 md_parts.append("")
 
-            image_list = page.get_images(full=True)
-            for img_idx, img_info in enumerate(image_list):
-                xref = img_info[0]
-                try:
-                    base_image = doc.extract_image(xref)
-                    if base_image and base_image.get("image"):
-                        self._report(
-                            (page_num + (img_idx + 1) / max(len(image_list), 1)) / total_pages,
-                            f"Page {page_num + 1} — describing image {img_idx + 1}/{len(image_list)}",
-                        )
-                        desc = self.describe_image(base_image["image"])
-                        md_parts.append(f"> **[Image {img_idx + 1}]**: {desc}")
-                        md_parts.append("")
-                except Exception as e:
-                    logger.debug(f"Could not extract image xref={xref}: {e}")
+            # Strict text-only PDF mode:
+            # intentionally ignore embedded tables/figures/images to avoid noisy pseudo-structured output.
 
             # Explicit page break marker for downstream parsers.
             if page_num < total_pages - 1:

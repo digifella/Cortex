@@ -5,6 +5,163 @@ All notable changes to the Cortex Suite project will be documented in this file.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### ✨ Ideation + Credibility Workflow Alignment (2-stage default)
+
+### 🚀 Improvements
+- Knowledge Synthesizer now runs in a **2-stage default flow**:
+  1) Discover Themes
+  2) Generate Ideas by Theme
+- Added optional **Classic 4-stage** mode in the Synthesizer UI for deeper sessions.
+- Added Synthesizer **minimum credibility tier** filter so ideation context respects source quality constraints.
+- Added markdown export for both 2-stage and 4-stage ideation outputs.
+
+### 🗄️ Maintenance
+- Added **Credibility Metadata Retrofit** batch tool in Maintenance (host + Docker):
+  - targets selected working collections
+  - dry-run support
+  - optional text-aware classification mode
+  - backfills canonical fields:
+    - `credibility_tier_value`
+    - `credibility_tier_key`
+    - `credibility_tier_label`
+    - `credibility`
+
+### 🔧 Bug Fixes
+- Restored `run_synthesis` compatibility shim in `cortex_engine/knowledge_synthesizer.py` to prevent breakage in legacy call paths.
+- Async ingestion metadata now always includes canonical credibility defaults, avoiding missing-tier records on alternate ingestion paths.
+- Credibility retrofit scope matching now supports mixed collection identifier formats (`doc_id` hashes, UUID chunk IDs, nested `_node_content.metadata.doc_id`).
+- Credibility retrofit now enforces a single credibility classification per document (majority tier across chunks, deterministic tie-breaking).
+- Ingestion now applies hard duplicate guards against existing Chroma `doc_id`s in both analysis and finalize stages (host + Docker), preventing duplicate document indexing.
+- Async ingestion path now performs the same `doc_id` duplicate guard before `collection.add`.
+
+### 🔎 Knowledge Search Stabilization (WSL/CUDA cold-start + reranker reliability)
+
+### 🚀 Improvements
+- Added global model warmup kickoff from `Cortex_Suite.py` so embedding/reranker warmup can start at app launch instead of waiting for Knowledge Search page entry.
+- Added `Reranker Model` selector in Knowledge Search sidebar (`2B`, `8B`, `Auto`) with explicit speed/quality guidance.
+- Improved search responsiveness by skipping reranker on `text-fallback` strategy and tightening vector warmup timeout behavior.
+- Added warmup status panel in Knowledge Search with manual `Refresh Warmup Status` control.
+- Reduced preload churn by preventing duplicate page-level preload threads when global warmup is already active.
+
+### 🔧 Bug Fixes
+- Removed Search-page import dependency on `async_query`/LlamaIndex by introducing lightweight threshold helper (`cortex_engine/utils/search_threshold.py`), avoiding NumPy/SciPy import-chain crashes on page load.
+- Fixed worker-thread Streamlit context noise and collection peek ambiguity in Knowledge Search threaded paths.
+- Added reranker health/cooldown circuit breaker to prevent endless failed reload loops and surfaced failure state in UI.
+- Hardened reranker imports against fragile top-level `transformers` exports by using stable submodule import paths.
+- Fixed Ollama model-service session handling to avoid unclosed aiohttp session warnings.
+
+### 🧩 Refactor Wave: Ingest + Maintenance Componentization
+
+Large UI refactor pass to reduce duplication between host and Docker pages, isolate critical workflows, and make future stabilization safer.
+
+### 🚀 Improvements
+- Knowledge Ingest page shell is now componentized with shared stage routing and top-level workflow orchestration.
+- Knowledge Ingest processing log/finalization UI moved to shared component.
+- Knowledge Ingest metadata review/finalization UI moved to shared component.
+- Knowledge Ingest document-type management UI moved to shared component.
+- Knowledge Ingest recovery panel and service-status panel moved to shared components.
+- Maintenance page reset/recovery controls moved to shared component (host + Docker aligned to one simplified flow).
+- Maintenance page database health check moved to shared component.
+- Maintenance page embedding model status panel moved to shared component.
+- Maintenance page embedding inspector panel moved to shared component.
+- Maintenance page DB path scan/save/discovery tools moved to shared component.
+- Maintenance page deduplication workflow moved to shared component.
+- Docker maintenance danger-zone clean-start panel moved to shared component.
+
+### 🔧 Internal
+- Added/maintained host+Docker component pairs under `pages/components/` and `docker/pages/components/` to prevent drift.
+- Reduced monolithic page complexity in `pages/2_Knowledge_Ingest.py`, `docker/pages/2_Knowledge_Ingest.py`, `pages/6_Maintenance.py`, and `docker/pages/6_Maintenance.py`.
+
+## v6.0.7 - 2026-02-12
+
+### PDF Infographic Noise Filtering
+
+Improves strict PDF text extraction by removing infographic/chart label noise from text-layer output.
+
+### ✨ New Features
+- Strict PDF text mode now strips infographic/chart text-layer noise and inserts a single omission marker when detected.
+
+### 🚀 Improvements
+- Chart axis/tick/value fragments from infographic pages are now filtered out of markdown output.
+- Reduces false numeric clutter on visual-heavy report pages.
+
+### 🔧 Bug Fixes
+- Fixed residual infographic text leakage in strict text-only PDF conversion.
+
+## v6.0.6 - 2026-02-12
+
+### PDF Strict Text-Only Mode
+
+Switches PDF textifier to strict text-only extraction, ignoring tables/figures/images to avoid unreliable pseudo-structured output.
+
+### ✨ New Features
+- PDF textifier now runs in strict text-only mode and excludes table/figure/image extraction blocks.
+
+### 🚀 Improvements
+- Converted markdown is cleaner and more stable for downstream metadata extraction/classification.
+- Removes malformed table-like fragments caused by unreliable layout reconstruction.
+
+### 🔧 Bug Fixes
+- Eliminated noisy figure/table artefacts in converted markdown from complex report graphics.
+
+## v6.0.5 - 2026-02-12
+
+### PDF Table Parsing Safety Update
+
+Adds conservative PDF table-to-Markdown extraction for simple tables and replaces unreliable figure parsing with explicit placeholders.
+
+### ✨ New Features
+- PDF textifier now extracts simple high-confidence tables and emits Markdown ASCII-style tables.
+- PDF visuals that are not reliably machine-parseable are now explicitly marked as unavailable instead of being loosely described.
+
+### 🚀 Improvements
+- Table extraction now uses quality gating (shape/completeness/length checks) to avoid noisy table output.
+- Figure handling now uses deterministic placeholders for charts/infographics/logos in PDF workflows.
+
+### 🔧 Bug Fixes
+- Reduced ingestion noise caused by OCR-like numeric fragments from unstructured figure parsing in reports.
+
+## v6.0.4 - 2026-02-12
+
+### Metadata Extraction Reliability Update
+
+Improves document preface extraction reliability for publication dates/titles and suppresses logo/icon image noise in metadata workflows.
+
+### ✨ New Features
+- Document preface extraction now prioritizes citation/publishing-line date patterns, including `(YYYY)` citation years and `Revised version, <Month YYYY>` forms.
+- Textifier now suppresses logo/icon-only image descriptions with a deterministic placeholder (`[Image: logo/icon omitted]`) to reduce metadata noise.
+
+### 🚀 Improvements
+- Title extraction now skips citation boilerplate such as `Please cite this publication as`.
+- LLM preface metadata instructions now explicitly ignore tiny/logo/icon figure captions for title/date/source/abstract/keywords decisions.
+
+### 🔧 Bug Fixes
+- Reduced false `publishing_date: Unknown` outcomes on institutional reports where publication year appears in citation blocks.
+- Reduced abstract/keyword contamination from decorative figure descriptions (logos/icons/watermarks).
+
+## v6.0.3 - 2026-02-11
+
+### Document and Photo Processing Upgrade
+
+Renames Document Extract and expands Photo Processor with independent resize, metadata ownership, and keyword anonymization controls.
+
+### ✨ New Features
+- `Document Extract` page is now labeled `Document & Photo Processing` with heading `Document or Photo Processing`.
+- `Photo Keywords` tab is now `Photo Processor`.
+- Added independent `Resize Photos Only` action with resolution profiles:
+  - `Low (1920 x 1080)` max
+  - `Medium (2560 x 1440)` max
+- Added ownership metadata writing with editable prefilled notice:
+  - `All rights (c) Longboardfella. Contact longboardfella.com for info on use of photos.`
+- Added keyword anonymization option with editable blocked keyword list (default includes `friends`, `family`, `paul`, `paul_c`, `jacqui`).
+
+### 🚀 Improvements
+- Photo workflow now separates resize-only and keyword/metadata operations to avoid unnecessary AI description runs.
+- Photo results now report resize details, ownership write status, and removed sensitive tags.
+- Host and Docker copies for Document Extract and textifier are synchronized for this feature set.
+
+### 🔧 Bug Fixes
+- Fixed prior coupling where photo resize required the keyword generation path.
 
 ## v6.0.2 - 2026-02-07
 
