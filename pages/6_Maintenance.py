@@ -72,6 +72,7 @@ try:
     from cortex_engine.utils.gpu_monitor import get_gpu_memory_info, get_device_recommendations
     from cortex_engine.ingestion_recovery import IngestionRecoveryManager
     from cortex_engine.collection_manager import WorkingCollectionManager
+    from cortex_engine.journal_authority import classify_journal_authority
     from cortex_engine.setup_manager import SetupManager
     from cortex_engine.backup_manager import BackupManager
     from cortex_engine.sync_backup_manager import SyncBackupManager
@@ -86,6 +87,21 @@ PAGE_VERSION = VERSION_STRING
 
 # Set up logging
 logger = get_logger(__name__)
+
+_JOURNAL_AUTHORITY_FIELDS = (
+    "journal_ranking_source",
+    "journal_sourceid",
+    "journal_title",
+    "journal_issn",
+    "journal_sjr",
+    "journal_quartile",
+    "journal_rank_global",
+    "journal_categories",
+    "journal_areas",
+    "journal_high_ranked",
+    "journal_match_method",
+    "journal_match_confidence",
+)
 
 # Initialize session state
 if 'maintenance_config' not in st.session_state:
@@ -776,6 +792,96 @@ def _run_credibility_retrofit(db_path: str, selected_collections: list, dry_run:
     return {"processed": processed, "updated": updated, "skipped": skipped, "errors": errors}
 
 
+def _run_journal_authority_retrofit(db_path: str, selected_collections: list, dry_run: bool, include_docs: bool) -> dict:
+    client = init_chroma_client(db_path)
+    if not client:
+        raise RuntimeError("Could not connect to ChromaDB client.")
+
+    collection = client.get_collection(COLLECTION_NAME)
+    working_mgr = WorkingCollectionManager()
+    requested_ids = set()
+    for name in selected_collections:
+        requested_ids.update(working_mgr.get_doc_ids_by_name(name))
+
+    allowed_doc_ids = set(requested_ids)
+    allowed_chunk_ids = set()
+    if requested_ids:
+        ids_list = list(requested_ids)
+        for i in range(0, len(ids_list), 200):
+            probe_ids = ids_list[i:i + 200]
+            try:
+                resolved = collection.get(ids=probe_ids, include=["metadatas"])
+                for rid, rmeta in zip(resolved.get("ids", []), resolved.get("metadatas", [])):
+                    allowed_chunk_ids.add(rid)
+                    if isinstance(rmeta, dict) and rmeta.get("doc_id"):
+                        allowed_doc_ids.add(str(rmeta.get("doc_id")))
+            except Exception:
+                continue
+
+    total = collection.count()
+    if total <= 0:
+        return {"processed": 0, "updated": 0, "skipped": 0, "errors": []}
+
+    processed = 0
+    updated = 0
+    skipped = 0
+    errors = []
+    update_ids = []
+    update_metas = []
+
+    include_fields = ["metadatas", "documents"] if include_docs else ["metadatas"]
+    batch_size = 300
+    for offset in range(0, total, batch_size):
+        batch = collection.get(limit=batch_size, offset=offset, include=include_fields)
+        ids = batch.get("ids", [])
+        metadatas = batch.get("metadatas", [])
+        documents = batch.get("documents", []) if include_docs else [""] * len(ids)
+
+        for cid, meta, doc in zip(ids, metadatas, documents):
+            if not isinstance(meta, dict):
+                skipped += 1
+                continue
+            if requested_ids:
+                doc_candidates = _extract_candidate_doc_ids(meta)
+                in_scope = (
+                    bool(doc_candidates.intersection(allowed_doc_ids))
+                    or (cid in allowed_chunk_ids)
+                    or (cid in requested_ids)
+                )
+                if not in_scope:
+                    skipped += 1
+                    continue
+
+            processed += 1
+            safe_meta = dict(meta)
+            try:
+                title_hint = str(
+                    safe_meta.get("title")
+                    or safe_meta.get("journal_title")
+                    or safe_meta.get("file_name")
+                    or ""
+                )
+                text_for_match = str(doc or "") if include_docs else str(safe_meta.get("summary", "") or "")
+                authority = classify_journal_authority(title=title_hint, text=text_for_match)
+
+                before = tuple(safe_meta.get(k) for k in _JOURNAL_AUTHORITY_FIELDS)
+                safe_meta.update(authority)
+                after = tuple(safe_meta.get(k) for k in _JOURNAL_AUTHORITY_FIELDS)
+                if before != after:
+                    updated += 1
+                    if not dry_run:
+                        update_ids.append(cid)
+                        update_metas.append(safe_meta)
+            except Exception as e:
+                errors.append(f"{cid}: {e}")
+
+    if update_ids and not dry_run:
+        for i in range(0, len(update_ids), 300):
+            collection.update(ids=update_ids[i:i + 300], metadatas=update_metas[i:i + 300])
+
+    return {"processed": processed, "updated": updated, "skipped": skipped, "errors": errors}
+
+
 def _check_source_url(url: str, timeout: float = 8.0) -> dict:
     checked_at = datetime.now().strftime("%Y-%m-%d")
     if not url or url == "Unknown":
@@ -1183,6 +1289,55 @@ def display_database_maintenance():
                 with st.spinner("Applying credibility policy to collection metadata..."):
                     try:
                         result = _run_credibility_retrofit(
+                            db_path=db_path,
+                            selected_collections=selected_collections,
+                            dry_run=dry_run,
+                            include_docs=include_docs,
+                        )
+                        mode_text = "Dry run complete" if dry_run else "Retrofit complete"
+                        st.success(f"{mode_text}: processed={result['processed']} updated={result['updated']} skipped={result['skipped']}")
+                        if result["errors"]:
+                            st.warning(f"Completed with {len(result['errors'])} item errors. Showing first 10:")
+                            for err in result["errors"][:10]:
+                                st.code(err)
+                    except Exception as e:
+                        st.error(f"Retrofit failed: {e}")
+
+    with st.expander("📰 Journal Authority Metadata Retrofit", expanded=False):
+        st.caption("Backfill SCImago journal authority signals (quartile/rank/high-ranked) on existing Chroma metadata.")
+        try:
+            mgr = WorkingCollectionManager()
+            collections = mgr.list_collections()
+        except Exception as e:
+            collections = []
+            st.warning(f"Could not load working collections: {e}")
+
+        selected_collections = st.multiselect(
+            "Collections to retrofit",
+            options=collections,
+            default=collections,
+            key="maintenance_journal_authority_collections",
+            help="Only documents belonging to selected collections will be updated.",
+        )
+        include_docs = st.checkbox(
+            "Use document text during journal matching",
+            value=False,
+            key="maintenance_journal_authority_include_docs",
+            help="Enables ISSN/title extraction from chunk text. Slower on large databases.",
+        )
+        dry_run = st.checkbox(
+            "Dry run (show counts, do not write)",
+            value=True,
+            key="maintenance_journal_authority_dry_run",
+        )
+
+        if st.button("Run Journal Authority Retrofit", key="maintenance_run_journal_authority_retrofit", type="primary"):
+            if not selected_collections:
+                st.error("Select at least one collection.")
+            else:
+                with st.spinner("Applying journal authority enrichment to collection metadata..."):
+                    try:
+                        result = _run_journal_authority_retrofit(
                             db_path=db_path,
                             selected_collections=selected_collections,
                             dry_run=dry_run,
