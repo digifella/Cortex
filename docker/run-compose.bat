@@ -320,7 +320,7 @@ set "_CHK_PORT=%~1"
 set "_CHK_LABEL=%~2"
 netstat -ano | findstr /R /C:":%_CHK_PORT% .*LISTENING" >nul
 if not errorlevel 1 (
-    echo ERROR: Cannot start: host port %_CHK_PORT% (%_CHK_LABEL%) is already in use.
+    echo ERROR: Cannot start: host port %_CHK_PORT% - %_CHK_LABEL% is already in use.
     exit /b 1
 )
 exit /b 0
