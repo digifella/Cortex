@@ -281,6 +281,19 @@ class AsyncIngestionEngine:
             "credibility_tier_key": "unclassified",
             "credibility_tier_label": "Unclassified",
             "credibility": "Final Unclassified Report",
+            # Journal authority fields (default unknown unless enrichment run elsewhere)
+            "journal_ranking_source": "scimagojr_2024",
+            "journal_sourceid": "",
+            "journal_title": "",
+            "journal_issn": "",
+            "journal_sjr": 0.0,
+            "journal_quartile": "",
+            "journal_rank_global": 0,
+            "journal_categories": "",
+            "journal_areas": "",
+            "journal_high_ranked": False,
+            "journal_match_method": "none",
+            "journal_match_confidence": 0.0,
         }
 
         # Add to vector store with explicit embedding

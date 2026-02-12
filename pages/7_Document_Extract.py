@@ -31,6 +31,7 @@ from cortex_engine.anonymizer import DocumentAnonymizer, AnonymizationMapping
 from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.version_config import VERSION_STRING
+from cortex_engine.journal_authority import classify_journal_authority
 
 # Set up logging
 logger = get_logger(__name__)
@@ -960,6 +961,11 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
     else:
         credibility_text = f"{stage} {cred_label} Report"
 
+    journal_authority = classify_journal_authority(
+        title=title,
+        text=_sanitize_markdown_for_preface(md_content),
+    )
+
     source_integrity_flag = "ok"
     if availability_status in {"not_found", "gone"}:
         source_integrity_flag = "deprecated_or_removed"
@@ -984,6 +990,7 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         "credibility_tier_key": cred_key,
         "credibility_tier_label": cred_label,
         "credibility": credibility_text,
+        **journal_authority,
     }
 
 
@@ -1015,6 +1022,18 @@ def _build_preface(md_meta: dict) -> str:
         f"credibility_tier_key: {_yaml_escape(md_meta.get('credibility_tier_key', 'unclassified'))}",
         f"credibility_tier_label: {_yaml_escape(md_meta.get('credibility_tier_label', 'Unclassified'))}",
         f"credibility: {_yaml_escape(md_meta.get('credibility', 'Unclassified Report'))}",
+        f"journal_ranking_source: {_yaml_escape(md_meta.get('journal_ranking_source', 'scimagojr_2024'))}",
+        f"journal_sourceid: {_yaml_escape(md_meta.get('journal_sourceid', ''))}",
+        f"journal_title: {_yaml_escape(md_meta.get('journal_title', ''))}",
+        f"journal_issn: {_yaml_escape(md_meta.get('journal_issn', ''))}",
+        f"journal_sjr: {_yaml_escape(md_meta.get('journal_sjr', 0.0))}",
+        f"journal_quartile: {_yaml_escape(md_meta.get('journal_quartile', ''))}",
+        f"journal_rank_global: {_yaml_escape(md_meta.get('journal_rank_global', 0))}",
+        f"journal_categories: {_yaml_escape(md_meta.get('journal_categories', ''))}",
+        f"journal_areas: {_yaml_escape(md_meta.get('journal_areas', ''))}",
+        f"journal_high_ranked: {_yaml_escape(md_meta.get('journal_high_ranked', False))}",
+        f"journal_match_method: {_yaml_escape(md_meta.get('journal_match_method', 'none'))}",
+        f"journal_match_confidence: {_yaml_escape(md_meta.get('journal_match_confidence', 0.0))}",
         f"keywords: {keywords_yaml}",
         f"abstract: {_yaml_escape(md_meta['abstract'])}",
         "---",

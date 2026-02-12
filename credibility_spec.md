@@ -9,6 +9,20 @@ Status: Active
 - `credibility_tier_label` (`Peer-Reviewed|Institutional|Pre-Print|Editorial|Commentary|Unclassified`)
 - `credibility` (human-readable string)
 
+## Journal Authority Fields
+- `journal_ranking_source` (`scimagojr_2024|...`)
+- `journal_sourceid` (string; SCImago Source ID when matched)
+- `journal_title` (matched journal title)
+- `journal_issn` (matched ISSN string)
+- `journal_sjr` (float; SJR score)
+- `journal_quartile` (`Q1|Q2|Q3|Q4|""`)
+- `journal_rank_global` (integer rank; `0` when unknown)
+- `journal_categories` (string)
+- `journal_areas` (string)
+- `journal_high_ranked` (boolean; currently true when quartile is `Q1`)
+- `journal_match_method` (`issn_exact|title_exact|title_fuzzy|none`)
+- `journal_match_confidence` (float `0..1`)
+
 ## Source Integrity Fields
 - `available_at` (canonical source URL if known)
 - `availability_status` (`available|not_found|gone|client_error|server_error|unreachable|unknown`)
@@ -51,6 +65,9 @@ Status: Active
 5. Do not tier-downgrade for temporary connectivity states (`client_error|server_error|unreachable`).
 6. Always emit all canonical fields consistently.
 7. AI-generated material should still be separately identifiable via `source_type = "AI Generated Report"` for filtering/analysis.
+8. Journal authority enrichment must remain orthogonal to credibility tiers.
+9. Journal matching priority: `ISSN exact` -> `title exact` -> `title fuzzy (conservative threshold)`.
+10. If no journal match is found, emit default journal authority values with `journal_match_method = none`.
 
 ## URL Availability Rules
 - Preferred check flow: `HEAD`, then fallback to ranged `GET` (`bytes=0-0`) if required.
