@@ -72,6 +72,23 @@ Large UI refactor pass to reduce duplication between host and Docker pages, isol
 - Added/maintained host+Docker component pairs under `pages/components/` and `docker/pages/components/` to prevent drift.
 - Reduced monolithic page complexity in `pages/2_Knowledge_Ingest.py`, `docker/pages/2_Knowledge_Ingest.py`, `pages/6_Maintenance.py`, and `docker/pages/6_Maintenance.py`.
 
+## v6.0.5 - 2026-02-12
+
+### PDF Table Parsing Safety Update
+
+Adds conservative PDF table-to-Markdown extraction for simple tables and replaces unreliable figure parsing with explicit placeholders.
+
+### ✨ New Features
+- PDF textifier now extracts simple high-confidence tables and emits Markdown ASCII-style tables.
+- PDF visuals that are not reliably machine-parseable are now explicitly marked as unavailable instead of being loosely described.
+
+### 🚀 Improvements
+- Table extraction now uses quality gating (shape/completeness/length checks) to avoid noisy table output.
+- Figure handling now uses deterministic placeholders for charts/infographics/logos in PDF workflows.
+
+### 🔧 Bug Fixes
+- Reduced ingestion noise caused by OCR-like numeric fragments from unstructured figure parsing in reports.
+
 ## v6.0.4 - 2026-02-12
 
 ### Metadata Extraction Reliability Update

@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.0.4"
+CORTEX_VERSION = "6.0.5"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 0,
-    "patch": 4,
+    "patch": 5,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,20 +25,19 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-02-12",
-    "release_name": "Metadata Extraction Reliability Update",
-    "description": "Improves document preface extraction reliability for publication dates/titles and suppresses logo-icon image noise in metadata workflows.",
+    "release_name": "PDF Table Parsing Safety Update",
+    "description": "Adds conservative PDF table-to-Markdown extraction for simple tables and replaces unreliable figure parsing with explicit placeholders.",
     "breaking_changes": [],
     "new_features": [
-        "Document preface extraction now prioritizes citation/publishing-line date patterns (e.g., `(2024)` and `Revised version, November 2024`)",
-        "Textifier now suppresses logo/icon-only image descriptions with a deterministic placeholder to reduce metadata noise"
+        "PDF textifier now extracts simple high-confidence tables and emits Markdown ASCII-style tables",
+        "PDF visuals that are not reliably machine-parseable are now explicitly marked as unavailable rather than loosely described"
     ],
     "improvements": [
-        "Title extraction now skips citation boilerplate lines such as `Please cite this publication as`",
-        "Preface metadata extraction prompt now explicitly ignores tiny/logo/icon figure captions"
+        "Table extraction now uses quality gating (shape/completeness/length checks) to avoid noisy table output",
+        "Figure handling now prefers deterministic placeholders for charts/infographics/logos in PDF workflows"
     ],
     "bug_fixes": [
-        "Reduced false `Unknown` publishing dates for institutional reports with citation-style metadata blocks",
-        "Reduced pollution of abstract/keyword metadata from decorative logo/icon figure captions"
+        "Reduced ingestion noise caused by OCR-like numeric fragments from unstructured figure parsing in reports"
     ],
     "performance": []
 }

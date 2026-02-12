@@ -133,6 +133,75 @@ class DocumentTextifier:
             lines.append("| " + " | ".join(row) + " |")
         return "\n".join(lines)
 
+    @staticmethod
+    def _clean_table_rows(rows: List[List[str]]) -> List[List[str]]:
+        cleaned_rows: List[List[str]] = []
+        for row in rows or []:
+            cleaned_row = []
+            for cell in row or []:
+                text = re.sub(r"\s+", " ", str(cell or "")).strip()
+                cleaned_row.append(text)
+            cleaned_rows.append(cleaned_row)
+        return cleaned_rows
+
+    @staticmethod
+    def _is_simple_table_quality(rows: List[List[str]]) -> bool:
+        if not rows or len(rows) < 2:
+            return False
+        col_count = max((len(r) for r in rows), default=0)
+        if col_count < 2:
+            return False
+        if col_count > 12:
+            return False
+
+        total_cells = len(rows) * col_count
+        filled_cells = 0
+        long_cell_count = 0
+        for row in rows:
+            normalized = row + [""] * (col_count - len(row))
+            for cell in normalized:
+                if cell:
+                    filled_cells += 1
+                if len(cell) > 140:
+                    long_cell_count += 1
+
+        fill_ratio = (filled_cells / total_cells) if total_cells else 0.0
+        if fill_ratio < 0.35:
+            return False
+        if long_cell_count > max(2, int(total_cells * 0.15)):
+            return False
+
+        header = rows[0] + [""] * (col_count - len(rows[0]))
+        header_nonempty = sum(1 for c in header if c)
+        if header_nonempty < 1:
+            return False
+        return True
+
+    def _extract_pdf_tables(self, page) -> List[Dict[str, object]]:
+        """Extract simple tables from a PDF page, returning parsed/failed statuses."""
+        results: List[Dict[str, object]] = []
+        if not hasattr(page, "find_tables"):
+            return results
+        try:
+            found = page.find_tables()
+            table_objs = list(getattr(found, "tables", []) or [])
+        except Exception as e:
+            logger.debug(f"PDF table detection failed on page {page.number + 1}: {e}")
+            return results
+
+        for idx, table_obj in enumerate(table_objs, 1):
+            try:
+                raw_rows = table_obj.extract() or []
+                rows = self._clean_table_rows(raw_rows)
+                if self._is_simple_table_quality(rows):
+                    results.append({"status": "parsed", "index": idx, "rows": rows})
+                else:
+                    results.append({"status": "unreliable", "index": idx, "rows": []})
+            except Exception as e:
+                logger.debug(f"Table extraction failed for table {idx} on page {page.number + 1}: {e}")
+                results.append({"status": "unreliable", "index": idx, "rows": []})
+        return results
+
     # ------------------------------------------------------------------
     # Dispatcher
     # ------------------------------------------------------------------
@@ -206,6 +275,18 @@ class DocumentTextifier:
                 md_parts.append(text)
                 md_parts.append("")
 
+            table_results = self._extract_pdf_tables(page)
+            for t in table_results:
+                table_idx = int(t.get("index", 0))
+                if t.get("status") == "parsed":
+                    rows = t.get("rows", [])
+                    md_parts.append(f"**Table {table_idx}:**")
+                    md_parts.append(self.table_to_markdown(rows))
+                    md_parts.append("")
+                else:
+                    md_parts.append(f"> **[Table {table_idx}]**: unable to be reliably parsed.")
+                    md_parts.append("")
+
             image_list = page.get_images(full=True)
             for img_idx, img_info in enumerate(image_list):
                 xref = img_info[0]
@@ -214,10 +295,9 @@ class DocumentTextifier:
                     if base_image and base_image.get("image"):
                         self._report(
                             (page_num + (img_idx + 1) / max(len(image_list), 1)) / total_pages,
-                            f"Page {page_num + 1} — describing image {img_idx + 1}/{len(image_list)}",
+                            f"Page {page_num + 1} — scanning figure {img_idx + 1}/{len(image_list)}",
                         )
-                        desc = self.describe_image(base_image["image"])
-                        md_parts.append(f"> **[Image {img_idx + 1}]**: {desc}")
+                        md_parts.append(f"> **[Figure {img_idx + 1}]**: unable to be reliably parsed.")
                         md_parts.append("")
                 except Exception as e:
                     logger.debug(f"Could not extract image xref={xref}: {e}")
