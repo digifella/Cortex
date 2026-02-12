@@ -72,6 +72,22 @@ Large UI refactor pass to reduce duplication between host and Docker pages, isol
 - Added/maintained host+Docker component pairs under `pages/components/` and `docker/pages/components/` to prevent drift.
 - Reduced monolithic page complexity in `pages/2_Knowledge_Ingest.py`, `docker/pages/2_Knowledge_Ingest.py`, `pages/6_Maintenance.py`, and `docker/pages/6_Maintenance.py`.
 
+## v6.0.7 - 2026-02-12
+
+### PDF Infographic Noise Filtering
+
+Improves strict PDF text extraction by removing infographic/chart label noise from text-layer output.
+
+### ✨ New Features
+- Strict PDF text mode now strips infographic/chart text-layer noise and inserts a single omission marker when detected.
+
+### 🚀 Improvements
+- Chart axis/tick/value fragments from infographic pages are now filtered out of markdown output.
+- Reduces false numeric clutter on visual-heavy report pages.
+
+### 🔧 Bug Fixes
+- Fixed residual infographic text leakage in strict text-only PDF conversion.
+
 ## v6.0.6 - 2026-02-12
 
 ### PDF Strict Text-Only Mode

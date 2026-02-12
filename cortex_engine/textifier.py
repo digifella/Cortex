@@ -145,6 +145,49 @@ class DocumentTextifier:
         return cleaned_rows
 
     @staticmethod
+    def _is_chart_noise_line(line: str) -> bool:
+        s = (line or "").strip()
+        if not s:
+            return False
+        low = s.lower()
+        if re.fullmatch(r"\d+(?:\.\d+)?%?", s):
+            return True
+        if re.fullmatch(r"(?:19|20)\d{2}", s):
+            return True
+        if re.search(r"\bvs\b", low) and len(s) <= 10:
+            return True
+        if re.fullmatch(r"[0-9%\s\.\-–—]+", s):
+            return True
+        if re.search(r"\b(life expectancy|key facts|key figures|infographic|chart)\b", low):
+            return True
+        tokens = s.split()
+        if 2 <= len(tokens) <= 8:
+            numeric_like = sum(1 for t in tokens if re.fullmatch(r"\d+(?:\.\d+)?%?", t))
+            if numeric_like >= max(2, len(tokens) // 2):
+                return True
+        return False
+
+    def _strip_infographic_noise(self, lines: List[str]) -> List[str]:
+        if not lines:
+            return []
+        marker_idx = -1
+        for i, line in enumerate(lines):
+            if re.search(r"\b(infographic|figure|chart)\b", line, flags=re.IGNORECASE):
+                marker_idx = i
+                break
+
+        if marker_idx >= 0:
+            # For infographic/chart pages, keep preface text only and drop the visual payload lines.
+            kept_prefix = [
+                ln for ln in lines[:marker_idx]
+                if ln and not self._is_chart_noise_line(ln)
+            ]
+            kept_prefix.append("[Infographic/Figure content omitted in strict text-only mode.]")
+            return kept_prefix
+
+        return [ln for ln in lines if not self._is_chart_noise_line(ln)]
+
+    @staticmethod
     def _is_simple_table_quality(rows: List[List[str]]) -> bool:
         if not rows or len(rows) < 2:
             return False
@@ -269,6 +312,7 @@ class DocumentTextifier:
                 if in_header_footer_zone and line in repeated_boilerplate:
                     continue
                 filtered_lines.append(line)
+            filtered_lines = self._strip_infographic_noise(filtered_lines)
 
             text = "\n".join(filtered_lines).strip()
             if text:
