@@ -12,6 +12,9 @@ REM Parse arguments
 set "STORAGE_MODE=portable"
 set "ACTION=start"
 set "EXECUTION_MODE=auto"
+set "UI_PORT=8501"
+set "API_PORT=8000"
+set "OLLAMA_PORT=11434"
 
 :parse_args
 if "%~1"=="" goto done_parsing
@@ -107,6 +110,11 @@ if not exist .env (
         exit /b 1
     )
 )
+
+REM Load optional host port overrides from .env
+for /f "tokens=1* delims==" %%A in ('findstr /B "CORTEX_UI_PORT=" .env 2^>nul') do set "UI_PORT=%%B"
+for /f "tokens=1* delims==" %%A in ('findstr /B "CORTEX_API_PORT=" .env 2^>nul') do set "API_PORT=%%B"
+for /f "tokens=1* delims==" %%A in ('findstr /B "CORTEX_OLLAMA_PORT=" .env 2^>nul') do set "OLLAMA_PORT=%%B"
 
 REM Handle storage mode
 if "%STORAGE_MODE%"=="external" goto external_mode
@@ -239,6 +247,30 @@ if /I "%HAS_GPU_CLI%"=="true" (
 
 :run_compose
 
+REM Stop opposite profile container to avoid Cortex-to-Cortex port collisions
+if "%PROFILE%"=="--profile gpu" (
+    docker compose --profile cpu stop cortex-suite-cpu >nul 2>&1
+) else (
+    docker compose --profile gpu stop cortex-suite-gpu >nul 2>&1
+)
+
+call :check_port_in_use "%UI_PORT%" "Streamlit UI"
+if errorlevel 1 goto port_in_use
+call :check_port_in_use "%API_PORT%" "API"
+if errorlevel 1 goto port_in_use
+call :check_port_in_use "%OLLAMA_PORT%" "Ollama"
+if errorlevel 1 goto port_in_use
+goto after_port_checks
+
+:port_in_use
+echo ERROR: One or more required ports are in use.
+echo Set CORTEX_UI_PORT, CORTEX_API_PORT, and/or CORTEX_OLLAMA_PORT in .env to free ports.
+echo Current mappings: UI=%UI_PORT% API=%API_PORT% OLLAMA=%OLLAMA_PORT%
+pause
+exit /b 1
+
+:after_port_checks
+
 REM Build and start services
 echo.
 echo Starting Cortex Suite services...
@@ -285,4 +317,14 @@ if "%STORAGE_MODE%"=="portable" (
 )
 echo.
 pause
+exit /b 0
+
+:check_port_in_use
+set "_CHK_PORT=%~1"
+set "_CHK_LABEL=%~2"
+netstat -ano | findstr /R /C:":%_CHK_PORT% .*LISTENING" >nul
+if not errorlevel 1 (
+    echo ERROR: Cannot start: host port %_CHK_PORT% (%_CHK_LABEL%) is already in use.
+    exit /b 1
+)
 exit /b 0

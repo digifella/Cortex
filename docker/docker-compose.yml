@@ -18,9 +18,9 @@ services:
     container_name: cortex-suite
     restart: unless-stopped
     ports:
-      - "8501:8501"
-      - "8000:8000"
-      - "11434:11434"
+      - "${CORTEX_UI_PORT:-8501}:8501"
+      - "${CORTEX_API_PORT:-8000}:8000"
+      - "${CORTEX_OLLAMA_PORT:-11434}:11434"
     volumes:
       - cortex_data:/data/ai_databases
       - knowledge_base:/data/knowledge_base
@@ -50,9 +50,9 @@ services:
     container_name: cortex-suite-gpu
     restart: unless-stopped
     ports:
-      - "8501:8501"
-      - "8000:8000"
-      - "11434:11434"
+      - "${CORTEX_UI_PORT:-8501}:8501"
+      - "${CORTEX_API_PORT:-8000}:8000"
+      - "${CORTEX_OLLAMA_PORT:-11434}:11434"
     volumes:
       - cortex_data:/data/ai_databases
       - knowledge_base:/data/knowledge_base

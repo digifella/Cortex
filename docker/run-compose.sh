@@ -22,6 +22,30 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+get_env_from_dotenv() {
+    local key="$1"
+    local val
+    val=$(grep -E "^${key}=" .env 2>/dev/null | tail -n1 | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
+    echo "$val"
+}
+
+is_port_in_use() {
+    local port="$1"
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$port$"
+        return $?
+    fi
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -iTCP:"$port" -sTCP:LISTEN -Pn >/dev/null 2>&1
+        return $?
+    fi
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -an 2>/dev/null | grep -Eq "[\\.:]$port[[:space:]]+.*LISTEN"
+        return $?
+    fi
+    return 1
+}
+
 echo ""
 echo "==============================================="
 echo "   CORTEX SUITE - Docker Compose Launcher"
@@ -182,6 +206,11 @@ else
     COMPOSE_CMD="docker compose"
 fi
 
+# Resolve host ports (defaults can be overridden in .env).
+UI_PORT="$(get_env_from_dotenv CORTEX_UI_PORT)"; UI_PORT="${UI_PORT:-8501}"
+API_PORT="$(get_env_from_dotenv CORTEX_API_PORT)"; API_PORT="${API_PORT:-8000}"
+OLLAMA_PORT="$(get_env_from_dotenv CORTEX_OLLAMA_PORT)"; OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+
 # Resolve CPU/GPU profile with explicit runtime checks.
 has_gpu_cli=false
 has_gpu_runtime=false
@@ -224,6 +253,25 @@ else
         PROFILE="--profile cpu"
     fi
 fi
+
+# Stop opposite profile container if present to avoid Cortex-to-Cortex port collisions.
+if [ "$PROFILE" = "--profile gpu" ]; then
+    docker compose --profile cpu stop cortex-suite-cpu >/dev/null 2>&1 || true
+else
+    docker compose --profile gpu stop cortex-suite-gpu >/dev/null 2>&1 || true
+fi
+
+# Host port preflight checks.
+for pair in "$UI_PORT:Streamlit UI" "$API_PORT:API" "$OLLAMA_PORT:Ollama"; do
+    p="${pair%%:*}"
+    label="${pair#*:}"
+    if is_port_in_use "$p"; then
+        echo -e "${RED}Cannot start: host port $p ($label) is already in use.${NC}"
+        echo "Free the port, or set one of these in .env: CORTEX_UI_PORT, CORTEX_API_PORT, CORTEX_OLLAMA_PORT."
+        echo "Current mapping vars: CORTEX_UI_PORT=$UI_PORT, CORTEX_API_PORT=$API_PORT, CORTEX_OLLAMA_PORT=$OLLAMA_PORT"
+        exit 1
+    fi
+done
 
 # Build and start services
 echo ""
