@@ -44,6 +44,9 @@ from pages.components._Maintenance_PathTools import (
 from pages.components._Maintenance_Dedup import (
     render_database_dedup_section as shared_render_database_dedup_section,
 )
+from pages.components._Maintenance_DangerZone import (
+    render_clean_start_danger_zone as shared_render_clean_start_danger_zone,
+)
 
 # Configure page
 st.set_page_config(
@@ -53,12 +56,11 @@ st.set_page_config(
 )
 
 # Page configuration
-PAGE_VERSION = None
+PAGE_VERSION = "v5.6.0"
 
 # Import Cortex modules
 try:
     from cortex_engine.config import INGESTED_FILES_LOG
-    from cortex_engine.version_config import VERSION_STRING
     from cortex_engine.config_manager import ConfigManager
     from cortex_engine.utils import (
         get_logger,
@@ -82,12 +84,16 @@ except ImportError as e:
     st.error(f"Failed to import required Cortex modules: {e}")
     st.stop()
 
-PAGE_VERSION = VERSION_STRING
-
 # Set up logging
 logger = get_logger(__name__)
 
 # Initialize session state
+if 'show_confirm_clear_log' not in st.session_state:
+    st.session_state.show_confirm_clear_log = False
+if 'show_confirm_delete_kb' not in st.session_state:
+    st.session_state.show_confirm_delete_kb = False
+if 'show_confirm_clean_start' not in st.session_state:
+    st.session_state.show_confirm_clean_start = False
 if 'maintenance_config' not in st.session_state:
     st.session_state.maintenance_config = None
 
@@ -133,6 +139,8 @@ def clear_ingestion_session_state(reason: str = "maintenance") -> None:
         "show_logs",
         "processing_metrics",
         "ingestion_start_time",
+        "show_confirm_clear_log",
+        "show_confirm_delete_kb",
     }
 
     for key in list(st.session_state.keys()):
@@ -216,177 +224,480 @@ def purge_ingestion_state_files(
             except Exception as e:
                 _error(f"Failed to clear log file {log_file}", e)
 
-
-def _remove_path(target: Path, deleted_items: list, errors: list, label: str) -> None:
-    """Delete a file or directory and record results."""
-    try:
-        if not target.exists():
-            return
-        if target.is_dir():
-            shutil.rmtree(target)
-        else:
-            target.unlink()
-        deleted_items.append(f"{label}: {target}")
-    except Exception as e:
-        errors.append(f"Failed to delete {label} ({target}): {e}")
-
-
-def _terminate_ingest_processes_for_db(db_root: Path) -> list:
-    """
-    Stop ingest subprocesses for the given database path.
-    This prevents another Streamlit session from recreating data during reset.
-    """
-    stopped = []
-    try:
-        import psutil  # type: ignore
-    except Exception:
-        logger.warning("psutil not available; cannot terminate external ingest processes")
-        return stopped
-
-    db_resolved = str(db_root.resolve())
-    for proc in psutil.process_iter(attrs=["pid", "cmdline"]):
-        try:
-            cmdline = proc.info.get("cmdline") or []
-            if not cmdline:
-                continue
-            cmd_text = " ".join(cmdline)
-            if "ingest_cortex.py" not in cmd_text and "cortex_engine.ingest_cortex" not in cmd_text:
-                continue
-
-            should_stop = False
-            if "--db-path" in cmdline:
-                idx = cmdline.index("--db-path")
-                if idx + 1 < len(cmdline):
-                    proc_db = cmdline[idx + 1]
-                    proc_db_root = resolve_db_root_path(proc_db)
-                    if proc_db_root and str(proc_db_root.resolve()) == db_resolved:
-                        should_stop = True
-            else:
-                # Conservative fallback: only stop if DB path text appears in command
-                if db_resolved in cmd_text:
-                    should_stop = True
-
-            if not should_stop:
-                continue
-
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except Exception:
-                proc.kill()
-            stopped.append(proc.pid)
-        except Exception:
-            continue
-    return stopped
-
-
-def _reset_database_artifacts(db_path: str, include_extended_state: bool = False) -> tuple:
-    """Core reset routine shared by delete/reset actions."""
-    db_root = resolve_db_root_path(db_path)
-    if not db_root:
-        raise ValueError("Database path is empty or invalid.")
-
-    deleted_items = []
-    errors = []
-
-    # Stop ingestion from this and other sessions to avoid instant re-creation.
-    clear_ingestion_session_state("maintenance.reset.start")
-    stopped_pids = _terminate_ingest_processes_for_db(db_root)
-    if stopped_pids:
-        deleted_items.append(f"Stopped ingest processes: {stopped_pids}")
-
-    project_root = Path(__file__).parent.parent
-
-    # Core KB artifacts
-    core_targets = [
-        ("ChromaDB directory", db_root / "knowledge_hub_db"),
-        ("Knowledge graph", db_root / "knowledge_cortex.gpickle"),
-        ("Collections file", db_root / "working_collections.json"),
-        ("Legacy collections file", project_root / "working_collections.json"),
-    ]
-    for label, target in core_targets:
-        _remove_path(target, deleted_items, errors, label)
-
-    # Remove ingestion state files and progress artifacts.
-    purge_ingestion_state_files(db_root, deleted_items, errors=errors)
-
-    # Extended clean-start artifacts from DB root only.
-    if include_extended_state:
-        extended_targets = [
-            ("Entity profiles", db_root / "entity_profiles"),
-            ("Workspaces", db_root / "workspaces"),
-            ("Structured data", db_root / "structured_data"),
-            ("Structured knowledge", db_root / "structured_knowledge.json"),
-            ("Entities cache", db_root / "entities.json"),
-        ]
-        for label, target in extended_targets:
-            _remove_path(target, deleted_items, errors, label)
-
-        # Delete any residual staging files directly under DB root.
-        for state_file in db_root.glob("staging_*.json"):
-            _remove_path(state_file, deleted_items, errors, "Staging file")
-
-    clear_ingestion_session_state("maintenance.reset.complete")
-    return deleted_items, errors
-
 def delete_ingested_document_database(db_path: str):
     """Delete the ingested document database with proper error handling and logging."""
+    db_root = resolve_db_root_path(db_path)
+    if not db_root:
+        st.error("❌ Database path is empty. Set a database path before deleting the knowledge base.")
+        return
+
+    chroma_db_dir = db_root / "knowledge_hub_db"
+    graph_file = db_root / "knowledge_cortex.gpickle"
+    collections_file = db_root / "working_collections.json"
+    project_root = Path(__file__).parent.parent
+    project_collections_file = project_root / "working_collections.json"
+    
     try:
-        deleted_items, errors = _reset_database_artifacts(db_path, include_extended_state=False)
+        deleted_items = []
+        cleanup_errors = []
+        cleanup_errors = []
+        errors = []
+
+        # Clear the ingested log explicitly in case the directory delete fails
+        ingested_log = chroma_db_dir / INGESTED_FILES_LOG
+        if ingested_log.exists():
+            try:
+                ingested_log.unlink()
+                deleted_items.append(f"Ingested files log: {ingested_log}")
+                logger.info(f"Cleared ingested files log: {ingested_log}")
+            except Exception as e:
+                error_msg = f"Failed to delete ingested files log: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete ChromaDB directory
+        if chroma_db_dir.exists() and chroma_db_dir.is_dir():
+            try:
+                shutil.rmtree(chroma_db_dir)
+                deleted_items.append(f"ChromaDB directory: {chroma_db_dir}")
+                logger.info(f"Successfully deleted ChromaDB directory: {chroma_db_dir}")
+            except Exception as e:
+                error_msg = f"Failed to delete ChromaDB directory: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete knowledge graph file
+        if graph_file.exists():
+            try:
+                graph_file.unlink()
+                deleted_items.append(f"Knowledge graph: {graph_file}")
+                logger.info(f"Successfully deleted knowledge graph: {graph_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete knowledge graph file: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete collections file (stored in both project and DB root)
+        for target in (project_collections_file, collections_file):
+            if target.exists():
+                try:
+                    target.unlink()
+                    deleted_items.append(f"Collections file: {target}")
+                    logger.info(f"Successfully deleted collections file: {target}")
+                except Exception as e:
+                    error_msg = f"Failed to delete collections file {target}: {e}"
+                    errors.append(error_msg)
+                    logger.error(error_msg)
+
+        # Clear staging/batch/progress artifacts even if the database directory is missing
+        purge_ingestion_state_files(db_root, deleted_items, errors=errors)
+
+        # Report results
         if deleted_items:
-            st.success("✅ Database artifacts deleted:\n" + "\n".join(f"- {item}" for item in deleted_items))
+            st.success(f"✅ Successfully deleted ingested document database components:\n" + "\n".join(f"- {item}" for item in deleted_items))
+            logger.info("Ingested document database deletion completed successfully")
+        
         if errors:
-            st.error("❌ Some items could not be deleted:\n" + "\n".join(f"- {err}" for err in errors))
+            st.error(f"❌ Some items could not be deleted:\n" + "\n".join(f"- {error}" for error in errors))
+            
         if not deleted_items and not errors:
-            st.warning("⚠️ No ingested database artifacts were found to delete.")
+            st.warning("⚠️ No ingested document database components found to delete.")
+            logger.warning(f"No ingested document database found at: {db_root}")
+
     except Exception as e:
+        error_msg = f"Failed to delete ingested document database: {e}"
         logger.error(f"Ingested document database deletion failed: {e}")
-        st.error(f"❌ Failed to delete ingested document database: {e}")
+        st.error(f"❌ {error_msg}")
+
+    # Clear ingestion-related session state to prevent stale UI state
+    clear_ingestion_session_state("maintenance.delete_ingested_db")
+
+    # Reset the confirmation state
+    st.session_state.show_confirm_delete_kb = False
 
 def perform_clean_start(db_path: str):
-    """Perform complete KB reset with a concise, deterministic cleanup flow."""
+    """Perform complete system reset - removes all data, collections, logs, and configurations for fresh start."""
+    clear_ingestion_session_state("maintenance.clean_start.begin")
+    
+    # Initialize comprehensive debug log
+    debug_log_lines = []
+    debug_log_lines.append("=" * 80)
+    debug_log_lines.append("CORTEX SUITE CLEAN START DEBUG LOG")
+    debug_log_lines.append("=" * 80)
+    debug_log_lines.append(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    debug_log_lines.append(f"Original DB Path: {db_path}")
+    debug_log_lines.append(f"Running in Docker: {os.path.exists('/.dockerenv')}")
+    
+    # Handle Docker environment path resolution properly
+    is_docker_env = os.path.exists('/.dockerenv')
+    resolved_root = resolve_db_root_path(db_path) if not is_docker_env else Path(db_path) if db_path else None
+
+    if is_docker_env:
+        final_db_path = str(resolved_root) if resolved_root else ""
+        msg = f"🐳 **Docker Mode:** Using configured database path `{final_db_path}` (Docker handles volume mapping)"
+        st.info(msg)
+        debug_log_lines.append("ENVIRONMENT: Docker Container")
+        debug_log_lines.append(f"Final DB Path: {final_db_path}")
+        debug_log_lines.append("Path Conversion: None (Docker handles volume mapping)")
+    else:
+        resolved_root = resolve_db_root_path(db_path)
+        final_db_path = str(resolved_root) if resolved_root else convert_windows_to_wsl_path(db_path)
+        msg = f"💻 **Host Mode:** Converted `{db_path}` to `{final_db_path}`"
+        st.info(msg)
+        debug_log_lines.append("ENVIRONMENT: Host/WSL")
+        debug_log_lines.append(f"Final DB Path: {final_db_path}")
+        debug_log_lines.append("Path Conversion: Applied WSL conversion")
+
+    if not final_db_path:
+        st.error("❌ Database path is empty. Set a valid knowledge base path before running Clean Start.")
+        logger.error("Clean Start aborted: no database path provided")
+        return
+    
+    debug_log_lines.append("")
+    debug_log_lines.append("OPERATIONS LOG:")
+    debug_log_lines.append("-" * 40)
+
     try:
-        resolved = resolve_db_root_path(db_path)
-        if not resolved:
-            st.error("❌ Database path is empty. Set a valid knowledge base path before running Clean Start.")
-            return
-
-        st.info(f"🧹 Running Clean Start for `{resolved}`")
-        deleted_items, errors = _reset_database_artifacts(str(resolved), include_extended_state=True)
-
-        st.success(f"✅ Clean Start completed. Removed {len(deleted_items)} item(s).")
-        with st.expander("Show removed items", expanded=False):
-            if deleted_items:
-                st.text("\n".join(f"- {item}" for item in deleted_items))
-            else:
-                st.text("No matching artifacts were found.")
-
-        if errors:
-            st.warning(f"⚠️ {len(errors)} cleanup issue(s) were reported.")
-            with st.expander("Show cleanup warnings", expanded=False):
-                st.text("\n".join(f"- {err}" for err in errors))
-
-        # Verify critical files are gone.
-        verify_targets = [
-            resolved / "knowledge_hub_db",
-            resolved / "working_collections.json",
-            resolved / "knowledge_cortex.gpickle",
-            resolved / "staging_ingestion.json",
-            resolved / "batch_state.json",
-        ]
-        remaining = [str(p) for p in verify_targets if p.exists()]
-        if remaining:
-            st.error("❌ Clean Start incomplete. Remaining critical artifacts:\n" + "\n".join(f"- {p}" for p in remaining))
+        deleted_items = []
+        cleanup_errors = []
+        
+        # Show current knowledge base location before deletion
+        chroma_db_dir = Path(final_db_path) / "knowledge_hub_db"
+        debug_log_lines.append(f"Target ChromaDB Directory: {chroma_db_dir}")
+        debug_log_lines.append(f"Directory Exists: {chroma_db_dir.exists()}")
+        
+        if chroma_db_dir.exists():
+            st.warning(f"📁 **Current Knowledge Base Found:** `{chroma_db_dir}`\n\nThis directory and all contents will be permanently deleted.")
+            debug_log_lines.append("STATUS: Knowledge base directory found - will be deleted")
         else:
-            st.success("✅ Verification passed: no critical KB artifacts remain.")
+            st.info(f"📁 **Knowledge Base Location:** `{chroma_db_dir}`\n\nDirectory does not exist - will clean up other logs and configurations only.")
+            debug_log_lines.append("STATUS: No knowledge base directory found - cleanup only")
+        
+        # Show debug information with clear path mapping and current file status
+        with st.container(border=True):
+            st.markdown("#### 🔍 Pre‑Operation Debug Information")
+            st.write(f"Windows path: `{db_path}`")
+            st.write(f"Resolved path: `{final_db_path}`")
+            # Current state check
+            st.markdown("**Current State Check**")
+            items = [
+                ("ChromaDB directory", Path(final_db_path) / "knowledge_hub_db"),
+                ("Collections file", Path(final_db_path) / "working_collections.json"),
+                ("Staging file", Path(final_db_path) / "staging_ingestion.json"),
+                ("Batch state", Path(final_db_path) / "batch_state.json"),
+                ("Knowledge graph", Path(final_db_path) / "knowledge_cortex.gpickle"),
+            ]
+            for label, p in items:
+                exists = p.exists()
+                icon = "✅" if exists else "⚪"
+                st.write(f"{icon} {label}: `{p}` (exists={exists})")
+            # Append to debug buffer as well
+            debug_display = "\n".join(debug_log_lines)
+            st.text_area("Debug Log", value=debug_display, height=140, help="Copy this info if you need to report issues")
+        
+        st.divider()
+        st.header("🧹 Clean Start Operations")
+        st.info("**The following operations will be performed step by step. You can read each step as it completes.**")
+        
+        # STEP 1: Check ChromaDB directory
+        st.subheader("Step 1: Checking ChromaDB Directory")
+        chroma_db_dir = Path(final_db_path) / "knowledge_hub_db"
+        
+        st.success(f"🔍 Looking for ChromaDB directory at: `{chroma_db_dir}`")
+        debug_log_lines.append(f"OPERATION: Checking ChromaDB directory at {chroma_db_dir}")
+        
+        st.success(f"🔍 Directory exists: `{chroma_db_dir.exists()}`")
+        debug_log_lines.append(f"RESULT: Directory exists = {chroma_db_dir.exists()}")
+        
+        # Show current step results (non-expander)
+        with st.container(border=True):
+            st.markdown("#### 📋 Step 1 Results")
+            step1_results = f"""Path being checked: {chroma_db_dir}
+Directory exists: {chroma_db_dir.exists()}
+"""
+            st.text_area("Step 1 Debug Information", value=step1_results, height=100)
+        
+        if chroma_db_dir.exists():
+            st.subheader("Step 2: Analyzing Directory Contents")
+            
+            # List all files in the directory for debugging
+            try:
+                files_in_dir = list(chroma_db_dir.iterdir())
+                file_names = [f.name for f in files_in_dir if f.is_file()]
+                dir_names = [f.name for f in files_in_dir if f.is_dir()]
+                st.success(f"🔍 Files in ChromaDB directory: `{file_names}`")
+                st.success(f"🔍 Subdirectories: `{dir_names}`")
+                debug_log_lines.append(f"FILES FOUND: {file_names}")
+                debug_log_lines.append(f"SUBDIRECTORIES FOUND: {dir_names}")
+                
+                # Show directory analysis results (non-expander)
+                with st.container(border=True):
+                    st.markdown("#### 📋 Step 2 Results - Directory Analysis")
+                    step2_results = f"""Directory contents:
+Files found: {file_names}
+Subdirectories found: {dir_names}
+Total items: {len(files_in_dir)}
+"""
+                    st.text_area("Step 2 Debug Information", value=step2_results, height=120)
+                    
+            except Exception as e:
+                st.error(f"❌ Could not list directory contents: {e}")
+                debug_log_lines.append(f"ERROR: Could not list directory contents: {e}")
+            
+            st.subheader("Step 3: Checking Ingested Files Log")
+            ingested_files_log = chroma_db_dir / "ingested_files.log"
+            st.success(f"🔍 Looking for ingested files log at: `{ingested_files_log}`")
+            st.success(f"🔍 Ingested files log exists: `{ingested_files_log.exists()}`")
+            debug_log_lines.append(f"INGESTED_LOG_PATH: {ingested_files_log}")
+            debug_log_lines.append(f"INGESTED_LOG_EXISTS: {ingested_files_log.exists()}")
+            
+            # Show ingested log check results (non-expander)
+            with st.container(border=True):
+                st.markdown("#### 📋 Step 3 Results - Ingested Log Check")
+                step3_results = f"""Ingested files log path: {ingested_files_log}
+Log file exists: {ingested_files_log.exists()}
+"""
+                st.text_area("Step 3 Debug Information", value=step3_results, height=100)
+            
+            if ingested_files_log.exists():
+                st.subheader("Step 4: Deleting Ingested Files Log")
+                try:
+                    ingested_files_log.unlink()
+                    deleted_items.append(f"Ingested files log: {ingested_files_log}")
+                    logger.info(f"Clean Start: Cleared ingested files log: {ingested_files_log}")
+                    st.success(f"✅ Successfully deleted ingested files log")
+                    debug_log_lines.append(f"SUCCESS: Deleted ingested files log")
+                except Exception as e:
+                    st.error(f"❌ Failed to delete ingested files log: {e}")
+                    logger.error(f"Clean Start: Failed to delete ingested files log: {e}")
+                    debug_log_lines.append(f"ERROR: Failed to delete ingested files log: {e}")
+            else:
+                st.info(f"ℹ️ No ingested files log found to delete - skipping this step")
+                debug_log_lines.append("INFO: No ingested files log found")
+        else:
+            st.warning(f"ℹ️ ChromaDB directory does not exist - skipping file-specific operations")
+            debug_log_lines.append("INFO: ChromaDB directory does not exist")
+        
+        # CRITICAL STEP: Delete ChromaDB directory (vector database)
+        st.subheader("⚠️ CRITICAL STEP: Delete ChromaDB Directory")
+        debug_log_lines.append("")
+        debug_log_lines.append("OPERATION: Attempting to delete ChromaDB directory")
+        
+        # Re-check directory existence for deletion step
+        chroma_exists_for_deletion = chroma_db_dir.exists() and chroma_db_dir.is_dir()
+        st.success(f"🔍 Directory exists for deletion: `{chroma_exists_for_deletion}`")
+        
+        if chroma_exists_for_deletion:
+            st.warning(f"⚠️ **ABOUT TO DELETE:** `{chroma_db_dir}`")
+            try:
+                shutil.rmtree(chroma_db_dir)
+                deleted_items.append(f"ChromaDB vector database: {chroma_db_dir}")
+                logger.info(f"Clean Start: Deleted ChromaDB directory: {chroma_db_dir}")
+                st.success(f"✅ **SUCCESS: Deleted ChromaDB directory** `{chroma_db_dir}`")
+                debug_log_lines.append(f"SUCCESS: Deleted ChromaDB directory {chroma_db_dir}")
+            except Exception as e:
+                st.error(f"❌ **FAILED to delete ChromaDB directory:** {e}")
+                debug_log_lines.append(f"ERROR: Failed to delete ChromaDB directory: {e}")
+        else:
+            st.info("ℹ️ ChromaDB directory does not exist - nothing to delete")
+            debug_log_lines.append("SKIP: ChromaDB directory does not exist or is not a directory")
+        
+        # Show critical step results (non-expander)
+        with st.container(border=True):
+            st.markdown("#### 📋 Critical Step Results - ChromaDB Directory Deletion")
+            critical_results = f"""Target directory: {chroma_db_dir}
+Directory existed before deletion: {chroma_exists_for_deletion}
+Directory exists after deletion attempt: {chroma_db_dir.exists() if hasattr(chroma_db_dir, 'exists') else 'Unknown'}
+Deletion successful: {'Yes' if chroma_exists_for_deletion and not chroma_db_dir.exists() else 'No' if chroma_exists_for_deletion else 'N/A - Directory did not exist'}
+"""
+            st.text_area("Critical Step Debug Information", value=critical_results, height=150)
+            
+            # 2. Delete knowledge graph file
+            graph_file = Path(final_db_path) / "knowledge_cortex.gpickle"
+            if graph_file.exists():
+                graph_file.unlink()
+                deleted_items.append(f"Knowledge graph: {graph_file}")
+                logger.info(f"Clean Start: Deleted knowledge graph: {graph_file}")
+            
+            # 3. Clear working collections (check both locations)
+            project_root = Path(__file__).parent.parent
+            old_collections_file = project_root / "working_collections.json"
+            new_collections_file = Path(final_db_path) / "working_collections.json"
+            
+            # Delete from project root if it exists
+            if old_collections_file.exists():
+                old_collections_file.unlink()
+                deleted_items.append(f"Working collections (old location): {old_collections_file}")
+                logger.info(f"Clean Start: Cleared working collections from project root: {old_collections_file}")
+            
+            # Delete from KB database path if it exists
+            if new_collections_file.exists():
+                new_collections_file.unlink()
+                deleted_items.append(f"Working collections: {new_collections_file}")
+                logger.info(f"Clean Start: Cleared working collections from KB database: {new_collections_file}")
+            
+            # 4. Clear ALL ingestion logs, staging, batch, and recovery metadata
+            db_path_obj = Path(final_db_path)
+            purge_ingestion_state_files(db_path_obj, deleted_items, debug_log_lines, cleanup_errors)
+            
+            # 5. Clear session state and cached configuration files
+            config_files_to_clear = [
+                project_root / "cortex_config.json",
+                project_root / "boilerplate.json"
+            ]
+            
+            for config_file in config_files_to_clear:
+                if config_file.exists():
+                    # For cortex_config.json, only reset database paths, keep other settings
+                    if config_file.name == "cortex_config.json":
+                        try:
+                            with open(config_file, 'r') as f:
+                                config_data = json.load(f)
+                            # Reset database-specific paths but keep other settings
+                            config_data.pop('ai_database_path', None)
+                            config_data.pop('knowledge_source_path', None) 
+                            with open(config_file, 'w') as f:
+                                json.dump(config_data, f, indent=2)
+                            deleted_items.append(f"Reset database paths in: {config_file}")
+                        except Exception as e:
+                            logger.warning(f"Could not reset config file {config_file}: {e}")
+                    else:
+                        config_file.unlink()
+                        deleted_items.append(f"Configuration file: {config_file}")
+            
+            # 6. Clear Streamlit session state cache files
+            streamlit_cache_patterns = [".streamlit/cache", "__pycache__", "*.pyc"]
+            for pattern in streamlit_cache_patterns:
+                for cache_item in project_root.rglob(pattern):
+                    if cache_item.is_file():
+                        cache_item.unlink()
+                        deleted_items.append(f"Cache file: {cache_item}")
+                    elif cache_item.is_dir() and cache_item.name in ['.streamlit', '__pycache__']:
+                        shutil.rmtree(cache_item)
+                        deleted_items.append(f"Cache directory: {cache_item}")
+            
+            # 7. Clear any remaining temporary and state files
+            temp_patterns = ["*.tmp", "*.temp", "temp_*", "*.pid", "*.lock", "*_state.json"]
+            for pattern in temp_patterns:
+                for temp_file in project_root.glob(pattern):
+                    if temp_file.is_file():
+                        temp_file.unlink()
+                        deleted_items.append(f"Temporary file: {temp_file}")
+        
+        # Add final debug log entries
+        debug_log_lines.append("")
+        debug_log_lines.append("FINAL RESULTS:")
+        debug_log_lines.append("-" * 40)
+        debug_log_lines.append(f"Total items cleaned: {len(deleted_items)}")
+        if cleanup_errors:
+            debug_log_lines.append("Warnings during cleanup:")
+            debug_log_lines.extend(f"- {err}" for err in cleanup_errors)
+        debug_log_lines.append("Deleted items:")
+        for item in deleted_items:
+            debug_log_lines.append(f"  - {item}")
+        debug_log_lines.append("")
+        debug_log_lines.append("OPERATION COMPLETED SUCCESSFULLY")
+        debug_log_lines.append("=" * 80)
+        
+        # Create comprehensive final debug log
+        final_debug_log = "\n".join(debug_log_lines)
+        
+        # Success message
+        st.success("✅ **Clean Start completed successfully!**")
+        st.markdown("### 🗑️ Cleaned Items:")
+        for item in deleted_items:
+            st.write(f"- {item}")
 
-        st.info(
-            "Next: go to Knowledge Ingest, keep the same DB path, and start a fresh ingest. "
-            "Collection assignment now happens only during finalization."
-        )
+        # Final verification
+        with st.container(border=True):
+            st.markdown("#### ✅ Final Verification")
+            items = [
+                ("ChromaDB directory", Path(final_db_path) / "knowledge_hub_db"),
+                ("Collections file", Path(final_db_path) / "working_collections.json"),
+                ("Staging file", Path(final_db_path) / "staging_ingestion.json"),
+                ("Batch state", Path(final_db_path) / "batch_state.json"),
+                ("Knowledge graph", Path(final_db_path) / "knowledge_cortex.gpickle"),
+            ]
+            for label, p in items:
+                exists = p.exists()
+                icon = "❌" if exists else "✅"
+                st.write(f"{icon} {label}: `{p}` (exists={exists})")
+
+        if cleanup_errors:
+            st.warning("⚠️ Some cleanup steps reported warnings:\n" + "\n".join(f"- {err}" for err in cleanup_errors))
+        
+        # Show final comprehensive debug log on screen
+        st.subheader("📋 Complete Debug Log")
+        st.info("**This shows everything that happened during the Clean Start operation. You can copy this information if needed.**")
+        
+        with st.container(border=True):
+            st.markdown("#### 📋 Complete Debug Log - All Operations")
+            st.text_area("Complete Debug Log", value=final_debug_log, height=400, help="Copy this entire log if you need to share it for troubleshooting")
+        
+        st.success("🎉 **CLEAN START IS COMPLETE - PLEASE READ THE DEBUG INFORMATION ABOVE**")
+        st.success("🔍 **IMPORTANT:** Check the debug logs above to see exactly what was deleted and any issues that occurred.")
+        
+        # Add a prominent message that stops auto-progression
+        st.warning("⏸️ **PAUSED FOR REVIEW** - Study the debug information above, then refresh the page to continue using the system.")
+
+        clear_ingestion_session_state("maintenance.clean_start.complete")
+        
+        st.info("""
+        ### 🚀 Next Steps:
+        1. **Review the debug logs above** to understand what was cleaned
+        2. **Navigate to Knowledge Ingest page** to set database path
+        3. **Run document ingestion** to rebuild your knowledge base  
+        4. **Start fresh** - all schema conflicts should be resolved
+        
+        Your system now has a completely clean slate and should work without any ChromaDB schema errors.
+        """)
+        
+        # STOP EXECUTION HERE so user can read everything
+        st.stop()
+        
+        logger.info(f"Clean Start completed successfully - {len(deleted_items)} items cleaned")
+        
     except Exception as e:
-        logger.error(f"Clean Start failed: {e}")
-        st.error(f"❌ Clean Start failed: {e}")
+        # Add error to debug log
+        debug_log_lines.append("")
+        debug_log_lines.append("CRITICAL ERROR:")
+        debug_log_lines.append("-" * 40)
+        debug_log_lines.append(f"Error: {str(e)}")
+        debug_log_lines.append(f"Error Type: {type(e).__name__}")
+        debug_log_lines.append("OPERATION FAILED")
+        debug_log_lines.append("=" * 80)
+        
+        # Create debug log even for failed operations
+        error_debug_log = "\n".join(debug_log_lines)
+        
+        error_msg = f"Clean Start failed: {e}"
+        logger.error(f"Clean Start error: {e}")
+        st.error(f"❌ {error_msg}")
+        
+        # Show error debug log on screen (avoid nested expanders)
+        st.subheader("📋 Error Debug Log")
+        st.error("**An error occurred during Clean Start. This shows what was attempted before the error:**")
+        with st.container(border=True):
+            st.markdown("#### 📋 Error Debug Log - All Operations Before Error")
+            st.text_area("Error Debug Log", value=error_debug_log, height=400, help="Copy this error log for troubleshooting")
+        
+        st.error("🚨 **CLEAN START FAILED - PLEASE READ THE ERROR DEBUG INFORMATION ABOVE**")
+        st.error("🔍 **IMPORTANT:** The error debug log above shows exactly what was attempted before the failure.")
+        
+        # Add a prominent message that stops auto-progression
+        st.warning("⏸️ **PAUSED FOR ERROR REVIEW** - Study the error information above for troubleshooting.")
+        
+        st.error("""
+        ### 🛠️ Troubleshooting Steps:
+        1. **Review the error debug log above** to understand what failed
+        2. Try manually deleting the database directory if permissions issue
+        3. Restart the application if needed
+        4. **Copy the error debug log above** for detailed troubleshooting information
+        5. Check Docker container has proper permissions to the mounted directories
+        """)
+        
+        # STOP EXECUTION HERE so user can read error information
+        st.stop()
 
 @st.cache_resource
 def init_chroma_client(db_path):
@@ -456,9 +767,78 @@ def clear_ingestion_log_file():
         logger.error(f"Failed to clear ingestion log: {e}")
 
 def delete_ingested_document_database_simple(db_path):
-    """Deprecated wrapper for backward compatibility."""
-    logger.info("delete_ingested_document_database_simple() is deprecated; delegating to canonical delete function")
-    delete_ingested_document_database(db_path)
+    """Permanently delete the entire ingested document database (simple version)"""
+    try:
+        db_root = resolve_db_root_path(db_path)
+        if not db_root:
+            st.error("❌ Database path is empty. Set a database path before deleting the knowledge base.")
+            return
+
+        kb_dir = db_root / "knowledge_hub_db"
+        collections_file = db_root / "working_collections.json"
+        project_collections_file = Path(__file__).parent.parent / "working_collections.json"
+        graph_file = db_root / "knowledge_cortex.gpickle"
+        
+        deleted_items = []
+        errors = []
+        
+        if kb_dir.exists():
+            try:
+                shutil.rmtree(kb_dir)
+                deleted_items.append("ChromaDB database")
+                logger.info(f"ChromaDB database deleted: {kb_dir}")
+            except Exception as e:
+                error_msg = f"Failed to delete ChromaDB database: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Delete collections file (DB root and legacy project copy)
+        for collection_target in (project_collections_file, collections_file):
+            if collection_target.exists():
+                try:
+                    collection_target.unlink()
+                    deleted_items.append(f"Collections ({collection_target})")
+                    logger.info(f"Collections file deleted: {collection_target}")
+                except Exception as e:
+                    error_msg = f"Failed to delete collections file {collection_target}: {e}"
+                    errors.append(error_msg)
+                    logger.error(error_msg)
+        
+        if graph_file.exists():
+            try:
+                graph_file.unlink()
+                deleted_items.append("Knowledge graph")
+                logger.info(f"Knowledge graph deleted: {graph_file}")
+            except Exception as e:
+                error_msg = f"Failed to delete knowledge graph: {e}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+        
+        # Purge remaining ingestion artifacts
+        purge_ingestion_state_files(db_root, deleted_items, errors=errors)
+
+        if deleted_items:
+            st.success(f"✅ Ingested document database deleted successfully: {', '.join(deleted_items)}")
+
+        if errors:
+            st.error(f"❌ Some items could not be deleted: {', '.join(errors)}")
+
+        if not deleted_items and not errors:
+            st.warning("No ingested document database components found to delete.")
+
+        # Clear ingestion-related session state to prevent stale UI state
+        ingestion_state_keys = [
+            'ingestion_stage', 'ingestion_process', 'batch_mode_active',
+            'log_messages', 'files_to_review', 'staged_files', 'resume_mode_enabled',
+            'current_scan_config', 'batch_ingest_mode', 'force_batch_mode'
+        ]
+        for key in ingestion_state_keys:
+            if key in st.session_state:
+                del st.session_state[key]
+
+    except Exception as e:
+        st.error(f"❌ Failed to delete ingested document database: {e}")
+        logger.error(f"Failed to delete ingested document database: {e}")
 
 def display_header():
     """Display page header with navigation and information"""
@@ -1387,7 +1767,10 @@ def display_database_maintenance():
                     except Exception as e:
                         st.error(f"Scheduled scan failed: {e}")
 
-    st.info("💡 Tip: Run **Database Health Check** first; use **Reset & Recovery** only when repair is insufficient.")
+    shared_render_clean_start_danger_zone(
+        db_path=db_path,
+        perform_clean_start_fn=perform_clean_start,
+    )
 
 def display_system_terminal():
     """Display system terminal and command execution interface"""
