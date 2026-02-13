@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.0.7"
+CORTEX_VERSION = "6.0.8"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 0,
-    "patch": 7,
+    "patch": 8,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,19 +24,21 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-02-12",
-    "release_name": "PDF Infographic Noise Filtering",
-    "description": "Improves strict PDF text extraction by removing infographic/chart label noise from text-layer output.",
+    "release_date": "2026-02-13",
+    "release_name": "URL PDF Ingestor",
+    "description": "Adds URL-list open-access PDF ingestion with optional single-pass PDF-to-Markdown conversion and download status reporting.",
     "breaking_changes": [],
     "new_features": [
-        "Strict PDF text mode now strips infographic/chart text-layer noise and inserts a single omission marker when detected"
+        "New URL PDF Ingestor page accepts URL lists, discovers open-access PDF links, and downloads accessible PDFs",
+        "Optional single-pass flow converts downloaded PDFs to Markdown using existing textifier pipeline",
+        "Run outputs include CSV/JSON status reports and one-click ZIP download of PDFs + Markdown + reports"
     ],
     "improvements": [
-        "Chart axis/tick/value fragments from infographic pages are now filtered out of markdown output",
-        "Textifier reduces false numeric clutter on visual-heavy report pages"
+        "URL ingest artifacts are stored under the configured external database root (`url_ingest/<timestamp>`)",
+        "Status tracking now explicitly flags download failures such as paywalled/forbidden, not-found, and no-open-access-pdf"
     ],
     "bug_fixes": [
-        "Fixed residual infographic text leakage in strict text-only PDF conversion"
+        "N/A"
     ],
     "performance": []
 }

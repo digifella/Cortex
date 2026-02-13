@@ -72,6 +72,29 @@ Large UI refactor pass to reduce duplication between host and Docker pages, isol
 - Added/maintained host+Docker component pairs under `pages/components/` and `docker/pages/components/` to prevent drift.
 - Reduced monolithic page complexity in `pages/2_Knowledge_Ingest.py`, `docker/pages/2_Knowledge_Ingest.py`, `pages/6_Maintenance.py`, and `docker/pages/6_Maintenance.py`.
 
+## v6.0.8 - 2026-02-13
+
+### URL PDF Ingestor
+
+Adds URL-list open-access PDF ingestion with optional single-pass PDF-to-Markdown conversion and download status reporting.
+
+### ✨ New Features
+- Added `URL PDF Ingestor` page (`pages/14_URL_Ingestor.py`) to process URL lists in batch.
+- URL ingestor discovers candidate open-access PDF links from direct URLs and article pages (including citation metadata links).
+- Optional single-pass conversion generates Markdown for each downloaded PDF using existing textifier logic.
+- Generates downloadable run artifacts:
+  - CSV report
+  - JSON report
+  - ZIP bundle containing PDFs + Markdown + reports
+
+### 🚀 Improvements
+- URL ingest outputs are stored under the configured external DB path at `url_ingest/<timestamp>/...`.
+- Per-URL status reporting now clearly flags outcomes such as:
+  - downloaded
+  - no open-access PDF found
+  - paywalled/forbidden
+  - HTTP/request/save/conversion failures
+
 ## v6.0.7 - 2026-02-12
 
 ### PDF Infographic Noise Filtering
