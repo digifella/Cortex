@@ -16,18 +16,28 @@ logger = get_logger(__name__)
 class LLMInterface:
     """Simple LLM interface using Ollama."""
 
-    def __init__(self, model: str = "mistral-small3.2", temperature: float = 0.7):
+    def __init__(
+        self,
+        model: str = "mistral-small3.2",
+        temperature: float = 0.7,
+        request_timeout: float = 90.0,
+    ):
         """
         Initialize LLM interface.
 
         Args:
             model: Model name
             temperature: Generation temperature
+            request_timeout: Ollama HTTP timeout in seconds
         """
         self.model = model
         self.temperature = temperature
+        self.request_timeout = request_timeout
+        self.client = ollama.Client(timeout=request_timeout)
 
-        logger.info(f"LLMInterface initialized with model: {model}")
+        logger.info(
+            f"LLMInterface initialized with model: {model} (timeout={request_timeout}s)"
+        )
 
     def generate(
         self,
@@ -60,13 +70,13 @@ class LLMInterface:
                 "content": prompt
             })
 
-            response = ollama.chat(
+            response = self.client.chat(
                 model=self.model,
                 messages=messages,
                 options={
                     "temperature": self.temperature,
-                    "num_predict": max_tokens or 2048
-                }
+                    "num_predict": max_tokens or 2048,
+                },
             )
 
             return response['message']['content']

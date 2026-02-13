@@ -5,6 +5,22 @@ All notable changes to the Cortex Suite project will be documented in this file.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### 🌐 URL Ingestor UX + Source Capture Improvements
+
+### ✨ New Features
+- URL Ingestor now supports optional **web-page markdown fallback** when no open-access PDF is available.
+- Added live **processing event log** in URL Ingestor to show per-URL request/candidate/failure steps.
+- Added optional input of Perplexity-style source files (`.md/.txt/.csv/.json`) and pasted local file paths for URL extraction.
+
+### 🚀 Improvements
+- URL extraction now normalizes noisy text/markdown patterns (inline links, markdown links, escaped URLs, DOI without scheme, host-only links).
+- Results table now includes clickable `input_url` and `final_url` link columns for rapid source inspection.
+- Captured non-PDF page markdown outputs are now prefixed with `scraped_` for easy distinction from PDF-derived markdown.
+
+### 🧩 Refactor
+- Introduced shared credibility classifier module: `cortex_engine/preface_classification.py`.
+- Refactored Document Extract preface classification and URL web-capture preface classification to use the same shared logic (host + Docker parity).
+
 ### ✨ Ideation + Credibility Workflow Alignment (2-stage default)
 
 ### 🚀 Improvements

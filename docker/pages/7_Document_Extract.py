@@ -32,6 +32,7 @@ from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.version_config import VERSION_STRING
 from cortex_engine.journal_authority import classify_journal_authority
+from cortex_engine.preface_classification import classify_credibility_tier
 
 # Set up logging
 logger = get_logger(__name__)
@@ -785,16 +786,6 @@ Markdown content:
         return None
 
 
-_CREDIBILITY_TIERS = {
-    5: ("peer-reviewed", "Peer-Reviewed"),
-    4: ("institutional", "Institutional"),
-    3: ("pre-print", "Pre-Print"),
-    2: ("editorial", "Editorial"),
-    1: ("commentary", "Commentary"),
-    0: ("unclassified", "Unclassified"),
-}
-
-
 def _detect_document_stage(file_path: str, title: str, md_content: str) -> str:
     text = f"{_user_visible_filename(file_path)}\n{title}\n{md_content[:30000]}".lower()
     return "Draft" if re.search(r"\bdraft\b", text) else "Final"
@@ -930,27 +921,11 @@ def _classify_credibility_tier(
     availability_status: str = "unknown",
 ) -> Dict[str, str]:
     text = f"{_user_visible_filename(file_path)}\n{publisher}\n{available_at}\n{md_content[:50000]}".lower()
-    marker_map = {
-        5: ["pubmed", "nlm", "nature", "lancet", "jama", "bmj", "peer-reviewed", "peer reviewed"],
-        4: ["who", "un ", "ipcc", "oecd", "world bank", "government", "department", "ministry", "university", "institute", "centre", "center"],
-        3: ["arxiv", "ssrn", "biorxiv", "researchgate", "preprint", "pre-print"],
-        2: ["scientific american", "the conversation", "hbr", "harvard business review", "editorial"],
-        1: ["blog", "newsletter", "opinion", "consulting report", "whitepaper", "white paper"],
-    }
-    if source_type == "AI Generated Report":
-        tier_value = 0
-    else:
-        tier_value = 0
-        for value in (5, 4, 3, 2, 1):
-            if any(marker in text for marker in marker_map[value]):
-                tier_value = value
-                break
-
-    # Dead/removed sources are significantly higher poisoning risk.
-    if availability_status in {"not_found", "gone"}:
-        tier_value = max(0, tier_value - 2)
-
-    key, label = _CREDIBILITY_TIERS[tier_value]
+    tier_value, key, label = classify_credibility_tier(
+        text=text,
+        source_type=source_type,
+        availability_status=availability_status,
+    )
     stage = _detect_document_stage(file_path, "", md_content)
     if availability_status in {"not_found", "gone"}:
         credibility_text = f"{stage} {label} Report (Source Link Unavailable)"
@@ -1312,11 +1287,23 @@ def _render_textifier_tab():
                     textifier = DocumentTextifier(use_vision=use_vision, on_progress=_on_progress)
                     try:
                         md_content = textifier.textify_file(fpath)
-                        md_content = _add_document_preface(fpath, md_content)
-                        results[f"{fname}_textified.md"] = md_content
                     except Exception as e:
                         st.error(f"Failed to convert {_user_visible_filename(fpath)}: {e}")
-                        logger.error(f"Textifier error for {fpath}: {e}", exc_info=True)
+                        logger.error(f"Textifier conversion error for {fpath}: {e}", exc_info=True)
+                        continue
+
+                    # Preface enrichment is best-effort. Never block markdown download on metadata issues.
+                    try:
+                        _on_progress(1.0, "Generating metadata preface...")
+                        md_content = _add_document_preface(fpath, md_content)
+                    except Exception as e:
+                        st.warning(
+                            f"Converted {_user_visible_filename(fpath)} but metadata preface failed; "
+                            "download includes markdown without preface."
+                        )
+                        logger.warning(f"Textifier preface enrichment failed for {fpath}: {e}", exc_info=True)
+
+                    results[f"{fname}_textified.md"] = md_content
 
                 progress.progress(1.0, "Done!")
                 status_text.empty()
