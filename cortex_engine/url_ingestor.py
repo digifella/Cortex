@@ -18,7 +18,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .document_preface import add_document_preface
-from .preface_classification import classify_credibility_tier
+from .preface_classification import classify_credibility_tier_with_reason
 from .textifier import DocumentTextifier
 from .utils import get_logger
 
@@ -234,7 +234,7 @@ class URLIngestor:
 
     def _build_web_preface(self, title: str, url: str, text: str) -> str:
         host = (urlparse(url).netloc or "").lower()
-        tier_value, tier_key, tier_label = classify_credibility_tier(
+        tier_value, tier_key, tier_label, tier_reason = classify_credibility_tier_with_reason(
             text=f"{host}\n{text[:8000]}",
             source_type="Other",
             availability_status="available",
@@ -259,6 +259,7 @@ class URLIngestor:
             f"credibility_tier_value: {self._yaml_escape(tier_value)}",
             f"credibility_tier_key: {self._yaml_escape(tier_key)}",
             f"credibility_tier_label: {self._yaml_escape(tier_label)}",
+            f"credibility_reason: {self._yaml_escape(tier_reason)}",
             f"credibility: {self._yaml_escape(credibility)}",
             "journal_ranking_source: 'n/a'",
             "journal_sourceid: ''",

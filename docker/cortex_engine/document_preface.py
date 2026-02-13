@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from .llm_interface import LLMInterface
-from .preface_classification import classify_credibility_tier
+from .preface_classification import classify_credibility_tier_with_reason
 from .utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -157,7 +157,7 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
     if not keywords:
         keywords = _extract_keywords_simple(md_content)
 
-    tier_value, tier_key, tier_label = classify_credibility_tier(
+    tier_value, tier_key, tier_label, tier_reason = classify_credibility_tier_with_reason(
         text=f"{publisher}\n{available_at}\n{md_content[:50000]}",
         source_type=source_type,
         availability_status="available" if available_at != "Unknown" else "unknown",
@@ -180,6 +180,7 @@ def _normalize_preface_metadata(file_path: str, source_hint: str, raw_meta: Opti
         "credibility_tier_value": tier_value,
         "credibility_tier_key": tier_key,
         "credibility_tier_label": tier_label,
+        "credibility_reason": tier_reason,
         "credibility": f"Final {tier_label} Report",
     }
 
@@ -211,6 +212,7 @@ def _build_preface(md_meta: dict) -> str:
         f"credibility_tier_value: {_yaml_escape(md_meta.get('credibility_tier_value', 0))}",
         f"credibility_tier_key: {_yaml_escape(md_meta.get('credibility_tier_key', 'unclassified'))}",
         f"credibility_tier_label: {_yaml_escape(md_meta.get('credibility_tier_label', 'Unclassified'))}",
+        f"credibility_reason: {_yaml_escape(md_meta.get('credibility_reason', 'unknown'))}",
         f"credibility: {_yaml_escape(md_meta.get('credibility', 'Unclassified Report'))}",
         "journal_ranking_source: 'n/a'",
         "journal_sourceid: ''",

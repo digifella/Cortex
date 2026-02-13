@@ -18,76 +18,181 @@ _CREDIBILITY_TIERS = {
 }
 
 
+_TRUSTED_INSTITUTION_HOSTS = {
+    "who.int",
+    "un.org",
+    "oecd.org",
+    "worldbank.org",
+    "imf.org",
+    "europa.eu",
+    "ipcc.ch",
+    "nih.gov",
+    "cdc.gov",
+}
+
+_SCHOLARLY_HOSTS = {
+    "pubmed.ncbi.nlm.nih.gov",
+    "pmc.ncbi.nlm.nih.gov",
+    "sciencedirect.com",
+    "springer.com",
+    "springeropen.com",
+    "nature.com",
+    "thelancet.com",
+    "jama.com",
+    "bmj.com",
+    "wiley.com",
+    "tandfonline.com",
+    "sagepub.com",
+    "frontiersin.org",
+    "plos.org",
+    "acm.org",
+    "ieee.org",
+    "science.org",
+    "cell.com",
+    "nejm.org",
+    "oup.com",
+    "cambridge.org",
+}
+
+_GOV_EDU_SUFFIXES = (
+    ".gov",
+    ".gov.uk",
+    ".gov.au",
+    ".gc.ca",
+    ".gouv.fr",
+    ".go.jp",
+    ".edu",
+    ".ac.uk",
+    ".edu.au",
+    ".ac.jp",
+    ".edu.nz",
+    ".ac.nz",
+)
+
+_COMMERCIAL_SUFFIXES = (
+    ".com",
+    ".co",
+    ".net",
+    ".biz",
+    ".info",
+    ".io",
+    ".ai",
+)
+
+
+def _host_matches(host: str, pattern: str) -> bool:
+    p = pattern.lower().strip()
+    h = (host or "").lower().strip()
+    return h == p or h.endswith(f".{p}")
+
+
+def _extract_hosts(blob: str) -> list[str]:
+    hosts: list[str] = []
+    for m in re.finditer(r"https?://([^/\s\"'<>]+)", blob, flags=re.IGNORECASE):
+        host = (m.group(1) or "").lower().strip().strip(".,;:!?")
+        if host and host not in hosts:
+            hosts.append(host)
+    for m in re.finditer(r"\b(?:www\.)?[a-z0-9-]+\.[a-z]{2,}(?:\.[a-z]{2,})?\b", blob, flags=re.IGNORECASE):
+        host = (m.group(0) or "").lower().strip().strip(".,;:!?")
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
+def _has_strong_peer_review_signals(blob: str, hosts: list[str]) -> bool:
+    strong_markers = [
+        r"\bdoi:\s*10\.\d{4,9}/",
+        r"\bdoi\.org/10\.\d{4,9}/",
+        r"\bpmid\b",
+        r"\bpubmed\b",
+        r"\bpmc\d+\b",
+        r"\bissn\b",
+        r"\bjournal\b",
+        r"\bvol(?:ume)?\s*\d+",
+        r"\bissue\s*\d+",
+    ]
+    if any(any(_host_matches(h, s) for s in _SCHOLARLY_HOSTS) for h in hosts):
+        return True
+    return any(re.search(pat, blob) for pat in strong_markers)
+
+
+def _is_trusted_institutional_host(hosts: list[str]) -> bool:
+    for host in hosts:
+        if any(_host_matches(host, p) for p in _TRUSTED_INSTITUTION_HOSTS):
+            return True
+        if host.endswith(_GOV_EDU_SUFFIXES):
+            return True
+    return False
+
+
+def _is_commercial_host(hosts: list[str]) -> bool:
+    return any(host.endswith(_COMMERCIAL_SUFFIXES) for host in hosts)
+
+
+def classify_credibility_tier_with_reason(
+    text: str,
+    source_type: str,
+    availability_status: str = "unknown",
+) -> Tuple[int, str, str, str]:
+    blob = (text or "").lower()
+    hosts = _extract_hosts(blob)
+    strong_peer = _has_strong_peer_review_signals(blob, hosts)
+    trusted_institution = _is_trusted_institutional_host(hosts)
+    commercial_host = _is_commercial_host(hosts)
+
+    preprint_markers = ["arxiv", "ssrn", "biorxiv", "researchgate", "preprint", "pre-print"]
+    editorial_markers = [
+        "scientificamerican.com", "theconversation.com", "hbr.org",
+        "editorial", "op-ed", "opinion",
+    ]
+    commentary_markers = [
+        "blog", "newsletter", "whitepaper", "white paper",
+        "medium.com", "substack.com", "blogspot.", "wordpress.", "linkedin.com",
+        "personal blog", "/blog",
+    ]
+
+    if source_type == "AI Generated Report":
+        tier_value = 0
+        reason = "ai_generated_default"
+    elif strong_peer and not any(m in blob for m in commentary_markers):
+        tier_value = 5
+        reason = "strong_scholarly_signals"
+    elif any(m in blob for m in preprint_markers):
+        tier_value = 3
+        reason = "preprint_markers"
+    elif trusted_institution:
+        tier_value = 4
+        reason = "trusted_institution_host"
+    elif any(m in blob for m in editorial_markers):
+        tier_value = 2
+        reason = "editorial_markers"
+    else:
+        tier_value = 1
+        reason = "commercial_domain_default" if commercial_host else "commentary_default"
+
+    # For scraped/general web sources, do not over-promote without hard evidence.
+    if source_type == "Other" and not strong_peer and not trusted_institution:
+        tier_value = min(tier_value, 2)
+        if tier_value <= 1 and commercial_host:
+            reason = "other_source_commercial_default"
+
+    # Dead/removed sources are significantly higher poisoning risk.
+    if availability_status in {"not_found", "gone"}:
+        tier_value = max(0, tier_value - 2)
+        reason = f"{reason}_downgraded_unavailable"
+
+    key, label = _CREDIBILITY_TIERS[tier_value]
+    return tier_value, key, label, reason
+
+
 def classify_credibility_tier(
     text: str,
     source_type: str,
     availability_status: str = "unknown",
 ) -> Tuple[int, str, str]:
-    def _has_strong_peer_review_signals(blob: str) -> bool:
-        strong_markers = [
-            r"\bdoi:\s*10\.\d{4,9}/",
-            r"\bdoi\.org/10\.\d{4,9}/",
-            r"\bpmid\b",
-            r"\bpubmed\b",
-            r"\bpmc\d+\b",
-            r"\bissn\b",
-            r"\bjournal\b",
-            r"\bvol(?:ume)?\s*\d+",
-            r"\bissue\s*\d+",
-        ]
-        journal_hosts = [
-            "nature.com", "thelancet.com", "jama.com", "bmj.com", "sciencedirect.com",
-            "springer.com", "wiley.com", "tandfonline.com", "sagepub.com", "frontiersin.org",
-            "plos.org", "acm.org", "ieee.org", "oup.com", "cambridge.org", "science.org",
-            "cell.com", "nejm.org", "pubmed.ncbi.nlm.nih.gov", "pmc.ncbi.nlm.nih.gov",
-        ]
-        if any(host in blob for host in journal_hosts):
-            return True
-        return any(re.search(pat, blob) for pat in strong_markers)
-
-    marker_map = {
-        5: ["pubmed", "nlm", "nature", "lancet", "jama", "bmj"],
-        4: [
-            "who", "who.int", "un ", "un.org", "ipcc", "oecd", "world bank", "worldbank.org",
-            "government", "department", "ministry", "university", "institute", "centre", "center",
-            ".gov", ".edu", "nih.gov", "cdc.gov", "europa.eu",
-        ],
-        3: ["arxiv", "ssrn", "biorxiv", "researchgate", "preprint", "pre-print"],
-        2: [
-            "scientific american", "scientificamerican.com", "the conversation", "theconversation.com",
-            "hbr", "hbr.org", "harvard business review", "editorial", "op-ed", "opinion",
-        ],
-        1: [
-            "blog", "newsletter", "consulting report", "whitepaper", "white paper",
-            "medium.com", "substack.com", "blogspot.", "wordpress.", "linkedin.com",
-        ],
-    }
-
-    blob = (text or "").lower()
-    commentary_markers = marker_map[1] + ["personal blog", "/blog", "opinion piece"]
-    is_commentary_like = any(marker in blob for marker in commentary_markers)
-    has_strong_peer = _has_strong_peer_review_signals(blob)
-
-    if source_type == "AI Generated Report":
-        tier_value = 0
-    else:
-        tier_value = 0
-        for value in (4, 3, 2, 1):
-            if any(marker in blob for marker in marker_map[value]):
-                tier_value = value
-                break
-
-        # Only promote to peer-reviewed with strong scholarly evidence.
-        if has_strong_peer and not is_commentary_like:
-            tier_value = max(tier_value, 5)
-
-        # Scraped/general web sources should not become peer-reviewed from weak cues.
-        if source_type == "Other" and not has_strong_peer:
-            tier_value = min(tier_value, 2) if tier_value else 1
-
-    # Dead/removed sources are significantly higher poisoning risk.
-    if availability_status in {"not_found", "gone"}:
-        tier_value = max(0, tier_value - 2)
-
-    key, label = _CREDIBILITY_TIERS[tier_value]
+    tier_value, key, label, _ = classify_credibility_tier_with_reason(
+        text=text,
+        source_type=source_type,
+        availability_status=availability_status,
+    )
     return tier_value, key, label
