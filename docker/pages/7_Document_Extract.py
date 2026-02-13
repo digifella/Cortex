@@ -33,6 +33,7 @@ from cortex_engine.config_manager import ConfigManager
 from cortex_engine.version_config import VERSION_STRING
 from cortex_engine.journal_authority import classify_journal_authority
 from cortex_engine.preface_classification import classify_credibility_tier
+from cortex_engine.document_preface import add_document_preface
 
 # Set up logging
 logger = get_logger(__name__)
@@ -1213,12 +1214,8 @@ def _build_preface(md_meta: dict) -> str:
 
 
 def _add_document_preface(file_path: str, md_content: str) -> str:
-    source_hint = _detect_source_type_hint(file_path, md_content)
-    raw_meta = _extract_preface_metadata_with_llm(file_path, md_content, source_hint)
-    fallback_meta = _fallback_preface_metadata(file_path, md_content, source_hint)
-    meta = _normalize_preface_metadata(file_path, source_hint, raw_meta, fallback_meta, md_content)
-    preface = _build_preface(meta)
-    return preface + md_content
+    # Shared engine routine used by both Textifier UI and URL-ingestor PDF->MD flow.
+    return add_document_preface(file_path, md_content)
 
 
 # ======================================================================

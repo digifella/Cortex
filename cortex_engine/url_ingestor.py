@@ -17,6 +17,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from .document_preface import add_document_preface
 from .preface_classification import classify_credibility_tier
 from .textifier import DocumentTextifier
 from .utils import get_logger
@@ -185,6 +186,7 @@ class URLIngestor:
         try:
             textifier = DocumentTextifier(use_vision=use_vision)
             md_content = textifier.textify_file(pdf_path)
+            md_content = add_document_preface(pdf_path, md_content)
             md_name = Path(pdf_path).with_suffix(".md").name
             md_path = self.md_dir / md_name
             md_path.write_text(md_content, encoding="utf-8")

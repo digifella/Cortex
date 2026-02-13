@@ -20,6 +20,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### 🧩 Refactor
 - Introduced shared credibility classifier module: `cortex_engine/preface_classification.py`.
 - Refactored Document Extract preface classification and URL web-capture preface classification to use the same shared logic (host + Docker parity).
+- Introduced shared document preface module: `cortex_engine/document_preface.py`.
+- Refactored both Textifier and URL-ingestor PDF->Markdown paths to use the same preface routine, eliminating duplicate PDF post-processing logic.
+
+### 🔧 Classification Hardening
+- Tightened peer-reviewed detection for scraped/web content so `Peer-Reviewed` is only assigned with strong scholarly signals (e.g., DOI/PMID/PMC/journal-host patterns).
+- Reduced false promotion of blog/editorial pages to peer-reviewed when they only reference scholarly terms.
 
 ### ✨ Ideation + Credibility Workflow Alignment (2-stage default)
 
