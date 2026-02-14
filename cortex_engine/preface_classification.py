@@ -54,6 +54,26 @@ _SCHOLARLY_HOSTS = {
     "cambridge.org",
 }
 
+_COMMENTARY_HOSTS = {
+    "wikipedia.org",
+    "youtube.com",
+    "youtu.be",
+    "medium.com",
+    "substack.com",
+    "blogspot.com",
+    "wordpress.com",
+    "linkedin.com",
+    "reddit.com",
+    "quora.com",
+    "stackexchange.com",
+}
+
+_EDITORIAL_HOSTS = {
+    "scientificamerican.com",
+    "theconversation.com",
+    "hbr.org",
+}
+
 _GOV_EDU_SUFFIXES = (
     ".gov",
     ".gov.uk",
@@ -129,6 +149,14 @@ def _is_commercial_host(hosts: list[str]) -> bool:
     return any(host.endswith(_COMMERCIAL_SUFFIXES) for host in hosts)
 
 
+def _is_explicit_commentary_host(hosts: list[str]) -> bool:
+    return any(any(_host_matches(host, p) for p in _COMMENTARY_HOSTS) for host in hosts)
+
+
+def _is_editorial_host(hosts: list[str]) -> bool:
+    return any(any(_host_matches(host, p) for p in _EDITORIAL_HOSTS) for host in hosts)
+
+
 def classify_credibility_tier_with_reason(
     text: str,
     source_type: str,
@@ -139,6 +167,8 @@ def classify_credibility_tier_with_reason(
     strong_peer = _has_strong_peer_review_signals(blob, hosts)
     trusted_institution = _is_trusted_institutional_host(hosts)
     commercial_host = _is_commercial_host(hosts)
+    explicit_commentary_host = _is_explicit_commentary_host(hosts)
+    editorial_host = _is_editorial_host(hosts)
 
     preprint_markers = ["arxiv", "ssrn", "biorxiv", "researchgate", "preprint", "pre-print"]
     editorial_markers = [
@@ -154,6 +184,12 @@ def classify_credibility_tier_with_reason(
     if source_type == "AI Generated Report":
         tier_value = 0
         reason = "ai_generated_default"
+    elif explicit_commentary_host:
+        tier_value = 1
+        reason = "explicit_commentary_host"
+    elif editorial_host:
+        tier_value = 2
+        reason = "explicit_editorial_host"
     elif strong_peer and not any(m in blob for m in commentary_markers):
         tier_value = 5
         reason = "strong_scholarly_signals"
