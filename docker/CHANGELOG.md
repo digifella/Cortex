@@ -5,6 +5,15 @@ All notable changes to the Cortex Suite project will be documented in this file.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### ⚙️ Local Queue Worker Harness
+
+### ✨ New Features
+- Added `worker/` local queue harness for polling `queue_worker_api.php`, downloading inputs, heartbeats, handler execution, and uploading completion/failure.
+- Added handler registry and `pdf_anonymise` worker handler scaffold for generic type-based task execution.
+
+### 🚀 Improvements
+- Worker `pdf_anonymise` path reuses existing `cortex_engine.anonymizer.DocumentAnonymizer` to avoid duplicate anonymization logic with Document Extract UI.
+
 ### 🌐 URL Ingestor UX + Source Capture Improvements
 
 ### ✨ New Features
