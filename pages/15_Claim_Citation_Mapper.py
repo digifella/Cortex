@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from cortex_engine.claim_mapper import map_claims_to_evidence
+from cortex_engine.citation_formatter import annotate_text_with_citations
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.ui_theme import apply_theme
@@ -56,6 +57,8 @@ selected_collections = st.multiselect(
 c1, c2 = st.columns(2)
 top_k = c1.slider("Evidence per claim", min_value=1, max_value=8, value=3, step=1)
 support_threshold = c2.slider("Support threshold", min_value=0.2, max_value=0.9, value=0.42, step=0.02)
+include_weak = st.checkbox("Include weak claims in citation insertion", value=True)
+max_inline_refs = st.slider("Inline references per claim", min_value=1, max_value=4, value=2, step=1)
 
 run = st.button("Map Claims", type="primary")
 
@@ -114,6 +117,25 @@ if result:
                 st.caption(f"Source: {ev.get('source_file', '')} | doc_id={ev.get('doc_id', '')} | score={ev.get('score')}")
                 st.write(ev.get("snippet", ""))
             st.markdown("---")
+
+    cited_text, references = annotate_text_with_citations(
+        draft_text=st.session_state.get("claim_mapper_input", ""),
+        claim_map_result=result,
+        include_statuses=("supported", "weak") if include_weak else ("supported",),
+        max_refs_per_claim=max_inline_refs,
+    )
+    final_text = cited_text
+    if references:
+        final_text = cited_text.rstrip() + "\n\n## References\n" + "\n".join(references) + "\n"
+
+    st.markdown("### Cited Draft")
+    st.text_area("Generated cited text", value=final_text, height=260)
+    st.download_button(
+        "Download cited draft (.md)",
+        data=final_text,
+        file_name=f"cited_draft_{time.strftime('%Y%m%d_%H%M%S')}.md",
+        mime="text/markdown",
+    )
 
     if st.button("Save Mapping JSON"):
         try:
