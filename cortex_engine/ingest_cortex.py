@@ -102,6 +102,7 @@ from cortex_engine.config import (
     COLLECTION_NAME, get_embed_model,
     TABLE_AWARE_CHUNKING, TABLE_SPECIFIC_EMBEDDINGS, FIGURE_ENTITY_LINKING
 )
+from cortex_engine.docling_adapter import resolve_ingest_backend, resolve_migration_mode
 from cortex_engine.utils.file_utils import get_file_hash
 from cortex_engine.utils.logging_utils import get_logger
 from cortex_engine.utils.smart_ollama_llm import create_smart_ollama_llm
@@ -647,12 +648,21 @@ def manual_load_documents(file_paths: List[str], args=None) -> List[Document]:
     LlamaIndex readers to Docling-enhanced processing while maintaining stability.
     """
     
-    # Check for migration mode preference in args
-    # In Docker environments, default to legacy mode to avoid Docling dependency conflicts
-    import os
-    default_mode = 'legacy' if os.path.exists('/.dockerenv') else 'gradual'
-    migration_mode = getattr(args, 'migration_mode', default_mode) if args else default_mode
+    # Backend selection:
+    # - default -> existing behavior (legacy in Docker, gradual elsewhere)
+    # - docling -> force Docling mode
+    # - auto -> gradual mode with fallback
+    ingest_backend = getattr(args, 'ingest_backend', None) if args else None
+    explicit_migration_mode = getattr(args, 'migration_mode', None) if args else None
+    migration_mode = resolve_migration_mode(
+        ingest_backend=ingest_backend,
+        explicit_migration_mode=explicit_migration_mode,
+    )
+    resolved_backend = resolve_ingest_backend(ingest_backend)
     skip_image_processing = getattr(args, 'skip_image_processing', False) if args else False
+    logger.info(
+        f"Ingestion backend resolved to '{resolved_backend}' (migration mode: {migration_mode})"
+    )
     
     # Use migration manager for intelligent processing
     try:
@@ -1904,9 +1914,9 @@ def main():
     parser.add_argument("--throttle-delay", type=float, default=1.0,
                        help="Baseline delay (s) between documents. Auto-adjusts with CPU/GPU load.")
     parser.add_argument("--cpu-threshold", type=float, default=70.0,
-                       help="CPU utilization (%) to start increasing delay (default 70)")
+                       help="CPU utilization (%%) to start increasing delay (default 70)")
     parser.add_argument("--gpu-threshold", type=float, default=60.0,
-                       help="GPU utilization (%) to start increasing delay (default 60)")
+                       help="GPU utilization (%%) to start increasing delay (default 60)")
     parser.add_argument("--max-throttle-delay", type=float, default=8.0,
                        help="Maximum adaptive delay (seconds) when system is under load")
     parser.add_argument("--cooldown-every", type=int, default=25,
@@ -1921,10 +1931,16 @@ def main():
                        help="Hard timeout (seconds) per LLM metadata call; on timeout, fallback metadata is used")
     parser.add_argument("--gpu-intensity", type=int, default=75,
                        help="GPU intensity 25-100%%. Lower = smaller batches + longer delays. Use 50-75%% if multitasking.")
+    parser.add_argument(
+        "--ingest-backend",
+        type=str,
+        default=os.getenv("CORTEX_INGEST_BACKEND", "default"),
+        choices=["default", "docling", "auto"],
+        help="Ingestion backend selector: default (safe), docling (force), auto (gradual with fallback).",
+    )
     args = parser.parse_args()
 
     # Store GPU intensity in environment for embedding services to use
-    import os
     os.environ["CORTEX_GPU_INTENSITY"] = str(args.gpu_intensity)
 
     writable, reason = ensure_directory_writable(args.db_path)

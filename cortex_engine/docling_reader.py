@@ -60,6 +60,7 @@ class DoclingDocumentReader:
         self.table_structure_recognition = table_structure_recognition
         self.skip_vlm_processing = skip_vlm_processing
         self._converter = None
+        self._model_repair_attempted = False
         
         if not DOCLING_AVAILABLE:
             logger.warning("Docling not available. Install with: pip install docling")
@@ -67,28 +68,64 @@ class DoclingDocumentReader:
             
         self._init_converter()
     
+    def _create_converter(self):
+        """Create a Docling converter instance with current options."""
+        global DocumentConverter, PipelineOptions
+        from docling.document_converter import DocumentConverter
+        from docling.datamodel.base_models import PipelineOptions
+
+        pipeline_options = PipelineOptions(
+            do_ocr=self.ocr_enabled,
+            do_table_structure=self.table_structure_recognition
+        )
+        return DocumentConverter(pipeline_options=pipeline_options)
+
+    @staticmethod
+    def _should_attempt_model_repair(error: Exception) -> bool:
+        """Detect missing Docling model artifacts that can be repaired via cache sync."""
+        message = str(error).lower()
+        return (
+            "missing onnx file" in message
+            or ("docling-models" in message and "model_artifacts" in message)
+            or "beehive_v0.0.5" in message
+        )
+
+    def _attempt_model_repair(self) -> bool:
+        """
+        Attempt to sync Docling model artifacts from Hugging Face cache.
+        Can be disabled by setting CORTEX_DOCLING_AUTO_REPAIR=0.
+        """
+        repair_enabled = os.getenv("CORTEX_DOCLING_AUTO_REPAIR", "1").strip().lower()
+        if repair_enabled in {"0", "false", "no"}:
+            logger.info("Docling auto-repair disabled via CORTEX_DOCLING_AUTO_REPAIR")
+            return False
+
+        try:
+            from huggingface_hub import snapshot_download
+        except Exception as e:
+            logger.warning(f"Docling repair unavailable (huggingface_hub import failed): {e}")
+            return False
+
+        try:
+            kwargs = {
+                "repo_id": "ds4sd/docling-models",
+                "repo_type": "model",
+                "resume_download": True,
+            }
+            hf_home = os.getenv("HF_HOME")
+            if hf_home:
+                kwargs["cache_dir"] = hf_home
+            local_path = snapshot_download(**kwargs)
+            logger.info(f"Docling model cache synchronized at: {local_path}")
+            return True
+        except Exception as e:
+            logger.warning(f"Docling model cache repair failed: {e}")
+            return False
+
     def _init_converter(self):
         """Initialize Docling converter with optimized settings."""
         try:
-            # Lazy import to avoid torch conflicts at startup
-            # Docling 1.8.5 simplified API - no InputFormat/allowed_formats
-            global DocumentConverter, PipelineOptions
-            from docling.document_converter import DocumentConverter
-            from docling.datamodel.base_models import PipelineOptions
-
-            # Configure pipeline options for optimal processing (Docling 1.8.5 API)
-            # Note: Docling 1.8.5 removed format restrictions - converter handles all supported formats
-            pipeline_options = PipelineOptions(
-                do_ocr=self.ocr_enabled,
-                do_table_structure=self.table_structure_recognition
-            )
-
-            # Create converter with simplified API
-            # Docling 1.8.5 auto-detects format and handles: PDF, DOCX, PPTX, XLSX, Images, HTML, MD, etc.
-            self._converter = DocumentConverter(
-                pipeline_options=pipeline_options
-            )
-
+            self._converter = self._create_converter()
             logger.info("✅ Docling converter initialized successfully (v1.8.5 API)")
             
         except ImportError as e:
@@ -97,6 +134,18 @@ class DoclingDocumentReader:
             logger.info("📋 Falling back to legacy document readers")
             self._converter = None
         except Exception as e:
+            if (not self._model_repair_attempted) and self._should_attempt_model_repair(e):
+                self._model_repair_attempted = True
+                logger.warning(f"Docling model artifacts appear incomplete: {e}")
+                logger.info("Attempting one-time Docling model cache repair...")
+                if self._attempt_model_repair():
+                    try:
+                        self._converter = self._create_converter()
+                        logger.info("✅ Docling converter initialized after model cache repair")
+                        return
+                    except Exception as retry_error:
+                        logger.warning(f"Docling converter retry failed after repair: {retry_error}")
+
             logger.warning(f"Docling converter failed to initialize: {e}")
             logger.info("🔧 This may be due to incompatible dependencies (torch/numpy versions)")
             logger.info("📋 Falling back to legacy document readers")

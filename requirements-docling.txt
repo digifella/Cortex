@@ -1,0 +1,13 @@
+# Dedicated optional Docling dependency set for Step 0 validation.
+# Install into an isolated venv to avoid perturbing your main runtime:
+#   python -m venv .venv-docling
+#   source .venv-docling/bin/activate
+#   pip install -r requirements-docling.txt
+
+docling==1.8.5
+docling-core==1.7.2
+docling-ibm-models==1.3.3
+docling-parse==1.6.2
+
+# Keep core numeric stack compatible with current Cortex baseline.
+numpy==1.26.4

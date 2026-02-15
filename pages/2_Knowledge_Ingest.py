@@ -25,6 +25,7 @@ import subprocess
 import sys
 import shutil
 import re
+import shlex
 from pathlib import Path
 from fnmatch import fnmatch
 from collections import defaultdict
@@ -126,12 +127,12 @@ def install_missing_models(missing_models: list) -> bool:
         return False
 
     try:
-        commands = model_checker.get_model_installation_commands(missing_models)
         with st.status("Installing models...", expanded=True) as status:
-            for cmd in commands:
-                status.write(f"$ {cmd}")
+            for model_name in missing_models:
+                cmd = ["ollama", "pull", model_name]
+                status.write(f"$ {' '.join(shlex.quote(part) for part in cmd)}")
                 try:
-                    result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+                    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
                     if result.stdout:
                         status.write(result.stdout)
                     if result.stderr:
@@ -326,6 +327,9 @@ def build_ingestion_command(container_db_path, files_to_process, target_collecti
 
     if target_collection:
         command.extend(["--target-collection", target_collection])
+
+    ingest_backend = st.session_state.get("ingest_backend", "default")
+    command.extend(["--ingest-backend", ingest_backend])
 
     # Add skip image processing flag if enabled
     if st.session_state.get("skip_image_processing", False):
@@ -590,6 +594,7 @@ def initialize_state(force_reset: bool = False):
         "files_to_review": [], "staged_files": [], "file_selections": {},
         "edited_staged_files": [], "staged_metadata": {}, "review_page": 0, "ingestion_process": None,
         "skip_image_processing": False,  # Option to skip VLM image processing
+        "ingest_backend": "default",  # default|docling|auto
         # Delay between documents; on WSL default to 1.5s for stability
         "throttle_delay": 1.5 if _is_wsl_default else 0.5,
         "batch_ingest_mode": False,  # Option to bypass preview check for large ingests
@@ -1748,6 +1753,15 @@ def render_config_and_scan_ui():
             st.checkbox("⚡ Skip image processing (faster, but loses visual content)", key="skip_image_processing",
                        value=False,
                        help="🖼️ Skip AI vision analysis of JPG/PNG files. Image processing is now optimized with parallel execution (30s timeout). Only skip if you don't need OCR, charts, or diagram analysis.")
+            st.selectbox(
+                "📚 Ingestion backend",
+                options=["default", "docling", "auto"],
+                key="ingest_backend",
+                help=(
+                    "default = safest profile (legacy in Docker, gradual elsewhere); "
+                    "docling = force Docling processing; auto = gradual migration with fallback."
+                ),
+            )
             # Use session default (which is WSL-aware) for initial value
             st.number_input(
                 "⏱️ Throttle delay (seconds between documents)",

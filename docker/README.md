@@ -244,8 +244,8 @@ For comprehensive GPU setup instructions, troubleshooting, and model selection d
 
 For superior document layout recognition and structure extraction:
 ```bash
-# Install Docling for enhanced document processing
-pip install "docling>=1.0.0,<1.9.0"
+# Recommended: isolate Docling in a dedicated venv
+bash scripts/setup_docling_env.sh
 ```
 
 **Benefits of Docling (when installed):**
@@ -254,7 +254,28 @@ pip install "docling>=1.0.0,<1.9.0"
 - Enhanced OCR for scanned documents
 - Superior handling of complex document formats
 
-**Note:** System works perfectly without Docling using proven legacy document readers (PyMuPDF, DocxReader, etc.). Docling is automatically detected and used when available.
+**Note:** System works perfectly without Docling using proven legacy document readers (PyMuPDF, DocxReader, etc.). Docling is optional and now selectable at ingest runtime.
+
+Docling backend controls:
+- UI: `Knowledge Ingest -> Advanced Options -> Ingestion backend`
+- CLI flag: `--ingest-backend default|docling|auto`
+- Env var: `CORTEX_INGEST_BACKEND=default|docling|auto`
+
+Validate Docling health:
+```bash
+# import-only validation
+bash scripts/validate_docling_ingest.sh
+
+# validate using a real sample file
+bash scripts/validate_docling_ingest.sh /tmp/cortex_docling_smoke_db "/path/to/sample.pdf"
+
+# or pass only a sample file (db path defaults to /tmp/cortex_docling_smoke_db)
+bash scripts/validate_docling_ingest.sh "/path/to/sample.pdf"
+```
+
+Docling model repair:
+- On missing Docling model artifacts, Cortex attempts a one-time cache repair automatically.
+- Disable auto-repair if needed: `export CORTEX_DOCLING_AUTO_REPAIR=0`
 
 **4. Set Up Environment Variables:**
 Create a `.env` file in the project root with your API keys.```# .env file
@@ -267,6 +288,12 @@ OPENAI_API_KEY="your_openai_api_key_here"
 GEMINI_API_KEY="your_gemini_api_key_here"
 YOUTUBE_API_KEY="your_google_api_key_for_youtube_search"
 GRAPHVIZ_DOT_EXECUTABLE="/usr/bin/dot"
+
+# Proposal/document generation provider for cortex_engine/llm_interface.py
+# Use "ollama" (default) or "lmstudio" (OpenAI-compatible local server)
+CORTEX_LLM_PROVIDER="ollama"
+CORTEX_LMSTUDIO_BASE_URL="http://localhost:1234/v1"
+CORTEX_LMSTUDIO_API_KEY="lm-studio"  # optional; LM Studio commonly accepts a dummy key
 
 # (Optional) Explicit path to Graphviz 'dot' executable to help resolve mind map issues.
 # Find this path by running `which dot` in your Ubuntu/WSL terminal.

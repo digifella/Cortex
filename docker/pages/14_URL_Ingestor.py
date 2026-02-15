@@ -76,14 +76,18 @@ with st.container(border=True):
     paste_path_lines = [ln.strip().strip("\"'") for ln in (url_text or "").splitlines() if ln.strip()]
     loaded_paths = []
     for line in paste_path_lines:
-        p = Path(line)
-        if p.exists() and p.is_file():
-            try:
-                file_text = p.read_text(encoding="utf-8", errors="ignore")
-                path_text += ("\n" + file_text)
-                loaded_paths.append(p.name)
-            except Exception as e:
-                st.warning(f"Could not read path from pasted text `{line}`: {e}")
+        try:
+            p = Path(line).expanduser()
+            if p.exists() and p.is_file():
+                try:
+                    file_text = p.read_text(encoding="utf-8", errors="ignore")
+                    path_text += ("\n" + file_text)
+                    loaded_paths.append(p.name)
+                except Exception as e:
+                    st.warning(f"Could not read path from pasted text `{line}`: {e}")
+        except (OSError, ValueError):
+            # Ignore non-path content pasted into the URL box.
+            continue
 
     paste_urls = normalize_url_list("\n".join([url_text, path_text]))
     if url_text.strip():
