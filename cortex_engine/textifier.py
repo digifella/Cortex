@@ -34,6 +34,75 @@ class DocumentTextifier:
         if self.on_progress:
             self.on_progress(fraction, message)
 
+    @staticmethod
+    def _is_structural_markdown_line(line: str) -> bool:
+        stripped = (line or "").strip()
+        if not stripped:
+            return True
+        if stripped.startswith(("#", ">", "|", "```", "---")):
+            return True
+        if re.match(r"^[-*+]\s+", stripped):
+            return True
+        if re.match(r"^\d+\.\s+", stripped):
+            return True
+        return False
+
+    def _normalize_markdown_output(self, markdown_text: str) -> str:
+        """
+        Normalize markdown text by:
+        - removing literal CR/CRLF markers
+        - normalizing newlines
+        - reflowing hard-wrapped plain lines into paragraphs
+        while preserving markdown structure.
+        """
+        text = (markdown_text or "")
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = re.sub(r"\s*<CRLF>\s*", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*<CR>\s*", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+
+        lines = [ln.rstrip() for ln in text.split("\n")]
+        out_lines: List[str] = []
+        para_buffer: List[str] = []
+        in_code_fence = False
+
+        def flush_paragraph() -> None:
+            if not para_buffer:
+                return
+            paragraph = " ".join(part.strip() for part in para_buffer if part.strip())
+            if paragraph:
+                out_lines.append(paragraph)
+            para_buffer.clear()
+
+        for raw in lines:
+            line = raw.strip()
+            if line.startswith("```"):
+                flush_paragraph()
+                in_code_fence = not in_code_fence
+                out_lines.append(raw)
+                continue
+
+            if in_code_fence:
+                out_lines.append(raw)
+                continue
+
+            if not line:
+                flush_paragraph()
+                if out_lines and out_lines[-1] != "":
+                    out_lines.append("")
+                continue
+
+            if self._is_structural_markdown_line(line):
+                flush_paragraph()
+                out_lines.append(raw)
+                continue
+
+            para_buffer.append(line)
+
+        flush_paragraph()
+        normalized = "\n".join(out_lines).strip()
+        return normalized + "\n" if normalized else ""
+
     def _init_vlm(self):
         """Lazy-init the Ollama VLM client, preferring Qwen3-VL models."""
         if self._vlm_client is not None:
@@ -328,7 +397,7 @@ class DocumentTextifier:
 
         doc.close()
         self._report(1.0, "PDF conversion complete")
-        return "\n".join(md_parts)
+        return self._normalize_markdown_output("\n".join(md_parts))
 
     # ------------------------------------------------------------------
     # DOCX
@@ -397,7 +466,7 @@ class DocumentTextifier:
             except Exception as e:
                 logger.debug(f"Could not extract DOCX image: {e}")
 
-        return "\n".join(md_parts)
+        return self._normalize_markdown_output("\n".join(md_parts))
 
     # ------------------------------------------------------------------
     # PPTX
@@ -452,7 +521,7 @@ class DocumentTextifier:
 
         self._report(1.0, "PPTX conversion complete")
 
-        return "\n".join(md_parts)
+        return self._normalize_markdown_output("\n".join(md_parts))
 
     # ------------------------------------------------------------------
     # Image files (PNG, JPG, etc.)
@@ -1249,7 +1318,7 @@ class DocumentTextifier:
             md = result.document.export_to_markdown()
             if md and md.strip():
                 logger.info("Used Docling for PDF conversion")
-                return md
+                return self._normalize_markdown_output(md)
         except Exception:
             pass
         return None
