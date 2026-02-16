@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from worker.handlers.cortex_sync import _resolve_existing_path
+from worker.handlers.cortex_sync import _list_local_topic_dirs, _resolve_existing_path
 
 
 def test_resolve_existing_path_public_html_remap(tmp_path, monkeypatch):
@@ -16,3 +16,13 @@ def test_resolve_existing_path_public_html_remap(tmp_path, monkeypatch):
     submitted = "/home/longboar/public_html/chatbot/knowledge/digital-health/doc.md"
     resolved = _resolve_existing_path(submitted)
     assert Path(resolved) == target
+
+
+def test_list_local_topic_dirs(tmp_path, monkeypatch):
+    site_root = tmp_path / "site"
+    knowledge = site_root / "chatbot" / "knowledge"
+    (knowledge / "digital-health").mkdir(parents=True, exist_ok=True)
+    (knowledge / "wellbeing").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CORTEX_SYNC_SITE_ROOT", str(site_root))
+    topics = _list_local_topic_dirs()
+    assert topics == ["digital-health", "wellbeing"]

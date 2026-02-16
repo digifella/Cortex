@@ -14,6 +14,17 @@ from cortex_engine.utils.path_utils import convert_windows_to_wsl_path
 logger = logging.getLogger(__name__)
 
 
+def _list_local_topic_dirs() -> list[str]:
+    site_root = os.environ.get(
+        "CORTEX_SYNC_SITE_ROOT",
+        str(Path.home() / "longboardfella_website" / "site"),
+    ).strip()
+    knowledge_root = Path(site_root) / "chatbot" / "knowledge"
+    if not knowledge_root.exists():
+        return []
+    return sorted([p.name for p in knowledge_root.iterdir() if p.is_dir()])
+
+
 def _normalize_input_path(raw_path: str) -> str:
     """Normalize path text to a usable local path in WSL/Linux."""
     text = str(raw_path or "").strip()
@@ -137,16 +148,29 @@ def handle(
     # Validate files exist on disk.
     valid_paths: list[str] = []
     errors: list[dict[str, str]] = []
+    missing_paths: list[str] = []
     for fp in file_paths:
         normalized = _resolve_existing_path(fp)
         if normalized and os.path.exists(normalized):
             valid_paths.append(normalized)
         else:
             errors.append({"file": str(fp), "error": "File not found on disk"})
+            missing_paths.append(str(fp))
             logger.warning("cortex_sync file not found: %s", fp)
 
     if not valid_paths:
-        raise ValueError(f"None of the {len(file_paths)} files exist on disk")
+        site_root = os.environ.get(
+            "CORTEX_SYNC_SITE_ROOT",
+            str(Path.home() / "longboardfella_website" / "site"),
+        ).strip()
+        topics = _list_local_topic_dirs()
+        hint = (
+            f"None of the {len(file_paths)} files exist on disk. "
+            f"Configured CORTEX_SYNC_SITE_ROOT='{site_root}'. "
+            f"Local topic dirs: {topics if topics else 'none found'}; "
+            f"missing sample: {missing_paths[:3]}"
+        )
+        raise ValueError(hint)
 
     if progress_cb:
         progress_cb(5, f"Validated {len(valid_paths)} files", "validate")
