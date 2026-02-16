@@ -183,23 +183,51 @@ class URLIngestor:
         except Exception as e:
             return False, status, "", f"save_failed: {e}"
 
-    def _convert_pdf_to_md(self, pdf_path: str, use_vision: bool = False) -> Tuple[bool, str, str]:
+    def _convert_pdf_to_md(
+        self,
+        pdf_path: str,
+        use_vision: bool = False,
+        textify_options: Optional[Dict[str, object]] = None,
+    ) -> Tuple[bool, str, str]:
         try:
-            textifier = DocumentTextifier.from_options(
-                {
-                    "use_vision": use_vision,
-                    "pdf_strategy": "hybrid",
-                    "docling_timeout_seconds": float(
-                        os.environ.get("CORTEX_TEXTIFIER_DOCLING_TIMEOUT_SECONDS", "240")
-                    ),
-                    "image_description_timeout_seconds": float(
-                        os.environ.get("CORTEX_TEXTIFIER_IMAGE_TIMEOUT_SECONDS", "20")
-                    ),
-                    "image_enrich_max_seconds": float(
-                        os.environ.get("CORTEX_TEXTIFIER_IMAGE_ENRICH_MAX_SECONDS", "120")
-                    ),
-                }
-            )
+            opts: Dict[str, object] = {
+                "use_vision": use_vision,
+                "pdf_strategy": "hybrid",
+                "docling_timeout_seconds": float(
+                    os.environ.get("CORTEX_TEXTIFIER_DOCLING_TIMEOUT_SECONDS", "240")
+                ),
+                "image_description_timeout_seconds": float(
+                    os.environ.get("CORTEX_TEXTIFIER_IMAGE_TIMEOUT_SECONDS", "20")
+                ),
+                "image_enrich_max_seconds": float(
+                    os.environ.get("CORTEX_TEXTIFIER_IMAGE_ENRICH_MAX_SECONDS", "120")
+                ),
+            }
+            # Override with options passed from caller/job input_data.
+            if textify_options:
+                for key in (
+                    "pdf_strategy",
+                    "cleanup_provider",
+                    "cleanup_model",
+                    "docling_timeout_seconds",
+                    "image_description_timeout_seconds",
+                    "image_enrich_max_seconds",
+                ):
+                    if key not in textify_options:
+                        continue
+                    value = textify_options.get(key)
+                    if value is None or value == "":
+                        continue
+                    if key.endswith("_seconds"):
+                        try:
+                            opts[key] = float(value)
+                        except Exception:
+                            logger.warning(f"Ignoring invalid textify option {key}={value!r}")
+                            continue
+                    else:
+                        opts[key] = value
+
+            textifier = DocumentTextifier.from_options(opts)
             md_content = textifier.textify_file(pdf_path)
             md_content = add_document_preface(pdf_path, md_content)
             md_name = Path(pdf_path).with_suffix(".md").name
@@ -316,6 +344,7 @@ class URLIngestor:
         urls: List[str],
         convert_to_md: bool = False,
         use_vision_for_md: bool = False,
+        textify_options: Optional[Dict[str, object]] = None,
         capture_web_md_on_no_pdf: bool = False,
         progress_cb: Optional[Callable[[int, int, str], None]] = None,
         event_cb: Optional[Callable[[str], None]] = None,
@@ -419,7 +448,11 @@ class URLIngestor:
 
                 if convert_to_md and result.pdf_path:
                     _event("Converting downloaded PDF to Markdown.")
-                    ok, md_path, conv_reason = self._convert_pdf_to_md(result.pdf_path, use_vision=use_vision_for_md)
+                    ok, md_path, conv_reason = self._convert_pdf_to_md(
+                        result.pdf_path,
+                        use_vision=use_vision_for_md,
+                        textify_options=textify_options,
+                    )
                     if ok:
                         result.converted_to_md = True
                         result.md_path = md_path
