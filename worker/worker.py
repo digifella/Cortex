@@ -360,21 +360,74 @@ def main() -> int:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
+    consecutive_conn_errors = 0
+    last_conn_error_log_ts = 0.0
+
     while not stop_event.is_set():
         try:
             job = client.poll()
+            if consecutive_conn_errors > 0:
+                logging.info("Queue connectivity restored after %s failed attempt(s)", consecutive_conn_errors)
+                store.append_event(
+                    f"Queue connectivity restored after {consecutive_conn_errors} failed attempt(s)",
+                    level="info",
+                )
+            consecutive_conn_errors = 0
+
             if not job:
                 store.set_worker(status="idle", worker_id=cfg.worker_id)
                 time.sleep(cfg.poll_interval)
                 continue
             store.set_worker(status="processing", worker_id=cfg.worker_id)
             process_job(client, cfg, store, job)
+        except requests.ConnectionError as e:
+            consecutive_conn_errors += 1
+            backoff_seconds = min(max(cfg.poll_interval, 5) * (2 ** min(consecutive_conn_errors - 1, 5)), 300)
+            now = time.time()
+            # Avoid flooding logs/events during sustained outages.
+            if consecutive_conn_errors == 1 or (now - last_conn_error_log_ts) >= 30:
+                err_text = str(e)
+                if len(err_text) > 240:
+                    err_text = err_text[:240] + "..."
+                logging.warning(
+                    "Queue server unreachable (attempt=%s, retry_in=%ss): %s",
+                    consecutive_conn_errors,
+                    int(backoff_seconds),
+                    err_text,
+                )
+                store.append_event(
+                    f"Queue server unreachable (attempt={consecutive_conn_errors}, retry_in={int(backoff_seconds)}s)",
+                    level="warning",
+                )
+                last_conn_error_log_ts = now
+            store.set_worker(status="disconnected", worker_id=cfg.worker_id)
+            time.sleep(backoff_seconds)
+        except requests.Timeout as e:
+            consecutive_conn_errors += 1
+            backoff_seconds = min(max(cfg.poll_interval, 5) * (2 ** min(consecutive_conn_errors - 1, 5)), 300)
+            now = time.time()
+            if consecutive_conn_errors == 1 or (now - last_conn_error_log_ts) >= 30:
+                logging.warning(
+                    "Queue request timeout (attempt=%s, retry_in=%ss): %s",
+                    consecutive_conn_errors,
+                    int(backoff_seconds),
+                    e,
+                )
+                store.append_event(
+                    f"Queue request timeout (attempt={consecutive_conn_errors}, retry_in={int(backoff_seconds)}s)",
+                    level="warning",
+                )
+                last_conn_error_log_ts = now
+            store.set_worker(status="degraded", worker_id=cfg.worker_id)
+            time.sleep(backoff_seconds)
         except requests.HTTPError as e:
+            consecutive_conn_errors = 0
             logging.error("HTTP error while polling/processing: %s", e)
             store.append_event(f"HTTP error: {e}", level="error")
             store.set_worker(status="error", worker_id=cfg.worker_id)
             time.sleep(cfg.poll_interval)
         except Exception:
+            consecutive_conn_errors = 0
             logging.exception("Worker loop error")
             store.append_event("Worker loop error", level="error")
             store.set_worker(status="error", worker_id=cfg.worker_id)
