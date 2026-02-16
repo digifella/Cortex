@@ -91,17 +91,32 @@ class QueueMonitorStore:
             state["jobs"] = jobs
             self._write_state(state)
 
-    def append_event(self, message: str, level: str = "info", job_id: Optional[int] = None) -> None:
+    def append_event(
+        self,
+        message: str,
+        level: str = "info",
+        job_id: Optional[int] = None,
+        stage: Optional[str] = None,
+        progress_pct: Optional[int] = None,
+        source: Optional[str] = None,
+    ) -> None:
         with self._lock:
             state = self._read_state()
             events: List[Dict[str, Any]] = list(state.get("events") or [])
+            payload: Dict[str, Any] = {
+                "ts": _utc_now_iso(),
+                "level": level.lower().strip() or "info",
+                "job_id": job_id,
+                "message": str(message),
+            }
+            if stage:
+                payload["stage"] = str(stage)
+            if progress_pct is not None:
+                payload["progress_pct"] = max(0, min(100, int(progress_pct)))
+            if source:
+                payload["source"] = str(source)
             events.append(
-                {
-                    "ts": _utc_now_iso(),
-                    "level": level.lower().strip() or "info",
-                    "job_id": job_id,
-                    "message": str(message),
-                }
+                payload
             )
             # Keep file bounded.
             state["events"] = events[-1000:]
@@ -129,6 +144,25 @@ class QueueMonitorStore:
             state = self._read_state()
             state["events"] = []
             self._write_state(state)
+
+    def clear_jobs_by_status(self, statuses: List[str]) -> int:
+        wanted = {str(s).strip().lower() for s in statuses if str(s).strip()}
+        if not wanted:
+            return 0
+        with self._lock:
+            state = self._read_state()
+            jobs = dict(state.get("jobs") or {})
+            kept: Dict[str, Any] = {}
+            removed = 0
+            for key, item in jobs.items():
+                status = str((item or {}).get("status") or "").strip().lower()
+                if status in wanted:
+                    removed += 1
+                    continue
+                kept[key] = item
+            state["jobs"] = kept
+            self._write_state(state)
+            return removed
 
     def is_cancel_requested(self, job_id: int) -> bool:
         with self._lock:

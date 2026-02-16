@@ -264,18 +264,35 @@ def process_job(client: QueueClient, cfg: Config, store: QueueMonitorStore, job:
             if store.is_cancel_requested(job_id):
                 raise JobCancelledError("Cancelled after input download")
 
+        progress_event_state = {"last_stage": "", "last_pct": -10, "last_message": ""}
+
         def _progress_cb(progress_pct: float, message: str, stage: Optional[str] = None) -> None:
             pct = max(0, min(100, int(progress_pct)))
             update_stage = stage or "processing"
+            msg = str(message or "").strip()
             store.upsert_job(
                 job_id,
                 status="processing",
                 stage=update_stage,
-                message=str(message or "").strip()[:500],
+                message=msg[:500],
                 progress_pct=pct,
             )
-            if message:
-                store.append_event(str(message), level="info", job_id=job_id)
+            stage_changed = update_stage != progress_event_state["last_stage"]
+            pct_step = (pct - int(progress_event_state["last_pct"])) >= 10
+            message_changed = bool(msg) and msg != progress_event_state["last_message"]
+            if stage_changed or pct_step or message_changed:
+                if msg:
+                    store.append_event(
+                        msg,
+                        level="info",
+                        job_id=job_id,
+                        stage=update_stage,
+                        progress_pct=pct,
+                        source="worker.progress",
+                    )
+                progress_event_state["last_stage"] = update_stage
+                progress_event_state["last_pct"] = pct
+                progress_event_state["last_message"] = msg
             if store.is_cancel_requested(job_id):
                 raise JobCancelledError("Cancelled by operator")
 

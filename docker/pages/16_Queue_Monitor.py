@@ -9,6 +9,7 @@ import os
 import time
 from pathlib import Path
 from typing import Dict, Any
+from datetime import datetime, timezone
 
 import requests
 import streamlit as st
@@ -81,6 +82,23 @@ def _sort_jobs(jobs: Dict[str, Any]):
     return sorted(values, key=lambda x: x.get("updated_at", ""), reverse=True)
 
 
+def _parse_iso(ts: str) -> datetime | None:
+    text = str(ts or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _is_stale(ts: str, stale_seconds: int = 300) -> bool:
+    dt = _parse_iso(ts)
+    if not dt:
+        return False
+    return (datetime.now(timezone.utc) - dt).total_seconds() > stale_seconds
+
+
 def main():
     st.title("Queue Monitor")
     st.caption(f"Cortex {VERSION_STRING}")
@@ -113,7 +131,25 @@ def main():
     col1.metric("Worker Status", worker.get("status", "unknown"))
     col2.metric("Tracked Jobs", len(jobs))
     col3.metric("Active Jobs", sum(1 for j in jobs if j.get("status") in {"claimed", "processing", "uploading_result"}))
-    col4.metric("Events", len(events))
+    col4.metric("Stale Jobs", sum(1 for j in jobs if _is_stale(j.get("updated_at", ""))))
+
+    with st.expander("Bulk Actions", expanded=False):
+        b1, b2, b3 = st.columns(3)
+        with b1:
+            if st.button("Clear Completed/Failed/Cancelled", use_container_width=True):
+                removed = store.clear_jobs_by_status(["completed", "failed", "cancelled"])
+                st.success(f"Cleared {removed} local job entries.")
+                st.rerun()
+        with b2:
+            if st.button("Clear Only Completed", use_container_width=True):
+                removed = store.clear_jobs_by_status(["completed"])
+                st.success(f"Cleared {removed} completed job entries.")
+                st.rerun()
+        with b3:
+            if st.button("Clear Events", use_container_width=True):
+                store.clear_events()
+                st.success("Cleared event log.")
+                st.rerun()
 
     with st.expander("Worker Details", expanded=True):
         st.json(worker)
@@ -129,12 +165,16 @@ def main():
             with st.expander(title, expanded=status in {"processing", "claimed", "uploading_result"}):
                 c1, c2, c3 = st.columns([2, 1, 1])
                 with c1:
+                    st.progress(max(0, min(100, int(item.get("progress_pct", 0)))) / 100.0)
                     st.write(
                         f"**Stage:** {item.get('stage', '')}  \n"
                         f"**Progress:** {item.get('progress_pct', 0)}%  \n"
+                        f"**Trace:** `{item.get('trace_id', '')}`  \n"
                         f"**Message:** {item.get('message', '')}  \n"
                         f"**Updated:** {item.get('updated_at', '')}"
                     )
+                    if _is_stale(item.get("updated_at", "")):
+                        st.warning("No job updates for >5 minutes (stale telemetry).")
                 with c2:
                     if st.button("Request Cancel", key=f"cancel_local_{job_id}", use_container_width=True):
                         store.request_cancel(job_id, requested_by="streamlit_queue_monitor")
@@ -152,26 +192,46 @@ def main():
                         )
                         st.info(msg)
                         st.rerun()
+                    if st.button("Cancel + Clear Local", key=f"cancel_clear_{job_id}", use_container_width=True):
+                        store.request_cancel(job_id, requested_by="streamlit_queue_monitor")
+                        msg = _send_remote_cancel(
+                            job_id,
+                            "Cancelled by operator from Queue Monitor",
+                        )
+                        store.clear_job(job_id)
+                        st.info(msg)
+                        st.success(f"Cleared local entry for job {job_id}.")
+                        st.rerun()
                 st.json(item)
 
     st.subheader("Recent Events")
-    ev_col1, ev_col2 = st.columns([1, 4])
+    ev_col1, ev_col2, ev_col3 = st.columns([1, 2, 2])
     with ev_col1:
-        if st.button("Clear Events", use_container_width=True):
-            store.clear_events()
-            st.rerun()
+        level_filter = st.selectbox("Level", ["all", "error", "warning", "info"], index=0, key="qm_level_filter")
     with ev_col2:
-        st.caption("Most recent 250 events")
-    recent_events = events[-250:]
+        job_filter = st.text_input("Job ID filter", value="", key="qm_job_filter").strip()
+    with ev_col3:
+        max_events = st.slider("Rows", min_value=50, max_value=1000, value=250, step=50, key="qm_max_events")
+
+    filtered_events = list(events)
+    if level_filter != "all":
+        filtered_events = [ev for ev in filtered_events if str(ev.get("level", "")).lower() == level_filter]
+    if job_filter:
+        filtered_events = [ev for ev in filtered_events if str(ev.get("job_id", "")) == job_filter]
+
+    recent_events = filtered_events[-max_events:]
     if not recent_events:
         st.info("No events logged yet.")
     else:
         for ev in reversed(recent_events):
-            st.write(
+            stage_text = f" stage={ev.get('stage')}" if ev.get("stage") else ""
+            pct_text = f" {ev.get('progress_pct', 0)}%" if ev.get("progress_pct") is not None else ""
+            source_text = f" src={ev.get('source')}" if ev.get("source") else ""
+            st.code(
                 f"`{ev.get('ts','')}` "
                 f"[{ev.get('level','info').upper()}] "
                 f"{'#'+str(ev.get('job_id')) if ev.get('job_id') else ''} "
-                f"{ev.get('message','')}"
+                f"{ev.get('message','')}{stage_text}{pct_text}{source_text}"
             )
 
 
