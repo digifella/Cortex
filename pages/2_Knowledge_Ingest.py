@@ -594,7 +594,7 @@ def initialize_state(force_reset: bool = False):
         "files_to_review": [], "staged_files": [], "file_selections": {},
         "edited_staged_files": [], "staged_metadata": {}, "review_page": 0, "ingestion_process": None,
         "skip_image_processing": False,  # Option to skip VLM image processing
-        "ingest_backend": "default",  # default|docling|auto
+        "ingest_backend": "docling",  # default|docling|auto
         # Delay between documents; on WSL default to 1.5s for stability
         "throttle_delay": 1.5 if _is_wsl_default else 0.5,
         "batch_ingest_mode": False,  # Option to bypass preview check for large ingests
@@ -1755,11 +1755,12 @@ def render_config_and_scan_ui():
                        help="🖼️ Skip AI vision analysis of JPG/PNG files. Image processing is now optimized with parallel execution (30s timeout). Only skip if you don't need OCR, charts, or diagram analysis.")
             st.selectbox(
                 "📚 Ingestion backend",
-                options=["default", "docling", "auto"],
+                options=["docling", "auto", "default"],
                 key="ingest_backend",
                 help=(
-                    "default = safest profile (legacy in Docker, gradual elsewhere); "
-                    "docling = force Docling processing; auto = gradual migration with fallback."
+                    "docling = force Docling processing (recommended); "
+                    "auto = gradual migration with fallback; "
+                    "default = safest profile (legacy in Docker, gradual elsewhere)."
                 ),
             )
             # Use session default (which is WSL-aware) for initial value

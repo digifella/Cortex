@@ -7,6 +7,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, asdict
@@ -184,7 +185,21 @@ class URLIngestor:
 
     def _convert_pdf_to_md(self, pdf_path: str, use_vision: bool = False) -> Tuple[bool, str, str]:
         try:
-            textifier = DocumentTextifier(use_vision=use_vision)
+            textifier = DocumentTextifier.from_options(
+                {
+                    "use_vision": use_vision,
+                    "pdf_strategy": "hybrid",
+                    "docling_timeout_seconds": float(
+                        os.environ.get("CORTEX_TEXTIFIER_DOCLING_TIMEOUT_SECONDS", "240")
+                    ),
+                    "image_description_timeout_seconds": float(
+                        os.environ.get("CORTEX_TEXTIFIER_IMAGE_TIMEOUT_SECONDS", "20")
+                    ),
+                    "image_enrich_max_seconds": float(
+                        os.environ.get("CORTEX_TEXTIFIER_IMAGE_ENRICH_MAX_SECONDS", "120")
+                    ),
+                }
+            )
             md_content = textifier.textify_file(pdf_path)
             md_content = add_document_preface(pdf_path, md_content)
             md_name = Path(pdf_path).with_suffix(".md").name

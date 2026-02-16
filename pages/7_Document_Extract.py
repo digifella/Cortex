@@ -27,7 +27,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 # Import core modules
-from cortex_engine.anonymizer import DocumentAnonymizer, AnonymizationMapping
+from cortex_engine.anonymizer import DocumentAnonymizer, AnonymizationMapping, AnonymizationOptions
 from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.version_config import VERSION_STRING
@@ -1232,6 +1232,57 @@ def _render_textifier_tab():
         st.header("Input")
 
         use_vision = st.toggle("Use Vision Model for images", value=True, key="txt_vision")
+        pdf_mode_label = st.selectbox(
+            "PDF processing mode",
+            options=[
+                "Hybrid (Recommended): Docling first, Qwen enhancement, fallback on timeout",
+                "Docling only (best layout/tables)",
+                "Qwen 30B cleanup (LLM-first, no Docling)",
+            ],
+            index=0,
+            key="txt_pdf_mode",
+            help="Hybrid runs Docling first, then enriches with vision/LLM, and falls back if timeout limits are hit.",
+        )
+        cleanup_provider = st.selectbox(
+            "Cleanup LLM provider",
+            options=["lmstudio", "ollama"],
+            index=0,
+            key="txt_cleanup_provider",
+        )
+        cleanup_model = st.text_input(
+            "Cleanup model",
+            value="qwen2.5:32b",
+            key="txt_cleanup_model",
+            help="Model name for markdown cleanup when using Qwen/Hybrid modes.",
+        )
+        st.caption("Timeout safeguards")
+        docling_timeout_seconds = st.number_input(
+            "Docling timeout (seconds)",
+            min_value=30,
+            max_value=1200,
+            value=240,
+            step=10,
+            key="txt_docling_timeout_s",
+            help="If Docling exceeds this time, Textifier falls back to legacy extraction.",
+        )
+        image_timeout_seconds = st.number_input(
+            "Per-image vision timeout (seconds)",
+            min_value=3,
+            max_value=180,
+            value=20,
+            step=1,
+            key="txt_image_timeout_s",
+            help="Maximum time allowed for each image description.",
+        )
+        image_budget_seconds = st.number_input(
+            "Total image-description budget (seconds)",
+            min_value=10,
+            max_value=1800,
+            value=120,
+            step=10,
+            key="txt_image_budget_s",
+            help="When budget is exceeded, remaining images are skipped with placeholders.",
+        )
         batch_mode = st.toggle("Batch mode (multi-file)", value=False, key="txt_batch_toggle")
         st.session_state["textifier_batch"] = batch_mode
 
@@ -1281,7 +1332,21 @@ def _render_textifier_tab():
                     if total_files > 1:
                         status_text.info(f"File {file_idx + 1}/{total_files}: {_user_visible_filename(fpath)}")
 
-                    textifier = DocumentTextifier(use_vision=use_vision, on_progress=_on_progress)
+                    mode_map = {
+                        "Hybrid (Recommended): Docling first, Qwen enhancement, fallback on timeout": "hybrid",
+                        "Docling only (best layout/tables)": "docling",
+                        "Qwen 30B cleanup (LLM-first, no Docling)": "qwen30b",
+                    }
+                    textifier_options = {
+                        "use_vision": use_vision,
+                        "pdf_strategy": mode_map.get(pdf_mode_label, "hybrid"),
+                        "cleanup_provider": cleanup_provider,
+                        "cleanup_model": cleanup_model,
+                        "docling_timeout_seconds": float(docling_timeout_seconds),
+                        "image_description_timeout_seconds": float(image_timeout_seconds),
+                        "image_enrich_max_seconds": float(image_budget_seconds),
+                    }
+                    textifier = DocumentTextifier.from_options(textifier_options, on_progress=_on_progress)
                     try:
                         md_content = textifier.textify_file(fpath)
                     except Exception as e:
@@ -1392,6 +1457,47 @@ def _render_anonymizer_tab():
                 help="Lower values detect more entities (may include false positives)",
             )
             st.session_state.confidence_threshold = confidence_threshold
+            st.caption("Granular redaction controls")
+            redact_people = st.checkbox("Redact people", value=True, key="anon_opt_people")
+            redact_organizations = st.checkbox("Redact organizations", value=True, key="anon_opt_orgs")
+            redact_projects = st.checkbox("Redact projects", value=True, key="anon_opt_projects")
+            redact_locations = st.checkbox("Redact locations", value=True, key="anon_opt_locations")
+            redact_personal_pronouns = st.checkbox(
+                "Redact personal pronouns (he/she/they/etc.)",
+                value=False,
+                key="anon_opt_pronouns",
+            )
+            redact_company_names = st.checkbox(
+                "Redact custom company names",
+                value=False,
+                key="anon_opt_company_names",
+            )
+            preserve_source_formatting = st.checkbox(
+                "Preserve source formatting",
+                value=True,
+                key="anon_opt_preserve_formatting",
+                help="Remove <CR>/<CRLF> markers and reflow hard-wrapped lines while keeping lists/headings/table-like lines.",
+            )
+            custom_company_names_text = st.text_area(
+                "Custom company names (comma-separated)",
+                value="",
+                key="anon_opt_company_names_text",
+                help="Optional deterministic masking list for known organization names.",
+                disabled=not redact_company_names,
+            )
+            anonymization_options = AnonymizationOptions(
+                redact_people=redact_people,
+                redact_organizations=redact_organizations,
+                redact_projects=redact_projects,
+                redact_locations=redact_locations,
+                redact_personal_pronouns=redact_personal_pronouns,
+                redact_company_names=redact_company_names,
+                custom_company_names=[
+                    name.strip() for name in custom_company_names_text.split(",") if name.strip()
+                ],
+                preserve_source_formatting=preserve_source_formatting,
+            )
+            st.session_state.anonymization_options = anonymization_options
 
     with col2:
         st.header("Anonymization Process")
@@ -1424,6 +1530,7 @@ def _render_anonymizer_tab():
                             output_path=None,
                             mapping=mapping,
                             confidence_threshold=st.session_state.confidence_threshold,
+                            options=st.session_state.get("anonymization_options"),
                         )
                         # Re-use the returned mapping for next file (consistent entities)
                         mapping = result_mapping

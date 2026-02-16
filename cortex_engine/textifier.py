@@ -9,8 +9,11 @@ import re
 import base64
 import subprocess
 import tempfile
+import statistics
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Any
 
 from cortex_engine.utils.logging_utils import get_logger
 
@@ -23,11 +26,59 @@ class DocumentTextifier:
     # Preferred vision models in order of priority
     VISION_MODELS = ["qwen3-vl:8b", "qwen3-vl:4b", "qwen3-vl"]
 
-    def __init__(self, use_vision: bool = True, on_progress: Optional[Callable[[float, str], None]] = None):
+    def __init__(
+        self,
+        use_vision: bool = True,
+        on_progress: Optional[Callable[[float, str], None]] = None,
+        pdf_strategy: str = "hybrid",
+        cleanup_provider: Optional[str] = None,
+        cleanup_model: Optional[str] = None,
+        docling_timeout_seconds: Optional[float] = None,
+        image_description_timeout_seconds: Optional[float] = None,
+        image_enrich_max_seconds: Optional[float] = None,
+    ):
         self.use_vision = use_vision
         self.on_progress = on_progress
+        self.pdf_strategy = (pdf_strategy or "docling").strip().lower()
+        self.cleanup_provider = (cleanup_provider or "").strip().lower()
+        self.cleanup_model = (cleanup_model or "").strip()
+        self.docling_timeout_seconds = float(
+            docling_timeout_seconds
+            if docling_timeout_seconds is not None
+            else os.getenv("CORTEX_TEXTIFIER_DOCLING_TIMEOUT_SECONDS", "240")
+        )
+        self.image_description_timeout_seconds = float(
+            image_description_timeout_seconds
+            if image_description_timeout_seconds is not None
+            else os.getenv("CORTEX_TEXTIFIER_IMAGE_TIMEOUT_SECONDS", "20")
+        )
+        self.image_enrich_max_seconds = float(
+            image_enrich_max_seconds
+            if image_enrich_max_seconds is not None
+            else os.getenv("CORTEX_TEXTIFIER_IMAGE_ENRICH_MAX_SECONDS", "120")
+        )
         self._vlm_client = None
         self._vlm_model = None
+        self._last_cleanup_applied = False
+
+    @classmethod
+    def from_options(
+        cls,
+        options: Optional[Dict[str, Any]] = None,
+        on_progress: Optional[Callable[[float, str], None]] = None,
+    ) -> "DocumentTextifier":
+        """Create a DocumentTextifier from a shared options payload."""
+        opts = dict(options or {})
+        return cls(
+            use_vision=bool(opts.get("use_vision", True)),
+            on_progress=on_progress,
+            pdf_strategy=str(opts.get("pdf_strategy", "hybrid") or "hybrid").strip().lower(),
+            cleanup_provider=str(opts.get("cleanup_provider", "") or "").strip().lower() or None,
+            cleanup_model=str(opts.get("cleanup_model", "") or "").strip() or None,
+            docling_timeout_seconds=float(opts.get("docling_timeout_seconds", 240)),
+            image_description_timeout_seconds=float(opts.get("image_description_timeout_seconds", 20)),
+            image_enrich_max_seconds=float(opts.get("image_enrich_max_seconds", 120)),
+        )
 
     def _report(self, fraction: float, message: str):
         """Send a progress update if a callback is registered."""
@@ -187,6 +238,38 @@ class DocumentTextifier:
             logger.warning(f"VLM describe failed: {e}")
             return "[Image: could not be described — vision model error]"
 
+    def _describe_image_with_timeout(self, image_bytes: bytes) -> str:
+        """Run image description with a hard timeout so long VLM calls don't stall conversion."""
+        timeout_s = self.image_description_timeout_seconds
+        if timeout_s is None or timeout_s <= 0:
+            return self.describe_image(image_bytes)
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(self.describe_image, image_bytes)
+        try:
+            return future.result(timeout=timeout_s)
+        except FuturesTimeoutError:
+            future.cancel()
+            return "[Image: description timed out]"
+        except Exception:
+            return "[Image: could not be described — vision model error]"
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    @staticmethod
+    def _run_with_timeout(fn, timeout_seconds: Optional[float], *args, **kwargs):
+        """Run a callable with optional timeout. Returns None when timed out."""
+        if timeout_seconds is None or timeout_seconds <= 0:
+            return fn(*args, **kwargs)
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(fn, *args, **kwargs)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeoutError:
+            future.cancel()
+            return None
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
     @staticmethod
     def table_to_markdown(rows: List[List[str]]) -> str:
         """Convert a list-of-lists table to Markdown."""
@@ -338,11 +421,13 @@ class DocumentTextifier:
 
     def textify_pdf(self, file_path: str) -> str:
         """Convert a PDF to Markdown using PyMuPDF."""
-        self._report(0.0, "Checking Docling availability...")
-        docling_md = self._try_docling(file_path)
-        if docling_md:
-            self._report(1.0, "Converted via Docling")
-            return docling_md
+        strategy = self.pdf_strategy
+        if strategy in {"docling", "hybrid"}:
+            self._report(0.0, "Checking Docling availability...")
+            docling_md = self._try_docling(file_path, timeout_seconds=self.docling_timeout_seconds)
+            if docling_md:
+                self._report(1.0, "Converted via Docling")
+                return docling_md
 
         import fitz  # PyMuPDF
 
@@ -374,7 +459,9 @@ class DocumentTextifier:
             page = doc[page_num]
             md_parts.append(f"## Page {page_num + 1}\n")
 
-            lines = page_lines[page_num] if page_num < len(page_lines) else []
+            lines = self._extract_pdf_page_structured_lines(page)
+            if not lines:
+                lines = page_lines[page_num] if page_num < len(page_lines) else []
             filtered_lines: List[str] = []
             for idx, line in enumerate(lines):
                 in_header_footer_zone = idx < 5 or idx >= max(len(lines) - 5, 0)
@@ -387,6 +474,15 @@ class DocumentTextifier:
             if text:
                 md_parts.append(text)
                 md_parts.append("")
+            elif self.use_vision:
+                # If no extractable text, include a vision summary so the page isn't lost.
+                try:
+                    pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                    desc = self.describe_image(pix.tobytes("png"))
+                    md_parts.append(f"> **[Page {page_num + 1} image summary]**: {desc}")
+                    md_parts.append("")
+                except Exception as e:
+                    logger.debug(f"Page image summary failed on page {page_num + 1}: {e}")
 
             # Strict text-only PDF mode:
             # intentionally ignore embedded tables/figures/images to avoid noisy pseudo-structured output.
@@ -397,7 +493,85 @@ class DocumentTextifier:
 
         doc.close()
         self._report(1.0, "PDF conversion complete")
-        return self._normalize_markdown_output("\n".join(md_parts))
+        normalized = self._normalize_markdown_output("\n".join(md_parts))
+        cleanup_enabled = strategy in {"qwen30b", "hybrid"} or (
+            os.getenv("CORTEX_TEXTIFIER_SEMANTIC_CLEANUP", "1").strip().lower() not in {"0", "false", "no"}
+        )
+        if cleanup_enabled:
+            cleaned = self._semantic_markdown_cleanup(normalized)
+            if cleaned and cleaned.strip():
+                out = self._normalize_markdown_output(cleaned)
+                # If explicit Qwen mode, return cleanup output even if only small change.
+                if strategy == "qwen30b":
+                    return out
+                # Hybrid accepts cleanup only when it actually improved structure.
+                if strategy != "hybrid" or (out != normalized and self._last_cleanup_applied):
+                    return out
+
+        return normalized
+
+    def _extract_pdf_page_structured_lines(self, page) -> List[str]:
+        """Extract page text while preserving visual structure better than plain text dump."""
+        lines_out: List[str] = []
+        try:
+            text_dict = page.get_text("dict")
+        except Exception as e:
+            logger.debug(f"Structured PDF extraction failed on page {page.number + 1}: {e}")
+            return lines_out
+
+        # Gather page-level font stats so we can detect heading-like lines.
+        font_sizes: List[float] = []
+        blocks = text_dict.get("blocks", []) if isinstance(text_dict, dict) else []
+        for block in blocks:
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    try:
+                        size = float(span.get("size", 0))
+                    except Exception:
+                        size = 0
+                    if size > 0:
+                        font_sizes.append(size)
+
+        base_font = statistics.median(font_sizes) if font_sizes else 10.0
+        heading_threshold = max(base_font * 1.25, base_font + 1.5)
+
+        for block in blocks:
+            if block.get("type") != 0:
+                continue
+            block_lines_added = 0
+            for line in block.get("lines", []):
+                spans = line.get("spans", [])
+                if not spans:
+                    continue
+                text = "".join((span.get("text", "") or "") for span in spans).strip()
+                if not text:
+                    continue
+
+                max_font = max(float(span.get("size", 0) or 0) for span in spans)
+                is_bold = any("bold" in str(span.get("font", "")).lower() for span in spans)
+                looks_heading = (
+                    (max_font >= heading_threshold and len(text) <= 120)
+                    or (is_bold and len(text) <= 80 and text[0].isupper())
+                    or re.match(r"^[A-Z][A-Z0-9 &/\-]{4,}$", text) is not None
+                )
+
+                # Keep numbering / bullets as markdown list items.
+                if re.match(r"^[\u2022\u25CF\u25AA]\s*", text):
+                    text = "- " + re.sub(r"^[\u2022\u25CF\u25AA]\s*", "", text)
+                elif re.match(r"^\d+\.\s+", text):
+                    pass
+                elif looks_heading:
+                    text = f"### {text}"
+
+                lines_out.append(text)
+                block_lines_added += 1
+
+            if block_lines_added > 0:
+                lines_out.append("")
+
+        return lines_out
 
     # ------------------------------------------------------------------
     # DOCX
@@ -567,6 +741,7 @@ class DocumentTextifier:
 
     # Text models for keyword extraction (VLMs need images, so use a text LLM)
     TEXT_MODELS = ["mistral:latest", "mistral-small3.2", "llama3:latest", "gemma:latest"]
+    CLEANUP_MODELS = ["qwen2.5:32b", "qwen2.5:14b", "mistral:latest", "llama3:latest"]
 
     def extract_keywords(self, description: str) -> List[str]:
         """Extract flat keywords from an image description using a text LLM.
@@ -640,6 +815,306 @@ class DocumentTextifier:
         except Exception as e:
             logger.warning(f"LLM keyword extraction failed: {e}")
             return self._extract_keywords_simple(description)
+
+    def _semantic_markdown_cleanup(self, markdown_text: str) -> str:
+        """Use a local text model to improve fallback markdown structure."""
+        content = (markdown_text or "").strip()
+        if not content:
+            return markdown_text
+        self._last_cleanup_applied = False
+
+        preferred = os.getenv("CORTEX_TEXTIFIER_CLEANUP_MODEL", "").strip()
+        if self.cleanup_model:
+            preferred = self.cleanup_model
+        candidates: List[str] = [preferred] if preferred else []
+        candidates.extend(self.CLEANUP_MODELS)
+        dedup_candidates: List[str] = []
+        seen_models = set()
+        for candidate in candidates:
+            if not candidate or candidate in seen_models:
+                continue
+            dedup_candidates.append(candidate)
+            seen_models.add(candidate)
+        candidates = dedup_candidates
+
+        max_chars = int(os.getenv("CORTEX_TEXTIFIER_CLEANUP_MAX_CHARS", "18000"))
+        payload = content[:max_chars]
+        prompt = (
+            "Rewrite this extracted markdown to improve readability while preserving facts.\n"
+            "Rules:\n"
+            "- Keep existing page headings like '## Page N'.\n"
+            "- Preserve wording and meaning; do not invent content.\n"
+            "- Split run-on lines into proper paragraphs.\n"
+            "- Convert obvious enumerations into markdown lists.\n"
+            "- Return markdown only.\n\n"
+            f"{payload}"
+        )
+
+        # Path 1: shared LLM interface (supports LM Studio and Ollama via env config).
+        for model_name in candidates:
+            if not model_name:
+                continue
+            try:
+                from cortex_engine.llm_interface import LLMInterface
+                provider_override = self.cleanup_provider or None
+                llm_kwargs: Dict[str, Any] = {
+                    "model": model_name,
+                    "temperature": 0.0,
+                    "request_timeout": 90.0,
+                }
+                if provider_override:
+                    llm_kwargs["provider"] = provider_override
+                llm = LLMInterface(**llm_kwargs)
+                result = llm.generate(prompt=prompt, system_prompt=None, max_tokens=4096).strip()
+                result = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
+                if result:
+                    logger.info(f"Applied semantic markdown cleanup via LLMInterface model={model_name}")
+                    self._last_cleanup_applied = True
+                    return result
+            except Exception:
+                if self._is_connection_error_exception():
+                    return markdown_text
+                continue
+
+        # Path 2: direct Ollama fallback with model availability probing.
+        if self.cleanup_provider and self.cleanup_provider != "ollama":
+            logger.info(f"Semantic cleanup skipped (provider '{self.cleanup_provider}' unavailable)")
+            return markdown_text
+        try:
+            import ollama
+            client = ollama.Client(timeout=90)
+        except Exception as e:
+            logger.info(f"Semantic cleanup skipped (ollama unavailable): {e}")
+            return markdown_text
+
+        cleanup_model = None
+        for model in candidates:
+            if not model:
+                continue
+            try:
+                client.show(model)
+                cleanup_model = model
+                break
+            except Exception:
+                continue
+
+        if not cleanup_model:
+            logger.info("Semantic cleanup skipped (no cleanup model available)")
+            return markdown_text
+
+        try:
+            response = client.chat(
+                model=cleanup_model,
+                messages=[{"role": "user", "content": prompt}],
+                options={"temperature": 0.0, "num_predict": 4096},
+            )
+            result = (response.get("message", {}) or {}).get("content", "").strip()
+            result = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
+            if result:
+                logger.info(f"Applied semantic markdown cleanup with {cleanup_model}")
+                self._last_cleanup_applied = True
+                return result
+            return markdown_text
+        except Exception as e:
+            logger.info(f"Semantic cleanup failed ({cleanup_model}): {e}")
+            return markdown_text
+
+    @staticmethod
+    def _is_connection_error_exception() -> bool:
+        """Best-effort check for endpoint/network availability errors from provider clients."""
+        import traceback
+        exc_text = traceback.format_exc().lower()
+        markers = [
+            "connection error",
+            "failed to connect",
+            "connection refused",
+            "timed out",
+            "max retries exceeded",
+            "name or service not known",
+            "couldn't connect to server",
+        ]
+        return any(marker in exc_text for marker in markers)
+
+    def _try_docling_subprocess(
+        self,
+        file_path: str,
+        timeout_seconds: float,
+    ) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
+        """
+        Run Docling conversion in a subprocess so timeout can terminate work cleanly.
+        Returns (markdown_text, figures) on success, else None.
+        """
+        import json
+        import sys
+
+        root_dir = str(Path(__file__).resolve().parents[1])
+        with tempfile.NamedTemporaryFile(prefix="cortex_docling_", suffix=".json", delete=False) as tf:
+            output_json_path = tf.name
+        script = "\n".join(
+            [
+                "import json, sys",
+                "from cortex_engine.docling_reader import DoclingDocumentReader",
+                "fp = sys.argv[1]",
+                "outp = sys.argv[2]",
+                "reader = DoclingDocumentReader()",
+                "payload = {'ok': False, 'text': '', 'figures': []}",
+                "if reader.is_available and reader.can_process_file(fp):",
+                "    docs = reader.load_data(fp)",
+                "    if docs and docs[0].text and docs[0].text.strip():",
+                "        md = docs[0].metadata or {}",
+                "        payload = {",
+                "            'ok': True,",
+                "            'text': docs[0].text,",
+                "            'figures': (md.get('docling_figures', []) or []),",
+                "        }",
+                "with open(outp, 'w', encoding='utf-8') as f:",
+                "    json.dump(payload, f)",
+            ]
+        )
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", script, str(file_path), str(output_json_path)],
+                cwd=root_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+            if proc.returncode != 0:
+                logger.info(f"Docling subprocess unavailable for {Path(file_path).name}: {proc.stderr.strip()}")
+                return None
+            payload = json.loads(Path(output_json_path).read_text(encoding="utf-8"))
+            if not payload.get("ok"):
+                return None
+            text = str(payload.get("text") or "")
+            figures = payload.get("figures") or []
+            if not text.strip():
+                return None
+            return text, figures
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                f"Docling timed out after {timeout_seconds}s for {Path(file_path).name}; "
+                "falling back to legacy reader"
+            )
+            return None
+        except Exception as e:
+            logger.info(f"Docling subprocess failed for {Path(file_path).name}: {e}")
+            return None
+        finally:
+            try:
+                Path(output_json_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def _enrich_docling_image_markers(
+        self,
+        markdown_text: str,
+        file_path: str,
+        figures: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        """
+        Replace Docling '<!-- image -->' markers with VLM descriptions.
+        Uses figure bbox/page metadata to crop images directly from the PDF when possible.
+        """
+        text = markdown_text or ""
+        marker = "<!-- image -->"
+        marker_count = text.count(marker)
+        if marker_count == 0:
+            return text
+
+        if not self.use_vision:
+            return text.replace(marker, "> **[Image]**: [Image: vision model disabled]")
+
+        figures = figures or []
+        descriptions: List[str] = []
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(file_path)
+            try:
+                enrich_started = time.monotonic()
+                page_desc_cache: Dict[int, str] = {}
+
+                def describe_page(page_idx: int) -> str:
+                    if page_idx in page_desc_cache:
+                        return page_desc_cache[page_idx]
+                    page_idx = min(max(page_idx, 0), len(doc) - 1)
+                    page = doc[page_idx]
+                    pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                    desc = self._describe_image_with_timeout(pix.tobytes("png"))
+                    page_desc_cache[page_idx] = desc
+                    return desc
+
+                for i in range(marker_count):
+                    elapsed = time.monotonic() - enrich_started
+                    if self.image_enrich_max_seconds > 0 and elapsed > self.image_enrich_max_seconds:
+                        descriptions.extend(
+                            ["[Image: skipped to keep processing responsive]"] * (marker_count - i)
+                        )
+                        break
+                    figure = figures[i] if i < len(figures) else {}
+                    desc = figure.get("vlm_description") or ""
+                    if desc:
+                        descriptions.append(desc)
+                        continue
+
+                    page_raw = figure.get("page")
+                    bbox = figure.get("bbox")
+                    # Fallback path when Docling doesn't expose figure-level metadata:
+                    # estimate image context from page index aligned to marker order.
+                    if page_raw is None:
+                        if marker_count > 1:
+                            ratio = i / float(marker_count - 1)
+                            page_idx = int(round(ratio * (len(doc) - 1)))
+                        else:
+                            page_idx = 0
+                        descriptions.append(describe_page(page_idx))
+                        continue
+                    if not bbox or len(bbox) != 4:
+                        page_idx = int(page_raw) - 1 if int(page_raw) >= 1 else int(page_raw)
+                        descriptions.append(describe_page(page_idx))
+                        continue
+
+                    try:
+                        page_idx = int(page_raw)
+                        # Docling page indices are typically 1-based.
+                        if page_idx >= 1:
+                            page_idx -= 1
+                    except Exception:
+                        descriptions.append("[Image: invalid figure page metadata]")
+                        continue
+
+                    if page_idx < 0 or page_idx >= len(doc):
+                        descriptions.append("[Image: figure page out of range]")
+                        continue
+
+                    page = doc[page_idx]
+                    try:
+                        rect = fitz.Rect(float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+                    except Exception:
+                        descriptions.append("[Image: invalid figure bounds]")
+                        continue
+
+                    # Defensive clamp/cleanup of rect.
+                    rect = rect & page.rect
+                    if rect.is_empty or rect.width < 4 or rect.height < 4:
+                        descriptions.append(describe_page(page_idx))
+                        continue
+
+                    pix = page.get_pixmap(clip=rect, matrix=fitz.Matrix(2.0, 2.0), alpha=False)
+                    desc = self._describe_image_with_timeout(pix.tobytes("png"))
+                    descriptions.append(desc or describe_page(page_idx))
+            finally:
+                doc.close()
+        except Exception as e:
+            logger.warning(f"Docling image marker enrichment failed: {e}")
+            descriptions = ["[Image: could not be described]"] * marker_count
+
+        parts = text.split(marker)
+        out: List[str] = [parts[0]]
+        for i in range(marker_count):
+            desc = descriptions[i] if i < len(descriptions) else "[Image: description unavailable]"
+            out.append(f"> **[Image {i + 1}]**: {desc}\n")
+            out.append(parts[i + 1] if i + 1 < len(parts) else "")
+        return "".join(out)
 
     @staticmethod
     def _extract_keywords_simple(description: str) -> List[str]:
@@ -1309,16 +1784,58 @@ class DocumentTextifier:
     # Docling fallback
     # ------------------------------------------------------------------
 
-    def _try_docling(self, file_path: str) -> Optional[str]:
+    def _try_docling(self, file_path: str, timeout_seconds: Optional[float] = None) -> Optional[str]:
         """Try using Docling for higher-quality conversion. Returns None if unavailable."""
+        if timeout_seconds and timeout_seconds > 0:
+            result = self._try_docling_subprocess(file_path, timeout_seconds)
+            if result:
+                md_text, figures = result
+                if str(file_path).lower().endswith(".pdf"):
+                    md_text = self._enrich_docling_image_markers(md_text, file_path, figures)
+                logger.info("Used Docling subprocess for PDF conversion")
+                return self._normalize_markdown_output(md_text)
+            return None
+
+        # Prefer Cortex Docling reader (handles model repair / pipeline options).
+        try:
+            from cortex_engine.docling_reader import DoclingDocumentReader
+            reader = DoclingDocumentReader()
+            if reader.is_available and reader.can_process_file(file_path):
+                docs = self._run_with_timeout(reader.load_data, timeout_seconds, file_path)
+                if docs is None:
+                    logger.warning(
+                        f"Docling timed out after {timeout_seconds}s for {Path(file_path).name}; "
+                        "falling back to legacy reader"
+                    )
+                    return None
+                if docs and docs[0].text and docs[0].text.strip():
+                    logger.info("Used DoclingDocumentReader for PDF conversion")
+                    md_text = docs[0].text
+                    figures = []
+                    try:
+                        figures = (docs[0].metadata or {}).get("docling_figures", []) or []
+                    except Exception:
+                        figures = []
+                    if str(file_path).lower().endswith(".pdf"):
+                        md_text = self._enrich_docling_image_markers(md_text, file_path, figures)
+                    return self._normalize_markdown_output(md_text)
+        except Exception as e:
+            logger.info(f"DoclingDocumentReader path unavailable: {e}")
+
+        # Fallback direct Docling converter path.
         try:
             from docling.document_converter import DocumentConverter
             converter = DocumentConverter()
-            result = converter.convert(file_path)
+            result = self._run_with_timeout(converter.convert, timeout_seconds, file_path)
+            if result is None:
+                logger.warning(
+                    f"Direct Docling converter timed out after {timeout_seconds}s for {Path(file_path).name}"
+                )
+                return None
             md = result.document.export_to_markdown()
             if md and md.strip():
                 logger.info("Used Docling for PDF conversion")
                 return self._normalize_markdown_output(md)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.info(f"Direct Docling converter unavailable: {e}")
         return None

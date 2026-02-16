@@ -221,7 +221,11 @@ def _load_model(config: Optional[Qwen3VLConfig] = None) -> tuple:
             # Import required packages
             import os
             import sys
-            from transformers import AutoProcessor
+            try:
+                from transformers import AutoProcessor
+            except Exception:
+                # Some transformers builds intermittently fail top-level re-export during lazy import.
+                from transformers.models.auto.processing_auto import AutoProcessor
             from transformers.models.qwen3_vl.modeling_qwen3_vl import (
                 Qwen3VLPreTrainedModel, Qwen3VLModel
             )
