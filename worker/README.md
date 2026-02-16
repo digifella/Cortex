@@ -47,6 +47,9 @@ venv/bin/python worker/worker.py
 ## Notes
 - Worker telemetry is written to `worker/tmp/queue_monitor_state.json` by default.
 - Queue monitor UI is available in Streamlit at `pages/16_Queue_Monitor.py`.
+- `cortex_sync` path remap:
+  - If website submits cPanel-style paths like `/home/<user>/public_html/...`, handler auto-remaps to local mirror root.
+  - Override local mirror root with `CORTEX_SYNC_SITE_ROOT` (default: `~/longboardfella_website/site`).
 - The `pdf_anonymise` worker handler intentionally calls the existing Cortex engine anonymizer:
   - `cortex_engine.anonymizer.DocumentAnonymizer`
 - This avoids duplicate anonymization logic between the admin queue worker path and Document Extract UI.

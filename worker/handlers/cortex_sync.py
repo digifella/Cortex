@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import getpass
 from argparse import Namespace
 from pathlib import Path
 from typing import Callable, Optional
@@ -23,6 +24,45 @@ def _normalize_input_path(raw_path: str) -> str:
         return str(Path(converted).expanduser())
     except Exception:
         return text
+
+
+def _resolve_existing_path(raw_path: str) -> str:
+    """
+    Resolve a submitted path to an existing local path.
+    Tries direct path, home-user remap, then public_html -> local site root remap.
+    """
+    normalized = _normalize_input_path(raw_path)
+    candidates: list[str] = []
+    if normalized:
+        candidates.append(normalized)
+
+    # Remap /home/<submitted_user>/... -> /home/<local_user>/...
+    parts = Path(normalized).parts if normalized else ()
+    if len(parts) >= 4 and parts[0] == "/" and parts[1] == "home":
+        tail = parts[3:]  # after /home/<user>/
+        local_user = getpass.getuser()
+        remapped = str(Path("/home") / local_user / Path(*tail))
+        if remapped not in candidates:
+            candidates.append(remapped)
+
+    # Remap cPanel style .../public_html/... into local website mirror root.
+    public_html_marker = "/public_html/"
+    if normalized and public_html_marker in normalized:
+        rel = normalized.split(public_html_marker, 1)[1].lstrip("/")
+        site_root = os.environ.get(
+            "CORTEX_SYNC_SITE_ROOT",
+            str(Path.home() / "longboardfella_website" / "site"),
+        ).strip()
+        remapped_site = str(Path(site_root) / rel)
+        if remapped_site not in candidates:
+            candidates.append(remapped_site)
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            if candidate != normalized:
+                logger.info("cortex_sync remapped path: %s -> %s", raw_path, candidate)
+            return candidate
+    return normalized
 
 
 def _load_doc_id_map(processed_log_path: str) -> dict[str, str]:
@@ -98,7 +138,7 @@ def handle(
     valid_paths: list[str] = []
     errors: list[dict[str, str]] = []
     for fp in file_paths:
-        normalized = _normalize_input_path(fp)
+        normalized = _resolve_existing_path(fp)
         if normalized and os.path.exists(normalized):
             valid_paths.append(normalized)
         else:
