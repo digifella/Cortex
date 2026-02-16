@@ -1,6 +1,7 @@
 # Python environments
 venv/
 .venv/
+.venv-docling/
 
 # Python cache and build
 __pycache__/
@@ -28,12 +29,15 @@ Thumbs.db
 .cache/
 coverage/
 logs/
+*.Zone.Identifier
 
 # Large or generated data
 data/
 datasets/
 models/
 checkpoints/
+database_exports/
+worker/tmp/
 
 # Ad hoc screenshots (avoid accidental commits)
 Screenshot*.png

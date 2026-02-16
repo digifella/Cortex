@@ -10,8 +10,12 @@ This folder contains the local/offline queue worker for the website work queue A
 - `handlers/pdf_textify.py`: `pdf_textify` handler (reuses `cortex_engine.textifier`).
 
 ## Setup
-1. Edit `worker/config.env` with your server URL and queue secret.
-2. Install dependencies in your venv:
+1. Create config from template:
+```bash
+cp worker/config.env.example worker/config.env
+```
+2. Edit `worker/config.env` with your server URL and queue secret.
+3. Install dependencies in your venv:
 ```bash
 pip install requests pymupdf
 ```
