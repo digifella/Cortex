@@ -1,4 +1,4 @@
-# Program Transparency Portal - Technical Blueprint (v2.2)
+# Program Transparency Portal - Technical Blueprint (v2.3)
 
 **Author:** Cortex engineering review  
 **Date:** 2026-02-16  
@@ -30,12 +30,23 @@ The following items are now implemented in Cortex and should be treated as curre
    - `image_description_timeout_seconds`
    - `image_enrich_max_seconds`
 
+## 0.3 Runtime Mode (Reconfirmed)
+
+Delivery is now set to **single-tenant runtime first**, with tenancy-ready contracts preserved.
+
+1. Runtime defaults:
+   - `tenant_id = "default"`
+   - `project_id = "default"`
+2. Keep tenant/project fields in schemas, storage records, and API contracts now.
+3. Keep permission checks behind functions/interfaces now, even if current operator has broad rights.
+4. Promote to dynamic multi-tenant mode later as an additive refactor.
+
 ## 1. Decision Summary
 
 The PRD is strong and executable. The recommended pathway is:
 
 1. Keep the PRD scope and phased rollout.
-2. Tighten platform foundations early (tenant isolation, retrieval policy enforcement, auditability, async jobs).
+2. Tighten platform foundations early (retrieval policy enforcement, auditability, async jobs).
 3. Reuse Cortex + website assets, but introduce a clear service boundary so this can scale to multi-client safely.
 
 This is a **go-forward blueprint** you can hand to the website-maintaining system for implementation alignment.
@@ -61,15 +72,15 @@ One implementation clarification is now explicit:
 
 ## 3. Warranted Changes to the Design
 
-## 3.1 Multi-tenant enforcement: move from "best effort" to "provable"
+## 3.1 Tenant-Ready, Single-Tenant Runtime
 
-**Adjustment:** Keep shared PostgreSQL for MVP, but enforce tenancy at three layers from day one:
+**Adjustment:** Keep runtime single-tenant for MVP while enforcing tenant/project fields structurally:
 
-1. `tenant_id` + `project_id` scoping in application query builder.
-2. PostgreSQL Row-Level Security (RLS) policies on all tenant tables.
-3. Retrieval pre-filter tests that fail CI if cross-tenant results can surface.
+1. Use fixed defaults (`default/default`) through adapters and UI calls.
+2. Keep query-builder signatures and data schemas tenant/project-aware.
+3. Add tests for scoped query construction with current fixed defaults.
 
-**Why:** Prevents subtle cross-client leakage as soon as more than one tenant exists.
+**Why:** Fast MVP execution now, low-cost migration later.
 
 ## 3.2 Retrieval architecture: policy filter before vector lookup
 
@@ -94,15 +105,15 @@ One implementation clarification is now explicit:
 1. `polling_api_adapter` (current harness, immediate use)
 2. `celery_redis_adapter` (PRD target for multi-worker hosted operation)
 
-## 3.4 Storage strategy: short-term Chroma, defined migration criteria
+## 3.4 Storage strategy: SQLite now, PostgreSQL migration criteria defined
 
-**Adjustment:** Start with Chroma only if needed for speed, but define migration trigger to `pgvector`:
+**Adjustment:** Keep current SQLite-backed operational path for MVP, with explicit migration criteria to PostgreSQL/pgvector:
 
-1. More than 5 active tenants, or
-2. Need strict SQL-governed retrieval joins, or
-3. Operations burden from dual stores becomes material.
+1. Concurrent curator/project workflows show lock/contention pain, or
+2. Dynamic tenant/role enforcement at DB layer is required, or
+3. Operations/reporting burden from current DB split becomes material.
 
-**Why:** Chroma is fast to ship; pgvector simplifies governance and reporting at scale.
+**Why:** SQLite keeps deployment simple now; PostgreSQL remains the deliberate scaling step.
 
 ## 3.5 De-identification policy: default irreversible in Workbench
 
@@ -139,26 +150,28 @@ One implementation clarification is now explicit:
 1. Finalise Docling environment and fallback chain in Cortex.
 2. Define canonical chunk schema:
    - `chunk_id`, `artefact_id`, `tenant_id`, `project_id`, `effective_date`, `allowed_roles`, `content_hash`.
-3. Implement retrieval gateway contract (pre-filter then search).
+3. Implement retrieval gateway contract (pre-filter then search) using fixed `tenant_id/project_id` defaults.
 4. Stand up queue job lifecycle + retry/dead-letter behavior.
 5. Add baseline observability:
    - structured logs, request/job IDs, audit event emitter.
 
-## Phase 1 - MVP Delivery (6-8 weeks)
+## Phase 1 - MVP Delivery (6-8 weeks, single-tenant runtime)
 
 1. Upload -> Vault -> anonymise -> curator approve -> Workbench publish.
 2. Permission-aware chat with citation rendering and refusal policy.
 3. Dashboard v1 (milestones, risks, spend).
 4. Sponsor deck generation with citation appendix.
-5. Tenant and role admin basics.
+5. Role-check abstraction in place with simplified single-user mapping (tenant admin UI deferred).
 
 ## Phase 2 - Hardening + Multi-client (4-6 weeks)
 
-1. RLS validation suite and cross-tenant security tests.
-2. Additional personas (Quality, Finance/CRO).
-3. LLM-based structured extraction with human correction UI.
-4. Alerting and trend deltas.
-5. Operational dashboards (queue depth, failure rates, ingest latency).
+1. Introduce dynamic tenant/project resolution and tenant role model.
+2. Migrate to PostgreSQL + RLS when criteria are met.
+3. RLS validation suite and cross-tenant security tests.
+4. Additional personas (Quality, Finance/CRO).
+5. LLM-based structured extraction with human correction UI.
+6. Alerting and trend deltas.
+7. Operational dashboards (queue depth, failure rates, ingest latency).
 
 ## Phase 3 - Automation + Connectors (4-8 weeks)
 
@@ -200,7 +213,8 @@ cp worker/config.env.example worker/config.env
 2. Edit `worker/config.env` with:
    - `QUEUE_SERVER_URL` (your live queue worker API endpoint)
    - `QUEUE_SECRET_KEY`
-   - optional `WORKER_ID`, `POLL_INTERVAL_SECONDS`, `HEARTBEAT_INTERVAL_SECONDS`
+   - optional `WORKER_ID`, `POLL_INTERVAL`, `HEARTBEAT_INTERVAL`
+   - `SUPPORTED_TYPES=pdf_anonymise,pdf_textify,url_ingest`
 
 ## 6.2 Install dependencies
 
@@ -216,7 +230,10 @@ venv/bin/python worker/worker.py
 
 ## 6.4 Functional test sequence
 
-1. Create a test queue job from your website admin queue UI/API (`pdf_anonymise`).
+1. Create test queue jobs from website admin queue UI/API:
+   - `pdf_anonymise`
+   - `pdf_textify`
+   - `url_ingest`
 2. Confirm worker logs show:
    - poll success
    - job claim
@@ -249,10 +266,10 @@ Current harness and PRD terms should be treated as equivalent:
 ## 7. Immediate Next Build Actions
 
 1. Freeze API contract between website and Cortex services.
-2. Implement retrieval gateway + isolation tests before adding new feature surface.
+2. Implement retrieval gateway with fixed `default/default` scope and tenancy-ready parameters.
 3. Ship one end-to-end golden path with a real client sample set (20-30 artefacts).
 4. Run queue runbook and baseline metrics (ingest latency, failure rate, citation validity).
 
 ---
 
-This v2 blueprint keeps your PRD direction, but makes the system safer to scale and easier to operate under real client load.
+This v2.3 blueprint keeps your PRD direction, aligns with current implemented behavior, and enables single-tenant delivery now without blocking later multi-tenant scale-out.
