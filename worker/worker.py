@@ -8,6 +8,7 @@ import signal
 import tempfile
 import threading
 import time
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
@@ -17,12 +18,23 @@ import requests
 
 # Ensure repo root is importable when running `python worker/worker.py`
 ROOT = Path(__file__).resolve().parent.parent
+SCRIPT_DIR = Path(__file__).resolve().parent
 import sys
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from worker.handlers import HANDLERS
+# Import handlers safely in both execution modes:
+# - script: `python worker/worker.py`
+# - module: `python -m worker.worker`
+if __package__ in (None, ""):
+    if str(SCRIPT_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPT_DIR))
+    from handlers import HANDLERS
+else:
+    from .handlers import HANDLERS
+from cortex_engine.handoff_contract import normalize_handoff_metadata
+from cortex_engine.queue_monitor import QueueMonitorStore
 
 
 def load_env_file(path: Path) -> Dict[str, str]:
@@ -49,6 +61,7 @@ class Config:
     temp_dir: Path
     heartbeat_interval: int
     request_timeout: int
+    queue_monitor_state_path: Path
 
 
 def read_config() -> Config:
@@ -68,6 +81,9 @@ def read_config() -> Config:
         temp_dir=Path(get("TEMP_DIR", str(ROOT / "worker" / "tmp"))),
         heartbeat_interval=int(get("HEARTBEAT_INTERVAL", "60")),
         request_timeout=int(get("REQUEST_TIMEOUT", "60")),
+        queue_monitor_state_path=Path(
+            get("QUEUE_MONITOR_STATE_PATH", str(ROOT / "worker" / "tmp" / "queue_monitor_state.json"))
+        ),
     )
 
     if not cfg.server_url or not cfg.secret_key:
@@ -90,6 +106,17 @@ class QueueClient:
             timeout=self.cfg.request_timeout,
             **kwargs,
         )
+        # Some hosts/proxies strip custom headers. On 403, retry once with query key fallback.
+        if response.status_code == 403 and "key" not in query:
+            fallback_query = dict(query)
+            fallback_query["key"] = self.cfg.secret_key
+            response = self.session.request(
+                method=method,
+                url=self.cfg.server_url,
+                params=fallback_query,
+                timeout=self.cfg.request_timeout,
+                **kwargs,
+            )
         response.raise_for_status()
         ctype = response.headers.get("Content-Type", "").lower()
         if "application/json" in ctype:
@@ -164,6 +191,10 @@ class HeartbeatThread(threading.Thread):
                 logging.exception("Heartbeat failed for job %s", self.job_id)
 
 
+class JobCancelledError(RuntimeError):
+    pass
+
+
 def parse_input_data(raw_value) -> dict:
     if raw_value is None:
         return {}
@@ -179,7 +210,7 @@ def parse_input_data(raw_value) -> dict:
         return {}
 
 
-def process_job(client: QueueClient, cfg: Config, job: dict) -> None:
+def process_job(client: QueueClient, cfg: Config, store: QueueMonitorStore, job: dict) -> None:
     job_id = int(job["id"])
     job_type = str(job.get("type", ""))
     handler = HANDLERS.get(job_type)
@@ -187,34 +218,106 @@ def process_job(client: QueueClient, cfg: Config, job: dict) -> None:
         client.fail(job_id, f"Unsupported job type: {job_type}")
         return
 
-    logging.info("Claimed job id=%s type=%s", job_id, job_type)
+    input_data = parse_input_data(job.get("input_data"))
+    handoff = normalize_handoff_metadata(job=job, input_data=input_data)
+    trace_id = handoff["trace_id"]
+
+    logging.info(
+        "Claimed job id=%s type=%s trace_id=%s source=%s",
+        job_id,
+        job_type,
+        trace_id,
+        handoff["source_system"],
+    )
+    store.upsert_job(
+        job_id,
+        job_type=job_type,
+        trace_id=trace_id,
+        source_system=handoff["source_system"],
+        input_filename=str(job.get("input_filename") or ""),
+        status="claimed",
+        message="Job claimed by worker",
+        progress_pct=1,
+        stage="claimed",
+        worker_id=cfg.worker_id,
+    )
+    store.append_event("Job claimed", job_id=job_id)
     work_dir = Path(tempfile.mkdtemp(prefix=f"queue_job_{job_id}_", dir=str(cfg.temp_dir)))
     input_path: Optional[Path] = None
 
     hb = HeartbeatThread(client, job_id, cfg.heartbeat_interval)
     hb.start()
     try:
+        if store.is_cancel_requested(job_id):
+            raise JobCancelledError("Cancelled before processing started")
+
         input_filename = str(job.get("input_filename", "") or "")
         if input_filename:
+            store.upsert_job(job_id, status="processing", stage="download_input", message="Downloading input", progress_pct=5)
             input_path = work_dir / input_filename
             downloaded = client.download_input(job_id, input_path)
             if downloaded is None:
                 raise RuntimeError("Failed to download input file")
             input_path = downloaded
             logging.info("Downloaded input to %s", input_path)
+            store.append_event(f"Downloaded input: {input_path.name}", job_id=job_id)
+            if store.is_cancel_requested(job_id):
+                raise JobCancelledError("Cancelled after input download")
 
-        input_data = parse_input_data(job.get("input_data"))
-        result = handler(input_path=input_path, input_data=input_data, job=job)
+        def _progress_cb(progress_pct: float, message: str, stage: Optional[str] = None) -> None:
+            pct = max(0, min(100, int(progress_pct)))
+            update_stage = stage or "processing"
+            store.upsert_job(
+                job_id,
+                status="processing",
+                stage=update_stage,
+                message=str(message or "").strip()[:500],
+                progress_pct=pct,
+            )
+            if message:
+                store.append_event(str(message), level="info", job_id=job_id)
+            if store.is_cancel_requested(job_id):
+                raise JobCancelledError("Cancelled by operator")
+
+        store.upsert_job(job_id, status="processing", stage="handler_start", message="Running handler", progress_pct=10)
+
+        handler_kwargs = {"input_path": input_path, "input_data": input_data, "job": job}
+        handler_params = set(inspect.signature(handler).parameters.keys())
+        if "progress_cb" in handler_params:
+            handler_kwargs["progress_cb"] = _progress_cb
+        if "is_cancelled_cb" in handler_params:
+            handler_kwargs["is_cancelled_cb"] = lambda: store.is_cancel_requested(job_id)
+
+        result = handler(**handler_kwargs)
         output_data = result.get("output_data", {}) if isinstance(result, dict) else {}
         output_file = result.get("output_file") if isinstance(result, dict) else None
         output_file = Path(output_file) if output_file else None
+        if not isinstance(output_data, dict):
+            output_data = {"result": output_data}
+        output_data["_handoff"] = handoff
 
+        if store.is_cancel_requested(job_id):
+            raise JobCancelledError("Cancelled before completion upload")
+
+        store.upsert_job(job_id, status="uploading_result", stage="complete", message="Uploading result", progress_pct=95)
         client.complete(job_id, output_data=output_data, output_file=output_file)
-        logging.info("Completed job id=%s", job_id)
-    except Exception as e:
-        logging.exception("Job id=%s failed", job_id)
+        logging.info("Completed job id=%s trace_id=%s", job_id, trace_id)
+        store.upsert_job(job_id, status="completed", stage="done", message="Completed", progress_pct=100)
+        store.append_event("Job completed", level="info", job_id=job_id)
+    except JobCancelledError as e:
+        logging.warning("Job id=%s trace_id=%s cancelled: %s", job_id, trace_id, e)
+        store.upsert_job(job_id, status="cancelled", stage="cancelled", message=str(e), progress_pct=100)
+        store.append_event(f"Job cancelled: {e}", level="warning", job_id=job_id)
         try:
-            client.fail(job_id, str(e))
+            client.fail(job_id, f"[trace_id={trace_id}] Cancelled by operator: {str(e)}")
+        except Exception:
+            logging.exception("Failed to submit cancel status for job id=%s", job_id)
+    except Exception as e:
+        logging.exception("Job id=%s trace_id=%s failed", job_id, trace_id)
+        store.upsert_job(job_id, status="failed", stage="failed", message=str(e)[:500], progress_pct=100)
+        store.append_event(f"Job failed: {e}", level="error", job_id=job_id)
+        try:
+            client.fail(job_id, f"[trace_id={trace_id}] {str(e)}")
         except Exception:
             logging.exception("Failed to submit fail status for job id=%s", job_id)
     finally:
@@ -239,6 +342,16 @@ def main() -> int:
     )
 
     client = QueueClient(cfg)
+    store = QueueMonitorStore(cfg.queue_monitor_state_path)
+    store.set_worker(
+        status="running",
+        worker_id=cfg.worker_id,
+        supported_types=cfg.supported_types,
+        poll_interval=cfg.poll_interval,
+        server_url=cfg.server_url,
+        pid=os.getpid(),
+    )
+    store.append_event("Queue worker started", level="info")
     stop_event = threading.Event()
 
     def _stop(*_args):
@@ -251,20 +364,27 @@ def main() -> int:
         try:
             job = client.poll()
             if not job:
+                store.set_worker(status="idle", worker_id=cfg.worker_id)
                 time.sleep(cfg.poll_interval)
                 continue
-            process_job(client, cfg, job)
+            store.set_worker(status="processing", worker_id=cfg.worker_id)
+            process_job(client, cfg, store, job)
         except requests.HTTPError as e:
             logging.error("HTTP error while polling/processing: %s", e)
+            store.append_event(f"HTTP error: {e}", level="error")
+            store.set_worker(status="error", worker_id=cfg.worker_id)
             time.sleep(cfg.poll_interval)
         except Exception:
             logging.exception("Worker loop error")
+            store.append_event("Worker loop error", level="error")
+            store.set_worker(status="error", worker_id=cfg.worker_id)
             time.sleep(cfg.poll_interval)
 
     logging.info("Queue worker stopped")
+    store.set_worker(status="stopped", worker_id=cfg.worker_id)
+    store.append_event("Queue worker stopped", level="info")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

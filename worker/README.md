@@ -4,17 +4,14 @@ This folder contains the local/offline queue worker for the website work queue A
 
 ## Files
 - `worker.py`: Main polling worker loop.
-- `config.env.example`: Template configuration.
+- `config.env`: Worker configuration for queue API and polling.
 - `handlers/__init__.py`: Job-type handler registry.
 - `handlers/pdf_anonymise.py`: `pdf_anonymise` handler (reuses `cortex_engine.anonymizer`).
+- `handlers/pdf_textify.py`: `pdf_textify` handler (reuses `cortex_engine.textifier`).
 
 ## Setup
-1. Copy config template:
-```bash
-cp worker/config.env.example worker/config.env
-```
-2. Edit `worker/config.env` with your server URL and queue secret.
-3. Install dependencies in your venv:
+1. Edit `worker/config.env` with your server URL and queue secret.
+2. Install dependencies in your venv:
 ```bash
 pip install requests pymupdf
 ```
@@ -35,9 +32,11 @@ venv/bin/python worker/worker.py
 
 ## Current Supported Job Types
 - `pdf_anonymise`
+- `pdf_textify`
 
 ## Notes
+- Worker telemetry is written to `worker/tmp/queue_monitor_state.json` by default.
+- Queue monitor UI is available in Streamlit at `pages/16_Queue_Monitor.py`.
 - The `pdf_anonymise` worker handler intentionally calls the existing Cortex engine anonymizer:
   - `cortex_engine.anonymizer.DocumentAnonymizer`
 - This avoids duplicate anonymization logic between the admin queue worker path and Document Extract UI.
-

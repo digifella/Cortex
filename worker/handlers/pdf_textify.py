@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from cortex_engine.textifier import DocumentTextifier
 
 logger = logging.getLogger(__name__)
 
 
-def handle(input_path: Optional[Path], input_data: dict, job: dict) -> dict:
+def handle(
+    input_path: Optional[Path],
+    input_data: dict,
+    job: dict,
+    progress_cb: Optional[Callable[[float, str, Optional[str]], None]] = None,
+    is_cancelled_cb: Optional[Callable[[], bool]] = None,
+) -> dict:
     """
     Document-to-Markdown handler.
 
@@ -37,9 +43,22 @@ def handle(input_path: Optional[Path], input_data: dict, job: dict) -> dict:
         mode,
         use_vision,
     )
+    if progress_cb:
+        progress_cb(15, "Starting textification", "textify_start")
+    if is_cancelled_cb and is_cancelled_cb():
+        raise RuntimeError("Cancelled before textification started")
 
-    textifier = DocumentTextifier.from_options(options)
+    textifier = DocumentTextifier.from_options(
+        options,
+        on_progress=(lambda frac, msg: progress_cb(15 + max(0, min(70, int(frac * 70))), msg, "textify_processing"))
+        if progress_cb
+        else None,
+    )
     markdown_text = textifier.textify_file(str(input_path))
+    if is_cancelled_cb and is_cancelled_cb():
+        raise RuntimeError("Cancelled after textification")
+    if progress_cb:
+        progress_cb(90, "Writing markdown output", "write_output")
 
     if not markdown_text or not markdown_text.strip():
         raise RuntimeError(f"Textifier returned empty output for {input_path.name}")
@@ -74,5 +93,7 @@ def handle(input_path: Optional[Path], input_data: dict, job: dict) -> dict:
         heading_count,
         table_count,
     )
+    if progress_cb:
+        progress_cb(100, "Textification complete", "done")
 
     return {"output_data": output_data, "output_file": output_path}
