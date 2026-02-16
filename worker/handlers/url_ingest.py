@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from cortex_engine.handoff_contract import validate_url_ingest_input
 from cortex_engine.url_ingestor import URLIngestor, normalize_url_list
 
 
@@ -58,7 +59,7 @@ def handle(
     - input_data.timeout_seconds: int (optional)
     - input_data.<textify options>: top-level advanced options forwarded to DocumentTextifier
     """
-    payload = dict(input_data or {})
+    payload = validate_url_ingest_input(input_data or {})
     ingest_options = dict(payload.get("ingest_options") or {})
 
     urls = _extract_urls(payload)
@@ -68,7 +69,7 @@ def handle(
     convert_to_md = bool(ingest_options.get("convert_to_md", False))
     use_vision_for_md = bool(ingest_options.get("use_vision", False))
     capture_web_md_on_no_pdf = bool(ingest_options.get("capture_web_md_on_no_pdf", True))
-    timeout_seconds = int(payload.get("timeout_seconds") or ingest_options.get("timeout_seconds") or 25)
+    timeout_seconds = int(payload.get("timeout_seconds") or 25)
     textify_options = _extract_textify_options(payload)
 
     base_dir = input_path.parent if input_path else Path(tempfile.gettempdir())

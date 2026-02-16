@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import Callable, Optional
 
+from cortex_engine.handoff_contract import validate_pdf_textify_input
 from cortex_engine.textifier import DocumentTextifier
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,8 @@ def handle(
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    options = dict((input_data or {}).get("textify_options") or {})
+    payload = validate_pdf_textify_input(input_data or {})
+    options = dict(payload.get("textify_options") or {})
     mode = str(options.get("pdf_strategy", "hybrid")).strip().lower() or "hybrid"
     use_vision = bool(options.get("use_vision", True))
 
