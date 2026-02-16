@@ -9,7 +9,7 @@ HANDOFF_CONTRACT_VERSION = "2026-02-15.v1"
 DEFAULT_TENANT_ID = "default"
 DEFAULT_PROJECT_ID = "default"
 
-SUPPORTED_JOB_TYPES = ["pdf_anonymise", "pdf_textify", "url_ingest", "portal_ingest"]
+SUPPORTED_JOB_TYPES = ["pdf_anonymise", "pdf_textify", "url_ingest", "portal_ingest", "cortex_sync"]
 
 SUPPORTED_ANONYMIZER_OPTIONS = [
     "redact_people",
@@ -234,4 +234,25 @@ def validate_portal_ingest_input(input_data: Optional[Dict[str, Any]] = None) ->
     if payload["chunk_min_chars"] > payload["chunk_target_chars"]:
         raise ValueError("chunk_min_chars must be <= chunk_target_chars")
 
+    return payload
+
+
+def validate_cortex_sync_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(input_data or {})
+
+    file_paths = payload.get("file_paths")
+    if not isinstance(file_paths, list) or not file_paths:
+        raise ValueError("cortex_sync requires 'file_paths' (non-empty list)")
+    normalized_paths = [str(p).strip() for p in file_paths if str(p).strip()]
+    if not normalized_paths:
+        raise ValueError("cortex_sync requires 'file_paths' (non-empty list)")
+    payload["file_paths"] = normalized_paths
+
+    collection_name = str(payload.get("collection_name") or "").strip()
+    if not collection_name:
+        raise ValueError("cortex_sync requires 'collection_name'")
+    payload["collection_name"] = collection_name
+
+    payload["topic"] = str(payload.get("topic") or "").strip()
+    payload["fresh"] = _coerce_bool(payload.get("fresh"), False)
     return payload

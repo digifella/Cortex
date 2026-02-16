@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from cortex_engine.handoff_contract import (
+    validate_cortex_sync_input,
     validate_pdf_textify_input,
     validate_portal_ingest_input,
     validate_url_ingest_input,
@@ -127,3 +128,23 @@ def test_portal_ingest_rejects_invalid_chunk_bounds():
                 "chunk_min_chars": 200,
             }
         )
+
+
+def test_cortex_sync_validates_required_fields():
+    payload = validate_cortex_sync_input(
+        {
+            "file_paths": [" /tmp/a.md ", "/tmp/b.md"],
+            "collection_name": "Website - OECD",
+            "fresh": "1",
+        }
+    )
+    assert payload["file_paths"] == ["/tmp/a.md", "/tmp/b.md"]
+    assert payload["collection_name"] == "Website - OECD"
+    assert payload["fresh"] is True
+
+
+def test_cortex_sync_rejects_missing_fields():
+    with pytest.raises(ValueError, match="file_paths"):
+        validate_cortex_sync_input({"collection_name": "x"})
+    with pytest.raises(ValueError, match="collection_name"):
+        validate_cortex_sync_input({"file_paths": ["/tmp/a.md"]})
