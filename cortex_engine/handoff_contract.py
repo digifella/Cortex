@@ -222,4 +222,16 @@ def validate_portal_ingest_input(input_data: Optional[Dict[str, Any]] = None) ->
         str(tenant_id).strip() if tenant_id is not None and str(tenant_id).strip() else DEFAULT_TENANT_ID
     )
 
+    payload["chunk_target_chars"] = _coerce_positive_int(
+        payload.get("chunk_target_chars"), 2000, "chunk_target_chars"
+    )
+    payload["chunk_min_chars"] = _coerce_positive_int(
+        payload.get("chunk_min_chars"), 200, "chunk_min_chars"
+    )
+    payload["max_chunks"] = _coerce_positive_int(
+        payload.get("max_chunks"), 250, "max_chunks"
+    )
+    if payload["chunk_min_chars"] > payload["chunk_target_chars"]:
+        raise ValueError("chunk_min_chars must be <= chunk_target_chars")
+
     return payload

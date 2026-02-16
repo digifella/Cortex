@@ -10,12 +10,19 @@ from cortex_engine.textifier import DocumentTextifier
 
 logger = logging.getLogger(__name__)
 
-# Target ~500 tokens per chunk (~2000 chars)
-CHUNK_TARGET_CHARS = 2000
-CHUNK_MIN_CHARS = 200
+# Default target ~500 tokens per chunk (~2000 chars)
+DEFAULT_CHUNK_TARGET_CHARS = 2000
+DEFAULT_CHUNK_MIN_CHARS = 200
+DEFAULT_MAX_CHUNKS = 250
 
 
-def chunk_text(text: str) -> list[dict]:
+def chunk_text(
+    text: str,
+    chunk_target_chars: int = DEFAULT_CHUNK_TARGET_CHARS,
+    chunk_min_chars: int = DEFAULT_CHUNK_MIN_CHARS,
+    max_chunks: int = DEFAULT_MAX_CHUNKS,
+    is_cancelled_cb: Optional[Callable[[], bool]] = None,
+) -> list[dict]:
     """Split text into chunks by paragraphs/sections, targeting ~500 tokens each."""
     if not text or not text.strip():
         return []
@@ -33,15 +40,20 @@ def chunk_text(text: str) -> list[dict]:
         is_heading = block.startswith("#")
 
         # If adding this block exceeds target, flush current.
-        if current and (len(current) + len(block) > CHUNK_TARGET_CHARS or is_heading):
-            if len(current.strip()) >= CHUNK_MIN_CHARS:
+        if is_cancelled_cb and is_cancelled_cb():
+            raise RuntimeError("Cancelled during chunking")
+
+        if current and (len(current) + len(block) > chunk_target_chars or is_heading):
+            if len(current.strip()) >= chunk_min_chars:
                 chunks.append(current.strip())
+                if len(chunks) >= max_chunks:
+                    break
             current = ""
 
         current += ("\n\n" if current else "") + block
 
     # Flush remaining.
-    if current.strip() and len(current.strip()) >= CHUNK_MIN_CHARS:
+    if current.strip() and len(current.strip()) >= chunk_min_chars and len(chunks) < max_chunks:
         chunks.append(current.strip())
     elif current.strip() and chunks:
         # Append short trailing text to last chunk.
@@ -69,6 +81,9 @@ def handle(
     then chunks the text for storage in the portal knowledge base.
     """
     payload = validate_portal_ingest_input(input_data or {})
+    chunk_target_chars = int(payload.get("chunk_target_chars", DEFAULT_CHUNK_TARGET_CHARS))
+    chunk_min_chars = int(payload.get("chunk_min_chars", DEFAULT_CHUNK_MIN_CHARS))
+    max_chunks = int(payload.get("max_chunks", DEFAULT_MAX_CHUNKS))
 
     if input_path is None:
         raise ValueError("portal_ingest requires an input file")
@@ -116,7 +131,13 @@ def handle(
     if progress_cb:
         progress_cb(70, "Chunking text", "chunking")
 
-    chunks = chunk_text(markdown_text)
+    chunks = chunk_text(
+        markdown_text,
+        chunk_target_chars=chunk_target_chars,
+        chunk_min_chars=chunk_min_chars,
+        max_chunks=max_chunks,
+        is_cancelled_cb=is_cancelled_cb,
+    )
 
     if progress_cb:
         progress_cb(90, f"Generated {len(chunks)} chunks", "chunks_ready")
@@ -134,6 +155,9 @@ def handle(
         "source_filename": input_path.name,
         "total_chars": len(markdown_text),
         "chunk_count": len(chunks),
+        "chunk_target_chars": chunk_target_chars,
+        "chunk_min_chars": chunk_min_chars,
+        "max_chunks": max_chunks,
         "portal_document_id": payload.get("portal_document_id"),
         "project_id": payload.get("project_id"),
         "tenant_id": payload.get("tenant_id"),
