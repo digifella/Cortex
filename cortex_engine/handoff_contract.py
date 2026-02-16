@@ -6,8 +6,10 @@ from typing import Any, Dict, Optional, Tuple
 import uuid
 
 HANDOFF_CONTRACT_VERSION = "2026-02-15.v1"
+DEFAULT_TENANT_ID = "default"
+DEFAULT_PROJECT_ID = "default"
 
-SUPPORTED_JOB_TYPES = ["pdf_anonymise", "pdf_textify", "url_ingest"]
+SUPPORTED_JOB_TYPES = ["pdf_anonymise", "pdf_textify", "url_ingest", "portal_ingest"]
 
 SUPPORTED_ANONYMIZER_OPTIONS = [
     "redact_people",
@@ -62,12 +64,20 @@ def normalize_handoff_metadata(
     source_system = str(
         input_data.get("source_system") or job.get("source_system") or "website"
     ).strip()
+    tenant_id = str(
+        input_data.get("tenant_id") or job.get("tenant_id") or DEFAULT_TENANT_ID
+    ).strip() or DEFAULT_TENANT_ID
+    project_id = str(
+        input_data.get("project_id") or job.get("project_id") or DEFAULT_PROJECT_ID
+    ).strip() or DEFAULT_PROJECT_ID
 
     return {
         "contract_version": HANDOFF_CONTRACT_VERSION,
         "trace_id": trace_id,
         "idempotency_key": idempotency_key,
         "source_system": source_system,
+        "tenant_id": tenant_id,
+        "project_id": project_id,
     }
 
 
