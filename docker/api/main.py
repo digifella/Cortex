@@ -23,9 +23,18 @@ from cortex_engine.async_query import AsyncSearchEngine, AsyncQueryConfig, Async
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.collection_manager import WorkingCollectionManager
 from cortex_engine.utils.logging_utils import get_logger
-from cortex_engine.utils.path_utils import convert_windows_to_wsl_path
+from cortex_engine.utils.path_utils import convert_to_docker_mount_path
 from cortex_engine.exceptions import *
 from cortex_engine.backup_manager import BackupManager, BackupMetadata, RestoreMetadata
+from cortex_engine.handoff_contract import (
+    HANDOFF_CONTRACT_VERSION,
+    SUPPORTED_ANONYMIZER_OPTIONS,
+    SUPPORTED_JOB_TYPES,
+    normalize_handoff_metadata,
+    validate_pdf_textify_input,
+    validate_portal_ingest_input,
+    validate_url_ingest_input,
+)
 
 # Configure logging
 logger = get_logger(__name__)
@@ -140,6 +149,32 @@ class BackupInfo(BaseModel):
     checksum: str
     description: Optional[str] = None
 
+
+class IntegrationHandshakeResponse(BaseModel):
+    contract_version: str
+    service: str
+    timestamp: str
+    capabilities: Dict[str, Any]
+
+
+class HandoffValidationRequest(BaseModel):
+    source_system: str = Field(..., description="Calling system, e.g. website")
+    operation: str = Field(..., description="Operation name, e.g. queue_job")
+    trace_id: Optional[str] = Field(None, description="Cross-system trace ID")
+    idempotency_key: Optional[str] = Field(None, description="Idempotency key for de-duplication")
+    tenant_id: Optional[str] = Field(None, description="Tenant scope (single-tenant default: 'default')")
+    project_id: Optional[str] = Field(None, description="Project scope (single-tenant default: 'default')")
+    payload: Dict[str, Any] = Field(default_factory=dict, description="Operation payload")
+
+
+class HandoffValidationResponse(BaseModel):
+    accepted: bool
+    contract_version: str
+    operation: str
+    issues: List[str]
+    handoff_metadata: Dict[str, str]
+    timestamp: str
+
 # Startup and shutdown events
 
 @app.on_event("startup")
@@ -154,7 +189,7 @@ async def startup_event():
         config_manager = ConfigManager()
         config = config_manager.get_config()
         from cortex_engine.utils.default_paths import get_default_ai_database_path
-        db_path = convert_windows_to_wsl_path(config.get('ai_database_path', get_default_ai_database_path()))
+        db_path = convert_to_docker_mount_path(config.get('ai_database_path', get_default_ai_database_path()))
         
         # Ensure database directory exists
         os.makedirs(db_path, exist_ok=True)
@@ -185,11 +220,40 @@ def get_db_path() -> str:
     return db_path
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify API token (implement your authentication logic)"""
-    # TODO: Implement proper authentication
-    # For now, just log the request
-    if credentials:
-        logger.debug(f"API request with token: {credentials.credentials[:10]}...")
+    """
+    Verify API token using environment configuration.
+
+    - If `CORTEX_API_TOKEN` is set, bearer auth is required.
+    - If `CORTEX_API_AUTH_REQUIRED=true`, bearer auth is required even if token is missing
+      (treated as server misconfiguration).
+    - Otherwise auth is optional for local development.
+    """
+    configured_token = os.getenv("CORTEX_API_TOKEN", "").strip()
+    auth_required = os.getenv("CORTEX_API_AUTH_REQUIRED", "false").strip().lower() in {"1", "true", "yes"}
+
+    if not configured_token and not auth_required:
+        return True
+
+    if not credentials:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not configured_token:
+        raise HTTPException(
+            status_code=500,
+            detail="API auth required but CORTEX_API_TOKEN is not configured",
+        )
+
+    if credentials.credentials != configured_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     return True
 
 # Health and status endpoints
@@ -232,6 +296,90 @@ async def get_system_status(db_path: str = Depends(get_db_path)):
     except Exception as e:
         logger.error(f"Error getting system status: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get system status: {str(e)}")
+
+
+@app.get("/integration/handshake", response_model=IntegrationHandshakeResponse, tags=["Integration"])
+async def integration_handshake(_: bool = Depends(verify_token)):
+    """Return handoff contract metadata for website<->cortex integration."""
+    return IntegrationHandshakeResponse(
+        contract_version=HANDOFF_CONTRACT_VERSION,
+        service="cortex-suite-api",
+        timestamp=datetime.now().isoformat(),
+        capabilities={
+            "queue_job_types": SUPPORTED_JOB_TYPES,
+            "anonymizer_options": SUPPORTED_ANONYMIZER_OPTIONS,
+            "supports_trace_id": True,
+            "supports_idempotency_key": True,
+            "supports_tenant_project_scope": True,
+            "default_tenant_id": "default",
+            "default_project_id": "default",
+        },
+    )
+
+
+@app.post("/integration/handoff/validate", response_model=HandoffValidationResponse, tags=["Integration"])
+async def validate_handoff_contract(
+    request: HandoffValidationRequest,
+    _: bool = Depends(verify_token),
+):
+    """Validate website->cortex handoff payloads before runtime execution."""
+    issues: List[str] = []
+    operation = request.operation.strip()
+    source_system = request.source_system.strip()
+
+    if not source_system:
+        issues.append("source_system is required")
+    if not operation:
+        issues.append("operation is required")
+
+    payload = request.payload or {}
+    if operation == "queue_job":
+        job_type = str(payload.get("type", "")).strip()
+        if not job_type:
+            issues.append("payload.type is required for queue_job")
+        elif job_type not in SUPPORTED_JOB_TYPES:
+            issues.append(f"payload.type '{job_type}' is unsupported")
+        else:
+            input_data = payload.get("input_data")
+            if isinstance(input_data, str):
+                try:
+                    input_data = json.loads(input_data)
+                except Exception:
+                    input_data = {}
+            if input_data is None:
+                input_data = {}
+            if not isinstance(input_data, dict):
+                issues.append("payload.input_data must be an object or JSON object string")
+            else:
+                try:
+                    if job_type == "pdf_textify":
+                        validate_pdf_textify_input(input_data)
+                    elif job_type == "url_ingest":
+                        validate_url_ingest_input(input_data)
+                    elif job_type == "portal_ingest":
+                        validate_portal_ingest_input(input_data)
+                except ValueError as e:
+                    issues.append(str(e))
+
+    handoff_metadata = normalize_handoff_metadata(
+        job={
+            "source_system": source_system,
+            "trace_id": request.trace_id,
+            "idempotency_key": request.idempotency_key,
+            "tenant_id": request.tenant_id,
+            "project_id": request.project_id,
+        },
+        input_data=payload,
+    )
+
+    return HandoffValidationResponse(
+        accepted=len(issues) == 0,
+        contract_version=HANDOFF_CONTRACT_VERSION,
+        operation=operation,
+        issues=issues,
+        handoff_metadata=handoff_metadata,
+        timestamp=datetime.now().isoformat(),
+    )
 
 # Search endpoints
 
@@ -664,4 +812,8 @@ async def verify_backup(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app,
+        host=os.getenv("CORTEX_API_HOST", "127.0.0.1"),
+        port=int(os.getenv("CORTEX_API_PORT", "8000")),
+    )

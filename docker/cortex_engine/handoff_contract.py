@@ -201,3 +201,25 @@ def validate_url_ingest_input(input_data: Optional[Dict[str, Any]] = None) -> Di
     top_level_textify = {k: payload[k] for k in SUPPORTED_TEXTIFY_OPTION_KEYS if k in payload}
     payload["textify_options"] = normalize_textify_options(top_level_textify)
     return payload
+
+
+def validate_portal_ingest_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(input_data or {})
+
+    portal_document_id = payload.get("portal_document_id")
+    if portal_document_id is None or str(portal_document_id).strip() == "":
+        payload["portal_document_id"] = ""
+    else:
+        payload["portal_document_id"] = str(portal_document_id).strip()
+
+    project_id = payload.get("project_id")
+    payload["project_id"] = (
+        str(project_id).strip() if project_id is not None and str(project_id).strip() else DEFAULT_PROJECT_ID
+    )
+
+    tenant_id = payload.get("tenant_id")
+    payload["tenant_id"] = (
+        str(tenant_id).strip() if tenant_id is not None and str(tenant_id).strip() else DEFAULT_TENANT_ID
+    )
+
+    return payload

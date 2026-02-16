@@ -4,6 +4,7 @@ import pytest
 
 from cortex_engine.handoff_contract import (
     validate_pdf_textify_input,
+    validate_portal_ingest_input,
     validate_url_ingest_input,
 )
 
@@ -87,3 +88,23 @@ def test_url_ingest_coerces_booleans_timeout_and_textify():
     assert payload["timeout_seconds"] == 35
     assert payload["textify_options"]["pdf_strategy"] == "hybrid"
     assert payload["textify_options"]["docling_timeout_seconds"] == 240.0
+
+
+def test_portal_ingest_defaults_scope_fields():
+    payload = validate_portal_ingest_input({})
+    assert payload["portal_document_id"] == ""
+    assert payload["project_id"] == "default"
+    assert payload["tenant_id"] == "default"
+
+
+def test_portal_ingest_normalizes_supplied_scope_fields():
+    payload = validate_portal_ingest_input(
+        {
+            "portal_document_id": 12345,
+            "project_id": "project-alpha",
+            "tenant_id": "tenant-a",
+        }
+    )
+    assert payload["portal_document_id"] == "12345"
+    assert payload["project_id"] == "project-alpha"
+    assert payload["tenant_id"] == "tenant-a"

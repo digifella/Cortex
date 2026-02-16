@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Callable, Optional
 
+from cortex_engine.handoff_contract import validate_portal_ingest_input
 from cortex_engine.textifier import DocumentTextifier
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,8 @@ def handle(
     Parses a document (PDF, DOCX, PPTX, MD, TXT) into text via Docling/Textifier,
     then chunks the text for storage in the portal knowledge base.
     """
+    payload = validate_portal_ingest_input(input_data or {})
+
     if input_path is None:
         raise ValueError("portal_ingest requires an input file")
     if not input_path.exists():
@@ -131,8 +134,9 @@ def handle(
         "source_filename": input_path.name,
         "total_chars": len(markdown_text),
         "chunk_count": len(chunks),
-        "portal_document_id": input_data.get("portal_document_id"),
-        "project_id": input_data.get("project_id"),
+        "portal_document_id": payload.get("portal_document_id"),
+        "project_id": payload.get("project_id"),
+        "tenant_id": payload.get("tenant_id"),
     }
 
     if progress_cb:
