@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import getpass
+import zipfile
 from argparse import Namespace
 from pathlib import Path
 from typing import Callable, Optional
@@ -76,6 +77,30 @@ def _resolve_existing_path(raw_path: str) -> str:
     return normalized
 
 
+def _collect_files_from_input_payload(input_path: Optional[Path]) -> list[str]:
+    """Collect file paths from downloaded queue input payload if present."""
+    if not input_path or not input_path.exists():
+        return []
+
+    suffix = input_path.suffix.lower()
+    if suffix == ".zip":
+        extract_dir = input_path.parent / f"{input_path.stem}_extract"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(input_path, "r") as zf:
+            zf.extractall(extract_dir)
+        candidates = []
+        for p in extract_dir.rglob("*"):
+            if not p.is_file():
+                continue
+            if p.suffix.lower() in {".md", ".txt", ".pdf", ".docx", ".pptx"}:
+                candidates.append(str(p))
+        return sorted(candidates)
+
+    if suffix in {".md", ".txt", ".pdf", ".docx", ".pptx"}:
+        return [str(input_path)]
+    return []
+
+
 def _load_doc_id_map(processed_log_path: str) -> dict[str, str]:
     """
     Read ingested_files.log.
@@ -145,11 +170,18 @@ def handle(
     topic = str(payload.get("topic") or "").strip()
     fresh = bool(payload.get("fresh", False))
 
+    uploaded_files = _collect_files_from_input_payload(input_path)
+    if uploaded_files:
+        logger.info("cortex_sync discovered %d file(s) in uploaded queue payload", len(uploaded_files))
+    candidate_paths = list(dict.fromkeys(file_paths + uploaded_files))
+    if not candidate_paths:
+        raise ValueError("cortex_sync requires either input_data.file_paths or an uploaded input file payload")
+
     # Validate files exist on disk.
     valid_paths: list[str] = []
     errors: list[dict[str, str]] = []
     missing_paths: list[str] = []
-    for fp in file_paths:
+    for fp in candidate_paths:
         normalized = _resolve_existing_path(fp)
         if normalized and os.path.exists(normalized):
             valid_paths.append(normalized)
@@ -165,7 +197,7 @@ def handle(
         ).strip()
         topics = _list_local_topic_dirs()
         hint = (
-            f"None of the {len(file_paths)} files exist on disk. "
+            f"None of the {len(candidate_paths)} files exist on disk. "
             f"Configured CORTEX_SYNC_SITE_ROOT='{site_root}'. "
             f"Local topic dirs: {topics if topics else 'none found'}; "
             f"missing sample: {missing_paths[:3]}"
@@ -289,7 +321,8 @@ def handle(
             "collection_name": collection_name,
             "topic": topic,
             "errors": errors,
-            "submitted_files": len(file_paths),
+            "submitted_files": len(candidate_paths),
             "validated_files": len(valid_paths),
+            "uploaded_files": len(uploaded_files),
         }
     }

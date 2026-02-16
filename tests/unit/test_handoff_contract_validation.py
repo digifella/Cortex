@@ -144,7 +144,7 @@ def test_cortex_sync_validates_required_fields():
 
 
 def test_cortex_sync_rejects_missing_fields():
-    with pytest.raises(ValueError, match="file_paths"):
-        validate_cortex_sync_input({"collection_name": "x"})
+    payload = validate_cortex_sync_input({"collection_name": "x"})
+    assert payload["file_paths"] == []
     with pytest.raises(ValueError, match="collection_name"):
         validate_cortex_sync_input({"file_paths": ["/tmp/a.md"]})
