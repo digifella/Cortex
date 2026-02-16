@@ -33,6 +33,7 @@ venv/bin/python worker/worker.py
 ## Current Supported Job Types
 - `pdf_anonymise`
 - `pdf_textify`
+- `url_ingest`
 
 ## Notes
 - Worker telemetry is written to `worker/tmp/queue_monitor_state.json` by default.

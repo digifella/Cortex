@@ -7,7 +7,7 @@ import uuid
 
 HANDOFF_CONTRACT_VERSION = "2026-02-15.v1"
 
-SUPPORTED_JOB_TYPES = ["pdf_anonymise", "pdf_textify"]
+SUPPORTED_JOB_TYPES = ["pdf_anonymise", "pdf_textify", "url_ingest"]
 
 SUPPORTED_ANONYMIZER_OPTIONS = [
     "redact_people",
