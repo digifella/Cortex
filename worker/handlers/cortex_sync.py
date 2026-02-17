@@ -85,7 +85,7 @@ def handle(
     """
     payload = validate_cortex_sync_input(input_data or {})
     manifest = payload.get("manifest") or []
-    collection_name = str(payload.get("collection_name") or "Website - All Topics").strip()
+    collection_name = str(payload.get("collection_name") or "default").strip() or "default"
     topic = str(payload.get("topic") or "").strip()
     fresh = bool(payload.get("fresh", False))
 

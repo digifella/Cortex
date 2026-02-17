@@ -146,8 +146,8 @@ def test_cortex_sync_validates_required_fields():
 def test_cortex_sync_rejects_missing_fields():
     payload = validate_cortex_sync_input({"collection_name": "x"})
     assert payload["file_paths"] == []
-    with pytest.raises(ValueError, match="collection_name"):
-        validate_cortex_sync_input({"file_paths": ["/tmp/a.md"]})
+    payload2 = validate_cortex_sync_input({"file_paths": ["/tmp/a.md"]})
+    assert payload2["collection_name"] == "default"
 
 
 def test_cortex_sync_accepts_manifest_mode():
@@ -159,6 +159,16 @@ def test_cortex_sync_accepts_manifest_mode():
     )
     assert payload["file_paths"] == []
     assert payload["manifest"][0]["zip_path"] == "digital-health/doc1.md"
+
+
+def test_cortex_sync_defaults_blank_collection_to_default():
+    payload = validate_cortex_sync_input(
+        {
+            "collection_name": "",
+            "manifest": [{"zip_path": "digital-health/doc1.md"}],
+        }
+    )
+    assert payload["collection_name"] == "default"
 
 
 def test_cortex_sync_rejects_bad_manifest():

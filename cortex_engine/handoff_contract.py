@@ -266,9 +266,7 @@ def validate_cortex_sync_input(input_data: Optional[Dict[str, Any]] = None) -> D
         payload["manifest"] = normalized_manifest
 
     collection_name = str(payload.get("collection_name") or "").strip()
-    if not collection_name:
-        raise ValueError("cortex_sync requires 'collection_name'")
-    payload["collection_name"] = collection_name
+    payload["collection_name"] = collection_name or "default"
 
     payload["topic"] = str(payload.get("topic") or "").strip()
     payload["fresh"] = _coerce_bool(payload.get("fresh"), False)
