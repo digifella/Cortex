@@ -3,102 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import os
-import getpass
 import zipfile
 from argparse import Namespace
 from pathlib import Path
 from typing import Callable, Optional
 
 from cortex_engine.handoff_contract import validate_cortex_sync_input
-from cortex_engine.utils.path_utils import convert_windows_to_wsl_path
 
 logger = logging.getLogger(__name__)
-
-
-def _list_local_topic_dirs() -> list[str]:
-    site_root = os.environ.get(
-        "CORTEX_SYNC_SITE_ROOT",
-        str(Path.home() / "longboardfella_website" / "site"),
-    ).strip()
-    knowledge_root = Path(site_root) / "chatbot" / "knowledge"
-    if not knowledge_root.exists():
-        return []
-    return sorted([p.name for p in knowledge_root.iterdir() if p.is_dir()])
-
-
-def _normalize_input_path(raw_path: str) -> str:
-    """Normalize path text to a usable local path in WSL/Linux."""
-    text = str(raw_path or "").strip()
-    if not text:
-        return text
-    try:
-        converted = convert_windows_to_wsl_path(text)
-        return str(Path(converted).expanduser())
-    except Exception:
-        return text
-
-
-def _resolve_existing_path(raw_path: str) -> str:
-    """
-    Resolve a submitted path to an existing local path.
-    Tries direct path, home-user remap, then public_html -> local site root remap.
-    """
-    normalized = _normalize_input_path(raw_path)
-    candidates: list[str] = []
-    if normalized:
-        candidates.append(normalized)
-
-    # Remap /home/<submitted_user>/... -> /home/<local_user>/...
-    parts = Path(normalized).parts if normalized else ()
-    if len(parts) >= 4 and parts[0] == "/" and parts[1] == "home":
-        tail = parts[3:]  # after /home/<user>/
-        local_user = getpass.getuser()
-        remapped = str(Path("/home") / local_user / Path(*tail))
-        if remapped not in candidates:
-            candidates.append(remapped)
-
-    # Remap cPanel style .../public_html/... into local website mirror root.
-    public_html_marker = "/public_html/"
-    if normalized and public_html_marker in normalized:
-        rel = normalized.split(public_html_marker, 1)[1].lstrip("/")
-        site_root = os.environ.get(
-            "CORTEX_SYNC_SITE_ROOT",
-            str(Path.home() / "longboardfella_website" / "site"),
-        ).strip()
-        remapped_site = str(Path(site_root) / rel)
-        if remapped_site not in candidates:
-            candidates.append(remapped_site)
-
-    for candidate in candidates:
-        if candidate and os.path.exists(candidate):
-            if candidate != normalized:
-                logger.info("cortex_sync remapped path: %s -> %s", raw_path, candidate)
-            return candidate
-    return normalized
-
-
-def _collect_files_from_input_payload(input_path: Optional[Path]) -> list[str]:
-    """Collect file paths from downloaded queue input payload if present."""
-    if not input_path or not input_path.exists():
-        return []
-
-    suffix = input_path.suffix.lower()
-    if suffix == ".zip":
-        extract_dir = input_path.parent / f"{input_path.stem}_extract"
-        extract_dir.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(input_path, "r") as zf:
-            zf.extractall(extract_dir)
-        candidates = []
-        for p in extract_dir.rglob("*"):
-            if not p.is_file():
-                continue
-            if p.suffix.lower() in {".md", ".txt", ".pdf", ".docx", ".pptx"}:
-                candidates.append(str(p))
-        return sorted(candidates)
-
-    if suffix in {".md", ".txt", ".pdf", ".docx", ".pptx"}:
-        return [str(input_path)]
-    return []
 
 
 def _load_doc_id_map(processed_log_path: str) -> dict[str, str]:
@@ -134,7 +46,7 @@ def _load_doc_id_map(processed_log_path: str) -> dict[str, str]:
         pass
 
     # Fallback legacy format: "path | doc_id" lines
-    result: dict[str, str] = {}
+    result2: dict[str, str] = {}
     for line in raw.splitlines():
         row = line.strip()
         if not row:
@@ -142,8 +54,8 @@ def _load_doc_id_map(processed_log_path: str) -> dict[str, str]:
         parts = [p.strip() for p in row.split("|", 1)]
         key = os.path.normpath(parts[0])
         value = parts[1] if len(parts) > 1 else ""
-        result[key] = value
-    return result
+        result2[key] = value
+    return result2
 
 
 def handle(
@@ -156,60 +68,72 @@ def handle(
     """
     Sync website knowledge documents into Cortex ChromaDB.
 
-    input_data contract:
+    The website ZIPs knowledge files (category/filename structure) and attaches
+    them as the job's input file. input_data carries a manifest mapping zip
+    paths to document metadata.
+
+    input_data contract (new — ZIP-based):
     {
-      "file_paths": ["/absolute/path/to/file.md", ...],
-      "collection_name": "Website - Wellbeing",
-      "topic": "wellbeing",
-      "fresh": false
+        "manifest": [
+            {"zip_path": "digital-health/file.md", "doc_id": 123, "source": "file", "category": "digital-health", "title": "..."},
+            ...
+        ],
+        "collection_name": "Website - Digital Health",
+        "topic": "digital-health",
+        "fresh": false
     }
     """
     payload = validate_cortex_sync_input(input_data or {})
-    file_paths = list(payload.get("file_paths") or [])
+    manifest = payload.get("manifest") or []
     collection_name = str(payload.get("collection_name") or "Website - All Topics").strip()
     topic = str(payload.get("topic") or "").strip()
     fresh = bool(payload.get("fresh", False))
 
-    uploaded_files = _collect_files_from_input_payload(input_path)
-    if uploaded_files:
-        logger.info("cortex_sync discovered %d file(s) in uploaded queue payload", len(uploaded_files))
-    candidate_paths = list(dict.fromkeys(file_paths + uploaded_files))
-    if not candidate_paths:
-        raise ValueError("cortex_sync requires either input_data.file_paths or an uploaded input file payload")
+    # Extract ZIP from downloaded input file
+    if not input_path or not input_path.exists():
+        raise ValueError("cortex_sync requires an input ZIP file (downloaded from queue)")
 
-    # Validate files exist on disk.
+    extract_dir = input_path.parent / f"{input_path.stem}_extract"
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info("Extracting ZIP %s to %s", input_path, extract_dir)
+    with zipfile.ZipFile(input_path, "r") as zf:
+        zf.extractall(extract_dir)
+
+    # Build file list from extracted ZIP, keyed by zip_path for error reporting
+    # zip_path format: category/filename.ext
     valid_paths: list[str] = []
+    zip_path_to_local: dict[str, str] = {}  # zip_path -> local extracted path
     errors: list[dict[str, str]] = []
-    missing_paths: list[str] = []
-    for fp in candidate_paths:
-        normalized = _resolve_existing_path(fp)
-        if normalized and os.path.exists(normalized):
-            valid_paths.append(normalized)
-        else:
-            errors.append({"file": str(fp), "error": "File not found on disk"})
-            missing_paths.append(str(fp))
-            logger.warning("cortex_sync file not found: %s", fp)
+
+    if manifest:
+        # Use manifest to find expected files
+        for entry in manifest:
+            zip_path = entry.get("zip_path", "")
+            local_path = str(extract_dir / zip_path)
+            if os.path.exists(local_path):
+                valid_paths.append(local_path)
+                zip_path_to_local[zip_path] = local_path
+            else:
+                errors.append({"file": zip_path, "error": "File not found in extracted ZIP"})
+                logger.warning("Expected file not in ZIP: %s", zip_path)
+    else:
+        # No manifest — discover files from ZIP
+        for p in sorted(extract_dir.rglob("*")):
+            if p.is_file() and p.suffix.lower() in {".md", ".txt", ".pdf", ".docx", ".pptx"}:
+                rel = str(p.relative_to(extract_dir))
+                valid_paths.append(str(p))
+                zip_path_to_local[rel] = str(p)
 
     if not valid_paths:
-        site_root = os.environ.get(
-            "CORTEX_SYNC_SITE_ROOT",
-            str(Path.home() / "longboardfella_website" / "site"),
-        ).strip()
-        topics = _list_local_topic_dirs()
-        hint = (
-            f"None of the {len(candidate_paths)} files exist on disk. "
-            f"Configured CORTEX_SYNC_SITE_ROOT='{site_root}'. "
-            f"Local topic dirs: {topics if topics else 'none found'}; "
-            f"missing sample: {missing_paths[:3]}"
-        )
-        raise ValueError(hint)
+        raise ValueError(f"No valid files found in extracted ZIP ({len(errors)} errors)")
 
     if progress_cb:
-        progress_cb(5, f"Validated {len(valid_paths)} files", "validate")
+        progress_cb(5, f"Extracted {len(valid_paths)} files from ZIP", "validate")
     if is_cancelled_cb and is_cancelled_cb():
         raise RuntimeError("Cancelled before initialization")
 
-    # Resolve db_path from ConfigManager (avoid path bugs from remote payload).
+    # Resolve db_path from ConfigManager (avoid path bugs from remote payload)
     from cortex_engine.config_manager import ConfigManager
 
     config_manager = ConfigManager()
@@ -223,7 +147,7 @@ def handle(
         len(valid_paths), collection_name, fresh, db_path,
     )
 
-    # Build args namespace matching ingest_cortex expectations.
+    # Build args namespace matching ingest_cortex expectations
     args = Namespace(
         db_path=db_path,
         skip_image_processing=True,
@@ -253,6 +177,7 @@ def handle(
         progress_cb(10, "Initializing Cortex ingestion", "init")
     initialize_script()
 
+    # Stage 2: Analyze documents
     if progress_cb:
         progress_cb(20, f"Analyzing {len(valid_paths)} documents", "analyze")
     if is_cancelled_cb and is_cancelled_cb():
@@ -264,34 +189,41 @@ def handle(
         target_collection=collection_name,
     )
 
+    # Stage 3: Finalize (embed into ChromaDB + build graph)
     if progress_cb:
         progress_cb(65, "Finalizing ingestion and embeddings", "finalize")
     if is_cancelled_cb and is_cancelled_cb():
         raise RuntimeError("Cancelled before finalization")
     finalize_ingestion(db_path=db_path, args=args)
 
+    # Stage 4: Read ingested doc_ids
     if progress_cb:
         progress_cb(85, "Collecting sync results", "results")
 
     processed_log_path = os.path.join(db_path, "knowledge_hub_db", INGESTED_FILES_LOG)
     doc_map = _load_doc_id_map(processed_log_path)
-    valid_norm_set = {os.path.normpath(vp) for vp in valid_paths}
+
+    # Build reverse map: local extracted path -> zip_path
+    local_to_zip: dict[str, str] = {v: k for k, v in zip_path_to_local.items()}
 
     doc_ids: list[str] = []
-    ingested_paths: set[str] = set()
-    for p, doc_id in doc_map.items():
-        if p in valid_norm_set:
-            ingested_paths.add(p)
-            if doc_id:
-                doc_ids.append(doc_id)
+    ingested_local_paths: set[str] = set()
+    for log_path, doc_id in doc_map.items():
+        # Check if this log entry matches any of our extracted files
+        for vp in valid_paths:
+            if os.path.normpath(log_path) == os.path.normpath(vp):
+                ingested_local_paths.add(vp)
+                if doc_id:
+                    doc_ids.append(doc_id)
+                break
 
-    # Any valid paths not seen in ingestion log are reported as errors.
+    # Report files not found in ingestion log — use zip_path for error key
     for vp in valid_paths:
-        nvp = os.path.normpath(vp)
-        if nvp not in ingested_paths:
-            errors.append({"file": vp, "error": "Not found in ingestion log after processing"})
+        if vp not in ingested_local_paths:
+            zip_path = local_to_zip.get(vp, os.path.basename(vp))
+            errors.append({"file": zip_path, "error": "Not found in ingestion log after processing"})
 
-    # Update collection references.
+    # Stage 5: Update working collection
     if progress_cb:
         progress_cb(95, "Updating working collection", "collection")
     if doc_ids:
@@ -313,6 +245,11 @@ def handle(
     if progress_cb:
         progress_cb(100, f"Done: {success_count} synced, {error_count} errors", "done")
 
+    logger.info(
+        "cortex_sync complete: %d synced, %d errors, collection='%s'",
+        success_count, error_count, collection_name,
+    )
+
     return {
         "output_data": {
             "success_count": success_count,
@@ -321,8 +258,5 @@ def handle(
             "collection_name": collection_name,
             "topic": topic,
             "errors": errors,
-            "submitted_files": len(candidate_paths),
-            "validated_files": len(valid_paths),
-            "uploaded_files": len(uploaded_files),
         }
     }

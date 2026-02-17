@@ -240,6 +240,8 @@ def validate_portal_ingest_input(input_data: Optional[Dict[str, Any]] = None) ->
 def validate_cortex_sync_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     payload = dict(input_data or {})
 
+    # Accept either 'manifest' (new: ZIP-based) or 'file_paths' (legacy: direct paths)
+    manifest = payload.get("manifest")
     file_paths = payload.get("file_paths", [])
     if file_paths is None:
         file_paths = []
@@ -247,6 +249,11 @@ def validate_cortex_sync_input(input_data: Optional[Dict[str, Any]] = None) -> D
         raise ValueError("cortex_sync 'file_paths' must be a list when provided")
     normalized_paths = [str(p).strip() for p in file_paths if str(p).strip()]
     payload["file_paths"] = normalized_paths
+
+    if manifest is not None:
+        if not isinstance(manifest, list):
+            raise ValueError("cortex_sync 'manifest' must be a list when provided")
+        payload["manifest"] = manifest
 
     collection_name = str(payload.get("collection_name") or "").strip()
     if not collection_name:
