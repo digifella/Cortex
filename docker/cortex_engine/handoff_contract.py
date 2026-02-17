@@ -240,13 +240,30 @@ def validate_portal_ingest_input(input_data: Optional[Dict[str, Any]] = None) ->
 def validate_cortex_sync_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     payload = dict(input_data or {})
 
-    file_paths = payload.get("file_paths")
-    if not isinstance(file_paths, list) or not file_paths:
-        raise ValueError("cortex_sync requires 'file_paths' (non-empty list)")
+    # Accept either 'manifest' (new: ZIP-based) or 'file_paths' (legacy: direct paths)
+    manifest = payload.get("manifest")
+    file_paths = payload.get("file_paths", [])
+    if file_paths is None:
+        file_paths = []
+    if not isinstance(file_paths, list):
+        raise ValueError("cortex_sync 'file_paths' must be a list when provided")
     normalized_paths = [str(p).strip() for p in file_paths if str(p).strip()]
-    if not normalized_paths:
-        raise ValueError("cortex_sync requires 'file_paths' (non-empty list)")
     payload["file_paths"] = normalized_paths
+
+    if manifest is not None:
+        if not isinstance(manifest, list):
+            raise ValueError("cortex_sync 'manifest' must be a list when provided")
+        normalized_manifest = []
+        for idx, entry in enumerate(manifest):
+            if not isinstance(entry, dict):
+                raise ValueError(f"cortex_sync manifest[{idx}] must be an object")
+            zip_path = str(entry.get("zip_path") or "").strip()
+            if not zip_path:
+                raise ValueError(f"cortex_sync manifest[{idx}].zip_path is required")
+            normalized_entry = dict(entry)
+            normalized_entry["zip_path"] = zip_path
+            normalized_manifest.append(normalized_entry)
+        payload["manifest"] = normalized_manifest
 
     collection_name = str(payload.get("collection_name") or "").strip()
     if not collection_name:

@@ -100,30 +100,43 @@ def handle(
     with zipfile.ZipFile(input_path, "r") as zf:
         zf.extractall(extract_dir)
 
+    extracted_supported_files = [
+        str(p.relative_to(extract_dir))
+        for p in sorted(extract_dir.rglob("*"))
+        if p.is_file() and p.suffix.lower() in {".md", ".txt", ".pdf", ".docx", ".pptx"}
+    ]
+
     # Build file list from extracted ZIP, keyed by zip_path for error reporting
     # zip_path format: category/filename.ext
     valid_paths: list[str] = []
     zip_path_to_local: dict[str, str] = {}  # zip_path -> local extracted path
     errors: list[dict[str, str]] = []
+    manifest_count = len(manifest)
+    matched_count = 0
 
     if manifest:
         # Use manifest to find expected files
         for entry in manifest:
             zip_path = entry.get("zip_path", "")
+            if os.path.isabs(zip_path) or ".." in Path(zip_path).parts:
+                errors.append({"file": zip_path, "error": "Invalid zip_path in manifest"})
+                logger.warning("Invalid manifest zip_path: %s", zip_path)
+                continue
             local_path = str(extract_dir / zip_path)
             if os.path.exists(local_path):
                 valid_paths.append(local_path)
                 zip_path_to_local[zip_path] = local_path
+                matched_count += 1
             else:
                 errors.append({"file": zip_path, "error": "File not found in extracted ZIP"})
                 logger.warning("Expected file not in ZIP: %s", zip_path)
     else:
         # No manifest — discover files from ZIP
-        for p in sorted(extract_dir.rglob("*")):
-            if p.is_file() and p.suffix.lower() in {".md", ".txt", ".pdf", ".docx", ".pptx"}:
-                rel = str(p.relative_to(extract_dir))
-                valid_paths.append(str(p))
-                zip_path_to_local[rel] = str(p)
+        for rel in extracted_supported_files:
+            path_obj = extract_dir / rel
+            valid_paths.append(str(path_obj))
+            zip_path_to_local[rel] = str(path_obj)
+        matched_count = len(valid_paths)
 
     if not valid_paths:
         raise ValueError(f"No valid files found in extracted ZIP ({len(errors)} errors)")
@@ -258,5 +271,9 @@ def handle(
             "collection_name": collection_name,
             "topic": topic,
             "errors": errors,
+            "manifest_count": manifest_count,
+            "extracted_count": len(extracted_supported_files),
+            "matched_count": matched_count,
+            "missing_manifest_entries": max(0, manifest_count - matched_count) if manifest_count else 0,
         }
     }

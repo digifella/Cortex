@@ -15,6 +15,30 @@ For immediate delivery, run in **single-tenant mode** with tenancy-ready structu
 3. Keep permission checks abstracted behind callable policy functions.
 4. Defer dynamic tenant admin UI and hard DB-level tenant enforcement to later phase.
 
+## Current Status (2026-02-17)
+
+Completed in Cortex:
+1. Queue job support: `pdf_anonymise`, `pdf_textify`, `url_ingest`, `portal_ingest`, `cortex_sync`.
+2. Handoff/API validation for queue payload contracts.
+3. Queue monitor page with progress telemetry and operator controls.
+4. ZIP-first `cortex_sync` flow aligned with website queue uploads (manifest-aware).
+
+## Next Sprint Execution (Portal)
+
+1. Stabilize website->Cortex knowledge sync:
+   - enforce ZIP manifest contract in website producer and API docs
+   - add one-click sync smoke test (small batch + expected collection assertion)
+2. Retrieval gateway (single-tenant runtime, tenancy-ready contract):
+   - introduce scoped retrieval wrapper with fixed defaults (`default/default`)
+   - add citation payload consistency checks
+3. Curation workflow foundation:
+   - add approval state markers on synced artifacts
+   - keep “published to workbench” explicit in metadata
+4. Evaluation harness:
+   - sync success/error rate
+   - citation presence/grounding checks
+   - queue latency and failure trend report
+
 ## 1. Delivery Lanes
 
 1. `Lane A (Critical Path)`: Website <-> Cortex handoff contract, queue reliability, retrieval policy enforcement.

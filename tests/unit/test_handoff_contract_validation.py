@@ -148,3 +148,24 @@ def test_cortex_sync_rejects_missing_fields():
     assert payload["file_paths"] == []
     with pytest.raises(ValueError, match="collection_name"):
         validate_cortex_sync_input({"file_paths": ["/tmp/a.md"]})
+
+
+def test_cortex_sync_accepts_manifest_mode():
+    payload = validate_cortex_sync_input(
+        {
+            "collection_name": "Website - Digital Health",
+            "manifest": [{"zip_path": "digital-health/doc1.md", "doc_id": 1}],
+        }
+    )
+    assert payload["file_paths"] == []
+    assert payload["manifest"][0]["zip_path"] == "digital-health/doc1.md"
+
+
+def test_cortex_sync_rejects_bad_manifest():
+    with pytest.raises(ValueError, match="manifest\\[0\\]\\.zip_path"):
+        validate_cortex_sync_input(
+            {
+                "collection_name": "Website - Digital Health",
+                "manifest": [{}],
+            }
+        )
