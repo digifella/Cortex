@@ -11,6 +11,7 @@ from typing import Callable, Optional
 from cortex_engine.handoff_contract import validate_cortex_sync_input
 
 logger = logging.getLogger(__name__)
+SUSPECT_DUPLICATE_COLLECTION = "Suspect_Duplicate"
 
 
 def _load_doc_id_map(processed_log_path: str) -> dict[str, str]:
@@ -56,6 +57,21 @@ def _load_doc_id_map(processed_log_path: str) -> dict[str, str]:
         value = parts[1] if len(parts) > 1 else ""
         result2[key] = value
     return result2
+
+
+def _partition_doc_ids_by_collision(doc_ids: list[str], preexisting_doc_ids: set[str]) -> tuple[list[str], list[str]]:
+    """Split doc IDs into non-colliding and colliding (already existed before this run)."""
+    unique: list[str] = []
+    seen: set[str] = set()
+    for did in doc_ids:
+        if not did or did in seen:
+            continue
+        seen.add(did)
+        unique.append(did)
+
+    normal = [did for did in unique if did not in preexisting_doc_ids]
+    collisions = [did for did in unique if did in preexisting_doc_ids]
+    return normal, collisions
 
 
 def handle(
@@ -160,6 +176,10 @@ def handle(
         len(valid_paths), collection_name, fresh, db_path,
     )
 
+    processed_log_path = os.path.join(db_path, "knowledge_hub_db", "ingested_files.log")
+    preexisting_map = _load_doc_id_map(processed_log_path)
+    preexisting_doc_ids = {did for did in preexisting_map.values() if did}
+
     # Build args namespace matching ingest_cortex expectations
     args = Namespace(
         db_path=db_path,
@@ -236,19 +256,33 @@ def handle(
             zip_path = local_to_zip.get(vp, os.path.basename(vp))
             errors.append({"file": zip_path, "error": "Not found in ingestion log after processing"})
 
-    # Stage 5: Update working collection
+    normal_doc_ids, collided_doc_ids = _partition_doc_ids_by_collision(doc_ids, preexisting_doc_ids)
+
+    # Stage 5: Update working collections
     if progress_cb:
         progress_cb(95, "Updating working collection", "collection")
-    if doc_ids:
+    if normal_doc_ids or collided_doc_ids:
         try:
             from cortex_engine.collection_manager import WorkingCollectionManager
 
             wcm = WorkingCollectionManager()
-            if collection_name not in wcm.get_collection_names():
-                wcm.create_collection(collection_name)
-                logger.info("Created collection: %s", collection_name)
-            wcm.add_docs_by_id_to_collection(collection_name, doc_ids)
-            logger.info("Added %d doc_ids to collection '%s'", len(doc_ids), collection_name)
+            if normal_doc_ids:
+                if collection_name not in wcm.get_collection_names():
+                    wcm.create_collection(collection_name)
+                    logger.info("Created collection: %s", collection_name)
+                wcm.add_docs_by_id_to_collection(collection_name, normal_doc_ids)
+                logger.info("Added %d doc_ids to collection '%s'", len(normal_doc_ids), collection_name)
+
+            if collided_doc_ids:
+                if SUSPECT_DUPLICATE_COLLECTION not in wcm.get_collection_names():
+                    wcm.create_collection(SUSPECT_DUPLICATE_COLLECTION)
+                    logger.info("Created collection: %s", SUSPECT_DUPLICATE_COLLECTION)
+                wcm.add_docs_by_id_to_collection(SUSPECT_DUPLICATE_COLLECTION, collided_doc_ids)
+                logger.warning(
+                    "Routed %d colliding doc_ids to collection '%s'",
+                    len(collided_doc_ids),
+                    SUSPECT_DUPLICATE_COLLECTION,
+                )
         except Exception as e:
             logger.exception("Collection update failed for %s", collection_name)
             errors.append({"file": "", "error": f"Collection update failed: {e}"})
@@ -276,5 +310,9 @@ def handle(
             "extracted_count": len(extracted_supported_files),
             "matched_count": matched_count,
             "missing_manifest_entries": max(0, manifest_count - matched_count) if manifest_count else 0,
+            "target_collection_doc_count": len(normal_doc_ids),
+            "suspect_duplicate_doc_count": len(collided_doc_ids),
+            "suspect_duplicate_collection_name": SUSPECT_DUPLICATE_COLLECTION,
+            "suspect_duplicate_doc_ids": collided_doc_ids,
         }
     }
