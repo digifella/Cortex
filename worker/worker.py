@@ -223,17 +223,21 @@ def process_job(client: QueueClient, cfg: Config, store: QueueMonitorStore, job:
     trace_id = handoff["trace_id"]
 
     logging.info(
-        "Claimed job id=%s type=%s trace_id=%s source=%s",
+        "Claimed job id=%s type=%s trace_id=%s source=%s scope=%s/%s",
         job_id,
         job_type,
         trace_id,
         handoff["source_system"],
+        handoff["tenant_id"],
+        handoff["project_id"],
     )
     store.upsert_job(
         job_id,
         job_type=job_type,
         trace_id=trace_id,
         source_system=handoff["source_system"],
+        tenant_id=handoff["tenant_id"],
+        project_id=handoff["project_id"],
         input_filename=str(job.get("input_filename") or ""),
         status="claimed",
         message="Job claimed by worker",
@@ -388,6 +392,7 @@ def main() -> int:
                 store.append_event(
                     f"Queue connectivity restored after {consecutive_conn_errors} failed attempt(s)",
                     level="info",
+                    source="worker.connectivity",
                 )
             consecutive_conn_errors = 0
 
@@ -415,6 +420,7 @@ def main() -> int:
                 store.append_event(
                     f"Queue server unreachable (attempt={consecutive_conn_errors}, retry_in={int(backoff_seconds)}s)",
                     level="warning",
+                    source="worker.connectivity",
                 )
                 last_conn_error_log_ts = now
             store.set_worker(status="disconnected", worker_id=cfg.worker_id)
@@ -433,6 +439,7 @@ def main() -> int:
                 store.append_event(
                     f"Queue request timeout (attempt={consecutive_conn_errors}, retry_in={int(backoff_seconds)}s)",
                     level="warning",
+                    source="worker.connectivity",
                 )
                 last_conn_error_log_ts = now
             store.set_worker(status="degraded", worker_id=cfg.worker_id)

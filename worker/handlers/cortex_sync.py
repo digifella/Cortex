@@ -267,6 +267,7 @@ def handle(
         "output_data": {
             "success_count": success_count,
             "error_count": error_count,
+            "effective_collection_name": collection_name,
             "doc_ids": doc_ids,
             "collection_name": collection_name,
             "topic": topic,

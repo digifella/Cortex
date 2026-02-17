@@ -170,6 +170,7 @@ def main():
                         f"**Stage:** {item.get('stage', '')}  \n"
                         f"**Progress:** {item.get('progress_pct', 0)}%  \n"
                         f"**Trace:** `{item.get('trace_id', '')}`  \n"
+                        f"**Scope:** `{item.get('tenant_id', 'default')}/{item.get('project_id', 'default')}`  \n"
                         f"**Message:** {item.get('message', '')}  \n"
                         f"**Updated:** {item.get('updated_at', '')}"
                     )
@@ -205,15 +206,22 @@ def main():
                 st.json(item)
 
     st.subheader("Recent Events")
-    ev_col1, ev_col2, ev_col3 = st.columns([1, 2, 2])
+    ev_col1, ev_col2, ev_col3, ev_col4 = st.columns([1, 2, 2, 2])
     with ev_col1:
         level_filter = st.selectbox("Level", ["all", "error", "warning", "info"], index=0, key="qm_level_filter")
     with ev_col2:
         job_filter = st.text_input("Job ID filter", value="", key="qm_job_filter").strip()
     with ev_col3:
         max_events = st.slider("Rows", min_value=50, max_value=1000, value=250, step=50, key="qm_max_events")
+    with ev_col4:
+        quiet_connectivity = st.toggle("Quiet connectivity", value=True, key="qm_quiet_connectivity")
 
     filtered_events = list(events)
+    if quiet_connectivity:
+        filtered_events = [
+            ev for ev in filtered_events
+            if str(ev.get("source", "")).strip().lower() != "worker.connectivity"
+        ]
     if level_filter != "all":
         filtered_events = [ev for ev in filtered_events if str(ev.get("level", "")).lower() == level_filter]
     if job_filter:
