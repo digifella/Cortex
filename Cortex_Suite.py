@@ -20,7 +20,11 @@ from cortex_engine.version_config import get_version_display, VERSION_METADATA
 from cortex_engine.utils.model_checker import model_checker
 from cortex_engine.help_system import help_system
 from cortex_engine.utils import get_logger
-from cortex_engine.config import QWEN3_VL_RERANKER_ENABLED, QWEN3_VL_RERANKER_SIZE
+from cortex_engine.config import (
+    QWEN3_VL_RERANKER_ENABLED,
+    QWEN3_VL_RERANKER_SIZE,
+    QWEN3_VL_RERANKER_WARMUP_ENABLED,
+)
 
 logger = get_logger(__name__)
 
@@ -80,7 +84,11 @@ def start_global_model_warmup():
         threading.Thread(target=_warmup_embedding_model, daemon=True).start()
         logger.info("🚀 Started global embedding warmup thread")
 
-    if QWEN3_VL_RERANKER_ENABLED and not st.session_state.get("global_reranker_warmup_started"):
+    if (
+        QWEN3_VL_RERANKER_ENABLED
+        and QWEN3_VL_RERANKER_WARMUP_ENABLED
+        and not st.session_state.get("global_reranker_warmup_started")
+    ):
         st.session_state.global_reranker_warmup_started = True
         threading.Thread(target=_warmup_reranker_model, daemon=True).start()
         logger.info("🚀 Started global reranker warmup thread")

@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from .utils.default_paths import get_default_ai_database_path
+from .utils import convert_windows_to_wsl_path
 
 # Config logger (minimal setup to avoid circular imports)
 logger = logging.getLogger(__name__)
@@ -187,7 +188,8 @@ MULTIMODAL_WEIGHT_TEXT = float(os.getenv("MULTIMODAL_WEIGHT_TEXT", "0.5"))
 MULTIMODAL_WEIGHT_TABLES = float(os.getenv("MULTIMODAL_WEIGHT_TABLES", "0.3"))
 MULTIMODAL_WEIGHT_IMAGES = float(os.getenv("MULTIMODAL_WEIGHT_IMAGES", "0.2"))
 MCP_SERVER_ENABLED = os.getenv("MCP_SERVER_ENABLED", "false").lower() == "true"
-MCP_SERVER_HOST = os.getenv("MCP_SERVER_HOST", "0.0.0.0")
+_MCP_DEFAULT_HOST = "0.0.0.0" if os.path.exists("/.dockerenv") else "127.0.0.1"
+MCP_SERVER_HOST = os.getenv("MCP_SERVER_HOST", _MCP_DEFAULT_HOST)
 MCP_SERVER_PORT = int(os.getenv("MCP_SERVER_PORT", "8001"))
 MCP_SERVER_API_KEY = os.getenv("MCP_SERVER_API_KEY", "")
 SCHEMA_EXTRACTION_ENABLED = os.getenv("SCHEMA_EXTRACTION_ENABLED", "false").lower() == "true"  # Off by default
@@ -232,12 +234,19 @@ def _get_qwen3vl_model_size() -> str:
     if env_size in ("2B", "8B"):
         return env_size
 
-    # Auto mode: check database first
-    # Note: Can't use get_db_path() here as it's defined later in this file
-    # Use BASE_DATA_PATH directly (already defined above)
+    # Auto mode: check active database first
     try:
+        from cortex_engine.config_manager import ConfigManager
         from cortex_engine.utils.embedding_validator import get_database_embedding_dimension
-        db_path = BASE_DATA_PATH  # Use the base path defined at module top
+        db_path = BASE_DATA_PATH
+        try:
+            config = ConfigManager().get_config()
+            configured_db_path = (config.get("ai_database_path") or "").strip()
+            if configured_db_path:
+                db_path = configured_db_path if os.path.exists("/.dockerenv") else convert_windows_to_wsl_path(configured_db_path)
+        except Exception as config_error:
+            logger.debug(f"Could not read configured database path, using fallback: {config_error}")
+
         db_dim = get_database_embedding_dimension(db_path)
 
         if db_dim is not None:
@@ -282,7 +291,8 @@ else:
 
 # Reranker configuration
 QWEN3_VL_RERANKER_ENABLED = os.getenv("QWEN3_VL_RERANKER_ENABLED", "false").lower() == "true"
-QWEN3_VL_RERANKER_SIZE = os.getenv("QWEN3_VL_RERANKER_SIZE", "auto")  # auto, 2B, 8B
+QWEN3_VL_RERANKER_WARMUP_ENABLED = os.getenv("QWEN3_VL_RERANKER_WARMUP_ENABLED", "false").lower() == "true"
+QWEN3_VL_RERANKER_SIZE = os.getenv("QWEN3_VL_RERANKER_SIZE", "2B")  # auto, 2B, 8B
 QWEN3_VL_RERANKER_TOP_K = int(os.getenv("QWEN3_VL_RERANKER_TOP_K", "20"))  # Results after reranking
 QWEN3_VL_RERANKER_CANDIDATES = int(os.getenv("QWEN3_VL_RERANKER_CANDIDATES", "50"))  # Candidates before reranking
 
@@ -391,6 +401,7 @@ def get_cortex_config() -> Dict[str, Any]:
         "qwen3_vl_model_size": QWEN3_VL_MODEL_SIZE,
         "qwen3_vl_mrl_dim": QWEN3_VL_MRL_DIM,
         "qwen3_vl_reranker_enabled": QWEN3_VL_RERANKER_ENABLED,
+        "qwen3_vl_reranker_warmup_enabled": QWEN3_VL_RERANKER_WARMUP_ENABLED,
         "qwen3_vl_reranker_size": QWEN3_VL_RERANKER_SIZE,
         "qwen3_vl_reranker_top_k": QWEN3_VL_RERANKER_TOP_K,
         "qwen3_vl_reranker_candidates": QWEN3_VL_RERANKER_CANDIDATES,
@@ -442,6 +453,7 @@ def get_model_config_for_task(task_type: str) -> Dict[str, str]:
         },
         "reranking": {
             "enabled": QWEN3_VL_RERANKER_ENABLED,
+            "warmup_enabled": QWEN3_VL_RERANKER_WARMUP_ENABLED,
             "model_size": QWEN3_VL_RERANKER_SIZE,
             "top_k": QWEN3_VL_RERANKER_TOP_K,
             "candidates": QWEN3_VL_RERANKER_CANDIDATES,
