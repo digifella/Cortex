@@ -63,6 +63,7 @@ from cortex_engine.document_type_manager import get_document_type_manager
 from cortex_engine.help_system import help_system
 from cortex_engine.batch_manager import BatchState
 from cortex_engine.ingestion_recovery import IngestionRecoveryManager
+from cortex_engine.pre_ingest_organizer import run_pre_ingest_organizer_scan
 from cortex_engine.ui_theme import apply_theme, section_header
 from cortex_engine.model_manager import (
     get_available_embedding_models,
@@ -1835,6 +1836,51 @@ def render_config_and_scan_ui():
     # Show appropriate button based on selection mode
     has_direct_files = len(direct_files_selected) > 0 and len(selected_to_scan) == 0
     has_dir_selection = len(selected_to_scan) > 0
+
+    # Optional pre-ingest organizer pass (scan-only manifest generation)
+    if has_dir_selection:
+        with st.expander("🧭 Pre-Ingest Organizer (Recommended for messy repositories)", expanded=False):
+            st.caption(
+                "Runs a fast pre-ingestion triage scan and writes "
+                "`<db_path>/pre_ingest/pre_ingest_manifest.json` "
+                "with include/exclude/review recommendations."
+            )
+            if st.button(
+                f"Run Pre-Ingest Organizer for {len(selected_to_scan)} director(y/ies)",
+                key="run_pre_ingest_organizer",
+                use_container_width=True,
+                type="secondary",
+            ):
+                if not (is_knowledge_path_valid and is_db_path_valid and db_path_writable):
+                    st.error("Valid source path and writable DB path are required.")
+                else:
+                    try:
+                        resolved_runtime = set_runtime_db_path(converted_db_path)
+                        result = run_pre_ingest_organizer_scan(
+                            source_dirs=selected_to_scan,
+                            db_path=resolved_runtime,
+                        )
+                        st.session_state.pre_ingest_manifest_path = result.get("manifest_path")
+                        st.session_state.pre_ingest_summary = result.get("summary", {})
+                        st.success(f"Pre-ingest manifest created at: `{result.get('manifest_path', '')}`")
+                    except Exception as e:
+                        st.error(f"Pre-ingest organizer failed: {e}")
+
+            summary = st.session_state.get("pre_ingest_summary")
+            if summary:
+                pol = summary.get("policy_counts", {})
+                own = summary.get("ownership_counts", {})
+                st.markdown(
+                    f"- Policy: include={pol.get('include', 0)}, exclude={pol.get('exclude', 0)}, "
+                    f"review_required={pol.get('review_required', 0)}, do_not_ingest={pol.get('do_not_ingest', 0)}"
+                )
+                st.markdown(
+                    f"- Ownership: first_party={own.get('first_party', 0)}, "
+                    f"client_owned={own.get('client_owned', 0)}, external_ip={own.get('external_ip', 0)}"
+                )
+            manifest_path = st.session_state.get("pre_ingest_manifest_path")
+            if manifest_path:
+                st.caption(f"Latest manifest: `{manifest_path}`")
 
     if has_direct_files:
         # Direct file selection mode - button to proceed with selected files

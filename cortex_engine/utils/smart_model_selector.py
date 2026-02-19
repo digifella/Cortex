@@ -293,6 +293,30 @@ def get_system_summary() -> Dict[str, Any]:
     return get_smart_selector().get_system_summary()
 
 
+def get_recommended_text_model() -> str:
+    """
+    Get recommended local text model based on effective memory tier.
+
+    Returns:
+        Ollama model name suited to current environment.
+    """
+    selector = get_smart_selector()
+    tier = selector.select_model_tier()
+    return MODEL_TIERS.get(tier, MODEL_TIERS["efficient"])["text_model"]
+
+
+def get_recommended_vision_model() -> str:
+    """
+    Get recommended local vision model based on effective memory tier.
+
+    Returns:
+        Ollama vision model name suited to current environment.
+    """
+    selector = get_smart_selector()
+    tier = selector.select_model_tier()
+    return MODEL_TIERS.get(tier, MODEL_TIERS["efficient"])["vision_model"]
+
+
 def get_optimal_embedding_model() -> str:
     """
     Get the optimal embedding model based on available hardware.

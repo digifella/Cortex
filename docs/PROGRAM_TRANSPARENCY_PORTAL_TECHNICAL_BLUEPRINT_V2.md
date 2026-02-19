@@ -29,6 +29,9 @@ The following items are now implemented in Cortex and should be treated as curre
    - `docling_timeout_seconds`
    - `image_description_timeout_seconds`
    - `image_enrich_max_seconds`
+6. Handoff metadata now carries single-tenant-ready scope fields:
+   - `tenant_id` (default: `default`)
+   - `project_id` (default: `default`)
 
 ## 0.3 Runtime Mode (Reconfirmed)
 

@@ -155,34 +155,36 @@ class AsyncSearchEngine:
             if os.path.exists(graph_path):
                 self.graph_manager = EnhancedGraphManager(graph_path)
     
-    async def search_async(self, 
+    async def search_async(self,
                           query: str,
                           search_type: str = "hybrid",
-                          include_synthesis: bool = True) -> AsyncQueryResult:
+                          include_synthesis: bool = True,
+                          doc_id_filter: Optional[List[str]] = None) -> AsyncQueryResult:
         """
         Perform async search with optional synthesis
-        
+
         Args:
             query: Search query string
             search_type: Type of search ("vector", "graph", "hybrid")
             include_synthesis: Whether to synthesize results
-            
+            doc_id_filter: Optional list of doc_ids to scope vector search
+
         Returns:
             AsyncQueryResult with search results and metadata
         """
         start_time = time.time()
         result = AsyncQueryResult(query=query)
-        
+
         try:
             logger.debug(f"🔍 Starting async search: '{query[:50]}...'")
-            
+
             # Perform search based on type
             if search_type == "vector":
-                await self._vector_search_async(query, result)
+                await self._vector_search_async(query, result, doc_id_filter=doc_id_filter)
             elif search_type == "graph":
                 await self._graph_search_async(query, result)
             elif search_type == "hybrid":
-                await self._hybrid_search_async(query, result)
+                await self._hybrid_search_async(query, result, doc_id_filter=doc_id_filter)
             else:
                 raise ValueError(f"Unknown search type: {search_type}")
             
@@ -204,32 +206,42 @@ class AsyncSearchEngine:
             logger.error(f"❌ Search error: {e}")
             return result
     
-    async def _vector_search_async(self, query: str, result: AsyncQueryResult) -> None:
+    async def _vector_search_async(self, query: str, result: AsyncQueryResult,
+                                    doc_id_filter: Optional[List[str]] = None) -> None:
         """Perform async vector search"""
         if not self.collection:
             raise ValueError("ChromaDB collection not available")
-        
+
         start_time = time.time()
-        
+
+        # Build where filter for collection scoping
+        where_filter = None
+        if doc_id_filter:
+            where_filter = {"doc_id": {"$in": doc_id_filter}}
+
         # Run vector search in executor
         loop = asyncio.get_event_loop()
         search_results = await loop.run_in_executor(
             self.executor,
             self._vector_search_sync,
-            query
+            query,
+            where_filter
         )
-        
+
         result.vector_search_time = time.time() - start_time
         result.results = search_results
-    
-    def _vector_search_sync(self, query: str) -> List[Dict[str, Any]]:
+
+    def _vector_search_sync(self, query: str, where_filter: Optional[Dict] = None) -> List[Dict[str, Any]]:
         """Synchronous vector search (runs in executor)"""
         try:
-            search_result = self.collection.query(
-                query_texts=[query],
-                n_results=self.config.max_results_per_query,
-                include=['documents', 'metadatas', 'distances']
-            )
+            query_kwargs = {
+                'query_texts': [query],
+                'n_results': self.config.max_results_per_query,
+                'include': ['documents', 'metadatas', 'distances'],
+            }
+            if where_filter:
+                query_kwargs['where'] = where_filter
+            search_result = self.collection.query(**query_kwargs)
 
             # Use model-aware threshold if not explicitly configured
             effective_threshold = self.config.similarity_threshold
@@ -332,10 +344,11 @@ class AsyncSearchEngine:
             logger.error(f"Graph search error: {e}")
             return {'results': [], 'context': {}}
     
-    async def _hybrid_search_async(self, query: str, result: AsyncQueryResult) -> None:
+    async def _hybrid_search_async(self, query: str, result: AsyncQueryResult,
+                                    doc_id_filter: Optional[List[str]] = None) -> None:
         """Perform hybrid vector + graph search"""
         # Run vector and graph searches concurrently
-        vector_task = self._vector_search_async(query, AsyncQueryResult(query=query))
+        vector_task = self._vector_search_async(query, AsyncQueryResult(query=query), doc_id_filter=doc_id_filter)
         graph_task = self._graph_search_async(query, AsyncQueryResult(query=query))
         
         vector_result, graph_result = await asyncio.gather(
