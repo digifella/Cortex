@@ -9,6 +9,8 @@ Date: 2025-08-22
 import logging
 import os
 import tempfile
+import shutil
+import inspect
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,7 +26,6 @@ except ImportError:
     DOCLING_AVAILABLE = False
 
 # Import these only when actually needed to avoid version conflicts
-# Docling 1.8.5 simplified API - removed InputFormat/allowed_formats
 DocumentConverter = None
 PipelineOptions = None
 
@@ -72,11 +73,34 @@ class DoclingDocumentReader:
         """Create a Docling converter instance with current options."""
         global DocumentConverter, PipelineOptions
         from docling.document_converter import DocumentConverter
-        from docling.datamodel.base_models import PipelineOptions
 
+        init_sig = inspect.signature(DocumentConverter.__init__)
+        init_params = set(init_sig.parameters.keys())
+
+        # Newer Docling API (2.x): allowed_formats + format_options
+        if "format_options" in init_params:
+            from docling.datamodel.base_models import InputFormat
+            from docling.document_converter import PdfFormatOption
+            from docling.datamodel.pipeline_options import PdfPipelineOptions
+
+            pdf_pipeline_options = PdfPipelineOptions(
+                do_ocr=self.ocr_enabled,
+                do_table_structure=self.table_structure_recognition,
+            )
+            return DocumentConverter(
+                allowed_formats=[InputFormat.PDF],
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(
+                        pipeline_options=pdf_pipeline_options
+                    )
+                },
+            )
+
+        # Legacy Docling API (1.x): pipeline_options
+        from docling.datamodel.base_models import PipelineOptions
         pipeline_options = PipelineOptions(
             do_ocr=self.ocr_enabled,
-            do_table_structure=self.table_structure_recognition
+            do_table_structure=self.table_structure_recognition,
         )
         return DocumentConverter(pipeline_options=pipeline_options)
 
@@ -117,6 +141,30 @@ class DoclingDocumentReader:
                 kwargs["cache_dir"] = hf_home
             local_path = snapshot_download(**kwargs)
             logger.info(f"Docling model cache synchronized at: {local_path}")
+
+            # Ensure both Hugging Face cache layouts are populated:
+            # 1) <HF_HOME>/models--...
+            # 2) <HF_HOME>/hub/models--...
+            local_path_obj = Path(local_path)
+            models_dir = None
+            for parent in [local_path_obj] + list(local_path_obj.parents):
+                name = parent.name
+                if name.startswith("models--ds4sd--docling-models"):
+                    models_dir = parent
+                    break
+
+            if models_dir is not None:
+                hf_home = Path(os.getenv("HF_HOME", str(models_dir.parents[1] if len(models_dir.parents) > 1 else models_dir.parent)))
+                hub_models_dir = hf_home / "hub" / models_dir.name
+                if not hub_models_dir.exists():
+                    hub_models_dir.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        os.symlink(models_dir, hub_models_dir, target_is_directory=True)
+                        logger.info(f"Docling model cache linked: {hub_models_dir} -> {models_dir}")
+                    except Exception:
+                        shutil.copytree(models_dir, hub_models_dir, dirs_exist_ok=True)
+                        logger.info(f"Docling model cache copied: {models_dir} -> {hub_models_dir}")
+
             return True
         except Exception as e:
             logger.warning(f"Docling model cache repair failed: {e}")
@@ -126,7 +174,7 @@ class DoclingDocumentReader:
         """Initialize Docling converter with optimized settings."""
         try:
             self._converter = self._create_converter()
-            logger.info("✅ Docling converter initialized successfully (v1.8.5 API)")
+            logger.info("✅ Docling converter initialized successfully")
             
         except ImportError as e:
             logger.warning(f"Docling dependency missing: {e}")

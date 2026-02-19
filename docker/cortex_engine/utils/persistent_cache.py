@@ -8,12 +8,21 @@ import json
 import hashlib
 import time
 import threading
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
+_SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_sql_identifier(identifier: str) -> str:
+    """Allow only safe SQLite identifiers for table names."""
+    if not _SQL_IDENTIFIER_RE.fullmatch(identifier):
+        raise ValueError(f"Invalid SQL identifier: {identifier!r}")
+    return identifier
 
 
 class PersistentCache:
@@ -47,7 +56,7 @@ class PersistentCache:
         self.cache_db_path = Path(cache_db_path)
         self.max_entries = max_entries
         self.default_ttl = timedelta(hours=default_ttl_hours)
-        self.table_name = table_name
+        self.table_name = _validate_sql_identifier(table_name)
         self._lock = threading.Lock()
 
         # Ensure parent directory exists

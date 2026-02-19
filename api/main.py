@@ -79,6 +79,7 @@ class SearchRequest(BaseModel):
     max_results: int = Field(10, description="Maximum number of results")
     include_synthesis: bool = Field(True, description="Include AI synthesis of results")
     similarity_threshold: float = Field(0.7, description="Minimum similarity threshold")
+    collection_name: Optional[str] = Field(None, description="Scope search to a specific collection")
 
 class SearchResponse(BaseModel):
     query: str
@@ -402,15 +403,29 @@ async def search_knowledge_base(
             similarity_threshold=request.similarity_threshold
         )
         
+        # Resolve collection doc_id filter if scoped to a collection
+        doc_id_filter = None
+        if request.collection_name:
+            try:
+                collection_manager = WorkingCollectionManager()
+                doc_ids = collection_manager.get_doc_ids_by_name(request.collection_name)
+                if doc_ids:
+                    doc_id_filter = doc_ids
+                else:
+                    logger.warning(f"Collection '{request.collection_name}' is empty or not found")
+            except Exception as e:
+                logger.warning(f"Failed to resolve collection '{request.collection_name}': {e}")
+
         # Perform search
         search_engine = AsyncSearchEngine(db_path, config)
         await search_engine.initialize()
-        
+
         try:
             result = await search_engine.search_async(
                 request.query,
                 request.search_type,
-                request.include_synthesis
+                request.include_synthesis,
+                doc_id_filter=doc_id_filter
             )
             
             response = SearchResponse(

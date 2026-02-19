@@ -76,12 +76,11 @@ class TestSafePathExists:
 
     def test_handles_permission_errors(self, monkeypatch):
         """Test that permission errors don't raise exceptions."""
-        def mock_exists():
+        def mock_exists(_self):
             raise PermissionError("Access denied")
 
-        # This should return False instead of raising
-        # Note: Testing this properly requires mocking Path.exists()
-        pass  # Placeholder - actual implementation needs monkeypatch
+        monkeypatch.setattr(Path, "exists", mock_exists)
+        assert _safe_path_exists("/root/protected") is False
 
 
 class TestDockerDetection:

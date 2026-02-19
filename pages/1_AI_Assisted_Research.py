@@ -172,7 +172,7 @@ def display_source_list(sources, selection_key, title):
         cite_count = f" (Citations: {source.get('citations', 0)})" if 'citations' in source else ''
         label = f"**[{source['source_type'].upper()}]** {source['title']}{cite_count}"
         # Use URL hash for stable key instead of index
-        url_hash = hashlib.md5(source.get('url', str(i)).encode()).hexdigest()[:8]
+        url_hash = hashlib.sha256(source.get('url', str(i)).encode()).hexdigest()[:8]
         st.checkbox(label, value=is_selected, key=f"{selection_key}_{url_hash}", on_change=toggle_source_selection, args=(source,))
 
 

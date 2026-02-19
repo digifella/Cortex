@@ -62,6 +62,9 @@ class Config:
     heartbeat_interval: int
     request_timeout: int
     queue_monitor_state_path: Path
+    cortex_api_url: str
+    cortex_tunnel_url: str
+    cortex_meta_sync_interval: int
 
 
 def read_config() -> Config:
@@ -84,6 +87,9 @@ def read_config() -> Config:
         queue_monitor_state_path=Path(
             get("QUEUE_MONITOR_STATE_PATH", str(ROOT / "worker" / "tmp" / "queue_monitor_state.json"))
         ),
+        cortex_api_url=get("CORTEX_API_URL", "http://127.0.0.1:8000").strip(),
+        cortex_tunnel_url=get("CORTEX_TUNNEL_URL", "").strip(),
+        cortex_meta_sync_interval=int(get("CORTEX_META_SYNC_INTERVAL", "300")),
     )
 
     if not cfg.server_url or not cfg.secret_key:
@@ -347,6 +353,81 @@ def process_job(client: QueueClient, cfg: Config, store: QueueMonitorStore, job:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def sync_cortex_meta(cfg: Config) -> bool:
+    """Push Cortex collection metadata to the website queue server."""
+    try:
+        # Check Cortex API health
+        api_status = "offline"
+        try:
+            health_resp = requests.get(f"{cfg.cortex_api_url}/health", timeout=3)
+            if health_resp.status_code == 200:
+                api_status = "online"
+        except Exception:
+            pass
+
+        # Get collection summary from WorkingCollectionManager
+        collections = {}
+        capabilities = []
+        if api_status == "online":
+            try:
+                from cortex_engine.collection_manager import WorkingCollectionManager
+                mgr = WorkingCollectionManager()
+                collections = mgr.get_collections_summary()
+                capabilities = ["vector", "graph", "hybrid"]
+            except Exception as e:
+                logging.warning("Failed to read Cortex collections: %s", e)
+
+        # Push to website
+        payload = {
+            "collections": collections,
+            "api_status": api_status,
+            "tunnel_url": cfg.cortex_tunnel_url,
+            "capabilities": capabilities,
+        }
+
+        resp = requests.post(
+            cfg.server_url,
+            params={"action": "cortex_meta"},
+            headers={"X-Queue-Key": cfg.secret_key, "Content-Type": "application/json"},
+            json=payload,
+            timeout=10,
+        )
+        # Retry with query key fallback on 403
+        if resp.status_code == 403:
+            resp = requests.post(
+                cfg.server_url,
+                params={"action": "cortex_meta", "key": cfg.secret_key},
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=10,
+            )
+        resp.raise_for_status()
+        logging.info("Cortex meta sync pushed: api=%s, collections=%d", api_status, len(collections))
+        return True
+    except Exception as e:
+        logging.warning("Cortex meta sync failed: %s", e)
+        return False
+
+
+class CortexMetaSyncThread(threading.Thread):
+    """Background thread that periodically pushes Cortex metadata to the website."""
+
+    def __init__(self, cfg: Config, interval: int):
+        super().__init__(daemon=True, name="cortex-meta-sync")
+        self.cfg = cfg
+        self.interval = interval
+        self._stop_event = threading.Event()
+
+    def stop(self):
+        self._stop_event.set()
+
+    def run(self):
+        # Initial sync on startup
+        sync_cortex_meta(self.cfg)
+        while not self._stop_event.wait(self.interval):
+            sync_cortex_meta(self.cfg)
+
+
 def main() -> int:
     cfg = read_config()
     cfg.temp_dir.mkdir(parents=True, exist_ok=True)
@@ -361,6 +442,10 @@ def main() -> int:
         cfg.supported_types,
         cfg.poll_interval,
     )
+
+    # Start Cortex metadata sync background thread
+    meta_sync = CortexMetaSyncThread(cfg, cfg.cortex_meta_sync_interval)
+    meta_sync.start()
 
     client = QueueClient(cfg)
     store = QueueMonitorStore(cfg.queue_monitor_state_path)
@@ -457,6 +542,8 @@ def main() -> int:
             store.set_worker(status="error", worker_id=cfg.worker_id)
             time.sleep(cfg.poll_interval)
 
+    meta_sync.stop()
+    meta_sync.join(timeout=3)
     logging.info("Queue worker stopped")
     store.set_worker(status="stopped", worker_id=cfg.worker_id)
     store.append_event("Queue worker stopped", level="info")

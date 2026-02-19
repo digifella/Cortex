@@ -8,9 +8,10 @@ import re
 import os
 import spacy
 from pathlib import Path
-from typing import List, Dict, Tuple, Set, Optional, Union
+from typing import List, Dict, Tuple, Set, Optional, Union, Any
 import logging
 from collections import defaultdict, Counter
+from dataclasses import dataclass, field
 
 from cortex_engine.entity_extractor import EntityExtractor, ExtractedEntity
 from cortex_engine.utils import get_logger
@@ -60,6 +61,59 @@ class AnonymizationMapping:
         """Get full mapping report for review."""
         return self.mappings.copy()
 
+
+@dataclass
+class AnonymizationOptions:
+    """Granular controls for anonymization behavior."""
+    redact_people: bool = True
+    redact_organizations: bool = True
+    redact_projects: bool = True
+    redact_locations: bool = True
+    redact_emails: bool = True
+    redact_phones: bool = True
+    redact_urls: bool = True
+    redact_headers_footers: bool = True
+    redact_personal_pronouns: bool = False
+    redact_company_names: bool = False
+    custom_company_names: List[str] = field(default_factory=list)
+    preserve_source_formatting: bool = True
+
+    @classmethod
+    def from_input(cls, value: Optional[Union["AnonymizationOptions", Dict[str, Any]]]) -> "AnonymizationOptions":
+        """Build options from dict/user input while keeping safe defaults."""
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, dict):
+            return cls()
+
+        kwargs: Dict[str, Any] = {}
+        for key in (
+            "redact_people",
+            "redact_organizations",
+            "redact_projects",
+            "redact_locations",
+            "redact_emails",
+            "redact_phones",
+            "redact_urls",
+            "redact_headers_footers",
+            "redact_personal_pronouns",
+            "redact_company_names",
+            "preserve_source_formatting",
+        ):
+            if key in value:
+                kwargs[key] = bool(value.get(key))
+
+        custom_names_raw = value.get("custom_company_names", [])
+        if isinstance(custom_names_raw, str):
+            custom_names = [name.strip() for name in custom_names_raw.split(",") if name.strip()]
+        elif isinstance(custom_names_raw, list):
+            custom_names = [str(name).strip() for name in custom_names_raw if str(name).strip()]
+        else:
+            custom_names = []
+        kwargs["custom_company_names"] = custom_names
+
+        return cls(**kwargs)
+
 class DocumentAnonymizer:
     """Main anonymization engine that processes documents."""
     
@@ -70,6 +124,10 @@ class DocumentAnonymizer:
         self.email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
         self.phone_pattern = re.compile(r'(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}')
         self.url_pattern = re.compile(r'https?://[^\s<>"{}|\\^`\[\]]+')
+        self.personal_pronoun_pattern = re.compile(
+            r"\b(he|she|him|her|his|hers|himself|herself|they|them|their|theirs|themself|themselves)\b",
+            re.IGNORECASE,
+        )
         
         # Enhanced name patterns for medical/academic documents
         self.comprehensive_name_patterns = [
@@ -102,23 +160,99 @@ class DocumentAnonymizer:
         except (OSError, ImportError) as e:
             logger.warning(f"spaCy model not available for anonymization: {e}")
             self.nlp = None
+
+    @staticmethod
+    def _is_structural_line(line: str) -> bool:
+        stripped = (line or "").strip()
+        if not stripped:
+            return True
+        if stripped.startswith(("#", ">", "|", "```", "---")):
+            return True
+        if re.match(r"^[-*+]\s+", stripped):
+            return True
+        if re.match(r"^\d+\.\s+", stripped):
+            return True
+        if re.match(r"^[A-Z][A-Z0-9 _-]{3,}:?$", stripped):
+            return True
+        return False
+
+    def _normalize_extracted_text(self, text: str) -> str:
+        """
+        Normalize extracted text similarly to Textifier:
+        - remove literal CR/CRLF markers
+        - normalize line endings
+        - reflow hard-wrapped plain lines into paragraphs
+        - preserve structural lines
+        """
+        normalized = (text or "")
+        normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+        normalized = re.sub(r"\s*<CRLF>\s*", "\n", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\s*<CR>\s*", "\n", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+
+        lines = [ln.rstrip() for ln in normalized.split("\n")]
+        out_lines: List[str] = []
+        para_buffer: List[str] = []
+        in_code_fence = False
+
+        def flush_paragraph() -> None:
+            if not para_buffer:
+                return
+            paragraph = " ".join(part.strip() for part in para_buffer if part.strip())
+            if paragraph:
+                out_lines.append(paragraph)
+            para_buffer.clear()
+
+        for raw in lines:
+            line = raw.strip()
+            if line.startswith("```"):
+                flush_paragraph()
+                in_code_fence = not in_code_fence
+                out_lines.append(raw)
+                continue
+
+            if in_code_fence:
+                out_lines.append(raw)
+                continue
+
+            if not line:
+                flush_paragraph()
+                if out_lines and out_lines[-1] != "":
+                    out_lines.append("")
+                continue
+
+            if self._is_structural_line(line):
+                flush_paragraph()
+                out_lines.append(raw)
+                continue
+
+            para_buffer.append(line)
+
+        flush_paragraph()
+        result = "\n".join(out_lines).strip()
+        return result + "\n" if result else ""
     
     def extract_text_from_file(self, file_path: Path) -> str:
         """Extract text from various file formats."""
         try:
             if file_path.suffix.lower() == '.txt':
                 with open(file_path, 'r', encoding='utf-8') as f:
-                    return f.read()
+                    return self._normalize_extracted_text(f.read())
             elif file_path.suffix.lower() in ['.pdf']:
                 # Use PyMuPDF for PDF text extraction
                 try:
                     import fitz
                     doc = fitz.open(file_path)
-                    text = ""
-                    for page in doc:
-                        text += page.get_text()
+                    text_parts: List[str] = []
+                    for page_index, page in enumerate(doc, start=1):
+                        page_text = page.get_text("text") or ""
+                        text_parts.append(page_text.strip())
+                        if page_index < len(doc):
+                            text_parts.append("")
+                            text_parts.append("---")
+                            text_parts.append("")
                     doc.close()
-                    return text
+                    return self._normalize_extracted_text("\n".join(text_parts))
                 except ImportError:
                     logger.error("PyMuPDF not available for PDF processing")
                     return ""
@@ -127,10 +261,10 @@ class DocumentAnonymizer:
                 try:
                     from docx import Document
                     doc = Document(file_path)
-                    text = ""
+                    text_lines: List[str] = []
                     for paragraph in doc.paragraphs:
-                        text += paragraph.text + "\n"
-                    return text
+                        text_lines.append(paragraph.text)
+                    return self._normalize_extracted_text("\n".join(text_lines))
                 except ImportError:
                     logger.error("python-docx not available for DOCX processing")
                     return ""
@@ -299,8 +433,15 @@ class DocumentAnonymizer:
         
         return any(keyword in text_lower for keyword in institutional_keywords)
     
-    def identify_entities_for_anonymization(self, text: str, filename: str = "", confidence_threshold: float = 0.3) -> List[ExtractedEntity]:
+    def identify_entities_for_anonymization(
+        self,
+        text: str,
+        filename: str = "",
+        confidence_threshold: float = 0.3,
+        options: Optional[Union[AnonymizationOptions, Dict[str, Any]]] = None,
+    ) -> List[ExtractedEntity]:
         """Identify all entities that should be anonymized using multiple methods."""
+        options = AnonymizationOptions.from_input(options)
         all_entities = []
         
         # Method 1: Existing entity extraction system
@@ -381,16 +522,30 @@ class DocumentAnonymizer:
             
             # Use dynamic confidence threshold
             if entity.confidence >= confidence_threshold:
+                entity_type = str(getattr(entity, "entity_type", "")).lower()
+                if entity_type == "person" and not options.redact_people:
+                    continue
+                if entity_type == "organization" and not options.redact_organizations:
+                    continue
+                if entity_type == "project" and not options.redact_projects:
+                    continue
+                if entity_type == "location" and not options.redact_locations:
+                    continue
                 filtered_entities.append(entity)
                 seen_names.add(normalized_name)
         
         logger.info(f"Identified {len(filtered_entities)} entities for anonymization using {len(all_entities)} total detections")
         return filtered_entities
     
-    def anonymize_text(self, text: str, entities: List[ExtractedEntity], 
-                      mapping: AnonymizationMapping) -> str:
+    def anonymize_text(
+        self,
+        text: str,
+        entities: List[ExtractedEntity],
+        mapping: AnonymizationMapping,
+        options: Optional[Union[AnonymizationOptions, Dict[str, Any]]] = None,
+    ) -> str:
         """Replace identified entities with anonymous placeholders."""
-        
+        options = AnonymizationOptions.from_input(options)
         anonymized_text = text
         
         # Sort entities by length (longest first) to avoid partial replacements
@@ -442,27 +597,53 @@ class DocumentAnonymizer:
                 logger.warning(f"Unexpected error replacing '{original_name}': {e}. Skipping replacement.")
                 continue
         
+        # Deterministic custom company name masking for known organizations
+        custom_company_replacements = 0
+        if options.redact_company_names and options.custom_company_names:
+            for company_name in sorted(set(options.custom_company_names), key=len, reverse=True):
+                anonymous_name = mapping.get_anonymous_name(company_name, "organization")
+                pattern = re.compile(r"\b" + re.escape(company_name) + r"\b", re.IGNORECASE)
+                matches = pattern.findall(anonymized_text)
+                if matches:
+                    anonymized_text = pattern.sub(anonymous_name, anonymized_text)
+                    custom_company_replacements += len(matches)
+
+        pronoun_count = 0
+        if options.redact_personal_pronouns:
+            pronoun_count = len(self.personal_pronoun_pattern.findall(anonymized_text))
+            anonymized_text = self.personal_pronoun_pattern.sub('[PRONOUN]', anonymized_text)
+
         # Handle emails, phones, URLs
-        email_count = len(self.email_pattern.findall(anonymized_text))
-        anonymized_text = self.email_pattern.sub('[EMAIL]', anonymized_text)
-        
-        phone_count = len(self.phone_pattern.findall(anonymized_text))
-        anonymized_text = self.phone_pattern.sub('[PHONE]', anonymized_text)
-        
-        url_count = len(self.url_pattern.findall(anonymized_text))
-        anonymized_text = self.url_pattern.sub('[URL]', anonymized_text)
-        
+        email_count = 0
+        if options.redact_emails:
+            email_count = len(self.email_pattern.findall(anonymized_text))
+            anonymized_text = self.email_pattern.sub('[EMAIL]', anonymized_text)
+
+        phone_count = 0
+        if options.redact_phones:
+            phone_count = len(self.phone_pattern.findall(anonymized_text))
+            anonymized_text = self.phone_pattern.sub('[PHONE]', anonymized_text)
+
+        url_count = 0
+        if options.redact_urls:
+            url_count = len(self.url_pattern.findall(anonymized_text))
+            anonymized_text = self.url_pattern.sub('[URL]', anonymized_text)
+
         # Handle headers/footers
         footer_replacements = 0
-        for pattern in self.header_footer_patterns:
-            matches = pattern.findall(anonymized_text)
-            if matches:
-                anonymized_text = pattern.sub('[HEADER/FOOTER REMOVED]', anonymized_text)
-                footer_replacements += len(matches)
+        if options.redact_headers_footers:
+            for pattern in self.header_footer_patterns:
+                matches = pattern.findall(anonymized_text)
+                if matches:
+                    anonymized_text = pattern.sub('[HEADER/FOOTER REMOVED]', anonymized_text)
+                    footer_replacements += len(matches)
         
-        logger.info(f"Anonymization complete: {replacements_made} entity replacements, "
-                   f"{email_count} emails, {phone_count} phones, {url_count} URLs, "
-                   f"{footer_replacements} headers/footers")
+        logger.info(
+            f"Anonymization complete: {replacements_made} entity replacements, "
+            f"{custom_company_replacements} custom company replacements, {pronoun_count} pronouns, "
+            f"{email_count} emails, {phone_count} phones, {url_count} URLs, "
+            f"{footer_replacements} headers/footers"
+        )
         
         return anonymized_text
     
@@ -496,7 +677,8 @@ class DocumentAnonymizer:
     def anonymize_single_file(self, input_path: Union[str, Path], 
                             output_path: Optional[Union[str, Path]] = None,
                             mapping: Optional[AnonymizationMapping] = None,
-                            confidence_threshold: float = 0.3) -> Tuple[str, AnonymizationMapping]:
+                            confidence_threshold: float = 0.3,
+                            options: Optional[Union[AnonymizationOptions, Dict[str, Any]]] = None) -> Tuple[str, AnonymizationMapping]:
         """Anonymize a single file."""
         
         input_path = normalize_path(input_path)
@@ -513,18 +695,28 @@ class DocumentAnonymizer:
         else:
             output_path = normalize_path(output_path)
         
+        resolved_options = AnonymizationOptions.from_input(options)
+
         logger.info(f"Anonymizing {input_path} -> {output_path}")
         
         # Extract text
         text = self.extract_text_from_file(input_path)
         if not text:
             raise ValueError(f"Could not extract text from {input_path}")
+
+        if resolved_options.preserve_source_formatting:
+            text = self._normalize_extracted_text(text)
         
         # Identify entities
-        entities = self.identify_entities_for_anonymization(text, input_path.name, confidence_threshold)
+        entities = self.identify_entities_for_anonymization(
+            text,
+            input_path.name,
+            confidence_threshold,
+            resolved_options,
+        )
         
         # Anonymize
-        anonymized_text = self.anonymize_text(text, entities, mapping)
+        anonymized_text = self.anonymize_text(text, entities, mapping, resolved_options)
         
         # Add anonymization header
         header = f"""[ANONYMIZED DOCUMENT]
@@ -553,7 +745,8 @@ Entities replaced: {len(mapping.mappings)}
     def anonymize_batch(self, input_paths: List[Union[str, Path]], 
                        output_directory: Optional[Union[str, Path]] = None,
                        shared_mapping: bool = True,
-                       confidence_threshold: float = 0.3) -> Dict[str, str]:
+                       confidence_threshold: float = 0.3,
+                       options: Optional[Union[AnonymizationOptions, Dict[str, Any]]] = None) -> Dict[str, str]:
         """Anonymize multiple files with optional shared entity mapping."""
         
         results = {}
@@ -578,7 +771,7 @@ Entities replaced: {len(mapping.mappings)}
                 file_mapping = mapping if shared_mapping else AnonymizationMapping()
                 
                 output_file, final_mapping = self.anonymize_single_file(
-                    input_path, output_path, file_mapping, confidence_threshold
+                    input_path, output_path, file_mapping, confidence_threshold, options
                 )
                 
                 results[str(input_path)] = output_file

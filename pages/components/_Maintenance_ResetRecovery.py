@@ -33,7 +33,6 @@ def render_reset_recovery_section(
             disabled=not clear_log_confirm,
         ):
             clear_ingestion_log_file_fn()
-            st.rerun()
 
         st.divider()
 
@@ -73,4 +72,3 @@ def render_reset_recovery_section(
                 perform_clean_start_fn(fresh_path)
             else:
                 delete_ingested_document_database_fn(fresh_path)
-            st.rerun()
