@@ -41,4 +41,8 @@ worker/tmp/
 
 # Ad hoc screenshots (avoid accidental commits)
 Screenshot*.png
+Screenshot*.jpg
 docker/Screenshot*.png
+
+# Local Windows-path mirror artifacts (must stay outside repo)
+F:\\ai_databases/
