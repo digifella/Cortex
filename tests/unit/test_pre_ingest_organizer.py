@@ -79,3 +79,29 @@ def test_pre_ingest_custom_policy_markers(tmp_path):
     assert "acme" in record["client_related"]
     assert record["source_ownership"] == "client_owned"
     assert record["ingest_policy_class"] == "review_required"
+
+
+def test_pre_ingest_progress_callback_emits_events(tmp_path):
+    source_root = tmp_path / "source"
+    db_root = tmp_path / "db"
+
+    _write(source_root / "alpha" / "doc1.txt", "first report")
+    _write(source_root / "alpha" / "doc2.md", "second report")
+
+    events = []
+
+    def _on_progress(event, data):
+        events.append((event, data))
+
+    result = run_pre_ingest_organizer_scan(
+        source_dirs=[source_root.as_posix()],
+        db_path=db_root.as_posix(),
+        progress_callback=_on_progress,
+    )
+
+    assert Path(result["manifest_path"]).exists()
+    event_names = [name for name, _ in events]
+    assert "scan_started" in event_names
+    assert "scan_complete" in event_names
+    assert "analyze_progress" in event_names
+    assert "manifest_written" in event_names

@@ -18,7 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .utils import (
     convert_source_path_to_docker_mount,
@@ -29,6 +29,7 @@ from .utils import (
 from .utils.file_utils import get_file_hash
 
 logger = get_logger(__name__)
+ProgressCallback = Callable[[str, Dict[str, Any]], None]
 
 
 SUPPORTED_EXTENSIONS = {
@@ -277,26 +278,77 @@ def _detect_source_ownership(
     return "first_party"
 
 
-def _iter_candidate_files(source_dirs: List[str], config: OrganizerConfig) -> List[Path]:
+def _emit_progress(progress_callback: Optional[ProgressCallback], event: str, **data: Any) -> None:
+    if not progress_callback:
+        return
+    try:
+        progress_callback(event, data)
+    except Exception:
+        # Progress logging should never break scan execution.
+        pass
+
+
+def _iter_candidate_files(
+    source_dirs: List[str],
+    config: OrganizerConfig,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> List[Path]:
     files: List[Path] = []
     include_exts = set(config.include_extensions or SUPPORTED_EXTENSIONS)
 
-    for source_dir in source_dirs:
+    for dir_idx, source_dir in enumerate(source_dirs, start=1):
+        _emit_progress(
+            progress_callback,
+            "scan_dir_start",
+            directory_index=dir_idx,
+            directory_count=len(source_dirs),
+            source_dir=source_dir,
+        )
         resolved = convert_source_path_to_docker_mount(source_dir)
         path_obj = Path(resolved)
         if not path_obj.exists() or not path_obj.is_dir():
             logger.warning(f"Source directory not found for pre-ingest organizer: {source_dir} -> {resolved}")
+            _emit_progress(
+                progress_callback,
+                "scan_dir_missing",
+                source_dir=source_dir,
+                resolved_path=resolved,
+            )
             continue
+        scanned_in_dir = 0
         for fp in path_obj.rglob("*"):
             if not fp.is_file():
                 continue
+            scanned_in_dir += 1
+            if scanned_in_dir == 1 or scanned_in_dir % 100 == 0:
+                _emit_progress(
+                    progress_callback,
+                    "scan_dir_progress",
+                    source_dir=source_dir,
+                    scanned_in_dir=scanned_in_dir,
+                    discovered_total=len(files),
+                    current_path=fp.as_posix(),
+                )
             ext = fp.suffix.lower()
-            if ext and ext not in include_exts:
+            if (not ext) or (ext not in include_exts):
                 continue
             files.append(fp)
             if len(files) >= config.max_file_count:
                 logger.warning(f"Max file count reached ({config.max_file_count}). Truncating scan.")
+                _emit_progress(
+                    progress_callback,
+                    "scan_truncated",
+                    max_file_count=config.max_file_count,
+                    discovered_total=len(files),
+                )
                 return files
+        _emit_progress(
+            progress_callback,
+            "scan_dir_done",
+            source_dir=source_dir,
+            scanned_in_dir=scanned_in_dir,
+            discovered_total=len(files),
+        )
     return files
 
 
@@ -305,6 +357,7 @@ def run_pre_ingest_organizer_scan(
     source_dirs: List[str],
     db_path: str,
     config: Optional[Dict[str, Any]] = None,
+    progress_callback: Optional[ProgressCallback] = None,
 ) -> Dict[str, Any]:
     """
     Execute pre-ingest scan and write manifest to external DB path.
@@ -322,13 +375,33 @@ def run_pre_ingest_organizer_scan(
     pre_ingest_dir = Path(runtime_db_path) / "pre_ingest"
     pre_ingest_dir.mkdir(parents=True, exist_ok=True)
 
-    files = _iter_candidate_files(source_dirs, cfg)
+    _emit_progress(
+        progress_callback,
+        "scan_started",
+        source_dir_count=len(source_dirs),
+        db_path=runtime_db_path,
+    )
+    files = _iter_candidate_files(source_dirs, cfg, progress_callback=progress_callback)
+    _emit_progress(
+        progress_callback,
+        "scan_complete",
+        discovered_total=len(files),
+    )
     now = datetime.now(timezone.utc).isoformat()
 
     records: List[Dict[str, Any]] = []
     grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
-    for fp in files:
+    total_files = len(files)
+    for idx, fp in enumerate(files, start=1):
+        if idx == 1 or idx % 25 == 0 or idx == total_files:
+            _emit_progress(
+                progress_callback,
+                "analyze_progress",
+                processed=idx,
+                total=total_files,
+                current_path=fp.as_posix(),
+            )
         sample = _extract_text_sample(fp, cfg.sample_char_limit)
         doc_class = _classify_doc_class(fp, sample)
         client_related = _extract_client_related(fp, sample, cfg.client_markers)
@@ -434,6 +507,12 @@ def run_pre_ingest_organizer_scan(
     manifest_path = pre_ingest_dir / "pre_ingest_manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as handle:
         json.dump(manifest, handle, indent=2)
+    _emit_progress(
+        progress_callback,
+        "manifest_written",
+        manifest_path=manifest_path.as_posix(),
+        total_files=len(records),
+    )
 
     return {
         "manifest_path": manifest_path.as_posix(),

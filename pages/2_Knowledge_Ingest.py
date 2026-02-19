@@ -1845,6 +1845,12 @@ def render_config_and_scan_ui():
                 "`<db_path>/pre_ingest/pre_ingest_manifest.json` "
                 "with include/exclude/review recommendations."
             )
+            log_placeholder = st.empty()
+            progress_placeholder = st.empty()
+            existing_lines = st.session_state.get("pre_ingest_log_lines", [])
+            if existing_lines:
+                log_placeholder.code("\n".join(existing_lines[-120:]), language="text")
+
             if st.button(
                 f"Run Pre-Ingest Organizer for {len(selected_to_scan)} director(y/ies)",
                 key="run_pre_ingest_organizer",
@@ -1855,15 +1861,82 @@ def render_config_and_scan_ui():
                     st.error("Valid source path and writable DB path are required.")
                 else:
                     try:
+                        st.session_state.pre_ingest_log_lines = []
+                        progress_placeholder.progress(0.0, text="Pre-ingest organizer starting...")
+
+                        def _format_pre_ingest_progress(event, data):
+                            if event == "scan_started":
+                                return f"[scan] Starting scan across {data.get('source_dir_count', 0)} directories"
+                            if event == "scan_dir_start":
+                                return (
+                                    f"[scan] Directory {data.get('directory_index', 0)}/{data.get('directory_count', 0)}: "
+                                    f"{data.get('source_dir', '')}"
+                                )
+                            if event == "scan_dir_progress":
+                                return (
+                                    f"[scan] {data.get('source_dir', '')} | scanned={data.get('scanned_in_dir', 0)} "
+                                    f"discovered={data.get('discovered_total', 0)} | {data.get('current_path', '')}"
+                                )
+                            if event == "scan_dir_done":
+                                return (
+                                    f"[scan] Completed {data.get('source_dir', '')} | scanned={data.get('scanned_in_dir', 0)} "
+                                    f"discovered={data.get('discovered_total', 0)}"
+                                )
+                            if event == "scan_complete":
+                                return f"[scan] Candidate discovery complete: {data.get('discovered_total', 0)} files"
+                            if event == "analyze_progress":
+                                return (
+                                    f"[analyze] {data.get('processed', 0)}/{data.get('total', 0)} | "
+                                    f"{data.get('current_path', '')}"
+                                )
+                            if event == "scan_truncated":
+                                return (
+                                    f"[scan] Max file limit reached ({data.get('max_file_count', 0)}), "
+                                    f"truncated at {data.get('discovered_total', 0)} files"
+                                )
+                            if event == "manifest_written":
+                                return f"[done] Manifest written: {data.get('manifest_path', '')}"
+                            if event == "scan_dir_missing":
+                                return (
+                                    f"[warn] Missing source directory: {data.get('source_dir', '')} "
+                                    f"-> {data.get('resolved_path', '')}"
+                                )
+                            return f"[{event}] {json.dumps(data, default=str)}"
+
+                        def _pre_ingest_progress_callback(event, data):
+                            line = _format_pre_ingest_progress(event, data)
+                            lines = st.session_state.setdefault("pre_ingest_log_lines", [])
+                            lines.append(line)
+                            if len(lines) > 500:
+                                st.session_state.pre_ingest_log_lines = lines[-500:]
+                            log_placeholder.code("\n".join(st.session_state.pre_ingest_log_lines[-120:]), language="text")
+
+                            if event == "scan_complete":
+                                progress_placeholder.progress(
+                                    0.5,
+                                    text=f"Discovery complete: {data.get('discovered_total', 0)} files. Analyzing...",
+                                )
+                            elif event == "analyze_progress":
+                                total = max(1, int(data.get("total", 1)))
+                                processed = max(0, min(int(data.get("processed", 0)), total))
+                                pct = 0.5 + (processed / total) * 0.5
+                                progress_placeholder.progress(
+                                    pct,
+                                    text=f"Analyzing files: {processed}/{total}",
+                                )
+
                         resolved_runtime = set_runtime_db_path(converted_db_path)
                         result = run_pre_ingest_organizer_scan(
                             source_dirs=selected_to_scan,
                             db_path=resolved_runtime,
+                            progress_callback=_pre_ingest_progress_callback,
                         )
                         st.session_state.pre_ingest_manifest_path = result.get("manifest_path")
                         st.session_state.pre_ingest_summary = result.get("summary", {})
+                        progress_placeholder.progress(1.0, text="Pre-ingest organizer complete")
                         st.success(f"Pre-ingest manifest created at: `{result.get('manifest_path', '')}`")
                     except Exception as e:
+                        progress_placeholder.empty()
                         st.error(f"Pre-ingest organizer failed: {e}")
 
             summary = st.session_state.get("pre_ingest_summary")
