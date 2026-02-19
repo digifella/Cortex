@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from cortex_engine.pre_ingest_organizer import run_pre_ingest_organizer_scan
+import pytest
+
+from cortex_engine.pre_ingest_organizer import PreIngestScanCancelled, run_pre_ingest_organizer_scan
 
 
 def _write(path: Path, content: str) -> None:
@@ -105,3 +107,25 @@ def test_pre_ingest_progress_callback_emits_events(tmp_path):
     assert "scan_complete" in event_names
     assert "analyze_progress" in event_names
     assert "manifest_written" in event_names
+
+
+def test_pre_ingest_control_callback_can_stop_scan(tmp_path):
+    source_root = tmp_path / "source"
+    db_root = tmp_path / "db"
+
+    _write(source_root / "alpha" / "doc1.txt", "one")
+    _write(source_root / "alpha" / "doc2.txt", "two")
+
+    calls = {"n": 0}
+
+    def _control():
+        calls["n"] += 1
+        if calls["n"] >= 1:
+            raise PreIngestScanCancelled("stopped in test")
+
+    with pytest.raises(PreIngestScanCancelled):
+        run_pre_ingest_organizer_scan(
+            source_dirs=[source_root.as_posix()],
+            db_path=db_root.as_posix(),
+            control_callback=_control,
+        )

@@ -30,6 +30,11 @@ from .utils.file_utils import get_file_hash
 
 logger = get_logger(__name__)
 ProgressCallback = Callable[[str, Dict[str, Any]], None]
+ControlCallback = Callable[[], None]
+
+
+class PreIngestScanCancelled(RuntimeError):
+    """Raised when a pre-ingest scan is stopped by operator action."""
 
 
 SUPPORTED_EXTENSIONS = {
@@ -288,15 +293,23 @@ def _emit_progress(progress_callback: Optional[ProgressCallback], event: str, **
         pass
 
 
+def _check_control(control_callback: Optional[ControlCallback]) -> None:
+    if not control_callback:
+        return
+    control_callback()
+
+
 def _iter_candidate_files(
     source_dirs: List[str],
     config: OrganizerConfig,
     progress_callback: Optional[ProgressCallback] = None,
+    control_callback: Optional[ControlCallback] = None,
 ) -> List[Path]:
     files: List[Path] = []
     include_exts = set(config.include_extensions or SUPPORTED_EXTENSIONS)
 
     for dir_idx, source_dir in enumerate(source_dirs, start=1):
+        _check_control(control_callback)
         _emit_progress(
             progress_callback,
             "scan_dir_start",
@@ -317,6 +330,7 @@ def _iter_candidate_files(
             continue
         scanned_in_dir = 0
         for fp in path_obj.rglob("*"):
+            _check_control(control_callback)
             if not fp.is_file():
                 continue
             scanned_in_dir += 1
@@ -358,6 +372,7 @@ def run_pre_ingest_organizer_scan(
     db_path: str,
     config: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[ProgressCallback] = None,
+    control_callback: Optional[ControlCallback] = None,
 ) -> Dict[str, Any]:
     """
     Execute pre-ingest scan and write manifest to external DB path.
@@ -381,7 +396,12 @@ def run_pre_ingest_organizer_scan(
         source_dir_count=len(source_dirs),
         db_path=runtime_db_path,
     )
-    files = _iter_candidate_files(source_dirs, cfg, progress_callback=progress_callback)
+    files = _iter_candidate_files(
+        source_dirs,
+        cfg,
+        progress_callback=progress_callback,
+        control_callback=control_callback,
+    )
     _emit_progress(
         progress_callback,
         "scan_complete",
@@ -394,6 +414,7 @@ def run_pre_ingest_organizer_scan(
 
     total_files = len(files)
     for idx, fp in enumerate(files, start=1):
+        _check_control(control_callback)
         if idx == 1 or idx % 25 == 0 or idx == total_files:
             _emit_progress(
                 progress_callback,

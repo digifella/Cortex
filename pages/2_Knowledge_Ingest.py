@@ -63,7 +63,7 @@ from cortex_engine.document_type_manager import get_document_type_manager
 from cortex_engine.help_system import help_system
 from cortex_engine.batch_manager import BatchState
 from cortex_engine.ingestion_recovery import IngestionRecoveryManager
-from cortex_engine.pre_ingest_organizer import run_pre_ingest_organizer_scan
+from cortex_engine.pre_ingest_organizer import PreIngestScanCancelled, run_pre_ingest_organizer_scan
 from cortex_engine.ui_theme import apply_theme, section_header
 from cortex_engine.model_manager import (
     get_available_embedding_models,
@@ -1845,99 +1845,229 @@ def render_config_and_scan_ui():
                 "`<db_path>/pre_ingest/pre_ingest_manifest.json` "
                 "with include/exclude/review recommendations."
             )
-            log_placeholder = st.empty()
-            progress_placeholder = st.empty()
-            existing_lines = st.session_state.get("pre_ingest_log_lines", [])
-            if existing_lines:
-                log_placeholder.code("\n".join(existing_lines[-120:]), language="text")
+            worker_state = st.session_state.setdefault(
+                "pre_ingest_worker",
+                {
+                    "status": "idle",
+                    "progress_pct": 0.0,
+                    "progress_text": "Not started",
+                    "log_lines": [],
+                    "event_queue": None,
+                    "thread": None,
+                    "pause_event": None,
+                    "stop_event": None,
+                    "error": "",
+                },
+            )
 
-            if st.button(
-                f"Run Pre-Ingest Organizer for {len(selected_to_scan)} director(y/ies)",
+            def _append_pre_ingest_log(line: str) -> None:
+                lines = worker_state.get("log_lines", [])
+                lines.append(line)
+                worker_state["log_lines"] = lines[-500:]
+
+            def _format_pre_ingest_progress(event, data):
+                if event == "scan_started":
+                    return f"[scan] Starting scan across {data.get('source_dir_count', 0)} directories"
+                if event == "scan_dir_start":
+                    return (
+                        f"[scan] Directory {data.get('directory_index', 0)}/{data.get('directory_count', 0)}: "
+                        f"{data.get('source_dir', '')}"
+                    )
+                if event == "scan_dir_progress":
+                    return (
+                        f"[scan] {data.get('source_dir', '')} | scanned={data.get('scanned_in_dir', 0)} "
+                        f"discovered={data.get('discovered_total', 0)} | {data.get('current_path', '')}"
+                    )
+                if event == "scan_dir_done":
+                    return (
+                        f"[scan] Completed {data.get('source_dir', '')} | scanned={data.get('scanned_in_dir', 0)} "
+                        f"discovered={data.get('discovered_total', 0)}"
+                    )
+                if event == "scan_complete":
+                    return f"[scan] Candidate discovery complete: {data.get('discovered_total', 0)} files"
+                if event == "analyze_progress":
+                    return (
+                        f"[analyze] {data.get('processed', 0)}/{data.get('total', 0)} | "
+                        f"{data.get('current_path', '')}"
+                    )
+                if event == "scan_truncated":
+                    return (
+                        f"[scan] Max file limit reached ({data.get('max_file_count', 0)}), "
+                        f"truncated at {data.get('discovered_total', 0)} files"
+                    )
+                if event == "manifest_written":
+                    return f"[done] Manifest written: {data.get('manifest_path', '')}"
+                if event == "scan_dir_missing":
+                    return (
+                        f"[warn] Missing source directory: {data.get('source_dir', '')} "
+                        f"-> {data.get('resolved_path', '')}"
+                    )
+                return f"[{event}] {json.dumps(data, default=str)}"
+
+            def _drain_pre_ingest_events() -> None:
+                event_queue = worker_state.get("event_queue")
+                if not event_queue:
+                    return
+                while True:
+                    try:
+                        event = event_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    kind = event.get("kind")
+                    if kind == "progress":
+                        evt = event.get("event", "")
+                        data = event.get("data", {})
+                        _append_pre_ingest_log(_format_pre_ingest_progress(evt, data))
+                        if evt == "scan_complete":
+                            worker_state["progress_pct"] = 0.5
+                            worker_state["progress_text"] = (
+                                f"Discovery complete: {data.get('discovered_total', 0)} files. Analyzing..."
+                            )
+                        elif evt == "analyze_progress":
+                            total = max(1, int(data.get("total", 1)))
+                            processed = max(0, min(int(data.get("processed", 0)), total))
+                            worker_state["progress_pct"] = 0.5 + (processed / total) * 0.5
+                            worker_state["progress_text"] = f"Analyzing files: {processed}/{total}"
+                    elif kind == "done":
+                        result = event.get("result", {})
+                        worker_state["status"] = "completed"
+                        worker_state["progress_pct"] = 1.0
+                        worker_state["progress_text"] = "Pre-ingest organizer complete"
+                        st.session_state.pre_ingest_manifest_path = result.get("manifest_path")
+                        st.session_state.pre_ingest_summary = result.get("summary", {})
+                        _append_pre_ingest_log(f"[done] Completed scan ({result.get('total_files', 0)} files)")
+                    elif kind == "stopped":
+                        worker_state["status"] = "stopped"
+                        worker_state["progress_text"] = "Stopped by operator"
+                        _append_pre_ingest_log(f"[stop] {event.get('message', 'Scan stopped')}")
+                    elif kind == "error":
+                        worker_state["status"] = "failed"
+                        worker_state["error"] = str(event.get("error", "Unknown error"))
+                        worker_state["progress_text"] = "Failed"
+                        _append_pre_ingest_log(f"[error] {worker_state['error']}")
+
+                thread_obj = worker_state.get("thread")
+                if thread_obj and (not thread_obj.is_alive()) and worker_state.get("status") in {"running", "paused", "stopping"}:
+                    worker_state["status"] = "stopped"
+                    worker_state["progress_text"] = "Stopped"
+
+            _drain_pre_ingest_events()
+
+            status = worker_state.get("status", "idle")
+            status_col, prog_col = st.columns([1, 3])
+            status_col.metric("Status", status)
+            prog_col.progress(float(worker_state.get("progress_pct", 0.0)), text=str(worker_state.get("progress_text", "")))
+
+            c1, c2, c3, c4 = st.columns(4)
+            can_start = status in {"idle", "completed", "failed", "stopped"}
+            if c1.button(
+                f"Run Pre-Ingest Organizer ({len(selected_to_scan)} dirs)",
                 key="run_pre_ingest_organizer",
                 use_container_width=True,
                 type="secondary",
+                disabled=not can_start,
             ):
                 if not (is_knowledge_path_valid and is_db_path_valid and db_path_writable):
                     st.error("Valid source path and writable DB path are required.")
                 else:
-                    try:
-                        st.session_state.pre_ingest_log_lines = []
-                        progress_placeholder.progress(0.0, text="Pre-ingest organizer starting...")
+                    resolved_runtime = set_runtime_db_path(converted_db_path)
+                    event_queue = queue.Queue()
+                    pause_event = threading.Event()
+                    pause_event.set()
+                    stop_event = threading.Event()
+                    worker_state["status"] = "running"
+                    worker_state["progress_pct"] = 0.0
+                    worker_state["progress_text"] = "Pre-ingest organizer starting..."
+                    worker_state["log_lines"] = []
+                    worker_state["event_queue"] = event_queue
+                    worker_state["pause_event"] = pause_event
+                    worker_state["stop_event"] = stop_event
+                    worker_state["error"] = ""
 
-                        def _format_pre_ingest_progress(event, data):
-                            if event == "scan_started":
-                                return f"[scan] Starting scan across {data.get('source_dir_count', 0)} directories"
-                            if event == "scan_dir_start":
-                                return (
-                                    f"[scan] Directory {data.get('directory_index', 0)}/{data.get('directory_count', 0)}: "
-                                    f"{data.get('source_dir', '')}"
-                                )
-                            if event == "scan_dir_progress":
-                                return (
-                                    f"[scan] {data.get('source_dir', '')} | scanned={data.get('scanned_in_dir', 0)} "
-                                    f"discovered={data.get('discovered_total', 0)} | {data.get('current_path', '')}"
-                                )
-                            if event == "scan_dir_done":
-                                return (
-                                    f"[scan] Completed {data.get('source_dir', '')} | scanned={data.get('scanned_in_dir', 0)} "
-                                    f"discovered={data.get('discovered_total', 0)}"
-                                )
-                            if event == "scan_complete":
-                                return f"[scan] Candidate discovery complete: {data.get('discovered_total', 0)} files"
-                            if event == "analyze_progress":
-                                return (
-                                    f"[analyze] {data.get('processed', 0)}/{data.get('total', 0)} | "
-                                    f"{data.get('current_path', '')}"
-                                )
-                            if event == "scan_truncated":
-                                return (
-                                    f"[scan] Max file limit reached ({data.get('max_file_count', 0)}), "
-                                    f"truncated at {data.get('discovered_total', 0)} files"
-                                )
-                            if event == "manifest_written":
-                                return f"[done] Manifest written: {data.get('manifest_path', '')}"
-                            if event == "scan_dir_missing":
-                                return (
-                                    f"[warn] Missing source directory: {data.get('source_dir', '')} "
-                                    f"-> {data.get('resolved_path', '')}"
-                                )
-                            return f"[{event}] {json.dumps(data, default=str)}"
+                    def _progress_callback(event, data):
+                        event_queue.put({"kind": "progress", "event": event, "data": data})
 
-                        def _pre_ingest_progress_callback(event, data):
-                            line = _format_pre_ingest_progress(event, data)
-                            lines = st.session_state.setdefault("pre_ingest_log_lines", [])
-                            lines.append(line)
-                            if len(lines) > 500:
-                                st.session_state.pre_ingest_log_lines = lines[-500:]
-                            log_placeholder.code("\n".join(st.session_state.pre_ingest_log_lines[-120:]), language="text")
+                    def _control_callback():
+                        while not pause_event.is_set():
+                            if stop_event.is_set():
+                                raise PreIngestScanCancelled("Scan stopped by operator")
+                            time.sleep(0.2)
+                        if stop_event.is_set():
+                            raise PreIngestScanCancelled("Scan stopped by operator")
 
-                            if event == "scan_complete":
-                                progress_placeholder.progress(
-                                    0.5,
-                                    text=f"Discovery complete: {data.get('discovered_total', 0)} files. Analyzing...",
-                                )
-                            elif event == "analyze_progress":
-                                total = max(1, int(data.get("total", 1)))
-                                processed = max(0, min(int(data.get("processed", 0)), total))
-                                pct = 0.5 + (processed / total) * 0.5
-                                progress_placeholder.progress(
-                                    pct,
-                                    text=f"Analyzing files: {processed}/{total}",
-                                )
+                    def _worker_target():
+                        try:
+                            result = run_pre_ingest_organizer_scan(
+                                source_dirs=selected_to_scan,
+                                db_path=resolved_runtime,
+                                progress_callback=_progress_callback,
+                                control_callback=_control_callback,
+                            )
+                            event_queue.put({"kind": "done", "result": result})
+                        except PreIngestScanCancelled as exc:
+                            event_queue.put({"kind": "stopped", "message": str(exc)})
+                        except Exception as exc:
+                            event_queue.put({"kind": "error", "error": str(exc)})
 
-                        resolved_runtime = set_runtime_db_path(converted_db_path)
-                        result = run_pre_ingest_organizer_scan(
-                            source_dirs=selected_to_scan,
-                            db_path=resolved_runtime,
-                            progress_callback=_pre_ingest_progress_callback,
-                        )
-                        st.session_state.pre_ingest_manifest_path = result.get("manifest_path")
-                        st.session_state.pre_ingest_summary = result.get("summary", {})
-                        progress_placeholder.progress(1.0, text="Pre-ingest organizer complete")
-                        st.success(f"Pre-ingest manifest created at: `{result.get('manifest_path', '')}`")
-                    except Exception as e:
-                        progress_placeholder.empty()
-                        st.error(f"Pre-ingest organizer failed: {e}")
+                    thread_obj = threading.Thread(target=_worker_target, daemon=True, name="pre-ingest-organizer")
+                    worker_state["thread"] = thread_obj
+                    thread_obj.start()
+                    st.rerun()
+
+            if c2.button(
+                "Pause",
+                key="pause_pre_ingest_organizer",
+                use_container_width=True,
+                disabled=status != "running",
+            ):
+                pause_event = worker_state.get("pause_event")
+                if pause_event:
+                    pause_event.clear()
+                    worker_state["status"] = "paused"
+                    _append_pre_ingest_log("[control] Pause requested")
+                    st.rerun()
+
+            if c3.button(
+                "Resume",
+                key="resume_pre_ingest_organizer",
+                use_container_width=True,
+                disabled=status != "paused",
+            ):
+                pause_event = worker_state.get("pause_event")
+                if pause_event:
+                    pause_event.set()
+                    worker_state["status"] = "running"
+                    _append_pre_ingest_log("[control] Resume requested")
+                    st.rerun()
+
+            if c4.button(
+                "Stop",
+                key="stop_pre_ingest_organizer",
+                use_container_width=True,
+                disabled=status not in {"running", "paused"},
+            ):
+                stop_event = worker_state.get("stop_event")
+                pause_event = worker_state.get("pause_event")
+                if stop_event:
+                    stop_event.set()
+                if pause_event:
+                    pause_event.set()
+                worker_state["status"] = "stopping"
+                worker_state["progress_text"] = "Stopping..."
+                _append_pre_ingest_log("[control] Stop requested")
+                st.rerun()
+
+            lines = worker_state.get("log_lines", [])
+            if lines:
+                st.code("\n".join(lines[-120:]), language="text")
+            if worker_state.get("status") == "failed" and worker_state.get("error"):
+                st.error(f"Pre-ingest organizer failed: {worker_state.get('error')}")
+            if worker_state.get("status") == "completed":
+                st.success(f"Pre-ingest manifest created at: `{st.session_state.get('pre_ingest_manifest_path', '')}`")
+
+            if worker_state.get("status") in {"running", "paused", "stopping"}:
+                time.sleep(1)
+                st.rerun()
 
             summary = st.session_state.get("pre_ingest_summary")
             if summary:
