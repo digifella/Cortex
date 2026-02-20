@@ -2601,8 +2601,8 @@ def render_config_and_scan_ui():
                     st.error(db_path_error or "Database path is not writable. Please choose a directory on a mounted drive that allows write access.")
 
     else:
-        # No files or directories selected - show disabled button
-        st.button("🔎 Select files or directories above to enable scanning", type="primary", use_container_width=True, disabled=True)
+        # No files or directories selected - show an explicit callout instead of a disabled button
+        st.info("🔎 Select files or directories above to enable scanning.")
 
     render_maintenance_link(
         "pages/6_Maintenance.py",
