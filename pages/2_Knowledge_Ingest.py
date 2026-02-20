@@ -201,6 +201,34 @@ div[data-testid="stButton"] > button:disabled,
     color: #6B7280 !important;
     border-color: #D4DAE0 !important;
 }
+
+/* Streamlit button variants (primary/secondary) - enforce readable contrast */
+button[data-testid="baseButton-primary"] {
+    background-color: #2A4362 !important;
+    color: #FFFFFF !important;
+    border: 1px solid #1F3550 !important;
+}
+button[data-testid="baseButton-primary"]:hover {
+    background-color: #324f73 !important;
+    color: #FFFFFF !important;
+}
+button[data-testid="baseButton-primary"]:disabled {
+    background-color: #E2E8F0 !important;
+    color: #374151 !important;
+    border-color: #CBD5E1 !important;
+    opacity: 1 !important;
+}
+button[data-testid="baseButton-secondary"] {
+    background-color: #F8F9FA !important;
+    color: #111111 !important;
+    border: 1px solid #C5CCD3 !important;
+}
+button[data-testid="baseButton-secondary"]:disabled {
+    background-color: #ECEFF2 !important;
+    color: #4B5563 !important;
+    border-color: #D4DAE0 !important;
+    opacity: 1 !important;
+}
 /* Force light mode for code blocks (processing log) */
 pre, code, .stCodeBlock, [data-testid="stCodeBlock"] {
     background-color: #F8F9FA !important;
