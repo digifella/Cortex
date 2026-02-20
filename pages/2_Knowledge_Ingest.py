@@ -2097,7 +2097,7 @@ def render_config_and_scan_ui():
                 st.caption(f"Latest manifest: `{manifest_path}`")
                 preview_col1, preview_col2 = st.columns([1, 1])
                 if preview_col1.button(
-                    "Load Manifest Table Preview",
+                    "Load Manifest For Review",
                     key="load_pre_ingest_manifest_preview",
                     use_container_width=True,
                 ):
@@ -2111,7 +2111,7 @@ def render_config_and_scan_ui():
                         st.error(f"Failed to load manifest preview: {e}")
 
                 if preview_col2.button(
-                    "Clear Table Preview",
+                    "Clear Loaded Manifest",
                     key="clear_pre_ingest_manifest_preview",
                     use_container_width=True,
                 ):
@@ -2120,26 +2120,161 @@ def render_config_and_scan_ui():
 
                 preview_records = list(st.session_state.get("pre_ingest_manifest_preview", []))
                 if preview_records:
+                    st.markdown("**Review + Edit Manifest Decisions**")
+                    st.caption("Editable fields: policy, sensitivity, ownership, and operator notes.")
+
                     table_rows = []
                     for rec in preview_records:
                         table_rows.append(
                             {
                                 "file_name": rec.get("file_name", ""),
                                 "doc_class": rec.get("doc_class", ""),
-                                "ingest_policy_class": rec.get("ingest_policy_class", ""),
-                                "sensitivity_level": rec.get("sensitivity_level", ""),
-                                "source_ownership": rec.get("source_ownership", ""),
-                                "is_canonical_version": rec.get("is_canonical_version", False),
+                                "ingest_policy_class": rec.get("ingest_policy_class", "review_required"),
+                                "sensitivity_level": rec.get("sensitivity_level", "public"),
+                                "source_ownership": rec.get("source_ownership", "first_party"),
+                                "is_canonical_version": bool(rec.get("is_canonical_version", False)),
+                                "operator_note": rec.get("operator_note", ""),
                                 "file_path": rec.get("file_path", ""),
                             }
                         )
-                    st.dataframe(table_rows, use_container_width=True, hide_index=True, height=320)
+
+                    edited_rows = st.data_editor(
+                        table_rows,
+                        key="pre_ingest_manifest_editor",
+                        use_container_width=True,
+                        hide_index=True,
+                        height=360,
+                        disabled=["file_name", "doc_class", "is_canonical_version", "file_path"],
+                        column_config={
+                            "ingest_policy_class": st.column_config.SelectboxColumn(
+                                "ingest_policy_class",
+                                options=["include", "exclude", "review_required", "do_not_ingest"],
+                                required=True,
+                            ),
+                            "sensitivity_level": st.column_config.SelectboxColumn(
+                                "sensitivity_level",
+                                options=["public", "internal", "confidential", "restricted"],
+                                required=True,
+                            ),
+                            "source_ownership": st.column_config.SelectboxColumn(
+                                "source_ownership",
+                                options=["first_party", "client_owned", "external_ip"],
+                                required=True,
+                            ),
+                            "operator_note": st.column_config.TextColumn(
+                                "operator_note",
+                                help="Optional override/context note for this document decision.",
+                            ),
+                        },
+                    )
+
+                    if hasattr(edited_rows, "to_dict"):
+                        edited_records = edited_rows.to_dict(orient="records")
+                    elif isinstance(edited_rows, list):
+                        edited_records = edited_rows
+                    else:
+                        edited_records = table_rows
+
+                    edit_col1, edit_col2 = st.columns([1, 1])
+                    if edit_col1.button(
+                        "Save Decisions to Manifest",
+                        key="save_pre_ingest_manifest_edits",
+                        use_container_width=True,
+                        type="primary",
+                    ):
+                        try:
+                            with open(manifest_path, "r", encoding="utf-8") as handle:
+                                payload = json.load(handle)
+                            records = list(payload.get("records", []))
+                            by_path = {str(r.get("file_path", "")): r for r in records}
+
+                            for row in edited_records:
+                                fp = str(row.get("file_path", ""))
+                                target = by_path.get(fp)
+                                if not target:
+                                    continue
+                                target["ingest_policy_class"] = str(row.get("ingest_policy_class", target.get("ingest_policy_class", "review_required")))
+                                target["sensitivity_level"] = str(row.get("sensitivity_level", target.get("sensitivity_level", "public")))
+                                target["source_ownership"] = str(row.get("source_ownership", target.get("source_ownership", "first_party")))
+                                target["operator_note"] = str(row.get("operator_note", target.get("operator_note", ""))).strip()
+
+                            payload["summary"] = {
+                                "total_files": len(records),
+                                "policy_counts": {
+                                    "include": sum(1 for r in records if r.get("ingest_policy_class") == "include"),
+                                    "exclude": sum(1 for r in records if r.get("ingest_policy_class") == "exclude"),
+                                    "review_required": sum(1 for r in records if r.get("ingest_policy_class") == "review_required"),
+                                    "do_not_ingest": sum(1 for r in records if r.get("ingest_policy_class") == "do_not_ingest"),
+                                },
+                                "ownership_counts": {
+                                    "first_party": sum(1 for r in records if r.get("source_ownership") == "first_party"),
+                                    "client_owned": sum(1 for r in records if r.get("source_ownership") == "client_owned"),
+                                    "external_ip": sum(1 for r in records if r.get("source_ownership") == "external_ip"),
+                                },
+                            }
+
+                            with open(manifest_path, "w", encoding="utf-8") as handle:
+                                json.dump(payload, handle, indent=2)
+
+                            st.session_state.pre_ingest_manifest_preview = records
+                            st.session_state.pre_ingest_summary = payload["summary"]
+                            st.success("Saved manifest decisions.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to save manifest decisions: {e}")
+
+                    include_review = edit_col2.toggle(
+                        "Include review_required in approved set",
+                        key="pre_ingest_include_review_required",
+                        value=False,
+                    )
+
+                    if st.button(
+                        "Prepare Ingest From Approved Policies",
+                        key="prepare_ingest_from_manifest_policies",
+                        use_container_width=True,
+                    ):
+                        allowed = {"include"}
+                        if include_review:
+                            allowed.add("review_required")
+
+                        selected_files = sorted(
+                            {
+                                str(r.get("file_path", "")).strip()
+                                for r in st.session_state.get("pre_ingest_manifest_preview", [])
+                                if str(r.get("ingest_policy_class", "")).strip() in allowed
+                                and str(r.get("file_path", "")).strip()
+                            }
+                        )
+
+                        if not selected_files:
+                            st.warning("No files match approved policies. Adjust decisions and save first.")
+                        else:
+                            st.session_state.files_to_review = selected_files
+                            st.session_state.file_selections = {fp: True for fp in selected_files}
+                            st.session_state.review_page = 0
+                            scan_config = {
+                                "selected_directories": selected_to_scan,
+                                "knowledge_source_path": st.session_state.knowledge_source_path,
+                                "db_path": st.session_state.db_path,
+                                "db_path_runtime": set_runtime_db_path(converted_db_path),
+                                "batch_ingest_mode": st.session_state.get("batch_ingest_mode", False),
+                                "manifest_path": manifest_path,
+                                "scan_timestamp": datetime.now().isoformat(),
+                            }
+                            if "current_scan_config" not in st.session_state:
+                                st.session_state.current_scan_config = {}
+                            st.session_state.current_scan_config.update(scan_config)
+                            st.session_state.ingestion_stage = "pre_analysis"
+                            st.success(f"Prepared {len(selected_files)} approved files for ingest review.")
+                            st.rerun()
+
                     if st.toggle(
                         "Show Raw Manifest JSON (first 50 records)",
                         key="show_pre_ingest_raw_json",
                         value=False,
                     ):
-                        st.json(preview_records[:50])
+                        st.json(st.session_state.get("pre_ingest_manifest_preview", [])[:50])
 
     if has_direct_files:
         # Direct file selection mode - button to proceed with selected files
