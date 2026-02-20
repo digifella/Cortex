@@ -2256,8 +2256,33 @@ def render_config_and_scan_ui():
                     st.markdown("**Review + Edit Manifest Decisions**")
                     st.caption("Editable fields: policy, sensitivity, ownership, and operator notes.")
 
+                    view_col1, view_col2 = st.columns(2)
+                    hide_include_rows = view_col1.checkbox(
+                        "Hide rows with ingest_policy_class = include",
+                        key="pre_ingest_hide_include_rows",
+                        value=False,
+                    )
+                    hide_do_not_rows = view_col2.checkbox(
+                        "Hide rows with ingest_policy_class = do_not_ingest",
+                        key="pre_ingest_hide_do_not_ingest_rows",
+                        value=False,
+                    )
+
+                    display_records = []
+                    for rec in preview_records:
+                        policy_class = str(rec.get("ingest_policy_class", "")).strip()
+                        if hide_include_rows and policy_class == "include":
+                            continue
+                        if hide_do_not_rows and policy_class == "do_not_ingest":
+                            continue
+                        display_records.append(rec)
+
+                    if not display_records:
+                        st.warning("No rows left to display with current filters.")
+                        display_records = []
+
                     table_rows = []
-                    for row_num, rec in enumerate(preview_records, start=1):
+                    for row_num, rec in enumerate(display_records, start=1):
                         table_rows.append(
                             {
                                 "row_num": row_num,
@@ -2323,7 +2348,7 @@ def render_config_and_scan_ui():
                     # Bulk update helpers for large manifests (apply by row range / filter in one action)
                     st.markdown("**Bulk Update (Range / Filter)**")
                     bulk_col1, bulk_col2, bulk_col3 = st.columns([1, 1, 2])
-                    total_rows = max(1, len(preview_records))
+                    total_rows = max(1, len(display_records))
                     with bulk_col1:
                         bulk_start = st.number_input(
                             "Start Row",
@@ -2393,7 +2418,7 @@ def render_config_and_scan_ui():
                         changed = 0
                         start_idx = int(min(bulk_start, bulk_end))
                         end_idx = int(max(bulk_start, bulk_end))
-                        for idx, rec in enumerate(preview_records, start=1):
+                        for idx, rec in enumerate(display_records, start=1):
                             name = str(rec.get("file_name", "")).lower()
                             path = str(rec.get("file_path", "")).lower()
                             text_hit = (not bulk_path_contains) or (bulk_path_contains in name) or (bulk_path_contains in path)
@@ -2435,7 +2460,7 @@ def render_config_and_scan_ui():
                     ):
                         changed = _apply_bulk_updates("range")
                         st.session_state.pre_ingest_manifest_preview = preview_records
-                        st.success(f"Applied bulk update to {changed} row(s).")
+                        st.success(f"Applied bulk update to {changed} displayed row(s).")
                         st.rerun()
                     if bulk_btn2.button(
                         "Apply To Filtered Rows",
@@ -2444,7 +2469,7 @@ def render_config_and_scan_ui():
                     ):
                         changed = _apply_bulk_updates("filtered")
                         st.session_state.pre_ingest_manifest_preview = preview_records
-                        st.success(f"Applied bulk update to {changed} filtered row(s).")
+                        st.success(f"Applied bulk update to {changed} displayed/filtered row(s).")
                         st.rerun()
                     if bulk_btn3.button(
                         "Apply To All Loaded Rows",
@@ -2453,7 +2478,7 @@ def render_config_and_scan_ui():
                     ):
                         changed = _apply_bulk_updates("all")
                         st.session_state.pre_ingest_manifest_preview = preview_records
-                        st.success(f"Applied bulk update to {changed} row(s).")
+                        st.success(f"Applied bulk update to {changed} displayed row(s).")
                         st.rerun()
 
                     edit_col1, edit_col2 = st.columns([1, 1])
