@@ -62,6 +62,34 @@ def _parse_iso_datetime(value):
         return None
 
 
+def _split_existing_and_missing_doc_ids(vector_collection, doc_ids):
+    """
+    Resolve which collection doc IDs are still present in the vector store.
+    Returns (existing_doc_ids, missing_doc_ids) preserving original order.
+    """
+    if not doc_ids:
+        return [], []
+
+    try:
+        results = vector_collection.get(
+            where={"doc_id": {"$in": doc_ids}},
+            include=["metadatas"],
+        )
+        metadatas = results.get("metadatas", []) if isinstance(results, dict) else []
+        existing_set = {
+            meta.get("doc_id")
+            for meta in metadatas
+            if isinstance(meta, dict) and meta.get("doc_id")
+        }
+        existing_doc_ids = [doc_id for doc_id in doc_ids if doc_id in existing_set]
+        missing_doc_ids = [doc_id for doc_id in doc_ids if doc_id not in existing_set]
+        return existing_doc_ids, missing_doc_ids
+    except Exception as e:
+        logger.warning(f"Failed to validate doc IDs against vector store: {e}")
+        # Fail safe: treat IDs as existing so user workflow still proceeds.
+        return list(doc_ids), []
+
+
 def _detect_active_ingestion(db_path: str, active_window_minutes: int = 30) -> dict:
     """Detect likely active ingestion by checking recent ingestion state artifacts."""
     try:
@@ -1100,7 +1128,16 @@ for collection in page_collections:
                             )
                             c_fix1, c_fix2 = st.columns([1, 2])
                             with c_fix1:
-                                if st.button("🩹 Repair References", key=f"repair_refs_{name}", use_container_width=True):
+                                repair_confirmed = st.checkbox(
+                                    "I understand this removes stale references from this collection.",
+                                    key=f"repair_confirm_{name}",
+                                )
+                                if st.button(
+                                    "🩹 Repair References",
+                                    key=f"repair_refs_{name}",
+                                    use_container_width=True,
+                                    disabled=not repair_confirmed,
+                                ):
                                     try:
                                         repair_result = collection_mgr.prune_missing_doc_references(name, vector_collection)
                                         removed = repair_result.get("removed_count", 0)
@@ -1295,15 +1332,30 @@ for collection in page_collections:
                                         default_docs = collection_mgr.collections.get('default', {}).get('doc_ids', [])
 
                                         if default_docs:
-                                            # Add docs to new collection
-                                            collection_mgr.add_docs_by_id_to_collection(new_name, default_docs)
+                                            # Validate which default doc IDs still exist in the vector store.
+                                            existing_default_docs, missing_default_docs = _split_existing_and_missing_doc_ids(
+                                                vector_collection, default_docs
+                                            )
+
+                                            if missing_default_docs:
+                                                st.warning(
+                                                    f"⚠️ Found {len(missing_default_docs)} stale reference(s) in 'default'. "
+                                                    "Only documents that still exist in the Knowledge Base will be migrated."
+                                                )
+
+                                            if existing_default_docs:
+                                                # Add valid docs to new collection.
+                                                collection_mgr.add_docs_by_id_to_collection(new_name, existing_default_docs)
 
                                             # Clear default collection
                                             collection_mgr.collections['default']['doc_ids'] = []
                                             collection_mgr.collections['default']['modified_at'] = datetime.now().isoformat()
                                             collection_mgr._save()
 
-                                            st.success(f"✅ Created '{new_name}' with {len(default_docs)} documents! Default collection cleared.")
+                                            st.success(
+                                                f"✅ Created '{new_name}' with {len(existing_default_docs)} valid document(s). "
+                                                f"Skipped {len(missing_default_docs)} stale reference(s). Default collection cleared."
+                                            )
                                         else:
                                             st.success(f"✅ Created '{new_name}' collection (default was empty).")
 
