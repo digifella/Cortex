@@ -25,6 +25,12 @@ Implement a resumable pre-ingest organizer workflow that scans source directorie
 - [x] Add unit tests for classification and version grouping
 - [x] Add minimal UI hook in Knowledge Ingest page to run pre-ingest scan
 - [x] Add docs on how to run/use pre-ingest organizer
+- [x] Add live pre-ingest scan log output (directories/files/progress)
+- [x] Add pause/resume/stop controls for long-running scans
+- [x] Add editable manifest review table in UI
+- [x] Add bulk row-range/filter update actions for large manifests
+- [x] Add directory-specific timestamped manifests + combined snapshots
+- [x] Add resume workflow to load and continue editing saved manifests without re-scan
 
 ## Phase 2: Staging Integration
 
@@ -46,5 +52,14 @@ Implement a resumable pre-ingest organizer workflow that scans source directorie
   - `pages/2_Knowledge_Ingest.py` pre-ingest organizer UI expander and trigger
   - `tests/unit/test_pre_ingest_organizer.py`
   - `docs/PRE_INGEST_ORGANIZER_QUICKSTART.md`
+- Expanded Phase 1 UX completed:
+  - live log + progress while scanning
+  - pause/resume/stop controls
+  - editable review table with controlled field options
+  - bulk updates by displayed row range / filter / all rows
+  - filtered display mode with continuous display row numbers
+  - auto-load manifest on scan completion
+  - manifest picker with per-file summary stats
+  - directory-specific and timestamped manifest outputs for re-entry
 - Targeted test run passed:
   - `pytest -q tests/unit/test_pre_ingest_organizer.py`
