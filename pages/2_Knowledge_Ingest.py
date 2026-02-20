@@ -241,6 +241,24 @@ button[data-testid="baseButton-secondary"]:disabled {
     border-color: #D4DAE0 !important;
     opacity: 1 !important;
 }
+
+/* Fallback hardening: any disabled button text must stay readable */
+div[data-testid="stButton"] button:disabled,
+div[data-testid="stButton"] button[aria-disabled="true"],
+.stButton button:disabled,
+.stButton button[aria-disabled="true"] {
+    opacity: 1 !important;
+    color: #111827 !important;
+    -webkit-text-fill-color: #111827 !important;
+}
+div[data-testid="stButton"] button:disabled *,
+div[data-testid="stButton"] button[aria-disabled="true"] *,
+.stButton button:disabled *,
+.stButton button[aria-disabled="true"] * {
+    color: #111827 !important;
+    opacity: 1 !important;
+    -webkit-text-fill-color: #111827 !important;
+}
 /* Force light mode for code blocks (processing log) */
 pre, code, .stCodeBlock, [data-testid="stCodeBlock"] {
     background-color: #F8F9FA !important;
