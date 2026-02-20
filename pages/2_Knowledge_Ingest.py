@@ -2350,6 +2350,36 @@ def render_config_and_scan_ui():
                     else:
                         edited_records = table_rows
 
+                    # Keep a live working copy in session so filters/bulk actions use current edits
+                    # even before explicit "Save Decisions to Manifest".
+                    live_changed = False
+                    preview_by_path = {str(r.get("file_path", "")): r for r in preview_records}
+                    for row in edited_records:
+                        fp = str(row.get("file_path", ""))
+                        target = preview_by_path.get(fp)
+                        if not target:
+                            continue
+                        current_doc_class = str(target.get("doc_class", "unknown"))
+                        next_doc_class = str(row.get("doc_class", current_doc_class))
+                        if next_doc_class != current_doc_class:
+                            target["doc_class"] = next_doc_class
+                            target["doc_class_overridden"] = True
+                            live_changed = True
+
+                        for key_name, fallback in (
+                            ("ingest_policy_class", "review_required"),
+                            ("sensitivity_level", "public"),
+                            ("source_ownership", "first_party"),
+                            ("operator_note", ""),
+                        ):
+                            existing_val = str(target.get(key_name, fallback))
+                            next_val = str(row.get(key_name, existing_val))
+                            if next_val != existing_val:
+                                target[key_name] = next_val
+                                live_changed = True
+                    if live_changed:
+                        st.session_state.pre_ingest_manifest_preview = preview_records
+
                     # Bulk update helpers for large manifests (apply by row range / filter in one action)
                     st.markdown("**Bulk Update (Range / Filter)**")
                     bulk_col1, bulk_col2, bulk_col3 = st.columns([1, 1, 2])
@@ -2405,19 +2435,6 @@ def render_config_and_scan_ui():
                             options=["No change", "first_party", "client_owned", "external_ip"],
                             key="pre_ingest_bulk_ownership",
                         )
-
-                    # First, carry any manual edits from data_editor back into the preview records in memory.
-                    edited_by_path = {str(row.get("file_path", "")): row for row in edited_records}
-                    for rec in preview_records:
-                        fp = str(rec.get("file_path", ""))
-                        row = edited_by_path.get(fp)
-                        if not row:
-                            continue
-                        rec["doc_class"] = str(row.get("doc_class", rec.get("doc_class", "unknown")))
-                        rec["ingest_policy_class"] = str(row.get("ingest_policy_class", rec.get("ingest_policy_class", "review_required")))
-                        rec["sensitivity_level"] = str(row.get("sensitivity_level", rec.get("sensitivity_level", "public")))
-                        rec["source_ownership"] = str(row.get("source_ownership", rec.get("source_ownership", "first_party")))
-                        rec["operator_note"] = str(row.get("operator_note", rec.get("operator_note", "")))
 
                     def _apply_bulk_updates(match_mode: str) -> int:
                         changed = 0
