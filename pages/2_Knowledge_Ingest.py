@@ -1923,7 +1923,11 @@ def render_config_and_scan_ui():
 
     # Optional pre-ingest organizer pass (scan-only manifest generation)
     if has_dir_selection:
-        with st.expander("🧭 Pre-Ingest Organizer (Recommended for messy repositories)", expanded=False):
+        pre_ingest_worker_state = st.session_state.get("pre_ingest_worker", {})
+        pre_ingest_status = str(pre_ingest_worker_state.get("status", "idle"))
+        pre_ingest_has_loaded_manifest = bool(st.session_state.get("pre_ingest_manifest_preview"))
+        pre_ingest_expanded = pre_ingest_status in {"running", "paused", "stopping", "completed", "failed"} or pre_ingest_has_loaded_manifest
+        with st.expander("🧭 Pre-Ingest Organizer (Recommended for messy repositories)", expanded=pre_ingest_expanded):
             st.caption(
                 "Runs a fast pre-ingestion triage scan and writes "
                 "`<db_path>/pre_ingest/pre_ingest_manifest.json` "
@@ -2024,6 +2028,15 @@ def render_config_and_scan_ui():
                         if st.session_state.get("pre_ingest_manifest_path"):
                             st.session_state.pre_ingest_manifest_selected = st.session_state.get("pre_ingest_manifest_path")
                         st.session_state.pre_ingest_summary = result.get("summary", {})
+                        # Auto-load newly created manifest for immediate review/edit.
+                        try:
+                            auto_manifest_path = st.session_state.get("pre_ingest_manifest_path")
+                            if auto_manifest_path:
+                                with open(auto_manifest_path, "r", encoding="utf-8") as handle:
+                                    auto_payload = json.load(handle)
+                                st.session_state.pre_ingest_manifest_preview = list(auto_payload.get("records", []))
+                        except Exception as exc:
+                            _append_pre_ingest_log(f"[warn] Could not auto-load manifest: {exc}")
                         _append_pre_ingest_log(f"[done] Completed scan ({result.get('total_files', 0)} files)")
                     elif kind == "stopped":
                         worker_state["status"] = "stopped"
@@ -2244,9 +2257,10 @@ def render_config_and_scan_ui():
                     st.caption("Editable fields: policy, sensitivity, ownership, and operator notes.")
 
                     table_rows = []
-                    for rec in preview_records:
+                    for row_num, rec in enumerate(preview_records, start=1):
                         table_rows.append(
                             {
+                                "row_num": row_num,
                                 "file_name": rec.get("file_name", ""),
                                 "doc_class": rec.get("doc_class", ""),
                                 "ingest_policy_class": rec.get("ingest_policy_class", "review_required"),
@@ -2264,8 +2278,14 @@ def render_config_and_scan_ui():
                         use_container_width=True,
                         hide_index=True,
                         height=360,
-                        disabled=["file_name", "is_canonical_version", "file_path"],
+                        disabled=["row_num", "file_name", "is_canonical_version", "file_path"],
                         column_config={
+                            "row_num": st.column_config.NumberColumn(
+                                "Row",
+                                help="Stable row number for bulk range operations.",
+                                format="%d",
+                                width="small",
+                            ),
                             "doc_class": st.column_config.SelectboxColumn(
                                 "doc_class",
                                 options=["work_knowledge", "admin_finance", "legal_contract", "draft", "unknown"],
