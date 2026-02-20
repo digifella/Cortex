@@ -1958,10 +1958,17 @@ def render_config_and_scan_ui():
             status_col.metric("Status", status)
             prog_col.progress(float(worker_state.get("progress_pct", 0.0)), text=str(worker_state.get("progress_text", "")))
 
+            force_rerun = st.checkbox(
+                "Force fresh re-run (clear previous manifest summary first)",
+                key="pre_ingest_force_rerun",
+                value=False,
+                help="Use this if a previous run's results are still shown or you want a clean re-scan cycle.",
+            )
+
             c1, c2, c3, c4 = st.columns(4)
             can_start = status in {"idle", "completed", "failed", "stopped"}
             if c1.button(
-                f"Run Pre-Ingest Organizer ({len(selected_to_scan)} dirs)",
+                f"Run/Re-run Pre-Ingest Organizer ({len(selected_to_scan)} dirs)",
                 key="run_pre_ingest_organizer",
                 use_container_width=True,
                 type="secondary",
@@ -1970,6 +1977,10 @@ def render_config_and_scan_ui():
                 if not (is_knowledge_path_valid and is_db_path_valid and db_path_writable):
                     st.error("Valid source path and writable DB path are required.")
                 else:
+                    if force_rerun:
+                        st.session_state.pre_ingest_manifest_path = ""
+                        st.session_state.pre_ingest_summary = {}
+                        st.session_state.pre_ingest_manifest_preview = []
                     resolved_runtime = set_runtime_db_path(converted_db_path)
                     event_queue = queue.Queue()
                     pause_event = threading.Event()
@@ -2084,6 +2095,47 @@ def render_config_and_scan_ui():
             manifest_path = st.session_state.get("pre_ingest_manifest_path")
             if manifest_path:
                 st.caption(f"Latest manifest: `{manifest_path}`")
+                preview_col1, preview_col2 = st.columns([1, 1])
+                if preview_col1.button(
+                    "Load Manifest Table Preview",
+                    key="load_pre_ingest_manifest_preview",
+                    use_container_width=True,
+                ):
+                    try:
+                        with open(manifest_path, "r", encoding="utf-8") as handle:
+                            payload = json.load(handle)
+                        records = list(payload.get("records", []))
+                        st.session_state.pre_ingest_manifest_preview = records
+                        st.success(f"Loaded {len(records)} manifest records.")
+                    except Exception as e:
+                        st.error(f"Failed to load manifest preview: {e}")
+
+                if preview_col2.button(
+                    "Clear Table Preview",
+                    key="clear_pre_ingest_manifest_preview",
+                    use_container_width=True,
+                ):
+                    st.session_state.pre_ingest_manifest_preview = []
+                    st.rerun()
+
+                preview_records = list(st.session_state.get("pre_ingest_manifest_preview", []))
+                if preview_records:
+                    table_rows = []
+                    for rec in preview_records:
+                        table_rows.append(
+                            {
+                                "file_name": rec.get("file_name", ""),
+                                "doc_class": rec.get("doc_class", ""),
+                                "ingest_policy_class": rec.get("ingest_policy_class", ""),
+                                "sensitivity_level": rec.get("sensitivity_level", ""),
+                                "source_ownership": rec.get("source_ownership", ""),
+                                "is_canonical_version": rec.get("is_canonical_version", False),
+                                "file_path": rec.get("file_path", ""),
+                            }
+                        )
+                    st.dataframe(table_rows, use_container_width=True, hide_index=True, height=320)
+                    with st.expander("Raw Manifest JSON (truncated view)", expanded=False):
+                        st.json(preview_records[:50])
 
     if has_direct_files:
         # Direct file selection mode - button to proceed with selected files
