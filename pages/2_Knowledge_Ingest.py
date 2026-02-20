@@ -2144,8 +2144,13 @@ def render_config_and_scan_ui():
                         use_container_width=True,
                         hide_index=True,
                         height=360,
-                        disabled=["file_name", "doc_class", "is_canonical_version", "file_path"],
+                        disabled=["file_name", "is_canonical_version", "file_path"],
                         column_config={
+                            "doc_class": st.column_config.SelectboxColumn(
+                                "doc_class",
+                                options=["work_knowledge", "admin_finance", "legal_contract", "draft", "unknown"],
+                                required=True,
+                            ),
                             "ingest_policy_class": st.column_config.SelectboxColumn(
                                 "ingest_policy_class",
                                 options=["include", "exclude", "review_required", "do_not_ingest"],
@@ -2193,6 +2198,10 @@ def render_config_and_scan_ui():
                                 target = by_path.get(fp)
                                 if not target:
                                     continue
+                                new_doc_class = str(row.get("doc_class", target.get("doc_class", "unknown")))
+                                old_doc_class = str(target.get("doc_class", "unknown"))
+                                target["doc_class"] = new_doc_class
+                                target["doc_class_overridden"] = bool(new_doc_class != old_doc_class)
                                 target["ingest_policy_class"] = str(row.get("ingest_policy_class", target.get("ingest_policy_class", "review_required")))
                                 target["sensitivity_level"] = str(row.get("sensitivity_level", target.get("sensitivity_level", "public")))
                                 target["source_ownership"] = str(row.get("source_ownership", target.get("source_ownership", "first_party")))
