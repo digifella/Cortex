@@ -2134,7 +2134,11 @@ def render_config_and_scan_ui():
                             }
                         )
                     st.dataframe(table_rows, use_container_width=True, hide_index=True, height=320)
-                    with st.expander("Raw Manifest JSON (truncated view)", expanded=False):
+                    if st.toggle(
+                        "Show Raw Manifest JSON (first 50 records)",
+                        key="show_pre_ingest_raw_json",
+                        value=False,
+                    ):
                         st.json(preview_records[:50])
 
     if has_direct_files:

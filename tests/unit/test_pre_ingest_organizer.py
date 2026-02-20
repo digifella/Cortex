@@ -81,6 +81,33 @@ def test_pre_ingest_custom_policy_markers(tmp_path):
     assert "acme" in record["client_related"]
     assert record["source_ownership"] == "client_owned"
     assert record["ingest_policy_class"] == "review_required"
+    assert record["sensitivity_level"] == "confidential"
+
+
+def test_pre_ingest_business_planning_markers_classified_internal(tmp_path):
+    source_root = tmp_path / "source"
+    db_root = tmp_path / "db"
+
+    _write(source_root / "sales" / "q1_sales_plan.txt", "weekly planning and pipeline report")
+    _write(source_root / "finance" / "quarterly_budget_report.txt", "quarterly report and budgets")
+
+    result = run_pre_ingest_organizer_scan(
+        source_dirs=[source_root.as_posix()],
+        db_path=db_root.as_posix(),
+    )
+
+    import json
+
+    payload = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+    by_name = {r["file_name"]: r for r in payload["records"]}
+
+    sales_doc = by_name["q1_sales_plan.txt"]
+    budget_doc = by_name["quarterly_budget_report.txt"]
+
+    assert sales_doc["sensitivity_level"] == "internal"
+    assert sales_doc["sensitivity_reason"] == "business_planning_marker"
+    assert budget_doc["sensitivity_level"] == "internal"
+    assert budget_doc["sensitivity_reason"] == "business_planning_marker"
 
 
 def test_pre_ingest_progress_callback_emits_events(tmp_path):

@@ -76,6 +76,21 @@ DEFAULT_RESTRICTED_PATH_MARKERS = [
     "blocked_ingest",
 ]
 
+INTERNAL_BUSINESS_MARKERS = [
+    "sales",
+    "industry planning",
+    "marketing plan",
+    "account plan",
+    "weekly planning",
+    "opportunities",
+    "sales plan",
+    "pipeline report",
+    "monthly report",
+    "quarterly report",
+    "budget",
+    "budgets",
+]
+
 
 @dataclass
 class OrganizerConfig:
@@ -194,6 +209,8 @@ def _detect_sensitivity(file_path: Path, sample: str, config: OrganizerConfig) -
         return "restricted", "strong_confidentiality_phrase"
     if any(token in combined for token in ("confidential", "internal use only", "proprietary", "privileged")):
         return "confidential", "confidentiality_marker"
+    if any(token in combined for token in INTERNAL_BUSINESS_MARKERS):
+        return "internal", "business_planning_marker"
     if any(token in combined for token in ("internal", "private", "client")):
         return "internal", "internal_marker"
     return "public", "no_sensitive_marker"
