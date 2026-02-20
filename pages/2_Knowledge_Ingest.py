@@ -175,6 +175,32 @@ div[data-testid="column"] .stButton > button {
     text-align: left !important;
     justify-content: flex-start !important;
 }
+
+/* Ensure readable high-contrast buttons regardless of app theme */
+div[data-testid="stButton"] > button,
+.stButton > button {
+    background-color: #F8F9FA !important;
+    color: #111111 !important;
+    border: 1px solid #C5CCD3 !important;
+}
+div[data-testid="stButton"] > button:hover,
+.stButton > button:hover {
+    background-color: #EEF2F6 !important;
+    color: #111111 !important;
+    border-color: #AEB8C3 !important;
+}
+div[data-testid="stButton"] > button:focus,
+.stButton > button:focus {
+    color: #111111 !important;
+    border-color: #7A8794 !important;
+    box-shadow: 0 0 0 2px rgba(122, 135, 148, 0.25) !important;
+}
+div[data-testid="stButton"] > button:disabled,
+.stButton > button:disabled {
+    background-color: #ECEFF2 !important;
+    color: #6B7280 !important;
+    border-color: #D4DAE0 !important;
+}
 /* Force light mode for code blocks (processing log) */
 pre, code, .stCodeBlock, [data-testid="stCodeBlock"] {
     background-color: #F8F9FA !important;
