@@ -2300,6 +2300,142 @@ def render_config_and_scan_ui():
                     else:
                         edited_records = table_rows
 
+                    # Bulk update helpers for large manifests (apply by row range / filter in one action)
+                    st.markdown("**Bulk Update (Range / Filter)**")
+                    bulk_col1, bulk_col2, bulk_col3 = st.columns([1, 1, 2])
+                    total_rows = max(1, len(preview_records))
+                    with bulk_col1:
+                        bulk_start = st.number_input(
+                            "Start Row",
+                            min_value=1,
+                            max_value=total_rows,
+                            value=1,
+                            step=1,
+                            key="pre_ingest_bulk_start_row",
+                        )
+                    with bulk_col2:
+                        bulk_end = st.number_input(
+                            "End Row",
+                            min_value=1,
+                            max_value=total_rows,
+                            value=total_rows,
+                            step=1,
+                            key="pre_ingest_bulk_end_row",
+                        )
+                    with bulk_col3:
+                        bulk_path_contains = st.text_input(
+                            "Optional filter (file/path contains)",
+                            key="pre_ingest_bulk_path_filter",
+                            value="",
+                            placeholder="e.g. account planning, /sales/, pipeline",
+                        ).strip().lower()
+
+                    bulk_set_col1, bulk_set_col2, bulk_set_col3, bulk_set_col4 = st.columns(4)
+                    with bulk_set_col1:
+                        bulk_doc_class = st.selectbox(
+                            "Set doc_class",
+                            options=["No change", "work_knowledge", "admin_finance", "legal_contract", "draft", "unknown"],
+                            key="pre_ingest_bulk_doc_class",
+                        )
+                    with bulk_set_col2:
+                        bulk_policy = st.selectbox(
+                            "Set ingest_policy_class",
+                            options=["No change", "include", "exclude", "review_required", "do_not_ingest"],
+                            key="pre_ingest_bulk_policy",
+                        )
+                    with bulk_set_col3:
+                        bulk_sensitivity = st.selectbox(
+                            "Set sensitivity_level",
+                            options=["No change", "public", "internal", "confidential", "restricted"],
+                            key="pre_ingest_bulk_sensitivity",
+                        )
+                    with bulk_set_col4:
+                        bulk_ownership = st.selectbox(
+                            "Set source_ownership",
+                            options=["No change", "first_party", "client_owned", "external_ip"],
+                            key="pre_ingest_bulk_ownership",
+                        )
+
+                    # First, carry any manual edits from data_editor back into the preview records in memory.
+                    edited_by_path = {str(row.get("file_path", "")): row for row in edited_records}
+                    for rec in preview_records:
+                        fp = str(rec.get("file_path", ""))
+                        row = edited_by_path.get(fp)
+                        if not row:
+                            continue
+                        rec["doc_class"] = str(row.get("doc_class", rec.get("doc_class", "unknown")))
+                        rec["ingest_policy_class"] = str(row.get("ingest_policy_class", rec.get("ingest_policy_class", "review_required")))
+                        rec["sensitivity_level"] = str(row.get("sensitivity_level", rec.get("sensitivity_level", "public")))
+                        rec["source_ownership"] = str(row.get("source_ownership", rec.get("source_ownership", "first_party")))
+                        rec["operator_note"] = str(row.get("operator_note", rec.get("operator_note", "")))
+
+                    def _apply_bulk_updates(match_mode: str) -> int:
+                        changed = 0
+                        start_idx = int(min(bulk_start, bulk_end))
+                        end_idx = int(max(bulk_start, bulk_end))
+                        for idx, rec in enumerate(preview_records, start=1):
+                            name = str(rec.get("file_name", "")).lower()
+                            path = str(rec.get("file_path", "")).lower()
+                            text_hit = (not bulk_path_contains) or (bulk_path_contains in name) or (bulk_path_contains in path)
+                            range_hit = start_idx <= idx <= end_idx
+
+                            if match_mode == "range":
+                                target = range_hit and text_hit
+                            elif match_mode == "filtered":
+                                target = text_hit
+                            else:
+                                target = True
+
+                            if not target:
+                                continue
+
+                            row_changed = False
+                            if bulk_doc_class != "No change" and rec.get("doc_class") != bulk_doc_class:
+                                rec["doc_class"] = bulk_doc_class
+                                rec["doc_class_overridden"] = True
+                                row_changed = True
+                            if bulk_policy != "No change" and rec.get("ingest_policy_class") != bulk_policy:
+                                rec["ingest_policy_class"] = bulk_policy
+                                row_changed = True
+                            if bulk_sensitivity != "No change" and rec.get("sensitivity_level") != bulk_sensitivity:
+                                rec["sensitivity_level"] = bulk_sensitivity
+                                row_changed = True
+                            if bulk_ownership != "No change" and rec.get("source_ownership") != bulk_ownership:
+                                rec["source_ownership"] = bulk_ownership
+                                row_changed = True
+                            if row_changed:
+                                changed += 1
+                        return changed
+
+                    bulk_btn1, bulk_btn2, bulk_btn3 = st.columns(3)
+                    if bulk_btn1.button(
+                        "Apply To Row Range",
+                        key="pre_ingest_apply_bulk_range",
+                        use_container_width=True,
+                    ):
+                        changed = _apply_bulk_updates("range")
+                        st.session_state.pre_ingest_manifest_preview = preview_records
+                        st.success(f"Applied bulk update to {changed} row(s).")
+                        st.rerun()
+                    if bulk_btn2.button(
+                        "Apply To Filtered Rows",
+                        key="pre_ingest_apply_bulk_filtered",
+                        use_container_width=True,
+                    ):
+                        changed = _apply_bulk_updates("filtered")
+                        st.session_state.pre_ingest_manifest_preview = preview_records
+                        st.success(f"Applied bulk update to {changed} filtered row(s).")
+                        st.rerun()
+                    if bulk_btn3.button(
+                        "Apply To All Loaded Rows",
+                        key="pre_ingest_apply_bulk_all",
+                        use_container_width=True,
+                    ):
+                        changed = _apply_bulk_updates("all")
+                        st.session_state.pre_ingest_manifest_preview = preview_records
+                        st.success(f"Applied bulk update to {changed} row(s).")
+                        st.rerun()
+
                     edit_col1, edit_col2 = st.columns([1, 1])
                     if edit_col1.button(
                         "Save Decisions to Manifest",
