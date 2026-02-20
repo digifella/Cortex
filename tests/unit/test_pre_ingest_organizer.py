@@ -156,3 +156,29 @@ def test_pre_ingest_control_callback_can_stop_scan(tmp_path):
             db_path=db_root.as_posix(),
             control_callback=_control,
         )
+
+
+def test_pre_ingest_writes_directory_specific_manifests(tmp_path):
+    source_a = tmp_path / "source_a"
+    source_b = tmp_path / "source_b"
+    db_root = tmp_path / "db"
+
+    _write(source_a / "reports" / "a_doc.txt", "internal planning")
+    _write(source_b / "reports" / "b_doc.txt", "external report")
+
+    result = run_pre_ingest_organizer_scan(
+        source_dirs=[source_a.as_posix(), source_b.as_posix()],
+        db_path=db_root.as_posix(),
+    )
+
+    manifest_paths = [Path(p) for p in result.get("manifest_paths", [])]
+    assert len(manifest_paths) >= 3  # combined + per-directory files
+    for p in manifest_paths:
+        assert p.exists()
+
+    combined = Path(result["manifest_path"])
+    assert combined.exists()
+    assert combined.name.startswith("pre_ingest_manifest_all_")
+
+    latest_alias = db_root / "pre_ingest" / "pre_ingest_manifest.json"
+    assert latest_alias.exists()

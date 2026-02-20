@@ -1934,6 +1934,11 @@ def render_config_and_scan_ui():
                         worker_state["progress_pct"] = 1.0
                         worker_state["progress_text"] = "Pre-ingest organizer complete"
                         st.session_state.pre_ingest_manifest_path = result.get("manifest_path")
+                        st.session_state.pre_ingest_manifest_paths = list(
+                            result.get("manifest_paths") or ([result.get("manifest_path")] if result.get("manifest_path") else [])
+                        )
+                        if st.session_state.get("pre_ingest_manifest_path"):
+                            st.session_state.pre_ingest_manifest_selected = st.session_state.get("pre_ingest_manifest_path")
                         st.session_state.pre_ingest_summary = result.get("summary", {})
                         _append_pre_ingest_log(f"[done] Completed scan ({result.get('total_files', 0)} files)")
                     elif kind == "stopped":
@@ -1979,6 +1984,8 @@ def render_config_and_scan_ui():
                 else:
                     if force_rerun:
                         st.session_state.pre_ingest_manifest_path = ""
+                        st.session_state.pre_ingest_manifest_paths = []
+                        st.session_state.pre_ingest_manifest_selected = ""
                         st.session_state.pre_ingest_summary = {}
                         st.session_state.pre_ingest_manifest_preview = []
                     resolved_runtime = set_runtime_db_path(converted_db_path)
@@ -2092,20 +2099,49 @@ def render_config_and_scan_ui():
                     f"- Ownership: first_party={own.get('first_party', 0)}, "
                     f"client_owned={own.get('client_owned', 0)}, external_ip={own.get('external_ip', 0)}"
                 )
-            manifest_path = st.session_state.get("pre_ingest_manifest_path")
-            if manifest_path:
-                st.caption(f"Latest manifest: `{manifest_path}`")
+            runtime_db_for_pre_ingest = set_runtime_db_path(converted_db_path) if converted_db_path else ""
+            pre_ingest_dir = Path(runtime_db_for_pre_ingest) / "pre_ingest" if runtime_db_for_pre_ingest else None
+            disk_manifests = []
+            if pre_ingest_dir and pre_ingest_dir.exists():
+                disk_manifests = sorted(
+                    [p.as_posix() for p in pre_ingest_dir.glob("pre_ingest_manifest*.json") if p.is_file()],
+                    key=lambda p: Path(p).stat().st_mtime,
+                    reverse=True,
+                )
+            known_manifests = list(st.session_state.get("pre_ingest_manifest_paths", []))
+            manifest_options = []
+            seen = set()
+            for p in (disk_manifests + known_manifests):
+                if p and p not in seen:
+                    seen.add(p)
+                    manifest_options.append(p)
+
+            if manifest_options:
+                default_selected = st.session_state.get("pre_ingest_manifest_selected") or manifest_options[0]
+                if default_selected not in manifest_options:
+                    default_selected = manifest_options[0]
+                selected_manifest = st.selectbox(
+                    "Manifest File",
+                    options=manifest_options,
+                    index=manifest_options.index(default_selected),
+                    key="pre_ingest_manifest_selected",
+                    help="Choose a saved manifest to review/edit and prepare for ingest.",
+                )
+                st.caption(f"Selected manifest: `{selected_manifest}`")
+
                 preview_col1, preview_col2 = st.columns([1, 1])
                 if preview_col1.button(
-                    "Load Manifest For Review",
+                    "Load Selected Manifest",
                     key="load_pre_ingest_manifest_preview",
                     use_container_width=True,
                 ):
                     try:
-                        with open(manifest_path, "r", encoding="utf-8") as handle:
+                        with open(selected_manifest, "r", encoding="utf-8") as handle:
                             payload = json.load(handle)
                         records = list(payload.get("records", []))
                         st.session_state.pre_ingest_manifest_preview = records
+                        st.session_state.pre_ingest_manifest_path = selected_manifest
+                        st.session_state.pre_ingest_summary = payload.get("summary", {})
                         st.success(f"Loaded {len(records)} manifest records.")
                     except Exception as e:
                         st.error(f"Failed to load manifest preview: {e}")
@@ -2188,7 +2224,7 @@ def render_config_and_scan_ui():
                         type="primary",
                     ):
                         try:
-                            with open(manifest_path, "r", encoding="utf-8") as handle:
+                            with open(selected_manifest, "r", encoding="utf-8") as handle:
                                 payload = json.load(handle)
                             records = list(payload.get("records", []))
                             by_path = {str(r.get("file_path", "")): r for r in records}
@@ -2222,10 +2258,11 @@ def render_config_and_scan_ui():
                                 },
                             }
 
-                            with open(manifest_path, "w", encoding="utf-8") as handle:
+                            with open(selected_manifest, "w", encoding="utf-8") as handle:
                                 json.dump(payload, handle, indent=2)
 
                             st.session_state.pre_ingest_manifest_preview = records
+                            st.session_state.pre_ingest_manifest_path = selected_manifest
                             st.session_state.pre_ingest_summary = payload["summary"]
                             st.success("Saved manifest decisions.")
                             st.rerun()
@@ -2268,7 +2305,7 @@ def render_config_and_scan_ui():
                                 "db_path": st.session_state.db_path,
                                 "db_path_runtime": set_runtime_db_path(converted_db_path),
                                 "batch_ingest_mode": st.session_state.get("batch_ingest_mode", False),
-                                "manifest_path": manifest_path,
+                                "manifest_path": selected_manifest,
                                 "scan_timestamp": datetime.now().isoformat(),
                             }
                             if "current_scan_config" not in st.session_state:

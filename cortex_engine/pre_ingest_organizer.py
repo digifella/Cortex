@@ -316,6 +316,38 @@ def _check_control(control_callback: Optional[ControlCallback]) -> None:
     control_callback()
 
 
+def _slugify_for_filename(value: str, fallback: str = "manifest") -> str:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return fallback
+    slug = re.sub(r"[^a-z0-9]+", "_", raw).strip("_")
+    return slug or fallback
+
+
+def _build_manifest(records: List[Dict[str, Any]], *, source_dirs: List[str], db_path: str, generated_at: str) -> Dict[str, Any]:
+    return {
+        "version": "1.1",
+        "generated_at": generated_at,
+        "source_dirs": source_dirs,
+        "db_path": db_path,
+        "records": records,
+        "summary": {
+            "total_files": len(records),
+            "policy_counts": {
+                "include": sum(1 for r in records if r.get("ingest_policy_class") == "include"),
+                "exclude": sum(1 for r in records if r.get("ingest_policy_class") == "exclude"),
+                "review_required": sum(1 for r in records if r.get("ingest_policy_class") == "review_required"),
+                "do_not_ingest": sum(1 for r in records if r.get("ingest_policy_class") == "do_not_ingest"),
+            },
+            "ownership_counts": {
+                "first_party": sum(1 for r in records if r.get("source_ownership") == "first_party"),
+                "client_owned": sum(1 for r in records if r.get("source_ownership") == "client_owned"),
+                "external_ip": sum(1 for r in records if r.get("source_ownership") == "external_ip"),
+            },
+        },
+    }
+
+
 def _iter_candidate_files(
     source_dirs: List[str],
     config: OrganizerConfig,
@@ -406,6 +438,16 @@ def run_pre_ingest_organizer_scan(
     runtime_db_path = convert_to_docker_mount_path(_normalized_source_path(db_path))
     pre_ingest_dir = Path(runtime_db_path) / "pre_ingest"
     pre_ingest_dir.mkdir(parents=True, exist_ok=True)
+    source_resolution = []
+    for idx, src in enumerate(source_dirs, start=1):
+        resolved = convert_source_path_to_docker_mount(src)
+        source_resolution.append(
+            {
+                "source_dir": src,
+                "resolved_path": Path(resolved),
+                "label": _slugify_for_filename(Path(str(src)).name or str(src), fallback=f"source_{idx}"),
+            }
+        )
 
     _emit_progress(
         progress_callback,
@@ -480,7 +522,17 @@ def run_pre_ingest_organizer_scan(
             "ingest_policy_confidence": 0.6,
             "ingest_policy_reasons": [],
             "scan_timestamp": now,
+            "source_dir": "",
         }
+        fp_posix = fp.as_posix()
+        matched_source = ""
+        matched_len = -1
+        for source_info in source_resolution:
+            root = source_info["resolved_path"].as_posix()
+            if root and fp_posix.startswith(root) and len(root) > matched_len:
+                matched_source = str(source_info["source_dir"])
+                matched_len = len(root)
+        record["source_dir"] = matched_source or source_dirs[0]
         records.append(record)
         grouped[group_key].append(record)
 
@@ -520,40 +572,43 @@ def run_pre_ingest_organizer_scan(
         except Exception:
             rec["file_hash"] = ""
 
-    manifest = {
-        "version": "1.0",
-        "generated_at": now,
-        "source_dirs": source_dirs,
-        "db_path": runtime_db_path,
-        "records": records,
-        "summary": {
-            "total_files": len(records),
-            "policy_counts": {
-                "include": sum(1 for r in records if r.get("ingest_policy_class") == "include"),
-                "exclude": sum(1 for r in records if r.get("ingest_policy_class") == "exclude"),
-                "review_required": sum(1 for r in records if r.get("ingest_policy_class") == "review_required"),
-                "do_not_ingest": sum(1 for r in records if r.get("ingest_policy_class") == "do_not_ingest"),
-            },
-            "ownership_counts": {
-                "first_party": sum(1 for r in records if r.get("source_ownership") == "first_party"),
-                "client_owned": sum(1 for r in records if r.get("source_ownership") == "client_owned"),
-                "external_ip": sum(1 for r in records if r.get("source_ownership") == "external_ip"),
-            },
-        },
-    }
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    combined_manifest = _build_manifest(records, source_dirs=source_dirs, db_path=runtime_db_path, generated_at=now)
+    combined_latest_path = pre_ingest_dir / "pre_ingest_manifest.json"
+    combined_timestamped_path = pre_ingest_dir / f"pre_ingest_manifest_all_{ts}.json"
+    with open(combined_latest_path, "w", encoding="utf-8") as handle:
+        json.dump(combined_manifest, handle, indent=2)
+    with open(combined_timestamped_path, "w", encoding="utf-8") as handle:
+        json.dump(combined_manifest, handle, indent=2)
 
-    manifest_path = pre_ingest_dir / "pre_ingest_manifest.json"
-    with open(manifest_path, "w", encoding="utf-8") as handle:
-        json.dump(manifest, handle, indent=2)
+    manifest_paths = [combined_timestamped_path.as_posix()]
+    records_by_source: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for rec in records:
+        key = str(rec.get("source_dir", "") or "unknown_source")
+        records_by_source[key].append(rec)
+
+    for idx, src in enumerate(source_dirs, start=1):
+        dir_records = list(records_by_source.get(src, []))
+        if not dir_records:
+            continue
+        label = _slugify_for_filename(Path(str(src)).name or str(src), fallback=f"source_{idx}")
+        dir_manifest = _build_manifest(dir_records, source_dirs=[src], db_path=runtime_db_path, generated_at=now)
+        dir_manifest_path = pre_ingest_dir / f"pre_ingest_manifest_{label}_{ts}.json"
+        with open(dir_manifest_path, "w", encoding="utf-8") as handle:
+            json.dump(dir_manifest, handle, indent=2)
+        manifest_paths.append(dir_manifest_path.as_posix())
+
     _emit_progress(
         progress_callback,
         "manifest_written",
-        manifest_path=manifest_path.as_posix(),
+        manifest_path=combined_timestamped_path.as_posix(),
+        manifest_paths=manifest_paths,
         total_files=len(records),
     )
 
     return {
-        "manifest_path": manifest_path.as_posix(),
-        "summary": manifest["summary"],
+        "manifest_path": combined_timestamped_path.as_posix(),
+        "manifest_paths": manifest_paths,
+        "summary": combined_manifest["summary"],
         "total_files": len(records),
     }
