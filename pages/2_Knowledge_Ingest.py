@@ -2230,16 +2230,63 @@ def render_config_and_scan_ui():
                     manifest_options.append(p)
 
             if manifest_options:
-                default_selected = st.session_state.get("pre_ingest_manifest_selected") or manifest_options[0]
-                if default_selected not in manifest_options:
-                    default_selected = manifest_options[0]
-                selected_manifest = st.selectbox(
+                manifest_meta = []
+                for path in manifest_options:
+                    p = Path(path)
+                    try:
+                        payload = json.loads(p.read_text(encoding="utf-8"))
+                        summary = payload.get("summary", {})
+                        pol = summary.get("policy_counts", {})
+                        total = summary.get("total_files", len(payload.get("records", [])))
+                        mtime = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                        is_alias = p.name == "pre_ingest_manifest.json"
+                        alias_note = " [LATEST ALIAS]" if is_alias else ""
+                        label = (
+                            f"{p.name}{alias_note} | {mtime} | "
+                            f"total={total} include={pol.get('include', 0)} "
+                            f"review={pol.get('review_required', 0)} dni={pol.get('do_not_ingest', 0)}"
+                        )
+                        manifest_meta.append(
+                            {
+                                "path": path,
+                                "label": label,
+                                "mtime": p.stat().st_mtime,
+                                "is_alias": is_alias,
+                            }
+                        )
+                    except Exception:
+                        manifest_meta.append(
+                            {
+                                "path": path,
+                                "label": f"{p.name} | (unable to read summary)",
+                                "mtime": p.stat().st_mtime if p.exists() else 0,
+                                "is_alias": p.name == "pre_ingest_manifest.json",
+                            }
+                        )
+
+                # Prefer most recent non-alias manifest by default (alias can be overwritten on re-scan).
+                manifest_meta.sort(key=lambda m: (m["mtime"], not m["is_alias"]), reverse=True)
+                path_by_label = {m["label"]: m["path"] for m in manifest_meta}
+                labels = [m["label"] for m in manifest_meta]
+                selected_path = st.session_state.get("pre_ingest_manifest_selected")
+                default_label = None
+                if selected_path:
+                    for m in manifest_meta:
+                        if m["path"] == selected_path:
+                            default_label = m["label"]
+                            break
+                if default_label is None:
+                    default_label = labels[0]
+
+                selected_label = st.selectbox(
                     "Manifest File",
-                    options=manifest_options,
-                    index=manifest_options.index(default_selected),
-                    key="pre_ingest_manifest_selected",
+                    options=labels,
+                    index=labels.index(default_label),
+                    key="pre_ingest_manifest_selected_label",
                     help="Choose a saved manifest to review/edit and prepare for ingest.",
                 )
+                selected_manifest = path_by_label[selected_label]
+                st.session_state.pre_ingest_manifest_selected = selected_manifest
                 st.caption(f"Selected manifest: `{selected_manifest}`")
 
                 preview_col1, preview_col2 = st.columns([1, 1])
