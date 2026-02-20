@@ -2035,6 +2035,7 @@ def render_config_and_scan_ui():
                                 with open(auto_manifest_path, "r", encoding="utf-8") as handle:
                                     auto_payload = json.load(handle)
                                 st.session_state.pre_ingest_manifest_preview = list(auto_payload.get("records", []))
+                                st.session_state.pre_ingest_editor_rev = int(st.session_state.get("pre_ingest_editor_rev", 0)) + 1
                         except Exception as exc:
                             _append_pre_ingest_log(f"[warn] Could not auto-load manifest: {exc}")
                         _append_pre_ingest_log(f"[done] Completed scan ({result.get('total_files', 0)} files)")
@@ -2085,6 +2086,7 @@ def render_config_and_scan_ui():
                         st.session_state.pre_ingest_manifest_selected = ""
                         st.session_state.pre_ingest_summary = {}
                         st.session_state.pre_ingest_manifest_preview = []
+                        st.session_state.pre_ingest_editor_rev = int(st.session_state.get("pre_ingest_editor_rev", 0)) + 1
                     resolved_runtime = set_runtime_db_path(converted_db_path)
                     event_queue = queue.Queue()
                     pause_event = threading.Event()
@@ -2239,6 +2241,7 @@ def render_config_and_scan_ui():
                         st.session_state.pre_ingest_manifest_preview = records
                         st.session_state.pre_ingest_manifest_path = selected_manifest
                         st.session_state.pre_ingest_summary = payload.get("summary", {})
+                        st.session_state.pre_ingest_editor_rev = int(st.session_state.get("pre_ingest_editor_rev", 0)) + 1
                         st.success(f"Loaded {len(records)} manifest records.")
                     except Exception as e:
                         st.error(f"Failed to load manifest preview: {e}")
@@ -2249,6 +2252,7 @@ def render_config_and_scan_ui():
                     use_container_width=True,
                 ):
                     st.session_state.pre_ingest_manifest_preview = []
+                    st.session_state.pre_ingest_editor_rev = int(st.session_state.get("pre_ingest_editor_rev", 0)) + 1
                     st.rerun()
 
                 preview_records = list(st.session_state.get("pre_ingest_manifest_preview", []))
@@ -2297,9 +2301,10 @@ def render_config_and_scan_ui():
                             }
                         )
 
+                    editor_rev = int(st.session_state.get("pre_ingest_editor_rev", 0))
                     edited_rows = st.data_editor(
                         table_rows,
-                        key="pre_ingest_manifest_editor",
+                        key=f"pre_ingest_manifest_editor_{editor_rev}",
                         use_container_width=True,
                         hide_index=True,
                         height=360,
@@ -2460,6 +2465,7 @@ def render_config_and_scan_ui():
                     ):
                         changed = _apply_bulk_updates("range")
                         st.session_state.pre_ingest_manifest_preview = preview_records
+                        st.session_state.pre_ingest_editor_rev = int(st.session_state.get("pre_ingest_editor_rev", 0)) + 1
                         st.success(f"Applied bulk update to {changed} displayed row(s).")
                         st.rerun()
                     if bulk_btn2.button(
@@ -2469,6 +2475,7 @@ def render_config_and_scan_ui():
                     ):
                         changed = _apply_bulk_updates("filtered")
                         st.session_state.pre_ingest_manifest_preview = preview_records
+                        st.session_state.pre_ingest_editor_rev = int(st.session_state.get("pre_ingest_editor_rev", 0)) + 1
                         st.success(f"Applied bulk update to {changed} displayed/filtered row(s).")
                         st.rerun()
                     if bulk_btn3.button(
@@ -2478,6 +2485,7 @@ def render_config_and_scan_ui():
                     ):
                         changed = _apply_bulk_updates("all")
                         st.session_state.pre_ingest_manifest_preview = preview_records
+                        st.session_state.pre_ingest_editor_rev = int(st.session_state.get("pre_ingest_editor_rev", 0)) + 1
                         st.success(f"Applied bulk update to {changed} displayed row(s).")
                         st.rerun()
 
@@ -2529,6 +2537,7 @@ def render_config_and_scan_ui():
                             st.session_state.pre_ingest_manifest_preview = records
                             st.session_state.pre_ingest_manifest_path = selected_manifest
                             st.session_state.pre_ingest_summary = payload["summary"]
+                            st.session_state.pre_ingest_editor_rev = int(st.session_state.get("pre_ingest_editor_rev", 0)) + 1
                             st.success("Saved manifest decisions.")
                             st.rerun()
                         except Exception as e:
