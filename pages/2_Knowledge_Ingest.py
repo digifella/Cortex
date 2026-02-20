@@ -176,56 +176,68 @@ div[data-testid="column"] .stButton > button {
     justify-content: flex-start !important;
 }
 
-/* Ensure readable high-contrast buttons regardless of app theme */
-div[data-testid="stButton"] > button,
-.stButton > button {
+/* Ensure readable button text in all states (including nested label spans) */
+div[data-testid="stButton"] button,
+.stButton button {
+    border: 1px solid #C5CCD3 !important;
     background-color: #F8F9FA !important;
     color: #111111 !important;
-    border: 1px solid #C5CCD3 !important;
 }
-div[data-testid="stButton"] > button:hover,
-.stButton > button:hover {
+div[data-testid="stButton"] button *,
+.stButton button * {
+    color: inherit !important;
+    opacity: 1 !important;
+    -webkit-text-fill-color: inherit !important;
+}
+div[data-testid="stButton"] button:hover,
+.stButton button:hover {
     background-color: #EEF2F6 !important;
     color: #111111 !important;
     border-color: #AEB8C3 !important;
 }
-div[data-testid="stButton"] > button:focus,
-.stButton > button:focus {
+div[data-testid="stButton"] button:focus,
+.stButton button:focus {
     color: #111111 !important;
     border-color: #7A8794 !important;
     box-shadow: 0 0 0 2px rgba(122, 135, 148, 0.25) !important;
 }
-div[data-testid="stButton"] > button:disabled,
-.stButton > button:disabled {
-    background-color: #ECEFF2 !important;
-    color: #6B7280 !important;
-    border-color: #D4DAE0 !important;
-}
 
-/* Streamlit button variants (primary/secondary) - enforce readable contrast */
-button[data-testid="baseButton-primary"] {
+/* Primary variants */
+div[data-testid="stButton"] button[kind^="primary"],
+.stButton button[kind^="primary"],
+button[data-testid="baseButton-primary"],
+button[data-testid="baseButton-primaryFormSubmit"] {
     background-color: #2A4362 !important;
     color: #FFFFFF !important;
-    border: 1px solid #1F3550 !important;
+    border-color: #1F3550 !important;
 }
-button[data-testid="baseButton-primary"]:hover {
+div[data-testid="stButton"] button[kind^="primary"]:hover,
+.stButton button[kind^="primary"]:hover,
+button[data-testid="baseButton-primary"]:hover,
+button[data-testid="baseButton-primaryFormSubmit"]:hover {
     background-color: #324f73 !important;
     color: #FFFFFF !important;
 }
-button[data-testid="baseButton-primary"]:disabled {
-    background-color: #E2E8F0 !important;
-    color: #374151 !important;
+div[data-testid="stButton"] button[kind^="primary"]:disabled,
+div[data-testid="stButton"] button[kind^="primary"][aria-disabled="true"],
+.stButton button[kind^="primary"]:disabled,
+.stButton button[kind^="primary"][aria-disabled="true"],
+button[data-testid="baseButton-primary"]:disabled,
+button[data-testid="baseButton-primaryFormSubmit"]:disabled {
+    background-color: #E5E7EB !important;
+    color: #111827 !important;
     border-color: #CBD5E1 !important;
     opacity: 1 !important;
 }
-button[data-testid="baseButton-secondary"] {
-    background-color: #F8F9FA !important;
-    color: #111111 !important;
-    border: 1px solid #C5CCD3 !important;
-}
+
+/* Secondary variants */
+div[data-testid="stButton"] button[kind^="secondary"]:disabled,
+div[data-testid="stButton"] button[kind^="secondary"][aria-disabled="true"],
+.stButton button[kind^="secondary"]:disabled,
+.stButton button[kind^="secondary"][aria-disabled="true"],
 button[data-testid="baseButton-secondary"]:disabled {
     background-color: #ECEFF2 !important;
-    color: #4B5563 !important;
+    color: #111827 !important;
     border-color: #D4DAE0 !important;
     opacity: 1 !important;
 }
