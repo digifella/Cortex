@@ -1921,8 +1921,19 @@ def render_config_and_scan_ui():
     has_direct_files = len(direct_files_selected) > 0 and len(selected_to_scan) == 0
     has_dir_selection = len(selected_to_scan) > 0
 
-    # Optional pre-ingest organizer pass (scan-only manifest generation)
-    if has_dir_selection:
+    runtime_db_for_manifest_resume = converted_db_path if converted_db_path else ""
+    pre_ingest_resume_dir = Path(runtime_db_for_manifest_resume) / "pre_ingest" if runtime_db_for_manifest_resume else None
+    resume_manifest_files = []
+    if pre_ingest_resume_dir and pre_ingest_resume_dir.exists():
+        resume_manifest_files = sorted(
+            [p.as_posix() for p in pre_ingest_resume_dir.glob("pre_ingest_manifest*.json") if p.is_file()],
+            key=lambda p: Path(p).stat().st_mtime,
+            reverse=True,
+        )
+    has_manifest_resume_option = bool(resume_manifest_files)
+
+    # Optional pre-ingest organizer pass (scan-only manifest generation + resume existing manifests)
+    if has_dir_selection or has_manifest_resume_option or bool(st.session_state.get("pre_ingest_manifest_preview")):
         pre_ingest_worker_state = st.session_state.get("pre_ingest_worker", {})
         pre_ingest_status = str(pre_ingest_worker_state.get("status", "idle"))
         pre_ingest_has_loaded_manifest = bool(st.session_state.get("pre_ingest_manifest_preview"))
@@ -1933,6 +1944,8 @@ def render_config_and_scan_ui():
                 "`<db_path>/pre_ingest/pre_ingest_manifest.json` "
                 "with include/exclude/review recommendations."
             )
+            if not has_dir_selection:
+                st.info("No directories selected for a new scan. You can still load and continue editing an existing manifest below.")
             worker_state = st.session_state.setdefault(
                 "pre_ingest_worker",
                 {
@@ -2075,7 +2088,7 @@ def render_config_and_scan_ui():
                 key="run_pre_ingest_organizer",
                 use_container_width=True,
                 type="secondary",
-                disabled=not can_start,
+                disabled=not (can_start and has_dir_selection),
             ):
                 if not (is_knowledge_path_valid and is_db_path_valid and db_path_writable):
                     st.error("Valid source path and writable DB path are required.")
