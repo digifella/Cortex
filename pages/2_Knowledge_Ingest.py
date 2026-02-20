@@ -1933,7 +1933,8 @@ def render_config_and_scan_ui():
     has_manifest_resume_option = bool(resume_manifest_files)
 
     # Optional pre-ingest organizer pass (scan-only manifest generation + resume existing manifests)
-    if has_dir_selection or has_manifest_resume_option or bool(st.session_state.get("pre_ingest_manifest_preview")):
+    # Show whenever DB path is present so users can resume manifest edits without directory selection.
+    if bool(converted_db_path) or has_dir_selection or has_manifest_resume_option or bool(st.session_state.get("pre_ingest_manifest_preview")):
         pre_ingest_worker_state = st.session_state.get("pre_ingest_worker", {})
         pre_ingest_status = str(pre_ingest_worker_state.get("status", "idle"))
         pre_ingest_has_loaded_manifest = bool(st.session_state.get("pre_ingest_manifest_preview"))
