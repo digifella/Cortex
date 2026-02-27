@@ -216,14 +216,15 @@ class DocumentTextifier:
                 messages=[{
                     "role": "user",
                     "content": (
-                        "Describe this photograph in 2-4 plain sentences. Identify main subject, setting, and colours. "
+                        "Describe this photograph very briefly in 1-2 short plain sentences (max 35 words total). "
+                        "Identify only the main subject and setting. "
                         "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
                         "return exactly: [Image: logo/icon omitted]. "
                         "Do not use markdown, headings, or bullet points. /no_think"
                     ),
                     "images": [encoded],
                 }],
-                options={"temperature": 0.1, "num_predict": 600},
+                options={"temperature": 0.1, "num_predict": 140},
             )
             result = response["message"]["content"].strip()
             # Qwen3-VL may wrap output in <think>...</think> tags
@@ -1287,6 +1288,48 @@ class DocumentTextifier:
             return False
 
     @staticmethod
+    def read_exif_location(file_path: str) -> Dict[str, str]:
+        """Read existing IPTC/XMP location fields from an image."""
+        import shutil
+
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return {"country": "", "state": "", "city": ""}
+        try:
+            import json
+
+            result = subprocess.run(
+                [
+                    exiftool_path,
+                    "-json",
+                    "-XMP-photoshop:City",
+                    "-IPTC:City",
+                    "-XMP-photoshop:State",
+                    "-IPTC:Province-State",
+                    "-XMP-photoshop:Country",
+                    "-IPTC:Country-PrimaryLocationName",
+                    file_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return {"country": "", "state": "", "city": ""}
+            payload = json.loads(result.stdout)
+            if not payload:
+                return {"country": "", "state": "", "city": ""}
+            row = payload[0]
+            return {
+                "country": (row.get("Country") or row.get("Country-PrimaryLocationName") or "").strip(),
+                "state": (row.get("State") or row.get("Province-State") or "").strip(),
+                "city": (row.get("City") or "").strip(),
+            }
+        except Exception as e:
+            logger.warning(f"Location read failed for {file_path}: {e}")
+            return {"country": "", "state": "", "city": ""}
+
+    @staticmethod
     def read_gps(file_path: str) -> Optional[Tuple[float, float]]:
         """Read GPS coordinates from image EXIF. Returns (lat, lon) or None."""
         import shutil
@@ -1314,6 +1357,19 @@ class DocumentTextifier:
         return None
 
     @staticmethod
+    def _merge_location_fields(*locations: Optional[Dict[str, str]]) -> Dict[str, str]:
+        """Merge location dicts, keeping the first non-empty value for each field."""
+        merged = {"country": "", "state": "", "city": ""}
+        for location in locations:
+            if not location:
+                continue
+            for field in ("country", "state", "city"):
+                value = (location.get(field, "") or "").strip()
+                if value and not merged[field]:
+                    merged[field] = value
+        return merged
+
+    @staticmethod
     def reverse_geocode(lat: float, lon: float) -> Dict[str, str]:
         """Reverse-geocode GPS coordinates to country/state/city.
 
@@ -1337,6 +1393,100 @@ class DocumentTextifier:
         except Exception as e:
             logger.warning(f"Reverse geocode failed for ({lat}, {lon}): {e}")
             return {"country": "", "state": "", "city": ""}
+
+    @staticmethod
+    def geocode_location_hint(city: str = "", state: str = "", country: str = "") -> Optional[Tuple[float, float]]:
+        """Resolve coordinates from a city/state/country hint."""
+        city = (city or "").strip()
+        state = (state or "").strip()
+        country = (country or "").strip()
+        if not any([city, state, country]):
+            return None
+        try:
+            from geopy.geocoders import Nominatim
+
+            geocoder = Nominatim(user_agent="cortex_suite", timeout=10)
+            queries: List[str] = []
+
+            if city:
+                queries.append(", ".join(part for part in [city, state, country] if part))
+                if state and not country:
+                    queries.append(", ".join(part for part in [city, state] if part))
+                if country and not state:
+                    queries.append(", ".join(part for part in [city, country] if part))
+                queries.append(city)
+            elif state:
+                queries.append(", ".join(part for part in [state, country] if part))
+                queries.append(state)
+
+            if country:
+                if not city:
+                    queries.append(f"capital of {country}")
+                    queries.append(f"{country} capital city")
+                queries.append(country)
+
+            seen = set()
+            for query in queries:
+                normalized = query.strip()
+                if not normalized or normalized.lower() in seen:
+                    continue
+                seen.add(normalized.lower())
+                loc = geocoder.geocode(normalized, exactly_one=True, language="en")
+                if loc is not None:
+                    return (float(loc.latitude), float(loc.longitude))
+        except Exception as e:
+            logger.warning(
+                "Forward geocode failed for city=%r state=%r country=%r: %s",
+                city,
+                state,
+                country,
+                e,
+            )
+        return None
+
+    def resolve_photo_location(
+        self,
+        file_path: str,
+        fallback_city: str = "",
+        fallback_country: str = "",
+    ) -> Dict[str, Any]:
+        """Resolve the best available location/GPS combination for a photo."""
+        existing_location = self.read_exif_location(file_path)
+        existing_gps = self.read_gps(file_path)
+
+        fallback_location = {"country": "", "state": "", "city": ""}
+        if not any(existing_location.values()) and not existing_gps:
+            fallback_location = {
+                "country": (fallback_country or "").strip(),
+                "state": "",
+                "city": (fallback_city or "").strip(),
+            }
+
+        seed_location = self._merge_location_fields(existing_location, fallback_location)
+        resolved_location = dict(seed_location)
+        resolved_gps = existing_gps
+
+        if resolved_gps:
+            reverse = self.reverse_geocode(resolved_gps[0], resolved_gps[1])
+            resolved_location = self._merge_location_fields(seed_location, reverse)
+        elif any(seed_location.values()):
+            derived_gps = self.geocode_location_hint(
+                city=seed_location.get("city", ""),
+                state=seed_location.get("state", ""),
+                country=seed_location.get("country", ""),
+            )
+            if derived_gps:
+                resolved_gps = derived_gps
+                reverse = self.reverse_geocode(derived_gps[0], derived_gps[1])
+                resolved_location = self._merge_location_fields(seed_location, reverse)
+
+        return {
+            "existing_location": existing_location,
+            "existing_gps": existing_gps,
+            "location": resolved_location,
+            "gps": resolved_gps,
+            "used_fallback_location": bool(any(fallback_location.values())),
+        }
 
     @staticmethod
     def write_exif_location(file_path: str, country: str, state: str,
@@ -1363,6 +1513,34 @@ class DocumentTextifier:
         except Exception as e:
             logger.warning(f"EXIF location write failed: {e}")
             return False
+
+    @staticmethod
+    def write_gps_coordinates(file_path: str, lat: float, lon: float) -> Dict[str, Any]:
+        """Write GPS coordinates to EXIF using decimal degrees."""
+        import shutil
+
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return {"success": False, "message": "exiftool not found on system PATH"}
+        try:
+            latitude = float(lat)
+            longitude = float(lon)
+            cmd = [
+                exiftool_path,
+                "-overwrite_original",
+                f"-GPSLatitude={abs(latitude):.6f}",
+                f"-GPSLatitudeRef={'N' if latitude >= 0 else 'S'}",
+                f"-GPSLongitude={abs(longitude):.6f}",
+                f"-GPSLongitudeRef={'E' if longitude >= 0 else 'W'}",
+                file_path,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                return {"success": True, "message": result.stdout.strip()}
+            return {"success": False, "message": result.stderr.strip() or "GPS write failed"}
+        except Exception as e:
+            logger.warning(f"GPS write failed for {file_path}: {e}")
+            return {"success": False, "message": str(e)}
 
     @staticmethod
     def write_ownership_metadata(file_path: str, ownership_notice: str) -> Dict[str, any]:
@@ -1396,7 +1574,11 @@ class DocumentTextifier:
 
     @staticmethod
     def _resize_image_preserving_metadata(
-        file_path: str, max_width: int = 1920, max_height: int = 1080
+        file_path: str,
+        max_width: int = 1920,
+        max_height: int = 1080,
+        convert_to_jpg: bool = False,
+        jpg_quality: int = 90,
     ) -> Dict[str, any]:
         """Downsample oversized images in-place and copy metadata from original."""
         from PIL import Image
@@ -1415,12 +1597,14 @@ class DocumentTextifier:
         }
 
         original_copy = None
+        output_path = file_path
         try:
             with Image.open(file_path) as img:
                 original_width, original_height = img.size
                 image_format = img.format or format_map.get(suffix, "JPEG")
 
-            if original_width <= max_width and original_height <= max_height:
+            should_convert_to_jpg = bool(convert_to_jpg and image_format != "JPEG")
+            if original_width <= max_width and original_height <= max_height and not should_convert_to_jpg:
                 return {
                     "resized": False,
                     "original_width": original_width,
@@ -1428,25 +1612,41 @@ class DocumentTextifier:
                     "new_width": original_width,
                     "new_height": original_height,
                     "metadata_preserved": True,
+                    "converted_to_jpg": False,
+                    "output_path": file_path,
                 }
 
             scale = min(max_width / float(original_width), max_height / float(original_height))
-            new_width = max(1, int(original_width * scale))
-            new_height = max(1, int(original_height * scale))
+            if original_width <= max_width and original_height <= max_height:
+                new_width, new_height = original_width, original_height
+            else:
+                new_width = max(1, int(original_width * scale))
+                new_height = max(1, int(original_height * scale))
+
+            target_format = "JPEG" if should_convert_to_jpg else image_format
+            if should_convert_to_jpg:
+                output_path = str(Path(file_path).with_suffix(".jpg"))
 
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 original_copy = tmp.name
             shutil.copy2(file_path, original_copy)
 
             with Image.open(file_path) as img:
-                if image_format == "JPEG" and img.mode in ("RGBA", "LA", "P"):
+                if target_format == "JPEG" and img.mode in ("RGBA", "LA", "P"):
                     img = img.convert("RGB")
                 resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
                 save_kwargs: Dict[str, any] = {}
-                if image_format == "JPEG":
-                    save_kwargs["quality"] = 90
+                if target_format == "JPEG":
+                    quality = int(max(60, min(100, jpg_quality)))
+                    save_kwargs["quality"] = quality
                     save_kwargs["optimize"] = True
-                resized.save(file_path, format=image_format, **save_kwargs)
+                resized.save(output_path, format=target_format, **save_kwargs)
+
+            if output_path != file_path and Path(file_path).exists():
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
 
             metadata_preserved = False
             exiftool_path = shutil.which("exiftool")
@@ -1459,7 +1659,7 @@ class DocumentTextifier:
                         original_copy,
                         "-all:all",
                         "-unsafe",
-                        file_path,
+                        output_path,
                     ],
                     capture_output=True,
                     text=True,
@@ -1468,18 +1668,20 @@ class DocumentTextifier:
                 metadata_preserved = copy_result.returncode == 0
                 if not metadata_preserved:
                     logger.warning(
-                        f"Metadata copy after resize failed for {Path(file_path).name}: {copy_result.stderr}"
+                        f"Metadata copy after resize failed for {Path(output_path).name}: {copy_result.stderr}"
                     )
             else:
                 logger.warning("exiftool not found; metadata copy after resize skipped")
 
             return {
-                "resized": True,
+                "resized": (new_width != original_width or new_height != original_height),
                 "original_width": original_width,
                 "original_height": original_height,
                 "new_width": new_width,
                 "new_height": new_height,
                 "metadata_preserved": metadata_preserved,
+                "converted_to_jpg": should_convert_to_jpg,
+                "output_path": output_path,
             }
         except Exception as e:
             logger.warning(f"Resize failed for {Path(file_path).name}: {e}")
@@ -1488,7 +1690,18 @@ class DocumentTextifier:
                     shutil.copy2(original_copy, file_path)
                 except Exception as restore_err:
                     logger.warning(f"Could not restore original image after resize failure: {restore_err}")
-            return {"resized": False, "error": str(e), "metadata_preserved": False}
+            if output_path != file_path and Path(output_path).exists():
+                try:
+                    os.remove(output_path)
+                except Exception:
+                    pass
+            return {
+                "resized": False,
+                "error": str(e),
+                "metadata_preserved": False,
+                "converted_to_jpg": False,
+                "output_path": file_path,
+            }
         finally:
             if original_copy and Path(original_copy).exists():
                 try:
@@ -1497,16 +1710,27 @@ class DocumentTextifier:
                     pass
 
     def resize_image_only(
-        self, file_path: str, max_width: int = 1920, max_height: int = 1080
+        self,
+        file_path: str,
+        max_width: int = 1920,
+        max_height: int = 1080,
+        convert_to_jpg: bool = False,
+        jpg_quality: int = 90,
     ) -> Dict[str, any]:
         """Resize photo only (no keyword generation), preserving metadata when possible."""
         self._report(0.0, "Checking image dimensions...")
         resize_info = self._resize_image_preserving_metadata(
-            file_path, max_width=max_width, max_height=max_height
+            file_path,
+            max_width=max_width,
+            max_height=max_height,
+            convert_to_jpg=convert_to_jpg,
+            jpg_quality=jpg_quality,
         )
+        output_path = resize_info.get("output_path", file_path)
         self._report(1.0, "Done")
         return {
-            "file_name": Path(file_path).name,
+            "file_name": Path(output_path).name,
+            "output_path": output_path,
             "resize_info": resize_info,
         }
 
@@ -1649,8 +1873,12 @@ class DocumentTextifier:
                       clear_keywords: bool = False,
                       clear_location: bool = False,
                       force_resize_max_1080: bool = False,
+                      generate_description: bool = True,
+                      populate_location: bool = True,
                       anonymize_keywords: bool = False,
                       blocked_keywords: Optional[List[str]] = None,
+                      fallback_city: str = "",
+                      fallback_country: str = "",
                       ownership_notice: str = "") -> Dict[str, any]:
         """Full pipeline: describe image, extract keywords, resolve GPS location, write to EXIF.
 
@@ -1687,72 +1915,113 @@ class DocumentTextifier:
 
         # Read existing keywords so we can merge (after any clear)
         existing_keywords = self.read_exif_keywords(file_path)
-
-        with open(file_path, "rb") as f:
-            image_bytes = f.read()
-
-        # GPS location lookup
-        self._report(0.1, "Reading GPS data...")
-        gps = self.read_gps(file_path)
-        location = None
-        has_gps = gps is not None
-        if has_gps:
-            self._report(0.15, "Reverse-geocoding location...")
-            location = self.reverse_geocode(gps[0], gps[1])
-            logger.info(f"GPS location for {file_name}: {location}")
-
-        self._report(0.2, "Describing image with vision model...")
-        description = self.describe_image(image_bytes)
-
-        self._report(0.5, "Extracting keywords...")
-        keywords = self.extract_keywords(description)
+        keywords: List[str] = []
+        new_keywords: List[str] = []
+        description = ""
         removed_sensitive_keywords: List[str] = []
-
-        # Add location tags to keywords
-        if location:
-            for field in ("city", "state", "country"):
-                val = location.get(field, "")
-                if val and val.lower() not in [k.lower() for k in keywords]:
-                    keywords.append(val.lower())
-        elif not has_gps:
-            # Mark as no GPS in batch mode
-            if "nogps" not in keywords:
-                keywords.append("nogps")
-
         existing_keywords_for_merge = existing_keywords
-        removed_existing_sensitive: List[str] = []
-        if anonymize_keywords:
-            # Sanitize generated keywords and existing metadata keywords.
-            keywords, removed_generated_sensitive = self._hybrid_filter_sensitive_keywords(
-                keywords, blocked_keywords=blocked_keywords
+        self._report(0.1, "Resolving GPS and location metadata...")
+        location = None
+        gps = None
+        location_result = {
+            "enabled": populate_location,
+            "location_written": False,
+            "gps_written": False,
+            "location_write_ok": True,
+            "gps_write_ok": True,
+        }
+        location_resolution = {
+            "existing_location": {"country": "", "state": "", "city": ""},
+            "existing_gps": None,
+            "location": {"country": "", "state": "", "city": ""},
+            "gps": None,
+            "used_fallback_location": False,
+        }
+        if populate_location:
+            location_resolution = self.resolve_photo_location(
+                file_path,
+                fallback_city=fallback_city,
+                fallback_country=fallback_country,
             )
-            existing_keywords_for_merge, removed_existing_sensitive = self._hybrid_filter_sensitive_keywords(
-                existing_keywords, blocked_keywords=blocked_keywords
-            )
-            removed_sensitive_keywords = list(dict.fromkeys(
-                removed_generated_sensitive + removed_existing_sensitive
-            ))
-
-        # Deduplicate: only write keywords that aren't already in EXIF
-        existing_lower = {k.lower() for k in existing_keywords_for_merge}
-        new_keywords = [k for k in keywords if k.lower() not in existing_lower]
-
-        self._report(0.8, "Writing keywords to EXIF...")
-        if anonymize_keywords:
-            # Replace existing keyword set with sanitized + generated keywords.
-            combined_target_keywords = sorted(set(existing_keywords_for_merge + keywords))
-            self.clear_exif_keyword_tags_only(file_path)
-            write_result = self.write_exif_keywords(file_path, combined_target_keywords, description)
-            new_keywords = [k for k in combined_target_keywords if k.lower() not in {x.lower() for x in existing_keywords}]
+            location = location_resolution.get("location")
+            gps = location_resolution.get("gps")
+            logger.info(f"Resolved location for {file_name}: {location} / {gps}")
         else:
-            write_result = self.write_exif_keywords(file_path, new_keywords, description)
+            location = self.read_exif_location(file_path)
+            gps = self.read_gps(file_path)
 
-        # Write location EXIF fields
-        if location and any(location.values()):
-            self.write_exif_location(
-                file_path, location.get("country", ""),
-                location.get("state", ""), location.get("city", ""),
-            )
+        has_gps = gps is not None
+
+        if generate_description:
+            with open(file_path, "rb") as f:
+                image_bytes = f.read()
+
+            self._report(0.2, "Describing image with vision model...")
+            description = self.describe_image(image_bytes)
+
+            self._report(0.5, "Extracting keywords...")
+            keywords = self.extract_keywords(description)
+        else:
+            self._report(0.5, "Skipping AI description generation")
+
+        if generate_description:
+            if populate_location and location and any(location.values()):
+                for field in ("city", "state", "country"):
+                    val = location.get(field, "")
+                    if val and val.lower() not in [k.lower() for k in keywords]:
+                        keywords.append(val.lower())
+            elif populate_location and not has_gps:
+                if "nogps" not in keywords:
+                    keywords.append("nogps")
+
+            removed_existing_sensitive: List[str] = []
+            if anonymize_keywords:
+                # Sanitize generated keywords and existing metadata keywords.
+                keywords, removed_generated_sensitive = self._hybrid_filter_sensitive_keywords(
+                    keywords, blocked_keywords=blocked_keywords
+                )
+                existing_keywords_for_merge, removed_existing_sensitive = self._hybrid_filter_sensitive_keywords(
+                    existing_keywords, blocked_keywords=blocked_keywords
+                )
+                removed_sensitive_keywords = list(dict.fromkeys(
+                    removed_generated_sensitive + removed_existing_sensitive
+                ))
+
+            # Deduplicate: only write keywords that aren't already in EXIF
+            existing_lower = {k.lower() for k in existing_keywords_for_merge}
+            new_keywords = [k for k in keywords if k.lower() not in existing_lower]
+
+            self._report(0.8, "Writing keywords to EXIF...")
+            if anonymize_keywords:
+                # Replace existing keyword set with sanitized + generated keywords.
+                combined_target_keywords = sorted(set(existing_keywords_for_merge + keywords))
+                self.clear_exif_keyword_tags_only(file_path)
+                write_result = self.write_exif_keywords(file_path, combined_target_keywords, description)
+                new_keywords = [
+                    k for k in combined_target_keywords
+                    if k.lower() not in {x.lower() for x in existing_keywords}
+                ]
+            else:
+                write_result = self.write_exif_keywords(file_path, new_keywords, description)
+        else:
+            write_result = {"success": True, "message": "Keyword generation skipped", "keywords_written": 0}
+
+        if populate_location:
+            if location and any(location.values()):
+                location_write_ok = self.write_exif_location(
+                    file_path,
+                    location.get("country", ""),
+                    location.get("state", ""),
+                    location.get("city", ""),
+                )
+                location_result["location_written"] = True
+                location_result["location_write_ok"] = location_write_ok
+            original_gps = location_resolution.get("existing_gps")
+            if gps and original_gps is None:
+                gps_write_result = self.write_gps_coordinates(file_path, gps[0], gps[1])
+                location_result["gps_written"] = True
+                location_result["gps_write_ok"] = bool(gps_write_result.get("success"))
+                location_result["gps_write_result"] = gps_write_result
 
         ownership_result = None
         if ownership_notice.strip():
@@ -1761,7 +2030,7 @@ class DocumentTextifier:
         # Combined set for display (existing + new)
         combined_keywords = (
             sorted(set(existing_keywords_for_merge + keywords))
-            if anonymize_keywords
+            if generate_description and anonymize_keywords
             else sorted(set(existing_keywords + keywords))
         )
 
@@ -1775,6 +2044,9 @@ class DocumentTextifier:
             "removed_sensitive_keywords": removed_sensitive_keywords,
             "has_gps": has_gps,
             "location": location,
+            "gps": gps,
+            "location_result": location_result,
+            "location_resolution": location_resolution,
             "exif_result": write_result,
             "ownership_result": ownership_result,
             "resize_info": resize_info,

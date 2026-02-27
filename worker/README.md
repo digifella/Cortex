@@ -9,7 +9,8 @@ This folder contains the local/offline queue worker for the website work queue A
 - `handlers/pdf_anonymise.py`: `pdf_anonymise` handler (reuses `cortex_engine.anonymizer`).
 - `handlers/pdf_textify.py`: `pdf_textify` handler (reuses `cortex_engine.textifier`).
 - `handlers/url_ingest.py`: `url_ingest` handler (open-access PDF discovery + optional textify).
-- `handlers/portal_ingest.py`: `portal_ingest` handler (document parse + chunk payload generation).
+- `handlers/youtube_summarise.py`: `youtube_summarise` handler (video summary workflows).
+- `handlers/market_radar.py`: `market_radar` handler (web intelligence report generation).
 - `handlers/cortex_sync.py`: `cortex_sync` handler (website knowledge files -> Cortex ingestion pipeline).
 
 ## Setup
@@ -41,7 +42,8 @@ venv/bin/python worker/worker.py
 - `pdf_anonymise`
 - `pdf_textify`
 - `url_ingest`
-- `portal_ingest`
+- `youtube_summarise`
+- `market_radar`
 - `cortex_sync`
 
 ## Notes

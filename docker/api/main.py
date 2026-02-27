@@ -33,7 +33,6 @@ from cortex_engine.handoff_contract import (
     normalize_handoff_metadata,
     validate_cortex_sync_input,
     validate_pdf_textify_input,
-    validate_portal_ingest_input,
     validate_url_ingest_input,
 )
 
@@ -357,8 +356,6 @@ async def validate_handoff_contract(
                         validate_pdf_textify_input(input_data)
                     elif job_type == "url_ingest":
                         validate_url_ingest_input(input_data)
-                    elif job_type == "portal_ingest":
-                        validate_portal_ingest_input(input_data)
                     elif job_type == "cortex_sync":
                         validate_cortex_sync_input(input_data)
                 except ValueError as e:

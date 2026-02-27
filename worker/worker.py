@@ -71,6 +71,11 @@ def read_config() -> Config:
     env_path = ROOT / "worker" / "config.env"
     file_vars = load_env_file(env_path)
 
+    # Export config.env values to os.environ so handlers can access them via os.environ.get()
+    for _k, _v in file_vars.items():
+        if _k not in os.environ:
+            os.environ[_k] = _v
+
     def get(name: str, default: str) -> str:
         return os.environ.get(name, file_vars.get(name, default))
 

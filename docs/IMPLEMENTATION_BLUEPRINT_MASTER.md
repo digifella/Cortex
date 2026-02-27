@@ -18,7 +18,7 @@ For immediate delivery, run in **single-tenant mode** with tenancy-ready structu
 ## Current Status (2026-02-17)
 
 Completed in Cortex:
-1. Queue job support: `pdf_anonymise`, `pdf_textify`, `url_ingest`, `portal_ingest`, `cortex_sync`.
+1. Queue job support: `pdf_anonymise`, `pdf_textify`, `url_ingest`, `cortex_sync`.
 2. Handoff/API validation for queue payload contracts.
 3. Queue monitor page with progress telemetry and operator controls.
 4. ZIP-first `cortex_sync` flow aligned with website queue uploads (manifest-aware).

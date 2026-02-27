@@ -43,6 +43,7 @@ st.set_page_config(page_title="Document & Photo Processing", layout="wide", page
 
 # Page metadata
 PAGE_VERSION = VERSION_STRING
+MAX_BATCH_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
 
 
 # ======================================================================
@@ -99,9 +100,28 @@ def _file_input_widget(key_prefix: str, allowed_types: List[str], label: str = "
                                     accept_multiple_files=(st.session_state.get(f"{key_prefix}_batch", False)))
         if uploaded:
             files = uploaded if isinstance(uploaded, list) else [uploaded]
-            if len(files) > 20:
-                st.warning(f"Maximum 20 documents per batch — only the first 20 of {len(files)} will be processed.")
-                files = files[:20]
+            accepted_files = []
+            accepted_bytes = 0
+            for uf in files:
+                size_bytes = int(getattr(uf, "size", 0) or 0)
+                if size_bytes <= 0:
+                    try:
+                        size_bytes = len(uf.getvalue())
+                    except Exception:
+                        size_bytes = 0
+                if accepted_bytes + size_bytes > MAX_BATCH_UPLOAD_BYTES:
+                    break
+                accepted_files.append(uf)
+                accepted_bytes += size_bytes
+            if not accepted_files:
+                st.error("Upload exceeds 1GB total limit. Select fewer/smaller files.")
+                return None
+            if len(accepted_files) < len(files):
+                st.warning(
+                    f"Maximum 1GB total upload for this batch — only the first "
+                    f"{len(accepted_files)} of {len(files)} files will be processed."
+                )
+            files = accepted_files
             temp_dir = Path(tempfile.gettempdir()) / f"cortex_{key_prefix}"
             temp_dir.mkdir(exist_ok=True, mode=0o755)
             paths = []
@@ -1440,11 +1460,6 @@ def _render_anonymizer_tab():
         st.session_state["anonymizer_batch"] = batch_mode
         selected_file = _file_input_widget("anonymizer", ["pdf", "docx", "txt"])
 
-        # Enforce 10-doc limit for anonymizer batch
-        if isinstance(selected_file, list) and len(selected_file) > 10:
-            st.warning(f"Maximum 10 documents for anonymization — only the first 10 of {len(selected_file)} will be processed.")
-            selected_file = selected_file[:10]
-
         has_files = selected_file is not None
         file_list = selected_file if isinstance(selected_file, list) else ([selected_file] if selected_file else [])
 
@@ -1794,14 +1809,58 @@ def _render_photo_keywords_tab():
             "Clear existing location fields first",
             value=False,
             key="photokw_clear_location",
-            help="Remove existing Country, State, and City EXIF fields and rebuild from GPS.",
+            help="Remove existing Country, State, and City EXIF fields and rebuild from GPS/location hints.",
+        )
+        generate_description = st.checkbox(
+            "Generate AI description + keywords",
+            value=True,
+            key="photokw_generate_description",
+            help="Writes a fresh description and any new keywords. Turn this off to update only location/GPS metadata.",
+        )
+        populate_location = st.checkbox(
+            "Fill location and GPS metadata",
+            value=True,
+            key="photokw_populate_location",
+            help="Completes City/State/Country from GPS, or derives GPS from City/Country hints when GPS is missing.",
+        )
+        fallback_city = st.text_input(
+            "Fallback city (optional)",
+            value="",
+            key="photokw_fallback_city",
+            disabled=not populate_location,
+            help="Used only when a photo has no GPS and no embedded location fields.",
+        )
+        fallback_country = st.text_input(
+            "Fallback country (optional)",
+            value="",
+            key="photokw_fallback_country",
+            disabled=not populate_location,
+            help="If only a country is provided, Cortex will try that country's capital city.",
         )
         resize_profile = st.selectbox(
             "Resize profile",
-            options=["Low (1920 x 1080)", "Medium (2560 x 1440)"],
+            options=["Keep original dimensions", "Low (1920 x 1080)", "Medium (2560 x 1440)"],
             index=0,
             key="photokw_resize_profile",
             help="Maximum output dimensions. Photos already below the selected profile are not resized.",
+        )
+        no_resize_selected = resize_profile == "Keep original dimensions"
+        convert_to_jpg = st.checkbox(
+            "Convert resized output to JPG",
+            value=False,
+            key="photokw_convert_to_jpg",
+            disabled=no_resize_selected,
+            help="When enabled, resized photos are saved as .jpg (useful for PNG/TIF inputs).",
+        )
+        jpg_quality = st.slider(
+            "JPG quality",
+            min_value=60,
+            max_value=100,
+            value=90,
+            step=1,
+            key="photokw_jpg_quality",
+            disabled=(not convert_to_jpg) or no_resize_selected,
+            help="Only applies when JPG conversion is enabled.",
         )
 
         anonymize_keywords = st.checkbox(
@@ -1846,11 +1905,30 @@ def _render_photo_keywords_tab():
         st.header("Results")
 
         if uploaded:
-            if len(uploaded) > 100:
-                st.warning(f"Maximum 100 photos per batch — only the first 100 of {len(uploaded)} will be processed.")
-                uploaded = uploaded[:100]
+            accepted_uploads = []
+            accepted_bytes = 0
+            for uf in uploaded:
+                size_bytes = int(getattr(uf, "size", 0) or 0)
+                if size_bytes <= 0:
+                    try:
+                        size_bytes = len(uf.getvalue())
+                    except Exception:
+                        size_bytes = 0
+                if accepted_bytes + size_bytes > MAX_BATCH_UPLOAD_BYTES:
+                    break
+                accepted_uploads.append(uf)
+                accepted_bytes += size_bytes
+            if not accepted_uploads:
+                st.error("Selected photos exceed the 1GB total upload limit.")
+                return
+            if len(accepted_uploads) < len(uploaded):
+                st.warning(
+                    f"Maximum 1GB total upload per photo batch — only the first "
+                    f"{len(accepted_uploads)} of {len(uploaded)} photos will be processed."
+                )
+            uploaded = accepted_uploads
             total = len(uploaded)
-            st.info(f"{total} photo(s) selected")
+            st.info(f"{total} photo(s) selected ({accepted_bytes / (1024 * 1024):.1f} MB total)")
 
             # Single-photo metadata preview for quick testing before processing.
             if total == 1:
@@ -1949,16 +2027,21 @@ def _render_photo_keywords_tab():
                         st.info(f"Metadata preview unavailable: {preview_meta.get('reason', 'Unknown reason')}")
 
             resolution_map = {
+                "Keep original dimensions": (None, None),
                 "Low (1920 x 1080)": (1920, 1080),
                 "Medium (2560 x 1440)": (2560, 1440),
             }
-            max_width, max_height = resolution_map.get(resize_profile, (1920, 1080))
+            max_width, max_height = resolution_map.get(resize_profile, (None, None))
 
             action_cols = st.columns(2)
             do_resize_only = action_cols[0].button("Resize Photos Only", use_container_width=True)
-            do_keywords = action_cols[1].button("Generate Keywords + Metadata", type="primary", use_container_width=True)
+            do_keywords = action_cols[1].button("Process Selected Metadata", type="primary", use_container_width=True)
 
             if do_resize_only or do_keywords:
+                if do_keywords and not any([generate_description, populate_location, apply_ownership]):
+                    st.warning("Select at least one metadata action before processing.")
+                    return
+
                 from cortex_engine.textifier import DocumentTextifier
 
                 # Save uploads to temp dir
@@ -2003,24 +2086,45 @@ def _render_photo_keywords_tab():
                     textifier.on_progress = _on_progress
                     try:
                         if do_resize_only:
-                            result = textifier.resize_image_only(
-                                fpath, max_width=max_width, max_height=max_height
-                            )
+                            if max_width is None or max_height is None:
+                                result = {
+                                    "file_name": Path(fpath).name,
+                                    "output_path": fpath,
+                                    "resize_info": {
+                                        "resized": False,
+                                        "metadata_preserved": True,
+                                        "skipped_resize": True,
+                                    },
+                                }
+                            else:
+                                result = textifier.resize_image_only(
+                                    fpath,
+                                    max_width=max_width,
+                                    max_height=max_height,
+                                    convert_to_jpg=convert_to_jpg,
+                                    jpg_quality=jpg_quality,
+                                )
+                            output_path = str(result.get("output_path", fpath))
+                            file_paths[idx] = output_path
                             if anonymize_keywords:
                                 result["keyword_anonymize_result"] = textifier.anonymize_existing_photo_keywords(
-                                    fpath, blocked_keywords=blocked_keywords
+                                    output_path, blocked_keywords=blocked_keywords
                                 )
                             if apply_ownership and ownership_notice.strip():
                                 result["ownership_result"] = textifier.write_ownership_metadata(
-                                    fpath, ownership_notice.strip()
+                                    output_path, ownership_notice.strip()
                                 )
                         else:
                             result = textifier.keyword_image(
                                 fpath, city_radius_km=city_radius,
-                                clear_keywords=clear_keywords,
-                                clear_location=clear_location,
+                                clear_keywords=(clear_keywords if generate_description else False),
+                                clear_location=(clear_location if populate_location else False),
+                                generate_description=generate_description,
+                                populate_location=populate_location,
                                 anonymize_keywords=anonymize_keywords,
                                 blocked_keywords=blocked_keywords,
+                                fallback_city=fallback_city,
+                                fallback_country=fallback_country,
                                 ownership_notice=(ownership_notice.strip() if apply_ownership else ""),
                             )
                         results.append(result)
@@ -2064,11 +2168,16 @@ def _render_photo_keywords_tab():
                     st.metric("Ownership Written", f"{ownership_ok}/{len(results)}")
             else:
                 # Summary metrics
-                total_kw = sum(len(r["keywords"]) for r in results)
                 total_new = sum(len(r.get("new_keywords", [])) for r in results)
                 total_existing = sum(len(r.get("existing_keywords", [])) for r in results)
                 total_removed = sum(len(r.get("removed_sensitive_keywords", [])) for r in results)
                 successful = sum(1 for r in results if r["exif_result"]["success"])
+                location_written = sum(
+                    1 for r in results if r.get("location_result", {}).get("location_written")
+                )
+                gps_written = sum(
+                    1 for r in results if r.get("location_result", {}).get("gps_written")
+                )
                 ownership_ok = sum(
                     1 for r in results
                     if not r.get("ownership_result") or r.get("ownership_result", {}).get("success")
@@ -2084,7 +2193,11 @@ def _render_photo_keywords_tab():
                     st.metric("Sensitive Tags Removed", total_removed)
                 with mc5:
                     st.metric("Metadata Written", f"{successful}/{len(results)}")
-                st.caption(f"Ownership metadata written: {ownership_ok}/{len(results)}")
+                st.caption(
+                    f"Location fields written: {location_written}/{len(results)} | "
+                    f"GPS written: {gps_written}/{len(results)} | "
+                    f"Ownership metadata written: {ownership_ok}/{len(results)}"
+                )
 
             # Download — single file direct, multiple as zip
             if file_paths:
@@ -2094,7 +2207,7 @@ def _render_photo_keywords_tab():
                     mime = "image/jpeg" if fname.lower().endswith((".jpg", ".jpeg")) else "image/png"
                     with open(fpath, "rb") as dl_f:
                         st.download_button(
-                            f"Download {fname} (with keywords)",
+                            f"Download {fname}",
                             dl_f.read(),
                             file_name=fname,
                             mime=mime,
@@ -2107,9 +2220,9 @@ def _render_photo_keywords_tab():
                             zf.write(fpath, Path(fpath).name)
                     buf.seek(0)
                     st.download_button(
-                        f"Download All {len(file_paths)} Photos (with keywords)",
+                        f"Download All {len(file_paths)} Photos",
                         buf.getvalue(),
-                        file_name="photos_with_keywords.zip",
+                        file_name="processed_photos.zip",
                         mime="application/zip",
                         use_container_width=True,
                     )
@@ -2121,12 +2234,16 @@ def _render_photo_keywords_tab():
                 resize_info = r.get("resize_info", {})
                 ownership_result = r.get("ownership_result")
                 if photokw_mode == "resize_only":
-                    if resize_info.get("resized"):
+                    if resize_info.get("skipped_resize"):
+                        st.info(f"Left dimensions unchanged for {r['file_name']}")
+                    elif resize_info.get("resized"):
                         st.success(
                             f"Resized {r['file_name']}: "
                             f"{resize_info.get('original_width')}x{resize_info.get('original_height')} -> "
                             f"{resize_info.get('new_width')}x{resize_info.get('new_height')}"
                         )
+                    elif resize_info.get("converted_to_jpg"):
+                        st.success(f"Converted to JPG: {r['file_name']}")
                     else:
                         st.info(f"No resize needed for {r['file_name']}")
                     if ownership_result:
@@ -2136,7 +2253,9 @@ def _render_photo_keywords_tab():
                             st.warning(f"Ownership metadata write failed: {ownership_result.get('message', '')}")
                 else:
                     exif = r["exif_result"]
-                    if exif["success"]:
+                    if exif.get("message") == "Keyword generation skipped":
+                        st.info("Description/keyword generation skipped")
+                    elif exif["success"]:
                         st.success(f"EXIF written: {exif['keywords_written']} keywords to {r['file_name']}")
                     else:
                         st.error(f"EXIF write failed: {exif['message']}")
@@ -2147,13 +2266,23 @@ def _render_photo_keywords_tab():
                             st.warning(f"Ownership metadata write failed: {ownership_result.get('message', '')}")
 
                     # GPS / location feedback
-                    if not r.get("has_gps"):
-                        st.warning(f"No GPS data found in **{r['file_name']}** — location fields could not be filled.")
-                    elif r.get("location"):
+                    location_result = r.get("location_result", {})
+                    if not location_result.get("enabled"):
+                        st.caption("Location/GPS processing was skipped.")
+                    elif r.get("location") and any((r.get("location") or {}).values()):
                         loc = r["location"]
                         parts = [v for v in [loc.get("city"), loc.get("state"), loc.get("country")] if v]
                         if parts:
                             st.info(f"Location: **{', '.join(parts)}**")
+                        if r.get("gps"):
+                            st.caption(f"GPS: {r['gps'][0]:.5f}, {r['gps'][1]:.5f}")
+                        if location_result.get("gps_written"):
+                            st.success("GPS coordinates were derived and written.")
+                    else:
+                        st.warning(
+                            f"No GPS or usable location hint was found for **{r['file_name']}**. "
+                            "Add fallback City/Country to auto-fill empty photos."
+                        )
 
                 with st.expander("Preview", expanded=True):
                     # Show thumbnail of the photo
@@ -2170,6 +2299,8 @@ def _render_photo_keywords_tab():
                             f"**Metadata preserved after resize:** "
                             f"{'Yes' if resize_info.get('metadata_preserved') else 'Partial/Unknown'}"
                         )
+                        if resize_info.get("skipped_resize"):
+                            st.caption("Dimensions were left unchanged by request.")
                     else:
                         desc = r["description"] or "(no description generated)"
                         st.markdown(f"**Description:**\n\n{desc}")
@@ -2181,6 +2312,8 @@ def _render_photo_keywords_tab():
                                 f"**Location:** {loc.get('city', '')} · "
                                 f"{loc.get('state', '')} · {loc.get('country', '')}"
                             )
+                            if r.get("gps"):
+                                st.caption(f"GPS: {r['gps'][0]:.5f}, {r['gps'][1]:.5f}")
                             st.divider()
                         existing = r.get("existing_keywords", [])
                         new_kw = r.get("new_keywords", [])
@@ -2199,7 +2332,10 @@ def _render_photo_keywords_tab():
             else:
                 # Batch mode
                 if photokw_mode != "resize_only":
-                    no_gps = [r for r in results if not r.get("has_gps")]
+                    no_gps = [
+                        r for r in results
+                        if "nogps" in [kw.lower() for kw in r.get("keywords", [])]
+                    ]
                     if no_gps:
                         st.warning(
                             f"**{len(no_gps)} photo(s) have no GPS data** — tagged with "
@@ -2229,6 +2365,8 @@ def _render_photo_keywords_tab():
                                 "Metadata preserved after resize: "
                                 f"{'Yes' if resize_info.get('metadata_preserved') else 'Partial/Unknown'}"
                             )
+                            if resize_info.get("converted_to_jpg"):
+                                st.caption("Converted to JPG")
                             anon_result = r.get("keyword_anonymize_result")
                             if anon_result:
                                 if anon_result.get("success"):
@@ -2261,13 +2399,15 @@ def _render_photo_keywords_tab():
                                 st.caption(f"Removed: {', '.join(removed_kw)}")
                             st.markdown(f"**Keywords ({len(r['keywords'])}):** {', '.join(r['keywords'])}")
                             exif = r["exif_result"]
-                            if exif["success"]:
+                            if exif.get("message") == "Keyword generation skipped":
+                                st.info("Description/keyword generation skipped")
+                            elif exif["success"]:
                                 st.success(f"EXIF written: {exif['keywords_written']} new keywords")
                             else:
                                 st.error(f"EXIF write failed: {exif['message']}")
 
         elif uploaded:
-            st.info("Choose an action: **Resize Photos Only** or **Generate Keywords + Metadata**")
+            st.info("Choose an action: **Resize Photos Only** or **Process Selected Metadata**")
         else:
             st.info("Upload photos from the left panel to get started")
 

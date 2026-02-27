@@ -9,7 +9,7 @@ HANDOFF_CONTRACT_VERSION = "2026-02-15.v1"
 DEFAULT_TENANT_ID = "default"
 DEFAULT_PROJECT_ID = "default"
 
-SUPPORTED_JOB_TYPES = ["pdf_anonymise", "pdf_textify", "url_ingest", "portal_ingest", "cortex_sync"]
+SUPPORTED_JOB_TYPES = ["pdf_anonymise", "pdf_textify", "url_ingest", "cortex_sync"]
 
 SUPPORTED_ANONYMIZER_OPTIONS = [
     "redact_people",
@@ -200,40 +200,6 @@ def validate_url_ingest_input(input_data: Optional[Dict[str, Any]] = None) -> Di
 
     top_level_textify = {k: payload[k] for k in SUPPORTED_TEXTIFY_OPTION_KEYS if k in payload}
     payload["textify_options"] = normalize_textify_options(top_level_textify)
-    return payload
-
-
-def validate_portal_ingest_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    payload = dict(input_data or {})
-
-    portal_document_id = payload.get("portal_document_id")
-    if portal_document_id is None or str(portal_document_id).strip() == "":
-        payload["portal_document_id"] = ""
-    else:
-        payload["portal_document_id"] = str(portal_document_id).strip()
-
-    project_id = payload.get("project_id")
-    payload["project_id"] = (
-        str(project_id).strip() if project_id is not None and str(project_id).strip() else DEFAULT_PROJECT_ID
-    )
-
-    tenant_id = payload.get("tenant_id")
-    payload["tenant_id"] = (
-        str(tenant_id).strip() if tenant_id is not None and str(tenant_id).strip() else DEFAULT_TENANT_ID
-    )
-
-    payload["chunk_target_chars"] = _coerce_positive_int(
-        payload.get("chunk_target_chars"), 2000, "chunk_target_chars"
-    )
-    payload["chunk_min_chars"] = _coerce_positive_int(
-        payload.get("chunk_min_chars"), 200, "chunk_min_chars"
-    )
-    payload["max_chunks"] = _coerce_positive_int(
-        payload.get("max_chunks"), 250, "max_chunks"
-    )
-    if payload["chunk_min_chars"] > payload["chunk_target_chars"]:
-        raise ValueError("chunk_min_chars must be <= chunk_target_chars")
-
     return payload
 
 
