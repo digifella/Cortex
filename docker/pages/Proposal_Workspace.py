@@ -30,6 +30,7 @@ from cortex_engine.config_manager import ConfigManager
 from cortex_engine.utils import convert_windows_to_wsl_path, resolve_db_root_path, get_logger
 
 logger = get_logger(__name__)
+MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
 
 # ============================================
 # INITIALIZATION
@@ -238,26 +239,29 @@ else:
         )
 
         if uploaded_file:
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp_file:
-                    tmp_file.write(uploaded_file.getvalue())
-                    tmp_path = Path(tmp_file.name)
+            if int(getattr(uploaded_file, "size", 0) or 0) > MAX_UPLOAD_BYTES:
+                st.error("Selected file exceeds the 1GB upload limit.")
+            else:
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp_file:
+                        tmp_file.write(uploaded_file.getvalue())
+                        tmp_path = Path(tmp_file.name)
 
-                with st.spinner("Processing document..."):
-                    text = DocumentProcessor.process_document(tmp_path)
-                    doc_path.parent.mkdir(parents=True, exist_ok=True)
-                    doc_path.write_text(text, encoding='utf-8')
+                    with st.spinner("Processing document..."):
+                        text = DocumentProcessor.process_document(tmp_path)
+                        doc_path.parent.mkdir(parents=True, exist_ok=True)
+                        doc_path.write_text(text, encoding='utf-8')
 
-                    workspace.metadata.original_filename = uploaded_file.name
-                    workspace.metadata.document_type = Path(uploaded_file.name).suffix.replace('.', '')
-                    workspace_manager._save_workspace(workspace)
+                        workspace.metadata.original_filename = uploaded_file.name
+                        workspace.metadata.document_type = Path(uploaded_file.name).suffix.replace('.', '')
+                        workspace_manager._save_workspace(workspace)
 
-                st.success(f"Uploaded: {uploaded_file.name}")
-                st.rerun()
+                    st.success(f"Uploaded: {uploaded_file.name}")
+                    st.rerun()
 
-            except Exception as e:
-                st.error(f"Error processing document: {e}")
-                logger.error(f"Failed to process document: {e}", exc_info=True)
+                except Exception as e:
+                    st.error(f"Error processing document: {e}")
+                    logger.error(f"Failed to process document: {e}", exc_info=True)
     else:
         st.success(f"Document uploaded: {workspace.metadata.original_filename}")
 

@@ -340,13 +340,64 @@ class WorkingCollectionManager:
             }
 
         try:
-            results = vector_collection.get(
-                where={"doc_id": {"$in": doc_ids}},
-                include=["metadatas"],
-            )
-            metadatas = results.get("metadatas", []) if isinstance(results, dict) else []
-            existing_ids = {meta.get("doc_id") for meta in metadatas if isinstance(meta, dict) and meta.get("doc_id")}
+            existing_ids = set()
+            direct_lookup_attempts = 0
+
+            # Fast path: batch lookup by metadata doc_id.
+            try:
+                results = vector_collection.get(
+                    where={"doc_id": {"$in": doc_ids}},
+                    include=["metadatas"],
+                )
+                metadatas = results.get("metadatas", []) if isinstance(results, dict) else []
+                existing_ids.update(
+                    meta.get("doc_id")
+                    for meta in metadatas
+                    if isinstance(meta, dict) and meta.get("doc_id")
+                )
+            except Exception as batch_error:
+                logger.warning(
+                    f"Batch doc_id lookup failed for collection '{name}', falling back to per-doc checks: {batch_error}"
+                )
+
+            # Verification fallback: per-doc lookups. This avoids destructive pruning
+            # when a backend behaves differently for "$in" metadata queries.
+            if len(existing_ids) < len(doc_ids):
+                unresolved = [doc_id for doc_id in doc_ids if doc_id not in existing_ids]
+                for doc_id in unresolved:
+                    try:
+                        direct_lookup_attempts += 1
+                        res = vector_collection.get(where={"doc_id": doc_id}, limit=1, include=["metadatas"])
+                        metas = res.get("metadatas", []) if isinstance(res, dict) else []
+                        if metas:
+                            existing_ids.add(doc_id)
+                    except Exception:
+                        continue
+
             missing_doc_ids = [doc_id for doc_id in doc_ids if doc_id not in existing_ids]
+
+            # Safety guard: if no IDs could be verified in a non-empty vector store and
+            # direct lookups could not be completed, do not mutate the collection.
+            if missing_doc_ids and len(existing_ids) == 0:
+                vector_count = None
+                try:
+                    vector_count = int(vector_collection.count())
+                except Exception:
+                    vector_count = None
+
+                if vector_count and direct_lookup_attempts == 0:
+                    logger.warning(
+                        f"Skipped pruning collection '{name}' because doc existence checks were inconclusive "
+                        f"(vector_count={vector_count}, attempted={direct_lookup_attempts})."
+                    )
+                    return {
+                        "collection": name,
+                        "total_before": len(doc_ids),
+                        "existing_count": 0,
+                        "removed_count": 0,
+                        "removed_doc_ids": [],
+                        "status": "unverified",
+                    }
 
             if missing_doc_ids:
                 self.remove_from_collection(name, missing_doc_ids)
@@ -360,6 +411,7 @@ class WorkingCollectionManager:
                 "existing_count": len(existing_ids),
                 "removed_count": len(missing_doc_ids),
                 "removed_doc_ids": missing_doc_ids,
+                "status": "ok",
             }
         except Exception as e:
             logger.error(f"Failed pruning collection references for '{name}': {e}")

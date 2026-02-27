@@ -223,16 +223,20 @@ def render_document_type_management(*, get_document_type_manager) -> None:
 
         with col2:
             st.markdown("**Import Configuration**")
+            max_upload_bytes = 1024 * 1024 * 1024  # 1 GiB
             uploaded_file = st.file_uploader("Choose config file", type=["json"])
             if uploaded_file is not None:
-                config_content = uploaded_file.read().decode("utf-8")
-                if st.button("📤 Import Config"):
-                    if doc_type_manager.import_config(config_content):
-                        st.success("Configuration imported successfully!")
-                        st.session_state.show_maintenance = True
-                        st.rerun()
-                    else:
-                        st.error("Failed to import configuration. Please check the file format.")
+                if int(getattr(uploaded_file, "size", 0) or 0) > max_upload_bytes:
+                    st.error("Selected config file exceeds the 1GB upload limit.")
+                else:
+                    config_content = uploaded_file.read().decode("utf-8")
+                    if st.button("📤 Import Config"):
+                        if doc_type_manager.import_config(config_content):
+                            st.success("Configuration imported successfully!")
+                            st.session_state.show_maintenance = True
+                            st.rerun()
+                        else:
+                            st.error("Failed to import configuration. Please check the file format.")
 
         st.markdown("---")
         st.subheader("Reset to Defaults")

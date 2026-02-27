@@ -58,6 +58,7 @@ from cortex_engine.ic_persistence_model import (
 from cortex_engine.utils import convert_windows_to_wsl_path, resolve_db_root_path, get_logger
 
 logger = get_logger(__name__)
+MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
 
 # ============================================
 # CSS
@@ -566,99 +567,102 @@ if phase == 1:
             )
 
             if uploaded_file:
-                try:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp_file:
-                        tmp_file.write(uploaded_file.getvalue())
-                        tmp_path = Path(tmp_file.name)
+                if int(getattr(uploaded_file, "size", 0) or 0) > MAX_UPLOAD_BYTES:
+                    st.error("Selected file exceeds the 1GB upload limit.")
+                else:
+                    try:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp_file:
+                            tmp_file.write(uploaded_file.getvalue())
+                            tmp_path = Path(tmp_file.name)
 
-                    with st.spinner("Processing document..."):
-                        text = DocumentProcessor.process_document(tmp_path)
-                        doc_path.parent.mkdir(parents=True, exist_ok=True)
-                        doc_path.write_text(text, encoding='utf-8')
+                        with st.spinner("Processing document..."):
+                            text = DocumentProcessor.process_document(tmp_path)
+                            doc_path.parent.mkdir(parents=True, exist_ok=True)
+                            doc_path.write_text(text, encoding='utf-8')
 
-                        ws.metadata.original_filename = uploaded_file.name
-                        ws.metadata.document_type = Path(uploaded_file.name).suffix.replace('.', '')
+                            ws.metadata.original_filename = uploaded_file.name
+                            ws.metadata.document_type = Path(uploaded_file.name).suffix.replace('.', '')
+                            workspace_mgr._save_workspace(ws)
+
+                        # Auto-process: chunk + classify fields
+                        with st.spinner("Extracting fields and classifying..."):
+                            chunks = chunker.create_chunks(text)
+                            completable_chunks = chunker.filter_completable_chunks(chunks)
+
+                            classified_fields = []
+                            for chunk in completable_chunks:
+                                field_patterns = [
+                                    r'^([A-Za-z][A-Za-z\s\(\)\']+):\s*$',
+                                    r'^([A-Z][^?]+\?)\s*$',
+                                    r'((?:Please\s+)?(?:provide|describe|detail|outline|explain)\s+[^.]{20,}\.)',
+                                    r'(How\s+(?:will|would|do|can)\s+you\s+[^?]+\?)',
+                                    r'^([A-Za-z][A-Za-z\s\']+):\s*[\[\<\_]',
+                                ]
+                                lines = chunk.content.split('\n')
+                                for line in lines:
+                                    line = line.strip()
+                                    if not line or len(line) < 5:
+                                        continue
+                                    for pattern in field_patterns:
+                                        match = re.match(pattern, line, re.IGNORECASE)
+                                        if match:
+                                            field_text = match.group(1).strip()
+                                            if len(field_text) > 5:
+                                                classified = field_classifier.classify(field_text, context=chunk.title, strict_filter=True)
+                                                if not any(cf.field_text == classified.field_text for cf in classified_fields):
+                                                    classified_fields.append(classified)
+                                            break
+
+                            auto_fields = [f for f in classified_fields if f.tier == FieldTier.AUTO_COMPLETE]
+                            intel_fields = [f for f in classified_fields if f.tier == FieldTier.INTELLIGENT]
+
+                            questions_by_type = defaultdict(list)
+                            for f in intel_fields:
+                                qtype = f.question_type or QuestionType.GENERAL
+                                questions_by_type[qtype.value].append(f)
+
+                            question_status = {}
+                            for f in intel_fields:
+                                question_status[f.field_text] = {'status': 'pending', 'response': '', 'evidence': []}
+
+                            st.session_state.pm_ic_fields = classified_fields
+                            st.session_state.pm_ic_auto_fields = auto_fields
+                            st.session_state.pm_ic_intel_fields = intel_fields
+                            st.session_state.pm_ic_questions_by_type = dict(questions_by_type)
+                            st.session_state.pm_ic_question_status = question_status
+                            st.session_state.pm_ic_evidence_cache = {}
+                            st.session_state.pm_ic_loaded_for = st.session_state.pm_workspace_id
+
+                            save_ic_state(st.session_state.pm_workspace_id)
+
+                        # Also initialize chunk mode for mention analysis
+                        ws = workspace_mgr.get_workspace(st.session_state.pm_workspace_id)
+                        ws.metadata.chunk_mode_enabled = True
+                        ws.metadata.total_chunks = len(completable_chunks)
+                        ws.metadata.current_chunk_id = 1
+                        ws.metadata.chunks_reviewed = 0
+                        ws.metadata.analysis_status = "pending"
+                        ws.chunks.clear()
+                        for chunk in completable_chunks:
+                            ws.chunks.append(ChunkProgress(
+                                chunk_id=chunk.chunk_id,
+                                title=chunk.title,
+                                start_line=chunk.start_line,
+                                end_line=chunk.end_line,
+                                status="pending",
+                                mentions_found=0,
+                                mentions_approved=0
+                            ))
                         workspace_mgr._save_workspace(ws)
 
-                    # Auto-process: chunk + classify fields
-                    with st.spinner("Extracting fields and classifying..."):
-                        chunks = chunker.create_chunks(text)
-                        completable_chunks = chunker.filter_completable_chunks(chunks)
+                        st.success(f"Uploaded and processed: {uploaded_file.name}")
+                        st.info(f"Found {len(auto_fields)} template fields (Tier 1) and {len(intel_fields)} substantive questions (Tier 2)")
+                        st.session_state.pm_phase = 2
+                        st.rerun()
 
-                        classified_fields = []
-                        for chunk in completable_chunks:
-                            field_patterns = [
-                                r'^([A-Za-z][A-Za-z\s\(\)\']+):\s*$',
-                                r'^([A-Z][^?]+\?)\s*$',
-                                r'((?:Please\s+)?(?:provide|describe|detail|outline|explain)\s+[^.]{20,}\.)',
-                                r'(How\s+(?:will|would|do|can)\s+you\s+[^?]+\?)',
-                                r'^([A-Za-z][A-Za-z\s\']+):\s*[\[\<\_]',
-                            ]
-                            lines = chunk.content.split('\n')
-                            for line in lines:
-                                line = line.strip()
-                                if not line or len(line) < 5:
-                                    continue
-                                for pattern in field_patterns:
-                                    match = re.match(pattern, line, re.IGNORECASE)
-                                    if match:
-                                        field_text = match.group(1).strip()
-                                        if len(field_text) > 5:
-                                            classified = field_classifier.classify(field_text, context=chunk.title, strict_filter=True)
-                                            if not any(cf.field_text == classified.field_text for cf in classified_fields):
-                                                classified_fields.append(classified)
-                                        break
-
-                        auto_fields = [f for f in classified_fields if f.tier == FieldTier.AUTO_COMPLETE]
-                        intel_fields = [f for f in classified_fields if f.tier == FieldTier.INTELLIGENT]
-
-                        questions_by_type = defaultdict(list)
-                        for f in intel_fields:
-                            qtype = f.question_type or QuestionType.GENERAL
-                            questions_by_type[qtype.value].append(f)
-
-                        question_status = {}
-                        for f in intel_fields:
-                            question_status[f.field_text] = {'status': 'pending', 'response': '', 'evidence': []}
-
-                        st.session_state.pm_ic_fields = classified_fields
-                        st.session_state.pm_ic_auto_fields = auto_fields
-                        st.session_state.pm_ic_intel_fields = intel_fields
-                        st.session_state.pm_ic_questions_by_type = dict(questions_by_type)
-                        st.session_state.pm_ic_question_status = question_status
-                        st.session_state.pm_ic_evidence_cache = {}
-                        st.session_state.pm_ic_loaded_for = st.session_state.pm_workspace_id
-
-                        save_ic_state(st.session_state.pm_workspace_id)
-
-                    # Also initialize chunk mode for mention analysis
-                    ws = workspace_mgr.get_workspace(st.session_state.pm_workspace_id)
-                    ws.metadata.chunk_mode_enabled = True
-                    ws.metadata.total_chunks = len(completable_chunks)
-                    ws.metadata.current_chunk_id = 1
-                    ws.metadata.chunks_reviewed = 0
-                    ws.metadata.analysis_status = "pending"
-                    ws.chunks.clear()
-                    for chunk in completable_chunks:
-                        ws.chunks.append(ChunkProgress(
-                            chunk_id=chunk.chunk_id,
-                            title=chunk.title,
-                            start_line=chunk.start_line,
-                            end_line=chunk.end_line,
-                            status="pending",
-                            mentions_found=0,
-                            mentions_approved=0
-                        ))
-                    workspace_mgr._save_workspace(ws)
-
-                    st.success(f"Uploaded and processed: {uploaded_file.name}")
-                    st.info(f"Found {len(auto_fields)} template fields (Tier 1) and {len(intel_fields)} substantive questions (Tier 2)")
-                    st.session_state.pm_phase = 2
-                    st.rerun()
-
-                except Exception as e:
-                    st.error(f"Error processing document: {e}")
-                    logger.error(f"Document processing failed: {e}", exc_info=True)
+                    except Exception as e:
+                        st.error(f"Error processing document: {e}")
+                        logger.error(f"Document processing failed: {e}", exc_info=True)
         else:
             st.success(f"Document uploaded: {ws.metadata.original_filename}")
 

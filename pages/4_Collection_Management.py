@@ -71,16 +71,45 @@ def _split_existing_and_missing_doc_ids(vector_collection, doc_ids):
         return [], []
 
     try:
-        results = vector_collection.get(
-            where={"doc_id": {"$in": doc_ids}},
-            include=["metadatas"],
-        )
-        metadatas = results.get("metadatas", []) if isinstance(results, dict) else []
-        existing_set = {
-            meta.get("doc_id")
-            for meta in metadatas
-            if isinstance(meta, dict) and meta.get("doc_id")
-        }
+        existing_set = set()
+        direct_lookup_attempts = 0
+
+        try:
+            results = vector_collection.get(
+                where={"doc_id": {"$in": doc_ids}},
+                include=["metadatas"],
+            )
+            metadatas = results.get("metadatas", []) if isinstance(results, dict) else []
+            existing_set.update(
+                meta.get("doc_id")
+                for meta in metadatas
+                if isinstance(meta, dict) and meta.get("doc_id")
+            )
+        except Exception as batch_error:
+            logger.warning(f"Batch doc_id validation failed: {batch_error}")
+
+        if len(existing_set) < len(doc_ids):
+            unresolved = [doc_id for doc_id in doc_ids if doc_id not in existing_set]
+            for doc_id in unresolved:
+                try:
+                    direct_lookup_attempts += 1
+                    res = vector_collection.get(where={"doc_id": doc_id}, limit=1, include=["metadatas"])
+                    metas = res.get("metadatas", []) if isinstance(res, dict) else []
+                    if metas:
+                        existing_set.add(doc_id)
+                except Exception:
+                    continue
+
+        # Conservative fallback: when checks were inconclusive against a non-empty
+        # vector store, avoid surfacing false stale-reference warnings.
+        if not existing_set:
+            try:
+                vector_count = int(vector_collection.count())
+            except Exception:
+                vector_count = 0
+            if vector_count > 0 and direct_lookup_attempts == 0:
+                return list(doc_ids), []
+
         existing_doc_ids = [doc_id for doc_id in doc_ids if doc_id in existing_set]
         missing_doc_ids = [doc_id for doc_id in doc_ids if doc_id not in existing_set]
         return existing_doc_ids, missing_doc_ids
@@ -1117,9 +1146,20 @@ for collection in page_collections:
                     st.info("This collection is empty.")
                 else:
                     with st.spinner("Fetching document details..."):
-                        results = vector_collection.get(where={"doc_id": {"$in": doc_ids}}, include=["metadatas"])
-                        unique_docs = {meta['doc_id']: meta for meta in results.get('metadatas', []) if 'doc_id' in meta}
-                        missing_doc_refs = [doc_id for doc_id in doc_ids if doc_id not in unique_docs]
+                        existing_doc_ids, missing_doc_refs = _split_existing_and_missing_doc_ids(
+                            vector_collection, doc_ids
+                        )
+                        unique_docs = {}
+                        if existing_doc_ids:
+                            results = vector_collection.get(
+                                where={"doc_id": {"$in": existing_doc_ids}},
+                                include=["metadatas"],
+                            )
+                            unique_docs = {
+                                meta['doc_id']: meta
+                                for meta in results.get('metadatas', [])
+                                if isinstance(meta, dict) and 'doc_id' in meta
+                            }
 
                         if missing_doc_refs:
                             st.warning(
@@ -1141,7 +1181,13 @@ for collection in page_collections:
                                     try:
                                         repair_result = collection_mgr.prune_missing_doc_references(name, vector_collection)
                                         removed = repair_result.get("removed_count", 0)
-                                        if removed:
+                                        status = repair_result.get("status", "ok")
+                                        if status == "unverified":
+                                            st.warning(
+                                                "Could not safely verify missing references in the current vector store; "
+                                                "no collection changes were made."
+                                            )
+                                        elif removed:
                                             st.success(f"✅ Removed {removed} stale reference(s) from '{name}'.")
                                         else:
                                             st.info("No stale references were removed.")

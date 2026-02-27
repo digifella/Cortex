@@ -84,6 +84,7 @@ except ImportError as e:
     st.stop()
 
 PAGE_VERSION = VERSION_STRING
+MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
 
 # Set up logging
 logger = get_logger(__name__)
@@ -1719,17 +1720,21 @@ def display_backup_management():
 
             import_path = None
             if uploaded_zip:
+                if int(getattr(uploaded_zip, "size", 0) or 0) > MAX_UPLOAD_BYTES:
+                    st.error("Selected package exceeds the 1GB upload limit.")
+                    uploaded_zip = None
+                else:
                 # Save uploaded file to temp location
-                import tempfile
-                temp_dir = Path(tempfile.gettempdir()) / "cortex_imports"
-                temp_dir.mkdir(exist_ok=True)
+                    import tempfile
+                    temp_dir = Path(tempfile.gettempdir()) / "cortex_imports"
+                    temp_dir.mkdir(exist_ok=True)
 
-                temp_zip_path = temp_dir / uploaded_zip.name
-                with open(temp_zip_path, 'wb') as f:
-                    f.write(uploaded_zip.getvalue())
+                    temp_zip_path = temp_dir / uploaded_zip.name
+                    with open(temp_zip_path, 'wb') as f:
+                        f.write(uploaded_zip.getvalue())
 
-                import_path = str(temp_zip_path)
-                st.success(f"📦 File loaded: {uploaded_zip.name} ({uploaded_zip.size / (1024*1024):.1f} MB)")
+                    import_path = str(temp_zip_path)
+                    st.success(f"📦 File loaded: {uploaded_zip.name} ({uploaded_zip.size / (1024*1024):.1f} MB)")
 
             if import_path:
                 # Validate button

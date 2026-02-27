@@ -33,6 +33,7 @@ st.set_page_config(page_title="Document Summarizer", layout="wide", page_icon="�
 
 # Page metadata
 PAGE_VERSION = VERSION_STRING
+MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
 
 def get_installed_ollama_models() -> set:
     """Get set of actually installed Ollama models."""
@@ -295,28 +296,31 @@ def main():
             
             if uploaded_file:
                 # Save uploaded file temporarily with proper permissions
-                try:
-                    temp_dir = Path(tempfile.gettempdir()) / "cortex_summaries"
-                    temp_dir.mkdir(exist_ok=True, mode=0o755)
-                    
-                    # Create temporary file with proper extension
-                    file_extension = Path(uploaded_file.name).suffix
-                    temp_filename = f"uploaded_{int(time.time())}_{uploaded_file.name}"
-                    selected_file = str(temp_dir / temp_filename)
-                    
-                    # Write file with proper permissions
-                    with open(selected_file, 'wb') as tmp_file:
-                        tmp_file.write(uploaded_file.getvalue())
-                    
-                    # Set file permissions
-                    os.chmod(selected_file, 0o644)
-                    
-                    st.success(f"📄 File uploaded: {uploaded_file.name}")
-                    st.info(f"Size: {uploaded_file.size / 1024:.1f} KB")
-                    
-                except Exception as e:
-                    st.error(f"❌ Failed to save uploaded file: {str(e)}")
+                if int(getattr(uploaded_file, "size", 0) or 0) > MAX_UPLOAD_BYTES:
+                    st.error("Selected file exceeds the 1GB upload limit.")
                     selected_file = None
+                else:
+                    try:
+                        temp_dir = Path(tempfile.gettempdir()) / "cortex_summaries"
+                        temp_dir.mkdir(exist_ok=True, mode=0o755)
+                        
+                        # Create temporary file with proper extension
+                        file_extension = Path(uploaded_file.name).suffix
+                        temp_filename = f"uploaded_{int(time.time())}_{uploaded_file.name}"
+                        selected_file = str(temp_dir / temp_filename)
+                        
+                        # Write file with proper permissions
+                        with open(selected_file, 'wb') as tmp_file:
+                            tmp_file.write(uploaded_file.getvalue())
+                        
+                        # Set file permissions
+                        os.chmod(selected_file, 0o644)
+                        
+                        st.success(f"📄 File uploaded: {uploaded_file.name}")
+                        st.info(f"Size: {uploaded_file.size / 1024:.1f} KB")
+                    except Exception as e:
+                        st.error(f"❌ Failed to save uploaded file: {str(e)}")
+                        selected_file = None
         
         else:  # Browse Anonymized Documents
             # Load configuration to find anonymized documents directory

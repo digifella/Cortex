@@ -164,6 +164,34 @@ def resolve_db_root_path(path_str: Union[str, Path, None]) -> Optional[Path]:
     return path_obj
 
 
+def get_database_path() -> str:
+    """
+    Return the configured knowledge-base root path.
+
+    This is a compatibility helper for modules that still import
+    `get_database_path` directly from `path_utils`.
+    """
+    try:
+        from cortex_engine.config_manager import ConfigManager
+        from cortex_engine.utils.default_paths import get_default_ai_database_path
+
+        config = ConfigManager().get_config()
+        configured = config.get("ai_database_path") or get_default_ai_database_path()
+
+        root = resolve_db_root_path(configured)
+        if not root:
+            return ""
+
+        # In Docker this returns container-visible mount path; outside Docker this
+        # keeps host/WSL-compatible normalization.
+        return convert_to_docker_mount_path(str(root))
+    except Exception:
+        fallback = resolve_db_root_path(os.environ.get("AI_DATABASE_PATH", ""))
+        if fallback:
+            return convert_to_docker_mount_path(str(fallback))
+        return ""
+
+
 def convert_to_docker_mount_path(path_str: Union[str, Path, None]) -> str:
     """
     Convert host paths to container-visible paths when running in Docker.

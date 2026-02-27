@@ -21,6 +21,7 @@ from cortex_engine.utils import convert_windows_to_wsl_path, get_logger, resolve
 from cortex_engine.version_config import VERSION_STRING
 
 logger = get_logger(__name__)
+MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
 
 st.set_page_config(page_title="URL PDF Ingestor", layout="wide", page_icon="🌐")
 
@@ -103,9 +104,12 @@ with st.container(border=True):
     uploaded_text = ""
     uploaded_urls: List[str] = []
     if uploaded_source is not None:
-        uploaded_text = uploaded_source.getvalue().decode("utf-8", errors="ignore")
-        uploaded_urls = normalize_url_list(uploaded_text)
-        st.caption(f"Loaded `{uploaded_source.name}` • extracted {len(uploaded_urls)} URL(s)")
+        if int(getattr(uploaded_source, "size", 0) or 0) > MAX_UPLOAD_BYTES:
+            st.error("Selected source file exceeds the 1GB upload limit.")
+        else:
+            uploaded_text = uploaded_source.getvalue().decode("utf-8", errors="ignore")
+            uploaded_urls = normalize_url_list(uploaded_text)
+            st.caption(f"Loaded `{uploaded_source.name}` • extracted {len(uploaded_urls)} URL(s)")
 
     combined_input = "\n".join([url_text.strip(), path_text.strip(), uploaded_text.strip()]).strip()
     preview_urls = normalize_url_list(combined_input)

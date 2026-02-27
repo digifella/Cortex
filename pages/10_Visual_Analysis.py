@@ -38,6 +38,7 @@ except ImportError as e:
     st.stop()
 
 PAGE_VERSION = VERSION_STRING
+MAX_BATCH_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
 
 # Initialize session state
 if "visual_analysis" not in st.session_state:
@@ -122,6 +123,31 @@ def handle_file_upload():
         accept_multiple_files=True,
         help="Supported formats: PNG, JPG, GIF, BMP, WebP, TIFF, SVG, ICO"
     )
+    if uploaded_files:
+        accepted_uploads = []
+        accepted_bytes = 0
+        for uf in uploaded_files:
+            size_bytes = int(getattr(uf, "size", 0) or 0)
+            if size_bytes <= 0:
+                try:
+                    size_bytes = len(uf.getvalue())
+                except Exception:
+                    size_bytes = 0
+            if accepted_bytes + size_bytes > MAX_BATCH_UPLOAD_BYTES:
+                break
+            accepted_uploads.append(uf)
+            accepted_bytes += size_bytes
+        if not accepted_uploads:
+            st.error("Selected images exceed the 1GB total upload limit.")
+            uploaded_files = []
+        else:
+            if len(accepted_uploads) < len(uploaded_files):
+                st.warning(
+                    f"Maximum 1GB total upload per batch — only the first "
+                    f"{len(accepted_uploads)} of {len(uploaded_files)} files will be processed."
+                )
+            uploaded_files = accepted_uploads
+            st.caption(f"Batch size: {accepted_bytes / (1024 * 1024):.1f} MB")
     
     # Process uploaded files
     processed_files = []
