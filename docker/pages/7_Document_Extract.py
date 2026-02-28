@@ -1874,6 +1874,22 @@ def _render_pdf_image_extract_tab():
             key="pdfimg_render_scale",
             help="Higher values create larger JPG extractions but use more memory.",
         )
+        split_full_page_scans = st.checkbox(
+            "Split full-page scans into separate photo crops",
+            value=False,
+            key="pdfimg_split_scans",
+            help="When a PDF page is one large scanned image, try to detect multiple photo regions inside it.",
+        )
+        split_min_crop_coverage_pct = st.slider(
+            "Minimum split crop area (%)",
+            min_value=1.0,
+            max_value=25.0,
+            value=6.0,
+            step=0.5,
+            key="pdfimg_split_min_crop_pct",
+            disabled=not split_full_page_scans,
+            help="Smaller values detect more candidate crops but can pick up layout noise.",
+        )
 
         selected = _file_input_widget("pdfimg", ["pdf"], label="Choose PDF scan:")
 
@@ -1920,6 +1936,8 @@ def _render_pdf_image_extract_tab():
                             ignore_edge_decorations=bool(ignore_edge_decorations),
                             edge_margin_pct=float(edge_margin_pct),
                             render_scale=float(render_scale),
+                            split_full_page_scans=bool(split_full_page_scans),
+                            split_min_crop_coverage_pct=float(split_min_crop_coverage_pct),
                         )
                     except Exception as e:
                         st.error(f"Failed to scan {_user_visible_filename(fpath)}: {e}")
@@ -1935,6 +1953,7 @@ def _render_pdf_image_extract_tab():
                             "skipped_small": int(result.get("skipped_small", 0) or 0),
                             "skipped_edge": int(result.get("skipped_edge", 0) or 0),
                             "skipped_invalid": int(result.get("skipped_invalid", 0) or 0),
+                            "split_generated": int(result.get("split_generated", 0) or 0),
                             "message": str(result.get("message", "") or ""),
                         }
                     )
@@ -1991,16 +2010,18 @@ def _render_pdf_image_extract_tab():
 
             total_detected = sum(int(row.get("detected", 0) or 0) for row in rows)
             total_extracted = sum(int(row.get("extracted", 0) or 0) for row in rows)
-            metric_cols = st.columns(3)
+            total_split = sum(int(row.get("split_generated", 0) or 0) for row in rows)
+            metric_cols = st.columns(4)
             metric_cols[0].metric("PDFs Scanned", len(rows))
             metric_cols[1].metric("Image Blocks Found", total_detected)
             metric_cols[2].metric("JPGs Extracted", total_extracted)
+            metric_cols[3].metric("Split Crops", total_split)
 
             for row in rows:
                 st.write(
                     f"**{row['pdf']}**: extracted {row['extracted']} / {row['detected']} "
                     f"(small skipped: {row['skipped_small']}, edge skipped: {row['skipped_edge']}, "
-                    f"invalid skipped: {row['skipped_invalid']})"
+                    f"invalid skipped: {row['skipped_invalid']}, split crops: {row['split_generated']})"
                 )
 
             if zip_bytes:

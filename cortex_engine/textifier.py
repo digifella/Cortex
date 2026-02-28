@@ -520,6 +520,8 @@ class DocumentTextifier:
         ignore_edge_decorations: bool = True,
         edge_margin_pct: float = 8.0,
         render_scale: float = 2.0,
+        split_full_page_scans: bool = False,
+        split_min_crop_coverage_pct: float = 6.0,
     ) -> Dict[str, Any]:
         """
         Extract likely photographic image regions from a PDF.
@@ -535,6 +537,7 @@ class DocumentTextifier:
         skipped_small = 0
         skipped_edge = 0
         skipped_invalid = 0
+        split_generated = 0
 
         doc = fitz.open(file_path)
         try:
@@ -619,6 +622,29 @@ class DocumentTextifier:
                         skipped_invalid += 1
                         continue
 
+                    split_crops: List[Dict[str, Any]] = []
+                    if split_full_page_scans:
+                        split_crops = self._split_scanned_page_image(
+                            image_bytes,
+                            parent_name=pdf_path.stem,
+                            page_number=page_idx + 1,
+                            image_index=page_extract_count + 1,
+                            min_width_px=int(min_width_px),
+                            min_height_px=int(min_height_px),
+                            min_crop_coverage_pct=float(split_min_crop_coverage_pct),
+                        )
+
+                    if len(split_crops) >= 2:
+                        split_generated += len(split_crops)
+                        for crop in split_crops:
+                            crop["bbox"] = [round(float(v), 2) for v in (bbox.x0, bbox.y0, bbox.x1, bbox.y1)]
+                            crop["source_pdf"] = pdf_path.name
+                            crop["intrinsic_width"] = intrinsic_width
+                            crop["intrinsic_height"] = intrinsic_height
+                            crop["coverage_pct"] = round(coverage_pct, 2)
+                            images.append(crop)
+                        continue
+
                     page_extract_count += 1
                     out_name = f"{pdf_path.stem}_page{page_idx + 1:03d}_image{page_extract_count:02d}.jpg"
                     images.append(
@@ -642,7 +668,8 @@ class DocumentTextifier:
             f"Extracted {len(images)} image(s) from {pdf_path.name}. "
             f"Detected {detected_blocks} image block(s); "
             f"skipped {skipped_small} small block(s), {skipped_edge} edge decoration(s), "
-            f"and {skipped_invalid} invalid block(s)."
+            f"and {skipped_invalid} invalid block(s). "
+            f"Generated {split_generated} split crop(s)."
         )
 
         return {
@@ -654,8 +681,144 @@ class DocumentTextifier:
             "skipped_small": skipped_small,
             "skipped_edge": skipped_edge,
             "skipped_invalid": skipped_invalid,
+            "split_generated": split_generated,
             "message": message,
         }
+
+    @staticmethod
+    def _merge_crop_boxes(boxes: List[Tuple[int, int, int, int]]) -> List[Tuple[int, int, int, int]]:
+        """Merge overlapping / nearly-touching crop boxes."""
+        if not boxes:
+            return []
+        merged: List[List[int]] = [list(boxes[0])]
+        for x, y, w, h in boxes[1:]:
+            merged_any = False
+            for box in merged:
+                bx, by, bw, bh = box
+                pad_x = max(12, min(w, bw) // 12)
+                pad_y = max(12, min(h, bh) // 12)
+                overlaps = not (
+                    x > bx + bw + pad_x
+                    or bx > x + w + pad_x
+                    or y > by + bh + pad_y
+                    or by > y + h + pad_y
+                )
+                if overlaps:
+                    nx0 = min(bx, x)
+                    ny0 = min(by, y)
+                    nx1 = max(bx + bw, x + w)
+                    ny1 = max(by + bh, y + h)
+                    box[0] = nx0
+                    box[1] = ny0
+                    box[2] = nx1 - nx0
+                    box[3] = ny1 - ny0
+                    merged_any = True
+                    break
+            if not merged_any:
+                merged.append([x, y, w, h])
+        return [tuple(box) for box in merged]
+
+    def _split_scanned_page_image(
+        self,
+        image_bytes: bytes,
+        parent_name: str,
+        page_number: int,
+        image_index: int,
+        min_width_px: int,
+        min_height_px: int,
+        min_crop_coverage_pct: float,
+    ) -> List[Dict[str, Any]]:
+        """
+        Try to split a large scanned-page image into separate photo crops.
+
+        This is a heuristic: it looks for large non-white rectangular regions on
+        the page image and returns crops only when it finds multiple candidates.
+        """
+        try:
+            import cv2
+            import numpy as np
+        except Exception as e:
+            logger.debug(f"OpenCV unavailable for PDF scan splitting: {e}")
+            return []
+
+        image_np = np.frombuffer(image_bytes, dtype=np.uint8)
+        decoded = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
+        if decoded is None:
+            return []
+
+        img_h, img_w = decoded.shape[:2]
+        if img_w < max(400, min_width_px) or img_h < max(400, min_height_px):
+            return []
+
+        gray = cv2.cvtColor(decoded, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        _, thresh = cv2.threshold(blurred, 245, 255, cv2.THRESH_BINARY_INV)
+
+        kernel_w = max(9, (img_w // 60) | 1)
+        kernel_h = max(9, (img_h // 60) | 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_w, kernel_h))
+        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
+        opened = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel, iterations=1)
+
+        contours, _ = cv2.findContours(opened, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return []
+
+        image_area = float(img_w * img_h)
+        min_crop_area = image_area * max(min_crop_coverage_pct, 0.5) / 100.0
+        candidate_boxes: List[Tuple[int, int, int, int]] = []
+
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            area = float(w * h)
+            if w < max(160, int(min_width_px * 0.4)):
+                continue
+            if h < max(160, int(min_height_px * 0.4)):
+                continue
+            if area < min_crop_area:
+                continue
+            if area > image_area * 0.92:
+                continue
+            aspect = w / float(max(h, 1))
+            if aspect < 0.3 or aspect > 4.0:
+                continue
+            candidate_boxes.append((x, y, w, h))
+
+        if len(candidate_boxes) < 2:
+            return []
+
+        candidate_boxes.sort(key=lambda box: (box[1], box[0]))
+        candidate_boxes = self._merge_crop_boxes(candidate_boxes)
+        if len(candidate_boxes) < 2:
+            return []
+
+        results: List[Dict[str, Any]] = []
+        for crop_idx, (x, y, w, h) in enumerate(candidate_boxes, 1):
+            pad_x = max(8, w // 40)
+            pad_y = max(8, h // 40)
+            x0 = max(0, x - pad_x)
+            y0 = max(0, y - pad_y)
+            x1 = min(img_w, x + w + pad_x)
+            y1 = min(img_h, y + h + pad_y)
+            crop = decoded[y0:y1, x0:x1]
+            if crop.size == 0:
+                continue
+            ok, encoded = cv2.imencode(".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+            if not ok:
+                continue
+            results.append(
+                {
+                    "file_name": (
+                        f"{parent_name}_page{page_number:03d}_image{image_index:02d}_crop{crop_idx:02d}.jpg"
+                    ),
+                    "bytes": encoded.tobytes(),
+                    "page": page_number,
+                    "split_from_scan": True,
+                    "split_bbox_px": [int(x0), int(y0), int(x1), int(y1)],
+                }
+            )
+
+        return results if len(results) >= 2 else []
 
     def _extract_pdf_page_structured_lines(self, page) -> List[str]:
         """Extract page text while preserving visual structure better than plain text dump."""
