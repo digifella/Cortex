@@ -431,12 +431,17 @@ class DoclingDocumentReader:
             logger.warning(f"Docling figure rendering unavailable: {render_error}")
             rendered_figures = []
 
-        for idx, rendered in enumerate(rendered_figures):
-            try:
-                element, pil_image = rendered
-            except ValueError:
-                # Older Docling versions only return the image
-                element, pil_image = None, rendered
+        total_figures = max(len(figures_data), len(rendered_figures))
+        for idx in range(total_figures):
+            rendered = rendered_figures[idx] if idx < len(rendered_figures) else None
+            element = None
+            pil_image = None
+            if rendered is not None:
+                try:
+                    element, pil_image = rendered
+                except ValueError:
+                    # Older Docling versions only return the image
+                    element, pil_image = None, rendered
 
             figure_dict = figures_data[idx] if idx < len(figures_data) else {}
             prov = None
@@ -453,21 +458,24 @@ class DoclingDocumentReader:
                 'caption': caption_map.get(idx) or figure_dict.get('text') or '',
             }
 
-            try:
-                buffer = BytesIO()
-                pil_image.save(buffer, format="PNG")
-                image_bytes = buffer.getvalue()
-                payload = {
-                    'index': idx,
-                    'image_base64': base64.b64encode(image_bytes).decode('utf-8'),
-                    'image_mime_type': 'image/png',
-                    'width': getattr(pil_image, 'width', None),
-                    'height': getattr(pil_image, 'height', None)
-                }
-                figure_payloads.append(payload)
-                figure_entry['has_image_payload'] = True
-            except Exception as encode_error:
-                logger.warning(f"Unable to serialize Docling figure {idx}: {encode_error}")
+            if pil_image is not None:
+                try:
+                    buffer = BytesIO()
+                    pil_image.save(buffer, format="PNG")
+                    image_bytes = buffer.getvalue()
+                    payload = {
+                        'index': idx,
+                        'image_base64': base64.b64encode(image_bytes).decode('utf-8'),
+                        'image_mime_type': 'image/png',
+                        'width': getattr(pil_image, 'width', None),
+                        'height': getattr(pil_image, 'height', None)
+                    }
+                    figure_payloads.append(payload)
+                    figure_entry['has_image_payload'] = True
+                except Exception as encode_error:
+                    logger.warning(f"Unable to serialize Docling figure {idx}: {encode_error}")
+                    figure_entry['has_image_payload'] = False
+            else:
                 figure_entry['has_image_payload'] = False
 
             figures_summary.append(figure_entry)

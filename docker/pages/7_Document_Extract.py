@@ -50,6 +50,18 @@ MAX_BATCH_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
 # Shared helpers
 # ======================================================================
 
+
+class _SessionUpload:
+    """Persist uploaded file bytes across Streamlit reruns."""
+
+    def __init__(self, name: str, data: bytes):
+        self.name = name
+        self._data = data or b""
+        self.size = len(self._data)
+
+    def getvalue(self) -> bytes:
+        return self._data
+
 def _get_knowledge_base_files(extensions: List[str]) -> List[Path]:
     """Return files from knowledge base directories matching given extensions."""
     config_manager = ConfigManager()
@@ -386,6 +398,23 @@ def _extract_names_from_author_block(raw: str) -> List[str]:
         if _looks_like_person_name(cleaned):
             names.append(cleaned)
     return list(dict.fromkeys(names))
+
+
+def _photo_description_issue(description: str) -> Optional[str]:
+    """Return a user-facing issue for placeholder image descriptions."""
+    desc = (description or "").strip()
+    if not desc.startswith("[Image:"):
+        return None
+    low = desc.lower()
+    if "timed out" in low:
+        return "Image description timed out. The vision model may be overloaded."
+    if "unavailable" in low:
+        return "Image description was skipped because the vision model was unavailable."
+    if "error" in low:
+        return "Image description failed due to a vision model error."
+    if "logo/icon omitted" in low:
+        return "Image looked like a logo or icon, so description was intentionally skipped."
+    return desc
 
 
 def _extract_available_at(md_content: str) -> str:
@@ -1305,6 +1334,15 @@ def _render_textifier_tab():
         )
         batch_mode = st.toggle("Batch mode (multi-file)", value=False, key="txt_batch_toggle")
         st.session_state["textifier_batch"] = batch_mode
+        batch_cooldown_seconds = st.slider(
+            "Cooldown between files (seconds)",
+            min_value=0.0,
+            max_value=10.0,
+            value=2.0,
+            step=0.5,
+            key="txt_batch_cooldown_s",
+            help="Adds a short pause between files to reduce system load during batch processing.",
+        )
 
         selected = _file_input_widget("textifier", ["pdf", "docx", "pptx", "png", "jpg", "jpeg"])
 
@@ -1386,6 +1424,13 @@ def _render_textifier_tab():
                         logger.warning(f"Textifier preface enrichment failed for {fpath}: {e}", exc_info=True)
 
                     results[f"{fname}_textified.md"] = md_content
+
+                    if batch_cooldown_seconds > 0 and total_files > 1 and file_idx < total_files - 1:
+                        progress.progress(
+                            min((file_idx + 1) / total_files, 1.0),
+                            f"Cooling down for {batch_cooldown_seconds:.1f}s before next file..."
+                        )
+                        time.sleep(batch_cooldown_seconds)
 
                 progress.progress(1.0, "Done!")
                 status_text.empty()
@@ -1776,12 +1821,26 @@ def _render_photo_keywords_tab():
             st.session_state["photokw_upload_version"] = 0
         ver = st.session_state["photokw_upload_version"]
 
-        uploaded = st.file_uploader(
+        uploaded_input = st.file_uploader(
             "Drop photos here:",
             type=["png", "jpg", "jpeg", "tiff", "webp", "gif", "bmp"],
             accept_multiple_files=True,
             key=f"photokw_upload_v{ver}",
         )
+        upload_cache_key = "photokw_uploaded_cache"
+        if uploaded_input:
+            uploaded = [_SessionUpload(uf.name, uf.getvalue()) for uf in uploaded_input]
+            st.session_state[upload_cache_key] = [
+                {"name": uf.name, "data": uf.getvalue()}
+                for uf in uploaded_input
+            ]
+        else:
+            cached_uploads = st.session_state.get(upload_cache_key) or []
+            uploaded = [
+                _SessionUpload(str(item.get("name") or ""), item.get("data") or b"")
+                for item in cached_uploads
+                if isinstance(item, dict) and item.get("name")
+            ]
 
         write_to_original = st.toggle(
             "Write to original files",
@@ -1850,7 +1909,7 @@ def _render_photo_keywords_tab():
             value=False,
             key="photokw_convert_to_jpg",
             disabled=no_resize_selected,
-            help="When enabled, resized photos are saved as .jpg (useful for PNG/TIF inputs).",
+            help="Only non-JPG sources are converted. Existing JPG files stay JPG and are only resized when needed.",
         )
         jpg_quality = st.slider(
             "JPG quality",
@@ -1887,6 +1946,15 @@ def _render_photo_keywords_tab():
             value="All rights (c) Longboardfella. Contact longboardfella.com for info on use of photos.",
             key="photokw_ownership_notice",
             height=90,
+        )
+        photokw_batch_cooldown_seconds = st.slider(
+            "Cooldown between photos (seconds)",
+            min_value=0.0,
+            max_value=10.0,
+            value=2.0,
+            step=0.5,
+            key="photokw_batch_cooldown_s",
+            help="Adds a short pause between photos to keep batch processing more responsive.",
         )
 
         if st.button("Clear All Photos", key="photokw_clear", use_container_width=True):
@@ -1927,6 +1995,10 @@ def _render_photo_keywords_tab():
                     f"{len(accepted_uploads)} of {len(uploaded)} photos will be processed."
                 )
             uploaded = accepted_uploads
+            st.session_state[upload_cache_key] = [
+                {"name": uf.name, "data": uf.getvalue()}
+                for uf in uploaded
+            ]
             total = len(uploaded)
             st.info(f"{total} photo(s) selected ({accepted_bytes / (1024 * 1024):.1f} MB total)")
 
@@ -1959,7 +2031,7 @@ def _render_photo_keywords_tab():
                 preview_meta = _read_photo_metadata_preview(str(preview_path))
 
                 with st.expander("Single Photo Metadata Preview", expanded=True):
-                    st.image(preview_photo, caption=preview_photo.name, width=420)
+                    st.image(preview_bytes, caption=preview_photo.name, width=420)
                     if preview_meta.get("available"):
                         description = preview_meta.get("description", "")
                         keywords = preview_meta.get("keywords", [])
@@ -2131,6 +2203,12 @@ def _render_photo_keywords_tab():
                     except Exception as e:
                         st.error(f"Failed: {fname}: {e}")
                         logger.error(f"Photo keyword error for {fpath}: {e}", exc_info=True)
+                    if photokw_batch_cooldown_seconds > 0 and total > 1 and idx < total - 1:
+                        progress.progress(
+                            min((idx + 1) / total, 1.0),
+                            f"Cooling down for {photokw_batch_cooldown_seconds:.1f}s before next photo..."
+                        )
+                        time.sleep(photokw_batch_cooldown_seconds)
 
                 progress.progress(1.0, "Done!")
 
@@ -2253,12 +2331,15 @@ def _render_photo_keywords_tab():
                             st.warning(f"Ownership metadata write failed: {ownership_result.get('message', '')}")
                 else:
                     exif = r["exif_result"]
+                    desc_issue = _photo_description_issue(r.get("description", ""))
                     if exif.get("message") == "Keyword generation skipped":
                         st.info("Description/keyword generation skipped")
                     elif exif["success"]:
                         st.success(f"EXIF written: {exif['keywords_written']} keywords to {r['file_name']}")
                     else:
                         st.error(f"EXIF write failed: {exif['message']}")
+                    if desc_issue:
+                        st.warning(desc_issue)
                     if ownership_result:
                         if ownership_result.get("success"):
                             st.success("Ownership metadata written")
@@ -2304,6 +2385,9 @@ def _render_photo_keywords_tab():
                     else:
                         desc = r["description"] or "(no description generated)"
                         st.markdown(f"**Description:**\n\n{desc}")
+                        desc_issue = _photo_description_issue(desc)
+                        if desc_issue:
+                            st.warning(desc_issue)
                         st.divider()
                         # Location fields
                         if r.get("location") and any(r["location"].values()):
@@ -2380,7 +2464,11 @@ def _render_photo_keywords_tab():
                                         f"Keyword anonymization failed: {anon_result.get('message', 'Unknown error')}"
                                     )
                         else:
-                            st.markdown(f"**Description:** {r.get('description') or '(no description)'}")
+                            desc = r.get('description') or '(no description)'
+                            st.markdown(f"**Description:** {desc}")
+                            desc_issue = _photo_description_issue(desc)
+                            if desc_issue:
+                                st.warning(desc_issue)
                             if loc and any(loc.values()):
                                 st.markdown(
                                     f"**Location:** {loc.get('city', '')} · "
