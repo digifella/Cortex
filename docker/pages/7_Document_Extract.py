@@ -1799,6 +1799,226 @@ def _get_entity_type(anonymized: str) -> str:
 
 
 # ======================================================================
+# PDF Image Extractor tab
+# ======================================================================
+
+def _render_pdf_image_extract_tab():
+    """Render the PDF image extraction utility."""
+    st.subheader("PDF Image Extractor")
+    with st.expander("About PDF Image Extractor", expanded=False):
+        st.write(
+            "Extracts likely photographic image blocks from PDFs into JPG files. "
+            "This is useful for scanned newsletters, reports, and old flatbed PDF scans where "
+            "photos need to be pulled out for separate processing."
+        )
+        st.caption(
+            "Filtering is heuristic-based: small graphics, header/footer art, and icons can be "
+            "excluded using the size and edge controls below."
+        )
+
+    col1, col2 = st.columns([1, 1.2])
+
+    with col1:
+        batch_mode = st.toggle("Batch mode (multi-file)", value=False, key="pdfimg_batch_toggle")
+        st.session_state["pdfimg_batch"] = batch_mode
+
+        min_width_px = st.slider(
+            "Minimum source image width (px)",
+            min_value=100,
+            max_value=3000,
+            value=500,
+            step=50,
+            key="pdfimg_min_width_px",
+            help="Ignore small embedded graphics narrower than this.",
+        )
+        min_height_px = st.slider(
+            "Minimum source image height (px)",
+            min_value=100,
+            max_value=3000,
+            value=500,
+            step=50,
+            key="pdfimg_min_height_px",
+            help="Ignore small embedded graphics shorter than this.",
+        )
+        min_page_coverage_pct = st.slider(
+            "Minimum on-page coverage (%)",
+            min_value=0.0,
+            max_value=40.0,
+            value=2.0,
+            step=0.5,
+            key="pdfimg_min_coverage_pct",
+            help="Filters out very small items even if their source image dimensions are large.",
+        )
+        ignore_edge_decorations = st.checkbox(
+            "Ignore likely header/footer and edge decorations",
+            value=True,
+            key="pdfimg_ignore_edge",
+            help="Skips small banner/icon-like images close to the page edges.",
+        )
+        edge_margin_pct = st.slider(
+            "Edge margin exclusion band (%)",
+            min_value=2.0,
+            max_value=20.0,
+            value=8.0,
+            step=1.0,
+            key="pdfimg_edge_margin_pct",
+            disabled=not ignore_edge_decorations,
+            help="The top, bottom, left, and right edge band used for decoration filtering.",
+        )
+        render_scale = st.slider(
+            "Output render scale",
+            min_value=1.0,
+            max_value=3.0,
+            value=2.0,
+            step=0.25,
+            key="pdfimg_render_scale",
+            help="Higher values create larger JPG extractions but use more memory.",
+        )
+
+        selected = _file_input_widget("pdfimg", ["pdf"], label="Choose PDF scan:")
+
+        if st.button("Clear Extractor Files", key="pdfimg_clear_all", use_container_width=True):
+            ver = st.session_state.get("pdfimg_upload_version", 0)
+            for key in list(st.session_state.keys()):
+                if key.startswith("pdfimg_"):
+                    del st.session_state[key]
+            st.session_state["pdfimg_upload_version"] = ver + 1
+            st.rerun()
+
+    with col2:
+        st.header("Output")
+
+        if selected:
+            files_to_process = selected if isinstance(selected, list) else [selected]
+            st.info(f"{len(files_to_process)} PDF file(s) ready for image extraction.")
+
+            if st.button("Extract Images to ZIP", type="primary", use_container_width=True):
+                from cortex_engine.textifier import DocumentTextifier
+
+                extractor = DocumentTextifier(use_vision=False)
+                all_images: List[Dict[str, object]] = []
+                extraction_rows: List[Dict[str, object]] = []
+                progress = st.progress(0.0, "Starting image scan...")
+
+                for file_idx, fpath in enumerate(files_to_process):
+                    visible_name = _user_visible_filename(fpath)
+                    file_base = file_idx / len(files_to_process)
+                    file_span = 1.0 / len(files_to_process)
+
+                    def _on_progress(frac, msg, _base=file_base, _span=file_span, _name=visible_name):
+                        overall = min(_base + frac * _span, 1.0)
+                        label = f"[{_name}] {msg}" if len(files_to_process) > 1 else msg
+                        progress.progress(overall, label)
+
+                    extractor.on_progress = _on_progress
+                    try:
+                        result = extractor.extract_pdf_images(
+                            fpath,
+                            min_width_px=int(min_width_px),
+                            min_height_px=int(min_height_px),
+                            min_page_coverage_pct=float(min_page_coverage_pct),
+                            ignore_edge_decorations=bool(ignore_edge_decorations),
+                            edge_margin_pct=float(edge_margin_pct),
+                            render_scale=float(render_scale),
+                        )
+                    except Exception as e:
+                        st.error(f"Failed to scan {_user_visible_filename(fpath)}: {e}")
+                        logger.error(f"PDF image extraction failed for {fpath}: {e}", exc_info=True)
+                        continue
+
+                    extraction_rows.append(
+                        {
+                            "pdf": visible_name,
+                            "pages": int(result.get("pages_scanned", 0) or 0),
+                            "detected": int(result.get("detected_blocks", 0) or 0),
+                            "extracted": len(result.get("images", []) or []),
+                            "skipped_small": int(result.get("skipped_small", 0) or 0),
+                            "skipped_edge": int(result.get("skipped_edge", 0) or 0),
+                            "skipped_invalid": int(result.get("skipped_invalid", 0) or 0),
+                            "message": str(result.get("message", "") or ""),
+                        }
+                    )
+
+                    for image in result.get("images", []) or []:
+                        image_record = dict(image)
+                        image_record["zip_path"] = f"{Path(visible_name).stem}/{image_record['file_name']}"
+                        all_images.append(image_record)
+
+                progress.progress(1.0, "Done!")
+
+                st.session_state["pdfimg_results"] = extraction_rows
+                if all_images:
+                    buf = io.BytesIO()
+                    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                        summary_lines = [
+                            "Cortex PDF Image Extractor",
+                            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                            "",
+                        ]
+                        for row in extraction_rows:
+                            summary_lines.append(
+                                f"{row['pdf']}: extracted {row['extracted']} of {row['detected']} detected "
+                                f"image block(s); skipped small={row['skipped_small']}, "
+                                f"edge={row['skipped_edge']}, invalid={row['skipped_invalid']}."
+                            )
+                        summary_lines.append("")
+                        summary_lines.append("Extracted files:")
+                        for image in all_images:
+                            zf.writestr(str(image["zip_path"]), image["bytes"])
+                            summary_lines.append(
+                                f"- {image['zip_path']} | page {image['page']} | "
+                                f"source {image['intrinsic_width']}x{image['intrinsic_height']} px | "
+                                f"coverage {image['coverage_pct']}% | bbox {image['bbox']}"
+                            )
+                        zf.writestr("extraction_summary.txt", "\n".join(summary_lines) + "\n")
+
+                    zip_name = "pdf_extracted_images.zip" if len(files_to_process) > 1 else (
+                        f"{Path(_user_visible_filename(files_to_process[0])).stem}_images.zip"
+                    )
+                    st.session_state["pdfimg_zip_bytes"] = buf.getvalue()
+                    st.session_state["pdfimg_zip_name"] = zip_name
+                else:
+                    st.session_state.pop("pdfimg_zip_bytes", None)
+                    st.session_state.pop("pdfimg_zip_name", None)
+
+        rows = st.session_state.get("pdfimg_results")
+        zip_bytes = st.session_state.get("pdfimg_zip_bytes")
+        zip_name = st.session_state.get("pdfimg_zip_name", "pdf_extracted_images.zip")
+
+        if rows:
+            st.divider()
+            st.subheader("Extraction Results")
+
+            total_detected = sum(int(row.get("detected", 0) or 0) for row in rows)
+            total_extracted = sum(int(row.get("extracted", 0) or 0) for row in rows)
+            metric_cols = st.columns(3)
+            metric_cols[0].metric("PDFs Scanned", len(rows))
+            metric_cols[1].metric("Image Blocks Found", total_detected)
+            metric_cols[2].metric("JPGs Extracted", total_extracted)
+
+            for row in rows:
+                st.write(
+                    f"**{row['pdf']}**: extracted {row['extracted']} / {row['detected']} "
+                    f"(small skipped: {row['skipped_small']}, edge skipped: {row['skipped_edge']}, "
+                    f"invalid skipped: {row['skipped_invalid']})"
+                )
+
+            if zip_bytes:
+                st.download_button(
+                    "Download Extracted JPGs (ZIP)",
+                    zip_bytes,
+                    file_name=zip_name,
+                    mime="application/zip",
+                    use_container_width=True,
+                )
+            else:
+                st.warning(
+                    "No images met the current thresholds. Lower the size or coverage filters "
+                    "if this PDF contains smaller photos."
+                )
+
+
+# ======================================================================
 # Photo Processor tab
 # ======================================================================
 
@@ -2508,10 +2728,15 @@ def main():
     st.title("Document or Photo Processing")
     st.caption(f"Version: {PAGE_VERSION} • Document conversion and privacy tools")
 
-    tab_textifier, tab_photo, tab_anonymizer = st.tabs(["Textifier", "Photo Processor", "Anonymizer"])
+    tab_textifier, tab_pdfimg, tab_photo, tab_anonymizer = st.tabs(
+        ["Textifier", "PDF Image Extractor", "Photo Processor", "Anonymizer"]
+    )
 
     with tab_textifier:
         _render_textifier_tab()
+
+    with tab_pdfimg:
+        _render_pdf_image_extract_tab()
 
     with tab_photo:
         _render_photo_keywords_tab()

@@ -511,6 +511,152 @@ class DocumentTextifier:
 
         return normalized
 
+    def extract_pdf_images(
+        self,
+        file_path: str,
+        min_width_px: int = 500,
+        min_height_px: int = 500,
+        min_page_coverage_pct: float = 2.0,
+        ignore_edge_decorations: bool = True,
+        edge_margin_pct: float = 8.0,
+        render_scale: float = 2.0,
+    ) -> Dict[str, Any]:
+        """
+        Extract likely photographic image regions from a PDF.
+
+        Uses PyMuPDF image blocks so the extracted JPEG matches what is visually
+        placed on the page, then filters out likely icons / header-footer art.
+        """
+        import fitz  # PyMuPDF
+
+        pdf_path = Path(file_path)
+        images: List[Dict[str, Any]] = []
+        detected_blocks = 0
+        skipped_small = 0
+        skipped_edge = 0
+        skipped_invalid = 0
+
+        doc = fitz.open(file_path)
+        try:
+            total_pages = len(doc)
+            for page_idx, page in enumerate(doc):
+                if total_pages > 0:
+                    self._report(page_idx / total_pages, f"Scanning page {page_idx + 1}/{total_pages}")
+
+                try:
+                    text_dict = page.get_text("dict") or {}
+                    blocks = list(text_dict.get("blocks", []) or [])
+                except Exception as e:
+                    logger.warning(f"Could not inspect PDF image blocks on page {page_idx + 1}: {e}")
+                    continue
+
+                page_rect = page.rect
+                page_area = max(page_rect.get_area(), 1.0)
+                margin_x = page_rect.width * max(edge_margin_pct, 0.0) / 100.0
+                margin_y = page_rect.height * max(edge_margin_pct, 0.0) / 100.0
+                page_extract_count = 0
+
+                for block in blocks:
+                    if block.get("type") != 1:
+                        continue
+                    detected_blocks += 1
+
+                    bbox_raw = block.get("bbox")
+                    if not bbox_raw or len(bbox_raw) != 4:
+                        skipped_invalid += 1
+                        continue
+
+                    try:
+                        bbox = fitz.Rect(
+                            float(bbox_raw[0]),
+                            float(bbox_raw[1]),
+                            float(bbox_raw[2]),
+                            float(bbox_raw[3]),
+                        )
+                    except Exception:
+                        skipped_invalid += 1
+                        continue
+
+                    bbox = bbox & page_rect
+                    if bbox.is_empty or bbox.width < 8 or bbox.height < 8:
+                        skipped_invalid += 1
+                        continue
+
+                    intrinsic_width = int(block.get("width", 0) or 0)
+                    intrinsic_height = int(block.get("height", 0) or 0)
+                    coverage_pct = (bbox.get_area() / page_area) * 100.0
+
+                    if intrinsic_width < int(min_width_px) or intrinsic_height < int(min_height_px):
+                        skipped_small += 1
+                        continue
+                    if coverage_pct < float(min_page_coverage_pct):
+                        skipped_small += 1
+                        continue
+
+                    if ignore_edge_decorations:
+                        near_top = bbox.y1 <= margin_y
+                        near_bottom = bbox.y0 >= (page_rect.height - margin_y)
+                        near_left = bbox.x1 <= margin_x
+                        near_right = bbox.x0 >= (page_rect.width - margin_x)
+                        banner_like = bbox.height <= (page_rect.height * 0.18)
+                        icon_like = bbox.width <= (page_rect.width * 0.18)
+                        if (near_top or near_bottom or near_left or near_right) and (banner_like or icon_like):
+                            skipped_edge += 1
+                            continue
+
+                    try:
+                        pix = page.get_pixmap(
+                            clip=bbox,
+                            matrix=fitz.Matrix(float(render_scale), float(render_scale)),
+                            alpha=False,
+                        )
+                        try:
+                            image_bytes = pix.tobytes("jpg")
+                        except Exception:
+                            image_bytes = pix.tobytes("jpeg")
+                    except Exception as e:
+                        logger.debug(f"Could not render PDF image block on page {page_idx + 1}: {e}")
+                        skipped_invalid += 1
+                        continue
+
+                    page_extract_count += 1
+                    out_name = f"{pdf_path.stem}_page{page_idx + 1:03d}_image{page_extract_count:02d}.jpg"
+                    images.append(
+                        {
+                            "file_name": out_name,
+                            "bytes": image_bytes,
+                            "page": page_idx + 1,
+                            "bbox": [round(float(v), 2) for v in (bbox.x0, bbox.y0, bbox.x1, bbox.y1)],
+                            "source_pdf": pdf_path.name,
+                            "intrinsic_width": intrinsic_width,
+                            "intrinsic_height": intrinsic_height,
+                            "coverage_pct": round(coverage_pct, 2),
+                        }
+                    )
+
+            self._report(1.0, "PDF image scan complete")
+        finally:
+            doc.close()
+
+        message = (
+            f"Extracted {len(images)} image(s) from {pdf_path.name}. "
+            f"Detected {detected_blocks} image block(s); "
+            f"skipped {skipped_small} small block(s), {skipped_edge} edge decoration(s), "
+            f"and {skipped_invalid} invalid block(s)."
+        )
+
+        return {
+            "success": bool(images),
+            "source_pdf": str(pdf_path),
+            "images": images,
+            "pages_scanned": total_pages if 'total_pages' in locals() else 0,
+            "detected_blocks": detected_blocks,
+            "skipped_small": skipped_small,
+            "skipped_edge": skipped_edge,
+            "skipped_invalid": skipped_invalid,
+            "message": message,
+        }
+
     def _extract_pdf_page_structured_lines(self, page) -> List[str]:
         """Extract page text while preserving visual structure better than plain text dump."""
         lines_out: List[str] = []
