@@ -60,6 +60,7 @@ class DocumentTextifier:
         )
         self._vlm_client = None
         self._vlm_model = None
+        self._vlm_skip_models: set[str] = set()
         self._last_cleanup_applied = False
 
     @classmethod
@@ -210,25 +211,28 @@ class DocumentTextifier:
         seen = set()
         for model in candidates:
             name = str(model or "").strip()
-            if not name or name in seen:
+            if not name or name in seen or name in self._vlm_skip_models:
                 continue
             seen.add(name)
             ordered.append(name)
         return ordered
 
-    def _describe_with_model(self, model: str, encoded_image: str) -> str:
+    def _describe_with_model(self, model: str, encoded_image: str, simple_prompt: bool = False) -> str:
         """Call a specific VLM model and normalize the returned text."""
+        prompt = (
+            "Describe this photograph very briefly in 1-2 short plain sentences (max 35 words total). "
+            "Identify only the main subject and setting. "
+            "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
+            "return exactly: [Image: logo/icon omitted]. "
+            "Do not use markdown, headings, or bullet points."
+        )
+        if not simple_prompt:
+            prompt += " /no_think"
         response = self._vlm_client.chat(
             model=model,
             messages=[{
                 "role": "user",
-                "content": (
-                    "Describe this photograph very briefly in 1-2 short plain sentences (max 35 words total). "
-                    "Identify only the main subject and setting. "
-                    "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
-                    "return exactly: [Image: logo/icon omitted]. "
-                    "Do not use markdown, headings, or bullet points. /no_think"
-                ),
+                "content": prompt,
                 "images": [encoded_image],
             }],
             options={"temperature": 0.1, "num_predict": 140},
@@ -319,14 +323,28 @@ class DocumentTextifier:
                 try:
                     if idx > 0:
                         self._vlm_client.show(model)
-                    result = self._describe_with_model(model, encoded)
+                    result = self._describe_with_model(model, encoded, simple_prompt=False)
                 except Exception as model_error:
+                    err_text = str(model_error)
+                    if "status code: 404" in err_text or "unexpectedly stopped" in err_text:
+                        self._vlm_skip_models.add(model)
                     logger.warning(f"VLM describe failed for model {model}: {model_error}")
                     models_tried.append(f"{model} (error)")
                     continue
                 models_tried.append(model)
                 if not result:
                     logger.warning(f"VLM returned empty description (model: {model})")
+                    if model.startswith("qwen3-vl"):
+                        try:
+                            retry_result = self._describe_with_model(model, encoded, simple_prompt=True)
+                        except Exception as retry_error:
+                            logger.warning(f"VLM simple-prompt retry failed for model {model}: {retry_error}")
+                            retry_result = ""
+                        if retry_result:
+                            logger.info(f"Recovered image description using simple-prompt retry on {model}")
+                            if self._looks_like_logo_icon_description(retry_result):
+                                return "[Image: logo/icon omitted]"
+                            return retry_result
                     continue
                 if model != self._vlm_model:
                     logger.info(f"Recovered image description using fallback vision model: {model}")
