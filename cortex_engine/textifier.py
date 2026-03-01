@@ -188,26 +188,11 @@ class DocumentTextifier:
             self._vlm_model = None
 
     def _vlm_model_candidates(self, include_current: bool = True) -> List[str]:
-        """Return a de-duplicated ordered list of VLM model names to try."""
+        """Return a de-duplicated ordered list of Qwen VLM model names to try."""
         candidates: List[str] = []
         if include_current and self._vlm_model:
             candidates.append(self._vlm_model)
         candidates.extend(self.VISION_MODELS)
-        try:
-            from cortex_engine.config import VLM_MODEL
-            if VLM_MODEL:
-                candidates.append(str(VLM_MODEL).strip())
-        except Exception:
-            pass
-        candidates.extend([
-            "llava:7b",
-            "llava:latest",
-            "llava",
-            "minicpm-v:latest",
-            "minicpm-v",
-            "moondream:latest",
-            "moondream",
-        ])
         ordered: List[str] = []
         seen = set()
         for model in candidates:
@@ -255,19 +240,10 @@ class DocumentTextifier:
         return re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
 
     def _retry_current_qwen_model(self, encoded_image: str) -> str:
-        """Retry the active Qwen model with simpler prompts and a fresh client."""
+        """Retry the active Qwen model with a fresh client."""
         model = str(self._vlm_model or "").strip()
         if not model.startswith("qwen3-vl"):
             return ""
-
-        try:
-            retry_result = self._describe_with_model(model, encoded_image, simple_prompt=True)
-        except Exception as retry_error:
-            logger.warning(f"VLM simple-prompt retry failed for model {model}: {retry_error}")
-            retry_result = ""
-        if retry_result:
-            logger.info(f"Recovered image description using simple-prompt retry on {model}")
-            return retry_result
 
         self._reset_vlm_session(f"{model} returned empty output")
         self._init_vlm()
@@ -365,13 +341,11 @@ class DocumentTextifier:
                 try:
                     if idx > 0:
                         self._vlm_client.show(model)
-                    result = self._describe_with_model(model, encoded, simple_prompt=False)
+                    result = self._describe_with_model(model, encoded, simple_prompt=True)
                 except Exception as model_error:
                     err_text = str(model_error)
                     if "status code: 404" in err_text:
                         self._vlm_skip_models.add(model)
-                    if "unexpectedly stopped" in err_text and model != self._vlm_model:
-                        self._vlm_crash_skip_models.add(model)
                     if "unexpectedly stopped" in err_text and model == self._vlm_model:
                         self._reset_vlm_session(f"{model} runner stopped unexpectedly")
                     logger.warning(f"VLM describe failed for model {model}: {model_error}")
