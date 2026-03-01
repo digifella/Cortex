@@ -267,6 +267,12 @@ class DocumentTextifier:
             flags=re.IGNORECASE,
         ).strip()
         cleaned = re.sub(
+            r"^(?:let'?s see|lets see|let s see|wait|hmm+|uh|um)[,\.\!\s:;-]*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        cleaned = re.sub(
             r"^(?:the photo|this photo|the image|this image)\s+(shows?|depicts?)\s+",
             "",
             cleaned,
@@ -292,6 +298,7 @@ class DocumentTextifier:
         filler_only = {
             "let's see",
             "lets see",
+            "let s see",
             "wait",
             "hmm",
             "hmmm",
