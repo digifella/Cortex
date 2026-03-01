@@ -280,6 +280,73 @@ class DocumentTextifier:
             self._log_vlm_response_debug(model, simple_prompt, response, result, cleaned, elapsed)
         return cleaned
 
+    def probe_image_vlm(self, image_bytes: bytes, simple_prompt: bool = True) -> Dict[str, Any]:
+        """Run a one-shot diagnostic probe for a single image and return raw response metadata."""
+        original_bytes = image_bytes or b""
+        prepared_bytes = self._prepare_vlm_image_bytes(original_bytes)
+        self._init_vlm()
+        if self._vlm_client is None or not self._vlm_model:
+            return {
+                "success": False,
+                "error": "No vision model available",
+                "original_bytes": len(original_bytes),
+                "prepared_bytes": len(prepared_bytes),
+            }
+
+        prompt = (
+            "Describe this photograph very briefly in 1-2 short plain sentences (max 35 words total). "
+            "Identify only the main subject and setting. "
+            "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
+            "return exactly: [Image: logo/icon omitted]. "
+            "Do not use markdown, headings, or bullet points."
+        )
+        if not simple_prompt:
+            prompt += " /no_think"
+
+        encoded = base64.b64encode(prepared_bytes).decode("utf-8")
+        try:
+            started = time.monotonic()
+            response = self._vlm_client.chat(
+                model=self._vlm_model,
+                messages=[{
+                    "role": "user",
+                    "content": prompt,
+                    "images": [encoded],
+                }],
+                options={"temperature": 0.1, "num_predict": 140},
+            )
+            elapsed = time.monotonic() - started
+            message = (response or {}).get("message", {}) if isinstance(response, dict) else {}
+            raw_text = str((message or {}).get("content", "") or "").strip()
+            cleaned = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+            think_chunks = re.findall(r"<think>.*?</think>", raw_text, flags=re.DOTALL)
+            think_text = " ".join(chunk.strip() for chunk in think_chunks if chunk.strip())
+            return {
+                "success": True,
+                "model": self._vlm_model,
+                "simple_prompt": simple_prompt,
+                "elapsed_seconds": round(elapsed, 3),
+                "original_bytes": len(original_bytes),
+                "prepared_bytes": len(prepared_bytes),
+                "has_message": bool(message),
+                "response_keys": sorted(list(response.keys())) if isinstance(response, dict) else [],
+                "message_keys": sorted(list(message.keys())) if isinstance(message, dict) else [],
+                "raw_length": len(raw_text),
+                "clean_length": len(cleaned),
+                "think_only": bool(think_text and not cleaned),
+                "raw_preview": re.sub(r"\s+", " ", raw_text).strip()[:300],
+                "think_preview": re.sub(r"\s+", " ", think_text).strip()[:300],
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "model": self._vlm_model,
+                "simple_prompt": simple_prompt,
+                "original_bytes": len(original_bytes),
+                "prepared_bytes": len(prepared_bytes),
+                "error": str(e),
+            }
+
     def _retry_current_qwen_model(self, encoded_image: str) -> str:
         """Retry the active Qwen model with a fresh client."""
         model = str(self._vlm_model or "").strip()

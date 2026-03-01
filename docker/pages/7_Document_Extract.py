@@ -2263,16 +2263,33 @@ def _render_photo_keywords_tab():
                     os.chmod(str(preview_path), 0o644)
                     st.session_state["photokw_single_upload_sig"] = preview_sig
                     st.session_state["photokw_single_working_path"] = str(preview_path)
+                    st.session_state.pop("photokw_vlm_probe", None)
                 else:
                     preview_path = Path(existing_path)
 
-                if st.button("Refresh Preview", key="photokw_preview_refresh", use_container_width=False):
+                probe_col, refresh_col = st.columns(2)
+                run_probe = probe_col.button("Run VLM Diagnostic Probe", key="photokw_vlm_probe_btn", use_container_width=True)
+                if refresh_col.button("Refresh Preview", key="photokw_preview_refresh", use_container_width=True):
                     st.rerun()
 
+                if run_probe:
+                    from cortex_engine.textifier import DocumentTextifier
+
+                    probe_result = DocumentTextifier(use_vision=True).probe_image_vlm(preview_bytes, simple_prompt=True)
+                    st.session_state["photokw_vlm_probe"] = probe_result
+
                 preview_meta = _read_photo_metadata_preview(str(preview_path))
+                probe_result = st.session_state.get("photokw_vlm_probe")
 
                 with st.expander("Single Photo Metadata Preview", expanded=True):
                     st.image(preview_bytes, caption=preview_photo.name, width=420)
+                    if probe_result:
+                        st.markdown("**VLM Diagnostic Probe**")
+                        st.json(probe_result)
+                        st.caption(
+                            "This shows the raw response shape from Ollama for the current photo using the simple prompt."
+                        )
+                        st.divider()
                     if preview_meta.get("available"):
                         description = preview_meta.get("description", "")
                         keywords = preview_meta.get("keywords", [])
