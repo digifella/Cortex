@@ -217,6 +217,13 @@ class DocumentTextifier:
             ordered.append(name)
         return ordered
 
+    def _reset_vlm_session(self, reason: str = "") -> None:
+        """Drop cached Ollama client/model so the next image starts with a fresh VLM session."""
+        if reason:
+            logger.info(f"Resetting cached VLM session: {reason}")
+        self._vlm_client = None
+        self._vlm_model = None
+
     def _describe_with_model(self, model: str, encoded_image: str, simple_prompt: bool = False) -> str:
         """Call a specific VLM model and normalize the returned text."""
         prompt = (
@@ -326,8 +333,10 @@ class DocumentTextifier:
                     result = self._describe_with_model(model, encoded, simple_prompt=False)
                 except Exception as model_error:
                     err_text = str(model_error)
-                    if "status code: 404" in err_text or "unexpectedly stopped" in err_text:
+                    if "status code: 404" in err_text:
                         self._vlm_skip_models.add(model)
+                    if "unexpectedly stopped" in err_text and model == self._vlm_model:
+                        self._reset_vlm_session(f"{model} runner stopped unexpectedly")
                     logger.warning(f"VLM describe failed for model {model}: {model_error}")
                     models_tried.append(f"{model} (error)")
                     continue
@@ -352,6 +361,7 @@ class DocumentTextifier:
                 if self._looks_like_logo_icon_description(result):
                     return "[Image: logo/icon omitted]"
                 return result
+            self._reset_vlm_session("no non-empty VLM description returned")
             logger.warning(f"No non-empty VLM description returned after trying: {', '.join(models_tried)}")
             return "[Image: vision model returned empty description]"
         except Exception as e:
