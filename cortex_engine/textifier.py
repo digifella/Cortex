@@ -215,6 +215,42 @@ class DocumentTextifier:
         self._vlm_client = None
         self._vlm_model = None
 
+    @staticmethod
+    def _vlm_debug_enabled() -> bool:
+        raw = str(os.environ.get("CORTEX_VLM_DEBUG", "1")).strip().lower()
+        return raw in {"1", "true", "yes", "on"}
+
+    def _log_vlm_response_debug(
+        self,
+        model: str,
+        simple_prompt: bool,
+        response: Any,
+        raw_text: str,
+        cleaned_text: str,
+        elapsed_seconds: float,
+    ) -> None:
+        """Log compact diagnostics for VLM responses so empty outputs can be diagnosed."""
+        if not self._vlm_debug_enabled():
+            return
+        message = (response or {}).get("message", {}) if isinstance(response, dict) else {}
+        think_chunks = re.findall(r"<think>.*?</think>", raw_text or "", flags=re.DOTALL)
+        think_text = " ".join(chunk.strip() for chunk in think_chunks if chunk.strip())
+        raw_preview = re.sub(r"\s+", " ", (raw_text or "")).strip()[:160]
+        think_preview = re.sub(r"\s+", " ", think_text).strip()[:160]
+        logger.info(
+            "VLM debug | model=%s | simple_prompt=%s | elapsed=%.2fs | raw_len=%s | clean_len=%s | "
+            "think_only=%s | has_message=%s | preview=%r | think_preview=%r",
+            model,
+            simple_prompt,
+            elapsed_seconds,
+            len(raw_text or ""),
+            len(cleaned_text or ""),
+            bool(think_text and not cleaned_text),
+            bool(message),
+            raw_preview,
+            think_preview,
+        )
+
     def _describe_with_model(self, model: str, encoded_image: str, simple_prompt: bool = False) -> str:
         """Call a specific VLM model and normalize the returned text."""
         prompt = (
@@ -226,6 +262,7 @@ class DocumentTextifier:
         )
         if not simple_prompt:
             prompt += " /no_think"
+        started = time.monotonic()
         response = self._vlm_client.chat(
             model=model,
             messages=[{
@@ -237,7 +274,11 @@ class DocumentTextifier:
         )
         result = ((response or {}).get("message", {}) or {}).get("content", "")
         result = str(result or "").strip()
-        return re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
+        cleaned = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
+        elapsed = time.monotonic() - started
+        if not cleaned or self._vlm_debug_enabled():
+            self._log_vlm_response_debug(model, simple_prompt, response, result, cleaned, elapsed)
+        return cleaned
 
     def _retry_current_qwen_model(self, encoded_image: str) -> str:
         """Retry the active Qwen model with a fresh client."""
