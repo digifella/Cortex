@@ -61,6 +61,7 @@ class DocumentTextifier:
         self._vlm_client = None
         self._vlm_model = None
         self._vlm_skip_models: set[str] = set()
+        self._vlm_crash_skip_models: set[str] = set()
         self._last_cleanup_applied = False
 
     @classmethod
@@ -211,7 +212,12 @@ class DocumentTextifier:
         seen = set()
         for model in candidates:
             name = str(model or "").strip()
-            if not name or name in seen or name in self._vlm_skip_models:
+            if (
+                not name
+                or name in seen
+                or name in self._vlm_skip_models
+                or name in self._vlm_crash_skip_models
+            ):
                 continue
             seen.add(name)
             ordered.append(name)
@@ -247,6 +253,35 @@ class DocumentTextifier:
         result = ((response or {}).get("message", {}) or {}).get("content", "")
         result = str(result or "").strip()
         return re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
+
+    def _retry_current_qwen_model(self, encoded_image: str) -> str:
+        """Retry the active Qwen model with simpler prompts and a fresh client."""
+        model = str(self._vlm_model or "").strip()
+        if not model.startswith("qwen3-vl"):
+            return ""
+
+        try:
+            retry_result = self._describe_with_model(model, encoded_image, simple_prompt=True)
+        except Exception as retry_error:
+            logger.warning(f"VLM simple-prompt retry failed for model {model}: {retry_error}")
+            retry_result = ""
+        if retry_result:
+            logger.info(f"Recovered image description using simple-prompt retry on {model}")
+            return retry_result
+
+        self._reset_vlm_session(f"{model} returned empty output")
+        self._init_vlm()
+        if not self._vlm_client or str(self._vlm_model or "").strip() != model:
+            return ""
+
+        try:
+            fresh_retry = self._describe_with_model(model, encoded_image, simple_prompt=True)
+        except Exception as retry_error:
+            logger.warning(f"Fresh-client simple-prompt retry failed for model {model}: {retry_error}")
+            fresh_retry = ""
+        if fresh_retry:
+            logger.info(f"Recovered image description using fresh-client retry on {model}")
+        return fresh_retry
 
     def _prepare_vlm_image_bytes(self, image_bytes: bytes) -> bytes:
         """
@@ -335,6 +370,8 @@ class DocumentTextifier:
                     err_text = str(model_error)
                     if "status code: 404" in err_text:
                         self._vlm_skip_models.add(model)
+                    if "unexpectedly stopped" in err_text and model != self._vlm_model:
+                        self._vlm_crash_skip_models.add(model)
                     if "unexpectedly stopped" in err_text and model == self._vlm_model:
                         self._reset_vlm_session(f"{model} runner stopped unexpectedly")
                     logger.warning(f"VLM describe failed for model {model}: {model_error}")
@@ -343,14 +380,9 @@ class DocumentTextifier:
                 models_tried.append(model)
                 if not result:
                     logger.warning(f"VLM returned empty description (model: {model})")
-                    if model.startswith("qwen3-vl"):
-                        try:
-                            retry_result = self._describe_with_model(model, encoded, simple_prompt=True)
-                        except Exception as retry_error:
-                            logger.warning(f"VLM simple-prompt retry failed for model {model}: {retry_error}")
-                            retry_result = ""
+                    if model == self._vlm_model and model.startswith("qwen3-vl"):
+                        retry_result = self._retry_current_qwen_model(encoded)
                         if retry_result:
-                            logger.info(f"Recovered image description using simple-prompt retry on {model}")
                             if self._looks_like_logo_icon_description(retry_result):
                                 return "[Image: logo/icon omitted]"
                             return retry_result
