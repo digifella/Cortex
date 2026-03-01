@@ -289,6 +289,22 @@ class DocumentTextifier:
             "instruction says",
             "the instruction says",
         )
+        filler_only = {
+            "let's see",
+            "lets see",
+            "wait",
+            "hmm",
+            "hmmm",
+            "uh",
+            "um",
+            "well",
+            "right",
+            "okay",
+            "ok",
+            "sure",
+            "got it",
+            "alright",
+        }
         for sentence in sentences:
             s = sentence.strip()
             if not s:
@@ -298,6 +314,9 @@ class DocumentTextifier:
             if not s:
                 continue
             slow = s.lower()
+            normalized_stub = re.sub(r"[^a-z]+", " ", slow).strip()
+            if normalized_stub in filler_only:
+                continue
             if any(marker in slow for marker in meta_markers):
                 continue
             filtered.append(s)
