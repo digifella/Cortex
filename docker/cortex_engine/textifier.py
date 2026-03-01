@@ -8,6 +8,7 @@ import io
 import os
 import re
 import base64
+import json
 import subprocess
 import tempfile
 import statistics
@@ -15,6 +16,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from cortex_engine.utils.logging_utils import get_logger
 
@@ -62,6 +65,7 @@ class DocumentTextifier:
         self._vlm_model = None
         self._vlm_skip_models: set[str] = set()
         self._vlm_crash_skip_models: set[str] = set()
+        self._last_vlm_http_meta: Dict[str, Any] = {}
         self._last_cleanup_applied = False
 
     @classmethod
@@ -251,6 +255,72 @@ class DocumentTextifier:
             think_preview,
         )
 
+    def _call_ollama_chat_http(
+        self,
+        model: str,
+        prompt: str,
+        encoded_image: str,
+    ) -> Dict[str, Any]:
+        """Call Ollama directly over HTTP to avoid opaque client-side empty-dict behavior."""
+        base_url = str(os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
+        url = f"{base_url}/api/chat"
+        payload = {
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": prompt,
+                "images": [encoded_image],
+            }],
+            "stream": False,
+            "options": {"temperature": 0.1, "num_predict": 140},
+        }
+        body = json.dumps(payload).encode("utf-8")
+        req = Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        self._last_vlm_http_meta = {
+            "url": url,
+            "status": None,
+            "body_preview": "",
+            "body_length": 0,
+            "error": "",
+        }
+        try:
+            with urlopen(req, timeout=120) as resp:
+                raw = resp.read()
+                text = raw.decode("utf-8", errors="replace")
+                self._last_vlm_http_meta.update(
+                    {
+                        "status": int(getattr(resp, "status", 200) or 200),
+                        "body_length": len(text),
+                        "body_preview": text[:300],
+                    }
+                )
+                if not text.strip():
+                    return {}
+                data = json.loads(text)
+                return data if isinstance(data, dict) else {}
+        except HTTPError as e:
+            body_text = e.read().decode("utf-8", errors="replace")
+            self._last_vlm_http_meta.update(
+                {
+                    "status": int(e.code),
+                    "body_length": len(body_text),
+                    "body_preview": body_text[:300],
+                    "error": f"HTTPError {e.code}",
+                }
+            )
+            raise
+        except URLError as e:
+            self._last_vlm_http_meta["error"] = f"URLError: {e}"
+            raise
+        except Exception as e:
+            self._last_vlm_http_meta["error"] = str(e)
+            raise
+
     def _describe_with_model(self, model: str, encoded_image: str, simple_prompt: bool = False) -> str:
         """Call a specific VLM model and normalize the returned text."""
         prompt = (
@@ -263,15 +333,7 @@ class DocumentTextifier:
         if not simple_prompt:
             prompt += " /no_think"
         started = time.monotonic()
-        response = self._vlm_client.chat(
-            model=model,
-            messages=[{
-                "role": "user",
-                "content": prompt,
-                "images": [encoded_image],
-            }],
-            options={"temperature": 0.1, "num_predict": 140},
-        )
+        response = self._call_ollama_chat_http(model, prompt, encoded_image)
         result = ((response or {}).get("message", {}) or {}).get("content", "")
         result = str(result or "").strip()
         cleaned = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
@@ -306,15 +368,7 @@ class DocumentTextifier:
         encoded = base64.b64encode(prepared_bytes).decode("utf-8")
         try:
             started = time.monotonic()
-            response = self._vlm_client.chat(
-                model=self._vlm_model,
-                messages=[{
-                    "role": "user",
-                    "content": prompt,
-                    "images": [encoded],
-                }],
-                options={"temperature": 0.1, "num_predict": 140},
-            )
+            response = self._call_ollama_chat_http(self._vlm_model, prompt, encoded)
             elapsed = time.monotonic() - started
             message = (response or {}).get("message", {}) if isinstance(response, dict) else {}
             raw_text = str((message or {}).get("content", "") or "").strip()
@@ -331,6 +385,7 @@ class DocumentTextifier:
                 "has_message": bool(message),
                 "response_keys": sorted(list(response.keys())) if isinstance(response, dict) else [],
                 "message_keys": sorted(list(message.keys())) if isinstance(message, dict) else [],
+                "http_meta": dict(self._last_vlm_http_meta or {}),
                 "raw_length": len(raw_text),
                 "clean_length": len(cleaned),
                 "think_only": bool(think_text and not cleaned),
@@ -344,6 +399,7 @@ class DocumentTextifier:
                 "simple_prompt": simple_prompt,
                 "original_bytes": len(original_bytes),
                 "prepared_bytes": len(prepared_bytes),
+                "http_meta": dict(self._last_vlm_http_meta or {}),
                 "error": str(e),
             }
 
