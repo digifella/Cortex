@@ -294,6 +294,10 @@ class DocumentTextifier:
             "third sentence",
             "instruction says",
             "the instruction says",
+            "the user wants",
+            "user wants",
+            "the user asked",
+            "user asked",
         )
         filler_only = {
             "let's see",
@@ -318,6 +322,7 @@ class DocumentTextifier:
                 continue
             s = re.sub(r"^(?:first|second|third)\s+sentence:\s*", "", s, flags=re.IGNORECASE).strip()
             s = re.sub(r"^(?:answer|description)\s*:\s*", "", s, flags=re.IGNORECASE).strip()
+            s = re.sub(r"^(?:the user wants|user wants|the user asked|user asked)\s+", "", s, flags=re.IGNORECASE).strip()
             if not s:
                 continue
             slow = s.lower()
