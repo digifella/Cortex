@@ -4,6 +4,7 @@ Converts PDF, DOCX, and PPTX documents to rich Markdown with optional
 vision-model descriptions of images and tables.
 """
 
+import io
 import os
 import re
 import base64
@@ -236,6 +237,55 @@ class DocumentTextifier:
         result = str(result or "").strip()
         return re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
 
+    def _prepare_vlm_image_bytes(self, image_bytes: bytes) -> bytes:
+        """
+        Downscale large images before sending them to the VLM.
+
+        This reduces Ollama memory pressure without changing the source file on disk.
+        """
+        max_edge = int(float(os.environ.get("CORTEX_VLM_MAX_EDGE_PX", "1600") or 1600))
+        max_payload_bytes = int(float(os.environ.get("CORTEX_VLM_MAX_INPUT_BYTES", str(1600 * 1024)) or (1600 * 1024)))
+        if max_edge <= 0 or not image_bytes:
+            return image_bytes
+        if len(image_bytes) <= max_payload_bytes:
+            # Still inspect dimensions, but small files often don't need work.
+            pass
+        try:
+            from PIL import Image
+        except Exception:
+            return image_bytes
+
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as img:
+                width, height = img.size
+                long_edge = max(width, height)
+                if long_edge <= max_edge and len(image_bytes) <= max_payload_bytes:
+                    return image_bytes
+
+                # Ensure a broadly compatible RGB payload for Ollama VLMs.
+                if img.mode not in ("RGB",):
+                    img = img.convert("RGB")
+
+                working = img.copy()
+                working.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+                out = io.BytesIO()
+                working.save(out, format="JPEG", quality=88, optimize=True)
+                reduced = out.getvalue()
+                if reduced and len(reduced) < len(image_bytes):
+                    logger.info(
+                        "Downscaled VLM input from %sx%s (%s KB) to %sx%s (%s KB)",
+                        width,
+                        height,
+                        max(1, len(image_bytes) // 1024),
+                        working.size[0],
+                        working.size[1],
+                        max(1, len(reduced) // 1024),
+                    )
+                    return reduced
+        except Exception as e:
+            logger.debug(f"Could not downscale VLM input image: {e}")
+        return image_bytes
+
     @staticmethod
     def _looks_like_logo_icon_description(text: str) -> bool:
         """Heuristic: detect short logo/icon-only descriptions that add metadata noise."""
@@ -262,7 +312,8 @@ class DocumentTextifier:
         if self._vlm_client is None:
             return "[Image: could not be described — vision model unavailable]"
         try:
-            encoded = base64.b64encode(image_bytes).decode("utf-8")
+            prepared_bytes = self._prepare_vlm_image_bytes(image_bytes)
+            encoded = base64.b64encode(prepared_bytes).decode("utf-8")
             models_tried: List[str] = []
             for idx, model in enumerate(self._vlm_model_candidates(include_current=True)):
                 try:
