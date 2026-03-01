@@ -4,13 +4,15 @@ Enhanced image processing and search capabilities for Cortex Suite
 """
 
 import os
+import json
 import base64
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
-import ollama
+from urllib.request import Request, urlopen
 from llama_index.core import Document
 from cortex_engine.config import VLM_MODEL
 from cortex_engine.utils.logging_utils import get_logger
+from cortex_engine.textifier import DocumentTextifier
 
 logger = get_logger(__name__)
 
@@ -19,7 +21,48 @@ class VisualSearchEngine:
     
     def __init__(self, vlm_model: str = None):
         self.vlm_model = vlm_model or VLM_MODEL
-        self.client = ollama.Client(timeout=180)  # 3 minute timeout for complex analysis
+        self._textifier = DocumentTextifier(use_vision=True)
+
+    def _encode_image_for_vlm(self, image_path: str) -> str:
+        with open(image_path, "rb") as image_file:
+            prepared = self._textifier._prepare_vlm_image_bytes(image_file.read())
+        return base64.b64encode(prepared).decode("utf-8")
+
+    def _extract_response_text(self, response: Dict) -> str:
+        message = (response or {}).get("message", {}) if isinstance(response, dict) else {}
+        content = str((message or {}).get("content", "") or "").strip()
+        thinking = str((message or {}).get("thinking", "") or "").strip()
+        cleaned = self._textifier._normalize_vlm_text(content)
+        if not cleaned and thinking:
+            cleaned = self._textifier._normalize_vlm_text(thinking)
+        return cleaned
+
+    def _chat_vlm(self, prompt: str, encoded_images: List[str], num_predict: int) -> Dict:
+        base_url = str(os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
+        url = f"{base_url}/api/chat"
+        payload = {
+            "model": self.vlm_model,
+            "messages": [{
+                "role": "user",
+                "content": prompt,
+                "images": encoded_images,
+            }],
+            "stream": False,
+            "options": {
+                "temperature": 0.1,
+                "top_p": 0.9,
+                "num_predict": num_predict,
+            },
+        }
+        req = Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(req, timeout=180) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        return json.loads(raw) if raw.strip() else {}
     
     def analyze_image_with_context(self, image_path: str, analysis_type: str = "comprehensive") -> Dict:
         """
@@ -36,31 +79,19 @@ class VisualSearchEngine:
             return {"error": f"Image file not found: {image_path}"}
         
         try:
-            with open(image_path, "rb") as image_file:
-                encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
-            
+            encoded_image = self._encode_image_for_vlm(image_path)
             prompt = self._get_analysis_prompt(analysis_type)
-            
-            response = self.client.chat(
-                model=self.vlm_model,
-                messages=[
-                    {
-                        'role': 'user',
-                        'content': prompt,
-                        'images': [encoded_image]
-                    }
-                ],
-                options={
-                    "temperature": 0.1,
-                    "top_p": 0.9,
-                    "num_predict": 800 if analysis_type == "comprehensive" else 400
-                }
+            response = self._chat_vlm(
+                prompt=prompt,
+                encoded_images=[encoded_image],
+                num_predict=800 if analysis_type == "comprehensive" else 400,
             )
+            description = self._extract_response_text(response)
             
             analysis_result = {
                 "image_path": image_path,
                 "analysis_type": analysis_type,
-                "description": response['message']['content'],
+                "description": description,
                 "model_used": self.vlm_model,
                 "success": True
             }
@@ -158,16 +189,9 @@ Focus on design principles and creative intent.'''
     def compare_images(self, image1_path: str, image2_path: str) -> Dict:
         """Compare two images and identify similarities/differences"""
         try:
-            with open(image1_path, "rb") as f1, open(image2_path, "rb") as f2:
-                encoded_img1 = base64.b64encode(f1.read()).decode('utf-8')
-                encoded_img2 = base64.b64encode(f2.read()).decode('utf-8')
-            
-            response = self.client.chat(
-                model=self.vlm_model,
-                messages=[
-                    {
-                        'role': 'user',
-                        'content': '''Compare these two images and identify:
+            encoded_img1 = self._encode_image_for_vlm(image1_path)
+            encoded_img2 = self._encode_image_for_vlm(image2_path)
+            prompt = '''Compare these two images and identify:
 
 1. **Similarities**: What elements, content, or themes are similar between the images?
 2. **Differences**: What are the key differences in content, style, or presentation?
@@ -175,17 +199,17 @@ Focus on design principles and creative intent.'''
 4. **Quality Assessment**: Are there differences in quality, resolution, or clarity?
 5. **Recommendation**: Which image would be more suitable for different use cases?
 
-Provide specific details about visual elements, text content, and overall presentation.''',
-                        'images': [encoded_img1, encoded_img2]
-                    }
-                ],
-                options={"temperature": 0.1, "num_predict": 600}
+Provide specific details about visual elements, text content, and overall presentation.'''
+            response = self._chat_vlm(
+                prompt=prompt,
+                encoded_images=[encoded_img1, encoded_img2],
+                num_predict=600,
             )
             
             return {
                 "image1_path": image1_path,
                 "image2_path": image2_path,
-                "comparison": response['message']['content'],
+                "comparison": self._extract_response_text(response),
                 "success": True
             }
             
