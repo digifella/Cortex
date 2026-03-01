@@ -257,16 +257,56 @@ class DocumentTextifier:
 
     @staticmethod
     def _normalize_vlm_text(text: str) -> str:
-        """Normalize model text by removing think tags and chatty lead-ins."""
+        """Normalize model text by removing think tags, lead-ins, and reasoning chatter."""
         cleaned = re.sub(r"<think>.*?</think>", "", str(text or ""), flags=re.DOTALL).strip()
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
         cleaned = re.sub(
             r"^(?:got it|okay|ok|sure|let'?s see|let us see|alright)[,\.\!\s:;-]*",
             "",
             cleaned,
             flags=re.IGNORECASE,
         ).strip()
+        cleaned = re.sub(
+            r"^(?:the photo|this photo|the image|this image)\s+(shows?|depicts?)\s+",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+
+        sentences = re.split(r"(?<=[.!?])\s+", cleaned)
+        filtered: List[str] = []
+        meta_markers = (
+            "need to be",
+            "be brief",
+            "max 35 words",
+            "max words",
+            "word count",
+            "let's count",
+            "check word count",
+            "first sentence",
+            "second sentence",
+            "third sentence",
+            "instruction says",
+            "the instruction says",
+        )
+        for sentence in sentences:
+            s = sentence.strip()
+            if not s:
+                continue
+            s = re.sub(r"^(?:first|second|third)\s+sentence:\s*", "", s, flags=re.IGNORECASE).strip()
+            s = re.sub(r"^(?:answer|description)\s*:\s*", "", s, flags=re.IGNORECASE).strip()
+            if not s:
+                continue
+            slow = s.lower()
+            if any(marker in slow for marker in meta_markers):
+                continue
+            filtered.append(s)
+
+        if filtered:
+            cleaned = " ".join(filtered[:2]).strip()
+
         cleaned = re.sub(r"^(?:the photo|this photo|the image|this image)\s+(shows?|depicts?)\s+", "", cleaned, flags=re.IGNORECASE)
-        return cleaned.strip()
+        return cleaned.strip(" -")
 
     def _call_ollama_chat_http(
         self,
