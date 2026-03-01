@@ -184,6 +184,58 @@ class DocumentTextifier:
             self._vlm_client = None
             self._vlm_model = None
 
+    def _vlm_model_candidates(self, include_current: bool = True) -> List[str]:
+        """Return a de-duplicated ordered list of VLM model names to try."""
+        candidates: List[str] = []
+        if include_current and self._vlm_model:
+            candidates.append(self._vlm_model)
+        candidates.extend(self.VISION_MODELS)
+        try:
+            from cortex_engine.config import VLM_MODEL
+            if VLM_MODEL:
+                candidates.append(str(VLM_MODEL).strip())
+        except Exception:
+            pass
+        candidates.extend([
+            "llava:7b",
+            "llava:latest",
+            "llava",
+            "minicpm-v:latest",
+            "minicpm-v",
+            "moondream:latest",
+            "moondream",
+        ])
+        ordered: List[str] = []
+        seen = set()
+        for model in candidates:
+            name = str(model or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            ordered.append(name)
+        return ordered
+
+    def _describe_with_model(self, model: str, encoded_image: str) -> str:
+        """Call a specific VLM model and normalize the returned text."""
+        response = self._vlm_client.chat(
+            model=model,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Describe this photograph very briefly in 1-2 short plain sentences (max 35 words total). "
+                    "Identify only the main subject and setting. "
+                    "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
+                    "return exactly: [Image: logo/icon omitted]. "
+                    "Do not use markdown, headings, or bullet points. /no_think"
+                ),
+                "images": [encoded_image],
+            }],
+            options={"temperature": 0.1, "num_predict": 140},
+        )
+        result = ((response or {}).get("message", {}) or {}).get("content", "")
+        result = str(result or "").strip()
+        return re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
+
     @staticmethod
     def _looks_like_logo_icon_description(text: str) -> bool:
         """Heuristic: detect short logo/icon-only descriptions that add metadata noise."""
@@ -211,30 +263,28 @@ class DocumentTextifier:
             return "[Image: could not be described — vision model unavailable]"
         try:
             encoded = base64.b64encode(image_bytes).decode("utf-8")
-            response = self._vlm_client.chat(
-                model=self._vlm_model,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        "Describe this photograph very briefly in 1-2 short plain sentences (max 35 words total). "
-                        "Identify only the main subject and setting. "
-                        "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
-                        "return exactly: [Image: logo/icon omitted]. "
-                        "Do not use markdown, headings, or bullet points. /no_think"
-                    ),
-                    "images": [encoded],
-                }],
-                options={"temperature": 0.1, "num_predict": 140},
-            )
-            result = response["message"]["content"].strip()
-            # Qwen3-VL may wrap output in <think>...</think> tags
-            result = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
-            if not result:
-                logger.warning(f"VLM returned empty description (model: {self._vlm_model})")
-                return "[Image: vision model returned empty description]"
-            if self._looks_like_logo_icon_description(result):
-                return "[Image: logo/icon omitted]"
-            return result
+            models_tried: List[str] = []
+            for idx, model in enumerate(self._vlm_model_candidates(include_current=True)):
+                try:
+                    if idx > 0:
+                        self._vlm_client.show(model)
+                    result = self._describe_with_model(model, encoded)
+                except Exception as model_error:
+                    logger.warning(f"VLM describe failed for model {model}: {model_error}")
+                    models_tried.append(f"{model} (error)")
+                    continue
+                models_tried.append(model)
+                if not result:
+                    logger.warning(f"VLM returned empty description (model: {model})")
+                    continue
+                if model != self._vlm_model:
+                    logger.info(f"Recovered image description using fallback vision model: {model}")
+                    self._vlm_model = model
+                if self._looks_like_logo_icon_description(result):
+                    return "[Image: logo/icon omitted]"
+                return result
+            logger.warning(f"No non-empty VLM description returned after trying: {', '.join(models_tried)}")
+            return "[Image: vision model returned empty description]"
         except Exception as e:
             logger.warning(f"VLM describe failed: {e}")
             return "[Image: could not be described — vision model error]"
