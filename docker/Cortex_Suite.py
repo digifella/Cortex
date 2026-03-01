@@ -29,6 +29,12 @@ from cortex_engine.config import (
 logger = get_logger(__name__)
 
 
+def _embedding_warmup_enabled() -> bool:
+    """Embedding warmup is opt-in to avoid competing with vision/photo workloads."""
+    raw = str(os.environ.get("CORTEX_EMBEDDING_WARMUP_ENABLED", "0")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _warmup_embedding_model():
     """Background warmup for embedding model at app startup."""
     try:
@@ -79,10 +85,12 @@ def start_global_model_warmup():
 
     os.environ["CORTEX_GLOBAL_WARMUP_STARTED"] = "1"
 
-    if not st.session_state.get("global_embedding_warmup_started"):
+    if _embedding_warmup_enabled() and not st.session_state.get("global_embedding_warmup_started"):
         st.session_state.global_embedding_warmup_started = True
         threading.Thread(target=_warmup_embedding_model, daemon=True).start()
         logger.info("🚀 Started global embedding warmup thread")
+    else:
+        logger.info("Skipping global embedding warmup (disabled by default)")
 
     if (
         QWEN3_VL_RERANKER_ENABLED
