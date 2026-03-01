@@ -255,6 +255,19 @@ class DocumentTextifier:
             think_preview,
         )
 
+    @staticmethod
+    def _normalize_vlm_text(text: str) -> str:
+        """Normalize model text by removing think tags and chatty lead-ins."""
+        cleaned = re.sub(r"<think>.*?</think>", "", str(text or ""), flags=re.DOTALL).strip()
+        cleaned = re.sub(
+            r"^(?:got it|okay|ok|sure|let'?s see|let us see|alright)[,\.\!\s:;-]*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        cleaned = re.sub(r"^(?:the photo|this photo|the image|this image)\s+(shows?|depicts?)\s+", "", cleaned, flags=re.IGNORECASE)
+        return cleaned.strip()
+
     def _call_ollama_chat_http(
         self,
         model: str,
@@ -334,9 +347,12 @@ class DocumentTextifier:
             prompt += " /no_think"
         started = time.monotonic()
         response = self._call_ollama_chat_http(model, prompt, encoded_image)
-        result = ((response or {}).get("message", {}) or {}).get("content", "")
-        result = str(result or "").strip()
-        cleaned = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
+        message = (response or {}).get("message", {}) if isinstance(response, dict) else {}
+        result = str((message or {}).get("content", "") or "").strip()
+        thinking = str((message or {}).get("thinking", "") or "").strip()
+        cleaned = self._normalize_vlm_text(result)
+        if not cleaned and thinking:
+            cleaned = self._normalize_vlm_text(thinking)
         elapsed = time.monotonic() - started
         if not cleaned or self._vlm_debug_enabled():
             self._log_vlm_response_debug(model, simple_prompt, response, result, cleaned, elapsed)
@@ -372,9 +388,12 @@ class DocumentTextifier:
             elapsed = time.monotonic() - started
             message = (response or {}).get("message", {}) if isinstance(response, dict) else {}
             raw_text = str((message or {}).get("content", "") or "").strip()
-            cleaned = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+            thinking_text = str((message or {}).get("thinking", "") or "").strip()
+            cleaned = self._normalize_vlm_text(raw_text)
+            if not cleaned and thinking_text:
+                cleaned = self._normalize_vlm_text(thinking_text)
             think_chunks = re.findall(r"<think>.*?</think>", raw_text, flags=re.DOTALL)
-            think_text = " ".join(chunk.strip() for chunk in think_chunks if chunk.strip())
+            think_text = " ".join(chunk.strip() for chunk in think_chunks if chunk.strip()) or thinking_text
             return {
                 "success": True,
                 "model": self._vlm_model,
@@ -387,6 +406,7 @@ class DocumentTextifier:
                 "message_keys": sorted(list(message.keys())) if isinstance(message, dict) else [],
                 "http_meta": dict(self._last_vlm_http_meta or {}),
                 "raw_length": len(raw_text),
+                "thinking_length": len(thinking_text),
                 "clean_length": len(cleaned),
                 "think_only": bool(think_text and not cleaned),
                 "raw_preview": re.sub(r"\s+", " ", raw_text).strip()[:300],
