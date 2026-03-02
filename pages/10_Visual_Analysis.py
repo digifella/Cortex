@@ -488,8 +488,16 @@ def render_svg_generator():
             options=["Trace Sketch", "Diagram to SVG", "Logo/Icon Vectorize", "Stylized Photo Poster"],
             key="svg_generator_mode",
         )
+        sketch_engine = None
         sketch_color_mode = None
         if svg_workflow != "Direct SVG":
+            sketch_engine = st.selectbox(
+                "Sketch Engine",
+                options=["Local (offline)", "Gemini"],
+                index=0,
+                key="svg_generator_sketch_engine",
+                help="Local uses built-in image processing and does not consume Gemini quota.",
+            )
             sketch_color_mode = st.radio(
                 "Sketch Style",
                 options=["B&W Line Art", "Colored Sketch"],
@@ -522,7 +530,7 @@ def render_svg_generator():
             upload_bytes = svg_upload.getvalue()
             source_sig = (
                 f"{svg_upload.name}:{len(upload_bytes)}:{svg_workflow}:{svg_mode}:"
-                f"{sketch_color_mode or ''}:{detail_level}:{svg_model}:{svg_prompt}"
+                f"{sketch_engine or ''}:{sketch_color_mode or ''}:{detail_level}:{svg_model}:{svg_prompt}"
             )
             if source_sig != st.session_state.svg_generator.get("source_sig"):
                 st.session_state.svg_generator["result"] = None
@@ -548,6 +556,7 @@ def render_svg_generator():
                             color_mode=(sketch_color_mode or "B&W Line Art"),
                             detail_level=detail_level,
                             user_prompt=svg_prompt,
+                            engine=(sketch_engine or "Local (offline)"),
                         )
                         result["sketch"] = sketch_result
                         if sketch_result.get("success") and svg_workflow == "Sketch + SVG":
@@ -591,7 +600,7 @@ def render_svg_generator():
                         use_container_width=True,
                         key="svg_generator_sketch_download",
                     )
-                    st.caption(f"Sketch model: {sketch_result.get('model_used', 'Unknown')}")
+                    st.caption(f"Sketch engine: {sketch_result.get('model_used', 'Unknown')}")
                 else:
                     st.error(sketch_result.get("error", "Sketch generation failed"))
                     preview = sketch_result.get("response_preview")

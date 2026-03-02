@@ -7,6 +7,7 @@ Supports direct image-to-SVG generation and a two-stage workflow:
 """
 
 import base64
+from io import BytesIO
 import json
 import os
 import re
@@ -16,6 +17,13 @@ from urllib.request import Request, urlopen
 from xml.etree import ElementTree as ET
 
 from cortex_engine.utils.logging_utils import get_logger
+
+try:
+    from PIL import Image, ImageFilter, ImageOps
+except Exception:  # pragma: no cover - handled at runtime
+    Image = None
+    ImageFilter = None
+    ImageOps = None
 
 logger = get_logger(__name__)
 
@@ -175,6 +183,62 @@ class GeminiSvgGenerator:
                     return {"bytes": data, "mime_type": mime}
         return {}
 
+    @staticmethod
+    def _encode_png(image_obj: Any) -> bytes:
+        buffer = BytesIO()
+        image_obj.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def generate_local_sketch(
+        self,
+        image_bytes: bytes,
+        color_mode: str = "B&W Line Art",
+        detail_level: int = 5,
+    ) -> Dict[str, Any]:
+        """Create a local offline sketch/poster image using Pillow."""
+        if Image is None or ImageFilter is None or ImageOps is None:
+            return {"success": False, "error": "Pillow is not available for local sketch generation"}
+        if not image_bytes:
+            return {"success": False, "error": "No image data provided"}
+
+        try:
+            with Image.open(BytesIO(image_bytes)) as img:
+                source = img.convert("RGB")
+        except Exception as e:
+            return {"success": False, "error": f"Could not open image: {e}"}
+
+        level = max(1, min(int(detail_level or 5), 10))
+        blur_radius = max(0.6, 3.0 - (level * 0.2))
+        edge_threshold = max(80, 210 - (level * 12))
+
+        if color_mode == "B&W Line Art":
+            gray = ImageOps.autocontrast(source.convert("L"))
+            smoothed = gray.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+            edges = smoothed.filter(ImageFilter.FIND_EDGES)
+            edges = ImageOps.autocontrast(edges)
+            line_art = edges.point(lambda p: 255 if p < edge_threshold else 0, mode="1").convert("L")
+            line_art = ImageOps.invert(line_art)
+            line_art = line_art.point(lambda p: 255 if p > 245 else p)
+            output = line_art.convert("RGB")
+        else:
+            poster_bits = 2 if level <= 3 else 3 if level <= 7 else 4
+            base = ImageOps.posterize(source, poster_bits)
+            base = ImageOps.autocontrast(base)
+            gray = ImageOps.autocontrast(source.convert("L"))
+            smoothed = gray.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+            edges = smoothed.filter(ImageFilter.FIND_EDGES)
+            edges = ImageOps.autocontrast(edges)
+            edge_mask = edges.point(lambda p: 255 if p > edge_threshold else 0, mode="L")
+            output = base.copy()
+            output.paste((28, 28, 28), mask=edge_mask)
+
+        return {
+            "success": True,
+            "model_used": "local-pillow-sketch",
+            "image_bytes": self._encode_png(output),
+            "mime_type": "image/png",
+        }
+
     def generate_intermediate_sketch(
         self,
         image_bytes: bytes,
@@ -183,8 +247,15 @@ class GeminiSvgGenerator:
         detail_level: int = 5,
         user_prompt: str = "",
         model_name: Optional[str] = None,
+        engine: str = "Gemini",
     ) -> Dict[str, Any]:
         """Generate a simplified image first, suitable as a useful output and as SVG input."""
+        if (engine or "").strip().lower().startswith("local"):
+            return self.generate_local_sketch(
+                image_bytes=image_bytes,
+                color_mode=color_mode,
+                detail_level=detail_level,
+            )
         if not self.api_key:
             return {"success": False, "error": "GEMINI_API_KEY is not configured"}
         if not image_bytes:
@@ -242,6 +313,7 @@ class GeminiSvgGenerator:
         return {
             "success": True,
             "model_used": chosen_model,
+            "engine": "gemini",
             "image_bytes": image_part["bytes"],
             "mime_type": image_part["mime_type"],
         }
