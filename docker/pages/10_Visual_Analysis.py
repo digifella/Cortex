@@ -8,6 +8,7 @@ Provides comprehensive image analysis, OCR, chart analysis, and visual search ca
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import os
 import json
 import time
@@ -29,6 +30,7 @@ PAGE_VERSION = None
 # Import Cortex modules
 try:
     from cortex_engine.visual_search import VisualSearchEngine, analyze_image, extract_text_from_image, analyze_chart_image
+    from cortex_engine.svg_generator import GeminiSvgGenerator
     from cortex_engine.config import VLM_MODEL
     from cortex_engine.version_config import VERSION_STRING
     from cortex_engine.utils.model_checker import model_checker
@@ -49,6 +51,12 @@ if "visual_analysis" not in st.session_state:
         "batch_processing": False,
         "comparison_mode": False,
         "visual_search_history": []
+    }
+
+if "svg_generator" not in st.session_state:
+    st.session_state.svg_generator = {
+        "result": None,
+        "source_sig": "",
     }
 
 def display_header():
@@ -451,6 +459,92 @@ Total Images: {len(results)}
                 mime="text/markdown"
             )
 
+def render_svg_generator():
+    """Render Gemini-powered SVG generation utility."""
+    st.subheader("🧩 SVG Generator")
+    st.caption(
+        "Generate a first-pass SVG from a sketch, logo, diagram, or photo reference. "
+        "Best quality is with simple source images; photos produce stylized vector interpretations."
+    )
+
+    col1, col2 = st.columns([1, 1.4])
+
+    with col1:
+        svg_upload = st.file_uploader(
+            "Upload source image for SVG",
+            type=["png", "jpg", "jpeg", "webp", "bmp", "gif", "tiff", "tif"],
+            accept_multiple_files=False,
+            key="svg_generator_upload",
+        )
+        svg_mode = st.selectbox(
+            "SVG Mode",
+            options=["Trace Sketch", "Diagram to SVG", "Logo/Icon Vectorize", "Stylized Photo Poster"],
+            key="svg_generator_mode",
+        )
+        svg_model = st.selectbox(
+            "Gemini Model",
+            options=["gemini-3-flash-preview", "gemini-3-pro-preview"],
+            index=0,
+            key="svg_generator_model",
+        )
+        svg_prompt = st.text_area(
+            "Style instructions (optional)",
+            value="",
+            height=120,
+            key="svg_generator_prompt",
+            help="Examples: use flat blue fills, simplify all text labels, preserve arrows, use rounded corners.",
+        )
+
+        if svg_upload:
+            upload_bytes = svg_upload.getvalue()
+            source_sig = f"{svg_upload.name}:{len(upload_bytes)}:{svg_mode}:{svg_model}:{svg_prompt}"
+            if source_sig != st.session_state.svg_generator.get("source_sig"):
+                st.session_state.svg_generator["result"] = None
+                st.session_state.svg_generator["source_sig"] = source_sig
+
+            if st.button("Generate SVG", type="primary", use_container_width=True, key="svg_generator_run"):
+                generator = GeminiSvgGenerator(model_name=svg_model)
+                with st.spinner("Generating SVG with Gemini..."):
+                    result = generator.generate_from_image(
+                        image_bytes=upload_bytes,
+                        mime_type=(svg_upload.type or "image/png"),
+                        mode=svg_mode,
+                        user_prompt=svg_prompt,
+                    )
+                st.session_state.svg_generator["result"] = result
+
+    with col2:
+        if svg_upload:
+            st.markdown("**Source Preview**")
+            st.image(svg_upload.getvalue(), caption=svg_upload.name, width=420)
+
+        result = st.session_state.svg_generator.get("result")
+        if result:
+            st.markdown("**SVG Result**")
+            if result.get("success"):
+                warnings = result.get("warnings") or []
+                if warnings:
+                    for warning in warnings:
+                        st.warning(warning)
+                svg_text = result.get("svg", "")
+                components.html(svg_text, height=420, scrolling=True)
+                st.download_button(
+                    "Download SVG",
+                    svg_text,
+                    file_name=f"generated_{time.strftime('%Y%m%d_%H%M%S')}.svg",
+                    mime="image/svg+xml",
+                    use_container_width=True,
+                    key="svg_generator_download",
+                )
+                with st.expander("SVG Markup", expanded=False):
+                    st.code(svg_text, language="xml")
+            else:
+                st.error(result.get("error", "SVG generation failed"))
+                preview = result.get("response_preview")
+                if preview:
+                    with st.expander("Model Response Preview", expanded=False):
+                        st.code(preview, language="text")
+
 def display_quick_actions():
     """Display quick action buttons and utilities"""
     st.subheader("⚡ Quick Actions")
@@ -520,6 +614,15 @@ def main():
         ollama pull llava:13b
         ```
         """)
+        render_svg_generator()
+        st.markdown("---")
+        st.markdown(
+            f"<div style='text-align: center; color: #666; font-size: 0.85em;'>"
+            f"Visual Analysis Dashboard v{PAGE_VERSION} • Gemini SVG Generator • "
+            f"Powered by {VLM_MODEL}"
+            f"</div>",
+            unsafe_allow_html=True
+        )
         return
     
     # Display analysis configuration
@@ -581,6 +684,9 @@ def main():
         - **Content Analysis**: Understand images for knowledge management
         - **Quality Assurance**: Compare images for consistency checking
         """)
+
+    st.markdown("---")
+    render_svg_generator()
     
     # Quick actions section
     display_quick_actions()
