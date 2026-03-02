@@ -463,8 +463,8 @@ def render_svg_generator():
     """Render Gemini-powered SVG generation utility."""
     st.subheader("🧩 SVG Generator")
     st.caption(
-        "Generate a first-pass SVG from a sketch, logo, diagram, or photo reference. "
-        "Best quality is with simple source images; photos produce stylized vector interpretations."
+        "Generate a sketch, line-art reference, or SVG from a sketch, logo, diagram, or photo. "
+        "For photos, the most reliable path is sketch first, then optional SVG conversion."
     )
 
     col1, col2 = st.columns([1, 1.4])
@@ -476,10 +476,33 @@ def render_svg_generator():
             accept_multiple_files=False,
             key="svg_generator_upload",
         )
+        svg_workflow = st.selectbox(
+            "Workflow",
+            options=["Direct SVG", "Sketch Only", "Sketch + SVG"],
+            index=2,
+            key="svg_generator_workflow",
+            help="Use Sketch + SVG for photos and more complex source images.",
+        )
         svg_mode = st.selectbox(
             "SVG Mode",
             options=["Trace Sketch", "Diagram to SVG", "Logo/Icon Vectorize", "Stylized Photo Poster"],
             key="svg_generator_mode",
+        )
+        sketch_color_mode = None
+        if svg_workflow != "Direct SVG":
+            sketch_color_mode = st.radio(
+                "Sketch Style",
+                options=["B&W Line Art", "Colored Sketch"],
+                horizontal=True,
+                key="svg_generator_sketch_style",
+            )
+        detail_level = st.slider(
+            "Detail Level",
+            min_value=1,
+            max_value=10,
+            value=5,
+            key="svg_generator_detail",
+            help="Lower values keep only major contours. Higher values preserve more line and shape detail.",
         )
         svg_model = st.selectbox(
             "Gemini Model",
@@ -497,20 +520,52 @@ def render_svg_generator():
 
         if svg_upload:
             upload_bytes = svg_upload.getvalue()
-            source_sig = f"{svg_upload.name}:{len(upload_bytes)}:{svg_mode}:{svg_model}:{svg_prompt}"
+            source_sig = (
+                f"{svg_upload.name}:{len(upload_bytes)}:{svg_workflow}:{svg_mode}:"
+                f"{sketch_color_mode or ''}:{detail_level}:{svg_model}:{svg_prompt}"
+            )
             if source_sig != st.session_state.svg_generator.get("source_sig"):
                 st.session_state.svg_generator["result"] = None
                 st.session_state.svg_generator["source_sig"] = source_sig
 
-            if st.button("Generate SVG", type="primary", use_container_width=True, key="svg_generator_run"):
+            button_label = {
+                "Direct SVG": "Generate SVG",
+                "Sketch Only": "Generate Sketch",
+                "Sketch + SVG": "Generate Sketch + SVG",
+            }[svg_workflow]
+            if st.button(button_label, type="primary", use_container_width=True, key="svg_generator_run"):
                 generator = GeminiSvgGenerator(model_name=svg_model)
-                with st.spinner("Generating SVG with Gemini..."):
-                    result = generator.generate_from_image(
-                        image_bytes=upload_bytes,
-                        mime_type=(svg_upload.type or "image/png"),
-                        mode=svg_mode,
-                        user_prompt=svg_prompt,
-                    )
+                with st.spinner("Generating with Gemini..."):
+                    result = {
+                        "workflow": svg_workflow,
+                        "sketch": None,
+                        "svg": None,
+                    }
+                    if svg_workflow in ("Sketch Only", "Sketch + SVG"):
+                        sketch_result = generator.generate_intermediate_sketch(
+                            image_bytes=upload_bytes,
+                            mime_type=(svg_upload.type or "image/png"),
+                            color_mode=(sketch_color_mode or "B&W Line Art"),
+                            detail_level=detail_level,
+                            user_prompt=svg_prompt,
+                        )
+                        result["sketch"] = sketch_result
+                        if sketch_result.get("success") and svg_workflow == "Sketch + SVG":
+                            result["svg"] = generator.generate_from_image(
+                                image_bytes=sketch_result.get("image_bytes", b""),
+                                mime_type=sketch_result.get("mime_type", "image/png"),
+                                mode=svg_mode,
+                                user_prompt=svg_prompt,
+                                detail_level=detail_level,
+                            )
+                    else:
+                        result["svg"] = generator.generate_from_image(
+                            image_bytes=upload_bytes,
+                            mime_type=(svg_upload.type or "image/png"),
+                            mode=svg_mode,
+                            user_prompt=svg_prompt,
+                            detail_level=detail_level,
+                        )
                 st.session_state.svg_generator["result"] = result
 
     with col2:
@@ -520,30 +575,56 @@ def render_svg_generator():
 
         result = st.session_state.svg_generator.get("result")
         if result:
-            st.markdown("**SVG Result**")
-            if result.get("success"):
-                warnings = result.get("warnings") or []
-                if warnings:
-                    for warning in warnings:
-                        st.warning(warning)
-                svg_text = result.get("svg", "")
-                components.html(svg_text, height=420, scrolling=True)
-                st.download_button(
-                    "Download SVG",
-                    svg_text,
-                    file_name=f"generated_{time.strftime('%Y%m%d_%H%M%S')}.svg",
-                    mime="image/svg+xml",
-                    use_container_width=True,
-                    key="svg_generator_download",
-                )
-                with st.expander("SVG Markup", expanded=False):
-                    st.code(svg_text, language="xml")
-            else:
-                st.error(result.get("error", "SVG generation failed"))
-                preview = result.get("response_preview")
-                if preview:
-                    with st.expander("Model Response Preview", expanded=False):
-                        st.code(preview, language="text")
+            sketch_result = result.get("sketch")
+            if sketch_result is not None:
+                st.markdown("**Sketch Result**")
+                if sketch_result.get("success"):
+                    sketch_bytes = sketch_result.get("image_bytes", b"")
+                    sketch_mime = sketch_result.get("mime_type", "image/png")
+                    st.image(sketch_bytes, caption=f"Sketch ({sketch_mime})", width=420)
+                    extension = "png" if "png" in sketch_mime.lower() else "jpg"
+                    st.download_button(
+                        "Download Sketch",
+                        sketch_bytes,
+                        file_name=f"sketch_{time.strftime('%Y%m%d_%H%M%S')}.{extension}",
+                        mime=sketch_mime,
+                        use_container_width=True,
+                        key="svg_generator_sketch_download",
+                    )
+                    st.caption(f"Sketch model: {sketch_result.get('model_used', 'Unknown')}")
+                else:
+                    st.error(sketch_result.get("error", "Sketch generation failed"))
+                    preview = sketch_result.get("response_preview")
+                    if preview:
+                        with st.expander("Sketch Response Preview", expanded=False):
+                            st.code(preview, language="text")
+
+            svg_result = result.get("svg")
+            if svg_result is not None:
+                st.markdown("**SVG Result**")
+                if svg_result.get("success"):
+                    warnings = svg_result.get("warnings") or []
+                    if warnings:
+                        for warning in warnings:
+                            st.warning(warning)
+                    svg_text = svg_result.get("svg", "")
+                    components.html(svg_text, height=420, scrolling=True)
+                    st.download_button(
+                        "Download SVG",
+                        svg_text,
+                        file_name=f"generated_{time.strftime('%Y%m%d_%H%M%S')}.svg",
+                        mime="image/svg+xml",
+                        use_container_width=True,
+                        key="svg_generator_download",
+                    )
+                    with st.expander("SVG Markup", expanded=False):
+                        st.code(svg_text, language="xml")
+                else:
+                    st.error(svg_result.get("error", "SVG generation failed"))
+                    preview = svg_result.get("response_preview")
+                    if preview:
+                        with st.expander("Model Response Preview", expanded=False):
+                            st.code(preview, language="text")
 
 def display_quick_actions():
     """Display quick action buttons and utilities"""
