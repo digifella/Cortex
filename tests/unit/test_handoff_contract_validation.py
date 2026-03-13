@@ -4,6 +4,7 @@ import pytest
 
 from cortex_engine.handoff_contract import (
     validate_cortex_sync_input,
+    validate_intel_extract_input,
     validate_pdf_textify_input,
     validate_url_ingest_input,
 )
@@ -139,3 +140,23 @@ def test_cortex_sync_rejects_bad_manifest():
                 "manifest": [{}],
             }
         )
+
+
+def test_intel_extract_normalizes_attachments():
+    payload = validate_intel_extract_input(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Forwarded screenshot",
+            "attachments": [
+                {
+                    "filename": "Screenshot.jpg",
+                    "mime_type": "image/jpeg",
+                    "stored_path": "C:\\temp\\Screenshot.jpg",
+                    "kind": "image",
+                }
+            ],
+        }
+    )
+    assert payload["org_name"] == "Longboardfella"
+    assert payload["attachments"][0]["filename"] == "Screenshot.jpg"
+    assert payload["attachments"][0]["kind"] == "image"

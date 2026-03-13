@@ -29,6 +29,7 @@ class DocumentTextifier:
 
     # Preferred vision models in order of priority
     VISION_MODELS = ["qwen3-vl:8b", "qwen3-vl:4b", "qwen3-vl"]
+    VISION_FALLBACK_MODELS = ["llava:latest", "llava"]
 
     def __init__(
         self,
@@ -67,6 +68,7 @@ class DocumentTextifier:
         self._vlm_crash_skip_models: set[str] = set()
         self._last_vlm_http_meta: Dict[str, Any] = {}
         self._last_cleanup_applied = False
+        self._available_ollama_models: Optional[set[str]] = None
 
     @classmethod
     def from_options(
@@ -172,7 +174,8 @@ class DocumentTextifier:
             # Try preferred Qwen3-VL models first
             for model in self.VISION_MODELS:
                 try:
-                    client.show(model)
+                    if not self._ollama_model_available(client, model):
+                        continue
                     self._vlm_client = client
                     self._vlm_model = model
                     logger.info(f"Textifier using vision model: {model}")
@@ -180,16 +183,64 @@ class DocumentTextifier:
                 except Exception:
                     continue
 
-            # Fall back to configured VLM_MODEL (e.g. llava:7b)
+            # Fall back to configured/default VLM names if Qwen3-VL is unavailable.
             from cortex_engine.config import VLM_MODEL
-            client.show(VLM_MODEL)
-            self._vlm_client = client
-            self._vlm_model = VLM_MODEL
-            logger.info(f"Textifier falling back to VLM_MODEL: {VLM_MODEL}")
+            fallback_candidates: List[str] = []
+            for model in [VLM_MODEL, *self.VISION_FALLBACK_MODELS]:
+                name = str(model or "").strip()
+                if name and name not in fallback_candidates:
+                    fallback_candidates.append(name)
+            for model in fallback_candidates:
+                if not self._ollama_model_available(client, model):
+                    continue
+                self._vlm_client = client
+                self._vlm_model = model
+                logger.info(f"Textifier falling back to vision model: {model}")
+                return
+            raise RuntimeError(f"no supported vision model installed (tried: {', '.join(fallback_candidates)})")
         except Exception as e:
             logger.warning(f"No vision model available: {e}")
             self._vlm_client = None
             self._vlm_model = None
+
+    def _refresh_ollama_models(self, client) -> set[str]:
+        try:
+            listing = client.list()
+        except Exception:
+            self._available_ollama_models = None
+            raise
+        names: set[str] = set()
+        models = []
+        if isinstance(listing, dict):
+            models = listing.get("models") or []
+        else:
+            models = getattr(listing, "models", []) or []
+        for item in models:
+            if isinstance(item, dict):
+                name = str(item.get("model") or item.get("name") or "").strip()
+            else:
+                name = str(getattr(item, "model", "") or getattr(item, "name", "") or "").strip()
+            if name:
+                names.add(name)
+        self._available_ollama_models = names
+        return names
+
+    def _ollama_model_available(self, client, model: str) -> bool:
+        name = str(model or "").strip()
+        if not name:
+            return False
+        if self._available_ollama_models is None:
+            try:
+                self._refresh_ollama_models(client)
+            except Exception:
+                pass
+        if self._available_ollama_models is not None:
+            return name in self._available_ollama_models
+        try:
+            client.show(name)
+            return True
+        except Exception:
+            return False
 
     def _vlm_model_candidates(self, include_current: bool = True) -> List[str]:
         """Return a de-duplicated ordered list of Qwen VLM model names to try."""
@@ -594,8 +645,9 @@ class DocumentTextifier:
             models_tried: List[str] = []
             for idx, model in enumerate(self._vlm_model_candidates(include_current=True)):
                 try:
-                    if idx > 0:
-                        self._vlm_client.show(model)
+                    if idx > 0 and not self._ollama_model_available(self._vlm_client, model):
+                        self._vlm_skip_models.add(model)
+                        continue
                     result = self._describe_with_model(model, encoded, simple_prompt=True)
                 except Exception as model_error:
                     err_text = str(model_error)
@@ -1460,12 +1512,9 @@ class DocumentTextifier:
             # Find an available text model
             text_model = None
             for model in self.TEXT_MODELS:
-                try:
-                    client.show(model)
+                if self._ollama_model_available(client, model):
                     text_model = model
                     break
-                except Exception:
-                    continue
 
             if not text_model:
                 logger.warning("No text model available for keyword extraction")
@@ -1592,7 +1641,8 @@ class DocumentTextifier:
             if not model:
                 continue
             try:
-                client.show(model)
+                if not self._ollama_model_available(client, model):
+                    continue
                 cleanup_model = model
                 break
             except Exception:
@@ -2467,12 +2517,9 @@ class DocumentTextifier:
 
             text_model = None
             for model in self.TEXT_MODELS:
-                try:
-                    client.show(model)
+                if self._ollama_model_available(client, model):
                     text_model = model
                     break
-                except Exception:
-                    continue
 
             if not text_model:
                 logger.warning("No text model available for keyword anonymization; using deterministic filtering only")

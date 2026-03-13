@@ -23,12 +23,12 @@ input_data schema:
     source_system str         Origin system (lab / admin)
 """
 
-import os
 import json
 import logging
+import os
 import tempfile
-import textwrap
-import re
+import urllib.parse
+import urllib.request
 from datetime import date
 from pathlib import Path
 
@@ -86,6 +86,116 @@ MODE_PROMPTS = {
     ),
 }
 
+MODEL_DETAILS = {
+    "gemini-flash": {"provider": "Google", "label": "Gemini 2.5 Flash"},
+    "gemini-pro": {"provider": "Google", "label": "Gemini 2.5 Pro"},
+    "claude-haiku": {"provider": "Anthropic", "label": "Claude Haiku"},
+    "claude-sonnet": {"provider": "Anthropic", "label": "Claude Sonnet"},
+}
+
+
+def _model_details(api_choice: str) -> dict:
+    details = MODEL_DETAILS.get(api_choice)
+    if details:
+        return details
+    return {"provider": "", "label": api_choice}
+
+
+def _fetch_youtube_metadata(url: str) -> dict:
+    """Best-effort public metadata lookup via YouTube oEmbed."""
+    oembed_url = "https://www.youtube.com/oembed?" + urllib.parse.urlencode(
+        {"url": url, "format": "json"}
+    )
+    try:
+        with urllib.request.urlopen(oembed_url, timeout=15) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        return {
+            "video_title": (payload.get("title") or "").strip(),
+            "author": (payload.get("author_name") or "").strip(),
+            "author_url": (payload.get("author_url") or "").strip(),
+            "provider": (payload.get("provider_name") or "YouTube").strip(),
+        }
+    except Exception as exc:
+        logger.info("YouTube metadata lookup failed for %s: %s", url, exc)
+        return {
+            "video_title": "",
+            "author": "",
+            "author_url": "",
+            "provider": "YouTube",
+        }
+
+
+def _title_context(url: str, metadata: dict, sections: dict) -> str:
+    parts = []
+    if metadata.get("video_title"):
+        parts.append(f"Video title: {metadata['video_title']}")
+    if metadata.get("author"):
+        parts.append(f"Channel/author: {metadata['author']}")
+    parts.append(f"URL: {url}")
+    for key in ("summary", "meeting_notes", "action_items", "timestamps", "transcript"):
+        value = (sections.get(key) or "").strip()
+        if value:
+            parts.append(f"{key.capitalize()} excerpt:\n{value[:1600]}")
+            break
+    return "\n\n".join(parts)
+
+
+def _fallback_report_title(metadata: dict, index: int) -> str:
+    return (
+        metadata.get("video_title")
+        or metadata.get("author")
+        or f"YouTube Summary Report {index}"
+    )
+
+
+def _generate_report_title_gemini(url: str, model_name: str, metadata: dict, sections: dict) -> str:
+    genai = _gemini_client()
+    model_id = "gemini-2.5-pro" if model_name == "gemini-pro" else "gemini-2.5-flash"
+    model = genai.GenerativeModel(model_id)
+    prompt = (
+        "Create a concise, professional title for a written summary report of this YouTube clip. "
+        "Use the actual subject matter, not generic wording. Max 12 words. "
+        "Return title text only. No quotes. No markdown.\n\n"
+        + _title_context(url, metadata, sections)
+    )
+    response = model.generate_content(prompt)
+    return (response.text or "").strip()
+
+
+def _generate_report_title_claude(url: str, model_name: str, metadata: dict, sections: dict) -> str:
+    client = _anthropic_client()
+    model_id = (
+        "claude-sonnet-4-6" if model_name == "claude-sonnet"
+        else "claude-haiku-4-5-20251001"
+    )
+    response = client.messages.create(
+        model=model_id,
+        max_tokens=64,
+        messages=[{
+            "role": "user",
+            "content": (
+                "Create a concise, professional title for a written summary report of this YouTube clip. "
+                "Use the actual subject matter, not generic wording. Max 12 words. "
+                "Return title text only. No quotes. No markdown.\n\n"
+                + _title_context(url, metadata, sections)
+            ),
+        }],
+    )
+    return response.content[0].text.strip()
+
+
+def _generate_report_title(url: str, api_choice: str, metadata: dict, sections: dict, index: int) -> str:
+    try:
+        if api_choice.startswith("gemini"):
+            title = _generate_report_title_gemini(url, api_choice, metadata, sections)
+        else:
+            title = _generate_report_title_claude(url, api_choice, metadata, sections)
+        cleaned = " ".join((title or "").split()).strip().strip("#").strip()
+        return cleaned or _fallback_report_title(metadata, index)
+    except Exception as exc:
+        logger.info("AI report title generation failed for %s: %s", url, exc)
+        return _fallback_report_title(metadata, index)
+
 
 # ── Gemini path ──
 
@@ -93,7 +203,7 @@ def _summarise_gemini(url: str, model_name: str, output_modes: list[str]) -> dic
     """Use Gemini's native YouTube URL understanding."""
     genai = _gemini_client()
 
-    model_id = "gemini-1.5-pro" if model_name == "gemini-pro" else "gemini-1.5-flash"
+    model_id = "gemini-2.5-pro" if model_name == "gemini-pro" else "gemini-2.5-flash"
     model = genai.GenerativeModel(model_id)
 
     sections = {}
@@ -205,23 +315,24 @@ MODE_LABELS = {
 def _build_report(results: list[dict], output_modes: list[str], api_choice: str) -> str:
     today = date.today().isoformat()
     mode_labels = ", ".join(MODE_LABELS.get(m, m) for m in output_modes)
-    api_label = {
-        "gemini-flash": "Gemini 1.5 Flash",
-        "gemini-pro": "Gemini 1.5 Pro",
-        "claude-haiku": "Claude Haiku",
-        "claude-sonnet": "Claude Sonnet",
-    }.get(api_choice, api_choice)
+    model_info = _model_details(api_choice)
+    api_label = model_info["label"]
+    if len(results) == 1:
+        report_title = results[0].get("report_title") or results[0].get("video_title") or "YouTube Summary Report"
+    else:
+        report_title = f"YouTube Summary Report - {len(results)} Videos"
 
     lines = [
         "---",
-        "title: YouTube Summary Report",
+        f"title: {report_title}",
         f"date: {today}",
         "source_type: youtube_summary",
+        f"provider: {model_info['provider']}",
         f"api: {api_label}",
         f"modes: {mode_labels}",
         "---",
         "",
-        "# YouTube Summary Report",
+        f"# {report_title}",
         f"Generated: {today} · API: {api_label} · Modes: {mode_labels}",
         "",
     ]
@@ -229,7 +340,14 @@ def _build_report(results: list[dict], output_modes: list[str], api_choice: str)
     for i, result in enumerate(results, 1):
         lines.append(f"---\n")
         url = result.get("url", "")
-        lines.append(f"## Video {i}")
+        report_title = result.get("report_title") or result.get("video_title") or f"Video {i}"
+        video_title = result.get("video_title", "")
+        author = result.get("author", "")
+        lines.append(f"## {report_title}")
+        if video_title:
+            lines.append(f"**Clip title:** {video_title}")
+        if author:
+            lines.append(f"**Author / channel:** {author}")
         lines.append(f"**URL:** {url}")
         lines.append("")
 
@@ -302,17 +420,33 @@ def handle(input_path, input_data: dict, job: dict):
 
     for url in urls:
         logger.info(f"Processing: {url} via {api_choice}")
+        metadata = _fetch_youtube_metadata(url)
         try:
             if use_gemini:
                 sections = _summarise_gemini(url, api_choice, output_modes)
             else:
                 transcript = _extract_transcript(url)
                 sections   = _summarise_claude(transcript, url, api_choice, output_modes)
-            results.append({"url": url, "sections": sections})
+            report_title = _generate_report_title(url, api_choice, metadata, sections, len(results) + 1)
+            results.append({
+                "url": url,
+                "sections": sections,
+                "video_title": metadata.get("video_title", ""),
+                "author": metadata.get("author", ""),
+                "author_url": metadata.get("author_url", ""),
+                "report_title": report_title,
+            })
         except Exception as e:
             logger.error(f"Failed to process {url}: {e}")
             errors.append({"url": url, "error": str(e)})
-            results.append({"url": url, "sections": {m: f"[Error: {e}]" for m in output_modes}})
+            results.append({
+                "url": url,
+                "sections": {m: f"[Error: {e}]" for m in output_modes},
+                "video_title": metadata.get("video_title", ""),
+                "author": metadata.get("author", ""),
+                "author_url": metadata.get("author_url", ""),
+                "report_title": _fallback_report_title(metadata, len(results) + 1),
+            })
 
     # Build output markdown
     report_md = _build_report(results, output_modes, api_choice)
@@ -323,13 +457,28 @@ def handle(input_path, input_data: dict, job: dict):
         f.write(report_md)
         output_path = Path(f.name)
 
+    model_info = _model_details(api_choice)
     output_data = {
-        "url_count":    len(urls),
+        "url_count": len(urls),
+        "video_count": len(urls),
+        "videos_processed": len(urls) - len(errors),
         "success_count": len(urls) - len(errors),
-        "error_count":  len(errors),
-        "api_used":     api_choice,
-        "modes":        output_modes,
-        "errors":       errors,
+        "error_count": len(errors),
+        "api_used": api_choice,
+        "provider": model_info["provider"],
+        "model": model_info["label"],
+        "modes": output_modes,
+        "report_title": results[0].get("report_title", "YouTube Summary Report") if len(results) == 1 else f"YouTube Summary Report - {len(results)} Videos",
+        "videos": [
+            {
+                "url": item.get("url", ""),
+                "clip_title": item.get("video_title", ""),
+                "author": item.get("author", ""),
+                "report_title": item.get("report_title", ""),
+            }
+            for item in results
+        ],
+        "errors": errors,
     }
 
     if push_to_kb:

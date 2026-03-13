@@ -5,6 +5,27 @@ All notable changes to the Cortex Suite project will be documented in this file.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### 🧠 Cortex Intelligence Intake + Review Loop
+
+### ✨ New Features
+- Added direct IMAP mailbox intake for Cortex-owned intelligence inboxes via `worker/intel_mailbox_worker.py` and `cortex_engine/intel_mailbox.py`.
+- Added `intel_extract` pipeline for email, HTML, attachment, OCR, and image-based entity extraction with website callback delivery.
+- Added stakeholder intelligence storage, matching, target update detection, and digest generation for person/organisation/theme workflows.
+- Added Streamlit `Stakeholder Signals` review page for manual signal testing, digest generation, and profile/update review.
+
+### 🚀 Improvements
+- Expanded queue handoff contract and worker registry to support `intel_extract`, `stakeholder_profile_sync`, `signal_ingest`, and `signal_digest`.
+- Added rich profile sync support for external profile IDs, organisation metadata, watch state, and current profile fields used by Market Radar.
+- Updated YouTube summarisation output to include smarter report titles and source clip metadata.
+- WATCH digest synthesis now prefers local `qwen3.5` Ollama models with fallback logic and configurable timeout.
+- Vision model selection now prefers installed `qwen3-vl` models and falls back cleanly to `llava:latest`.
+
+### 🔧 Bug Fixes
+- Fixed queue worker completion/failure response validation so false positives fail loudly.
+- Fixed intel extraction crashes on list-valued evidence payloads.
+- Fixed mailbox attachment persistence so duplicate filenames no longer overwrite each other.
+- Fixed direct Cortex website callback handling so application-level JSON errors are treated as real delivery failures.
+
 ### ⚙️ Local Queue Worker Harness
 
 ### ✨ New Features

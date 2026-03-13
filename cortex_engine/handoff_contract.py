@@ -9,7 +9,16 @@ HANDOFF_CONTRACT_VERSION = "2026-02-15.v1"
 DEFAULT_TENANT_ID = "default"
 DEFAULT_PROJECT_ID = "default"
 
-SUPPORTED_JOB_TYPES = ["pdf_anonymise", "pdf_textify", "url_ingest", "cortex_sync"]
+SUPPORTED_JOB_TYPES = [
+    "pdf_anonymise",
+    "pdf_textify",
+    "url_ingest",
+    "cortex_sync",
+    "intel_extract",
+    "stakeholder_profile_sync",
+    "signal_ingest",
+    "signal_digest",
+]
 
 SUPPORTED_ANONYMIZER_OPTIONS = [
     "redact_people",
@@ -236,4 +245,142 @@ def validate_cortex_sync_input(input_data: Optional[Dict[str, Any]] = None) -> D
 
     payload["topic"] = str(payload.get("topic") or "").strip()
     payload["fresh"] = _coerce_bool(payload.get("fresh"), False)
+    return payload
+
+
+def validate_stakeholder_profile_sync_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(input_data or {})
+    payload["org_name"] = str(payload.get("org_name") or "").strip()
+    if not payload["org_name"]:
+        raise ValueError("stakeholder_profile_sync requires org_name")
+
+    profiles = payload.get("profiles")
+    if not isinstance(profiles, list) or not profiles:
+        raise ValueError("stakeholder_profile_sync requires a non-empty profiles array")
+
+    normalized_profiles = []
+    for idx, profile in enumerate(profiles):
+        if not isinstance(profile, dict):
+            raise ValueError(f"stakeholder_profile_sync profiles[{idx}] must be an object")
+        canonical_name = str(profile.get("canonical_name") or profile.get("name") or "").strip()
+        if not canonical_name:
+            raise ValueError(f"stakeholder_profile_sync profiles[{idx}] requires canonical_name or name")
+        normalized = dict(profile)
+        normalized["canonical_name"] = canonical_name
+        normalized["target_type"] = str(profile.get("target_type") or "person").strip().lower() or "person"
+        normalized["external_profile_id"] = str(
+            profile.get("external_profile_id") or profile.get("website_profile_id") or profile.get("id") or ""
+        ).strip()
+        normalized["email"] = str(profile.get("email") or "").strip()
+        normalized["industry"] = str(profile.get("industry") or "").strip()
+        normalized["function"] = str(profile.get("function") or "").strip()
+        normalized["status"] = str(profile.get("status") or "active").strip().lower() or "active"
+        normalized["last_verified_at"] = str(profile.get("last_verified_at") or "").strip()
+        normalized["watch_status"] = str(profile.get("watch_status") or "off").strip().lower() or "off"
+        normalized["website_url"] = str(profile.get("website_url") or "").strip()
+        normalized["acn_abn"] = str(profile.get("acn_abn") or "").strip()
+        normalized["phone"] = str(profile.get("phone") or "").strip()
+        normalized["parent_entity"] = str(profile.get("parent_entity") or "").strip()
+        address = profile.get("address") or {}
+        normalized["address"] = dict(address) if isinstance(address, dict) else {}
+        normalized["aliases"] = [str(item).strip() for item in profile.get("aliases") or [] if str(item).strip()]
+        normalized["known_employers"] = [str(item).strip() for item in profile.get("known_employers") or [] if str(item).strip()]
+        normalized["tags"] = [str(item).strip() for item in profile.get("tags") or [] if str(item).strip()]
+        normalized_profiles.append(normalized)
+
+    payload["profiles"] = normalized_profiles
+    return payload
+
+
+def validate_intel_extract_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(input_data or {})
+    payload["org_name"] = str(payload.get("org_name") or "").strip()
+    if not payload["org_name"]:
+        raise ValueError("intel_extract requires org_name")
+
+    for key in (
+        "subject",
+        "raw_text",
+        "html_text",
+        "primary_url",
+        "text_note",
+        "parsed_candidate_name",
+        "parsed_candidate_employer",
+        "target_type",
+        "message_id",
+        "received_at",
+        "submitted_by",
+        "signal_type",
+        "intel_id",
+    ):
+        payload[key] = str(payload.get(key) or "").strip()
+
+    payload["target_type"] = payload["target_type"].lower() or "person"
+    payload["signal_type"] = payload["signal_type"] or "email_intel"
+
+    attachments = payload.get("attachments") or []
+    if not isinstance(attachments, list):
+        raise ValueError("intel_extract attachments must be an array when provided")
+    normalized_attachments = []
+    for idx, item in enumerate(attachments):
+        if not isinstance(item, dict):
+            raise ValueError(f"intel_extract attachments[{idx}] must be an object")
+        normalized_attachments.append(
+            {
+                "filename": str(item.get("filename") or "").strip(),
+                "mime_type": str(item.get("mime_type") or "").strip(),
+                "stored_path": str(item.get("stored_path") or "").strip(),
+                "kind": str(item.get("kind") or "").strip().lower(),
+            }
+        )
+    payload["attachments"] = normalized_attachments
+
+    tags = payload.get("tags") or []
+    if not isinstance(tags, list):
+        raise ValueError("intel_extract tags must be an array when provided")
+    payload["tags"] = [str(tag).strip() for tag in tags if str(tag).strip()]
+
+    if not (payload["subject"] or payload["raw_text"] or payload["html_text"] or payload["attachments"]):
+        raise ValueError("intel_extract requires subject, raw_text, html_text, or attachments")
+    return payload
+
+
+def validate_signal_ingest_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(input_data or {})
+    payload["org_name"] = str(payload.get("org_name") or "").strip()
+    if not payload["org_name"]:
+        raise ValueError("signal_ingest requires org_name")
+
+    payload["subject"] = str(payload.get("subject") or "").strip()
+    payload["raw_text"] = str(payload.get("raw_text") or payload.get("body") or "").strip()
+    if not payload["subject"] and not payload["raw_text"]:
+        raise ValueError("signal_ingest requires subject or raw_text")
+
+    payload["target_type"] = str(payload.get("target_type") or "person").strip().lower() or "person"
+    payload["primary_url"] = str(payload.get("primary_url") or payload.get("content") or "").strip()
+    payload["text_note"] = str(payload.get("text_note") or "").strip()
+    payload["parsed_candidate_name"] = str(
+        payload.get("parsed_candidate_name") or payload.get("stakeholder_name") or ""
+    ).strip()
+    payload["parsed_candidate_employer"] = str(
+        payload.get("parsed_candidate_employer") or payload.get("stakeholder_employer") or ""
+    ).strip()
+    payload["tags"] = [str(item).strip() for item in payload.get("tags") or [] if str(item).strip()]
+    return payload
+
+
+def validate_signal_digest_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(input_data or {})
+    payload["org_name"] = str(payload.get("org_name") or "").strip()
+    if not payload["org_name"]:
+        raise ValueError("signal_digest requires org_name")
+
+    payload["since_ts"] = str(payload.get("since_ts") or "").strip()
+    payload["max_items"] = _coerce_positive_int(payload.get("max_items"), 25, "max_items")
+    payload["include_needs_review"] = _coerce_bool(payload.get("include_needs_review"), True)
+    payload["matched_only"] = _coerce_bool(payload.get("matched_only"), True)
+    payload["llm_synthesis"] = _coerce_bool(payload.get("llm_synthesis"), False)
+    payload["llm_provider"] = str(payload.get("llm_provider") or "ollama").strip().lower() or "ollama"
+    payload["llm_model"] = str(payload.get("llm_model") or "").strip()
+    payload["profile_keys"] = [str(item).strip() for item in payload.get("profile_keys") or [] if str(item).strip()]
     return payload

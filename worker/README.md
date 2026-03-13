@@ -4,14 +4,15 @@ This folder contains the local/offline queue worker for the website work queue A
 
 ## Files
 - `worker.py`: Main polling worker loop.
+- `intel_mailbox_worker.py`: Direct IMAP poller for Cortex-owned intelligence inboxes.
 - `config.env`: Worker configuration for queue API and polling.
 - `handlers/__init__.py`: Job-type handler registry.
 - `handlers/pdf_anonymise.py`: `pdf_anonymise` handler (reuses `cortex_engine.anonymizer`).
 - `handlers/pdf_textify.py`: `pdf_textify` handler (reuses `cortex_engine.textifier`).
 - `handlers/url_ingest.py`: `url_ingest` handler (open-access PDF discovery + optional textify).
 - `handlers/youtube_summarise.py`: `youtube_summarise` handler (video summary workflows).
-- `handlers/market_radar.py`: `market_radar` handler (web intelligence report generation).
 - `handlers/cortex_sync.py`: `cortex_sync` handler (website knowledge files -> Cortex ingestion pipeline).
+- `handlers/signal_episode.py`: `signal_episode` handler (Signal Studio audio generation).
 
 ## Setup
 1. Create config from template:
@@ -29,6 +30,11 @@ pip install requests pymupdf
 venv/bin/python worker/worker.py
 ```
 
+Direct Cortex-owned intel mailbox intake:
+```bash
+venv/bin/python worker/intel_mailbox_worker.py
+```
+
 ## How It Works
 1. Polls `queue_worker_api.php?action=poll&types=...`
 2. Downloads input file (`action=download_input`)
@@ -43,7 +49,7 @@ venv/bin/python worker/worker.py
 - `pdf_textify`
 - `url_ingest`
 - `youtube_summarise`
-- `market_radar`
+- `signal_episode`
 - `cortex_sync`
 
 ## Notes
@@ -55,3 +61,8 @@ venv/bin/python worker/worker.py
 - The `pdf_anonymise` worker handler intentionally calls the existing Cortex engine anonymizer:
   - `cortex_engine.anonymizer.DocumentAnonymizer`
 - This avoids duplicate anonymization logic between the admin queue worker path and Document Extract UI.
+- `intel_mailbox_worker.py` reads IMAP settings from `worker/config.env`:
+  - `INTEL_IMAP_HOST`, `INTEL_IMAP_PORT`, `INTEL_IMAP_USERNAME`, `INTEL_IMAP_PASSWORD`
+  - `INTEL_IMAP_FOLDER`, `INTEL_IMAP_ORG_NAME`, `INTEL_ALLOWED_SENDERS`
+  - optional website callback: `INTEL_RESULTS_POST_URL`, `INTEL_RESULTS_POST_SECRET`
+- If no callback URL is configured, processed mailbox extraction results are written to the external DB path under `intel_mailbox/outbox/`.

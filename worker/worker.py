@@ -108,8 +108,21 @@ class QueueClient:
         self.session = requests.Session()
         self.session.headers.update({"X-Queue-Key": cfg.secret_key})
 
-    def _request(self, method: str, params: Dict[str, str], **kwargs):
-        query = dict(params)
+    def _request(self, method: str, params: Dict[str, str], expect_json: bool = True, **kwargs):
+        method = method.upper()
+        action = params.get("action", "")
+        query = dict(params) if method == "GET" else {}
+        if method != "GET":
+            data = kwargs.pop("data", None)
+            if data is None:
+                data = {}
+            if isinstance(data, dict):
+                data = dict(data)
+                for key, value in params.items():
+                    data.setdefault(key, value)
+                kwargs["data"] = data
+            else:
+                query = dict(params)
         response = self.session.request(
             method=method,
             url=self.cfg.server_url,
@@ -128,11 +141,36 @@ class QueueClient:
                 timeout=self.cfg.request_timeout,
                 **kwargs,
             )
+        debug_http = os.environ.get("QUEUE_DEBUG_HTTP", "").strip().lower() in {"1", "true", "yes", "on"}
+        if debug_http or action in {"complete", "fail"}:
+            body_preview = ""
+            try:
+                body_preview = response.text[:500].replace("\n", "\\n")
+            except Exception:
+                body_preview = "[unavailable]"
+            logging.info(
+                "Queue API response action=%s method=%s status=%s content_type=%s body=%s",
+                action,
+                method,
+                response.status_code,
+                response.headers.get("Content-Type", ""),
+                body_preview,
+            )
         response.raise_for_status()
+        if not expect_json:
+            return response
         ctype = response.headers.get("Content-Type", "").lower()
-        if "application/json" in ctype:
-            return response.json()
-        return response
+        if "application/json" not in ctype:
+            raise RuntimeError(
+                f"Queue API returned unexpected content type for {method} {params.get('action', '')}: {ctype or '[none]'}"
+            )
+        payload = response.json()
+        if isinstance(payload, dict):
+            if payload.get("error"):
+                raise RuntimeError(f"Queue API error for {params.get('action', '')}: {payload['error']}")
+            if payload.get("success") is False:
+                raise RuntimeError(f"Queue API reported unsuccessful {params.get('action', '')} request")
+        return payload
 
     def poll(self) -> Optional[dict]:
         payload = self._request(
@@ -146,7 +184,7 @@ class QueueClient:
         return payload.get("job") if isinstance(payload, dict) else None
 
     def download_input(self, job_id: int, out_path: Path) -> Optional[Path]:
-        response = self._request("GET", {"action": "download_input", "id": str(job_id)})
+        response = self._request("GET", {"action": "download_input", "id": str(job_id)}, expect_json=False)
         if not isinstance(response, requests.Response):
             return None
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -172,12 +210,13 @@ class QueueClient:
         if output_file and output_file.exists():
             files = {"file": (output_file.name, open(output_file, "rb"), "application/octet-stream")}
         try:
-            self._request(
+            payload = self._request(
                 "POST",
                 {"action": "complete", "id": str(job_id)},
                 data=data,
                 files=files,
             )
+            logging.info("Queue complete payload for job id=%s: %s", job_id, payload)
         finally:
             if files:
                 files["file"][1].close()
