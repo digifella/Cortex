@@ -6,6 +6,9 @@ from cortex_engine.handoff_contract import (
     validate_cortex_sync_input,
     validate_intel_extract_input,
     validate_pdf_textify_input,
+    validate_signal_ingest_input,
+    validate_signal_digest_input,
+    validate_stakeholder_profile_sync_input,
     validate_url_ingest_input,
 )
 
@@ -160,3 +163,78 @@ def test_intel_extract_normalizes_attachments():
     assert payload["org_name"] == "Longboardfella"
     assert payload["attachments"][0]["filename"] == "Screenshot.jpg"
     assert payload["attachments"][0]["kind"] == "image"
+
+
+def test_stakeholder_profile_sync_normalizes_affiliations():
+    payload = validate_stakeholder_profile_sync_input(
+        {
+            "org_name": "Longboardfella",
+            "org_alumni": ["SMS", "Escient", "sms"],
+            "profiles": [
+                {
+                    "canonical_name": "Jane Smith",
+                    "current_employer": "Acme Corp",
+                    "current_role": "Chief Strategy Officer",
+                    "affiliations": [
+                        {"org_name_text": "Acme Corp", "role": "Chief Strategy Officer", "is_primary": "1"},
+                        {"org_name_text": "Board Co", "role": "Director", "affiliation_type": "board", "confidence": "probable"},
+                    ],
+                }
+            ],
+        }
+    )
+    profile = payload["profiles"][0]
+    assert profile["current_employer"] == "Acme Corp"
+    assert profile["current_role"] == "Chief Strategy Officer"
+    assert len(profile["affiliations"]) == 2
+    assert profile["affiliations"][0]["is_primary"] == 1
+    assert profile["affiliations"][1]["affiliation_type"] == "board"
+    assert profile["affiliations"][1]["confidence"] == "probable"
+    assert payload["org_alumni"] == ["SMS", "Escient"]
+
+
+def test_signal_digest_validation_accepts_depth_and_tier():
+    payload = validate_signal_digest_input(
+        {
+            "org_name": "Longboardfella",
+            "profile_keys": ["abc123"],
+            "priority_profile_keys": ["abc123"],
+            "digest_tier": "priority",
+            "report_depth": "strategic",
+            "deep_analysis": "true",
+            "member_alumni": ["SMS"],
+            "org_alumni": ["SMS", "Deloitte"],
+        }
+    )
+    assert payload["digest_tier"] == "priority"
+    assert payload["report_depth"] == "strategic"
+    assert payload["deep_analysis"] is True
+    assert payload["priority_profile_keys"] == ["abc123"]
+    assert payload["member_alumni"] == ["SMS"]
+    assert payload["org_alumni"] == ["SMS", "Deloitte"]
+
+
+def test_signal_ingest_validation_accepts_watch_signal_batches():
+    payload = validate_signal_ingest_input(
+        {
+            "org_name": "Longboardfella",
+            "source": "market_radar_watch",
+            "source_job": "321",
+            "signals": [
+                {
+                    "target": "Jane Smith",
+                    "type": "person",
+                    "current_employer": "BigBank",
+                    "headline": "Jane Smith joins BigBank digital team",
+                    "url": "https://example.com/jane",
+                    "date": "2026-03-16T00:00:00Z",
+                    "snippet": "Appointment confirmed in trade media.",
+                    "source_type": "news",
+                }
+            ],
+        }
+    )
+    assert payload["source_system"] == "market_radar_watch"
+    assert payload["source_job"] == "321"
+    assert payload["signals"][0]["target_name"] == "Jane Smith"
+    assert payload["signals"][0]["headline"] == "Jane Smith joins BigBank digital team"

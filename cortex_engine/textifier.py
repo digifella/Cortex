@@ -2484,6 +2484,273 @@ class DocumentTextifier:
         }
 
     @staticmethod
+    def _copy_image_metadata_from_source(source_path: str, target_path: str) -> bool:
+        import shutil
+
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            logger.warning("exiftool not found; metadata copy skipped")
+            return False
+        try:
+            copy_result = subprocess.run(
+                [
+                    exiftool_path,
+                    "-overwrite_original",
+                    "-TagsFromFile",
+                    source_path,
+                    "-all:all",
+                    target_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if copy_result.returncode != 0:
+                logger.warning(
+                    f"Metadata copy failed for {Path(target_path).name}: {copy_result.stderr}"
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.warning(f"Metadata copy failed for {Path(target_path).name}: {e}")
+            return False
+
+    @staticmethod
+    def _interpolate_value(start: float, end: float, amount: float) -> float:
+        amount = max(0.0, min(1.0, float(amount)))
+        return float(start) + (float(end) - float(start)) * amount
+
+    @staticmethod
+    def _resolve_halftone_strength(
+        preset: str = "medium",
+        strength: Optional[float] = None,
+    ) -> Tuple[float, str]:
+        preset_name = str(preset or "medium").strip().lower() or "medium"
+        preset_strengths = {
+            "light": 28.0,
+            "medium": 48.0,
+            "strong": 72.0,
+        }
+        if strength is None:
+            strength_value = preset_strengths.get(preset_name, preset_strengths["medium"])
+        else:
+            strength_value = max(0.0, min(100.0, float(strength)))
+
+        if strength_value < 34:
+            derived_preset = "light"
+        elif strength_value < 67:
+            derived_preset = "medium"
+        else:
+            derived_preset = "strong"
+        return strength_value, derived_preset
+
+    @classmethod
+    def _build_halftone_repair_config(cls, strength_value: float) -> Dict[str, float]:
+        # Flatten the low end heavily so 0-15 stays genuinely subtle.
+        linear_strength = max(0.0, min(1.0, float(strength_value) / 100.0))
+        strength_norm = linear_strength ** 2.2
+
+        def odd_between(start: int, end: int) -> int:
+            candidate = int(round(cls._interpolate_value(start, end, strength_norm)))
+            if candidate % 2 == 0:
+                candidate += 1
+            return max(1, candidate)
+
+        return {
+            "scale": cls._interpolate_value(0.995, 0.74, strength_norm),
+            "median": odd_between(1, 7),
+            "gaussian": odd_between(1, 7),
+            "sigma": cls._interpolate_value(0.0, 0.95, strength_norm),
+            "denoise": cls._interpolate_value(0.0, 6.0, strength_norm),
+            "contrast_alpha": cls._interpolate_value(1.0, 1.04, strength_norm),
+            "contrast_beta": cls._interpolate_value(0.0, 1.5, strength_norm),
+            "sharpen_sigma": cls._interpolate_value(0.0, 1.0, strength_norm),
+            "sharpen_amount": cls._interpolate_value(0.0, 0.28, strength_norm),
+        }
+
+    @staticmethod
+    def _repair_halftone_image_preserving_metadata(
+        file_path: str,
+        preset: str = "medium",
+        strength: Optional[float] = None,
+        preserve_color: bool = True,
+        convert_to_jpg: bool = False,
+        jpg_quality: int = 92,
+    ) -> Dict[str, Any]:
+        """Reduce halftone/moire artefacts with a simple descreen pipeline."""
+        from PIL import Image
+        import shutil
+        import cv2
+        import numpy as np
+
+        strength_value, preset_name = DocumentTextifier._resolve_halftone_strength(
+            preset=preset,
+            strength=strength,
+        )
+        config = DocumentTextifier._build_halftone_repair_config(strength_value)
+
+        suffix = Path(file_path).suffix.lower()
+        original_copy = None
+        output_path = file_path
+        metadata_preserved = False
+
+        try:
+            with Image.open(file_path) as img:
+                original_width, original_height = img.size
+                if img.mode not in {"RGB", "RGBA", "L"}:
+                    img = img.convert("RGB")
+                elif img.mode == "RGBA":
+                    img = img.convert("RGB")
+                elif img.mode == "L" and preserve_color:
+                    img = img.convert("RGB")
+                original_rgb = np.array(img)
+
+            should_convert_to_jpg = bool(convert_to_jpg and suffix not in {".jpg", ".jpeg"})
+            if should_convert_to_jpg:
+                output_path = str(Path(file_path).with_suffix(".jpg"))
+
+            original_copy = tempfile.NamedTemporaryFile(delete=False, suffix=suffix or ".img").name
+            shutil.copy2(file_path, original_copy)
+
+            original_bgr = cv2.cvtColor(original_rgb, cv2.COLOR_RGB2BGR) if original_rgb.ndim == 3 else original_rgb.copy()
+            target_width = max(64, int(round(original_width * config["scale"])))
+            target_height = max(64, int(round(original_height * config["scale"])))
+            working = cv2.resize(original_bgr, (target_width, target_height), interpolation=cv2.INTER_AREA)
+
+            if preserve_color and working.ndim == 3:
+                lab = cv2.cvtColor(working, cv2.COLOR_BGR2LAB)
+                lightness, channel_a, channel_b = cv2.split(lab)
+                if int(config["median"]) >= 3:
+                    lightness = cv2.medianBlur(lightness, int(config["median"]))
+                if int(config["gaussian"]) >= 3 and float(config["sigma"]) > 0:
+                    lightness = cv2.GaussianBlur(
+                        lightness,
+                        (int(config["gaussian"]), int(config["gaussian"])),
+                        config["sigma"],
+                    )
+                if float(config["denoise"]) >= 0.5:
+                    lightness = cv2.fastNlMeansDenoising(lightness, None, h=float(config["denoise"]))
+                repaired_small = cv2.cvtColor(
+                    cv2.merge([lightness, channel_a, channel_b]),
+                    cv2.COLOR_LAB2BGR,
+                )
+            else:
+                gray = working if working.ndim == 2 else cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
+                if int(config["median"]) >= 3:
+                    gray = cv2.medianBlur(gray, int(config["median"]))
+                if int(config["gaussian"]) >= 3 and float(config["sigma"]) > 0:
+                    gray = cv2.GaussianBlur(
+                        gray,
+                        (int(config["gaussian"]), int(config["gaussian"])),
+                        config["sigma"],
+                    )
+                if float(config["denoise"]) >= 0.5:
+                    gray = cv2.fastNlMeansDenoising(gray, None, h=float(config["denoise"]))
+                repaired_small = gray if not preserve_color else cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+            repaired_full = cv2.resize(
+                repaired_small,
+                (original_width, original_height),
+                interpolation=cv2.INTER_CUBIC,
+            )
+            if float(config["contrast_alpha"]) != 1.0 or float(config["contrast_beta"]) != 0.0:
+                repaired_full = cv2.convertScaleAbs(
+                    repaired_full,
+                    alpha=float(config["contrast_alpha"]),
+                    beta=float(config["contrast_beta"]),
+                )
+            if float(config["sharpen_amount"]) >= 0.02 and float(config["sharpen_sigma"]) > 0:
+                blur_for_sharpen = cv2.GaussianBlur(repaired_full, (0, 0), float(config["sharpen_sigma"]))
+                repaired_full = cv2.addWeighted(
+                    repaired_full,
+                    1.0 + float(config["sharpen_amount"]),
+                    blur_for_sharpen,
+                    -float(config["sharpen_amount"]),
+                    0,
+                )
+
+            if preserve_color:
+                repaired_rgb = cv2.cvtColor(repaired_full, cv2.COLOR_BGR2RGB)
+                save_image = Image.fromarray(repaired_rgb)
+            else:
+                repaired_gray = repaired_full if repaired_full.ndim == 2 else cv2.cvtColor(repaired_full, cv2.COLOR_BGR2GRAY)
+                save_image = Image.fromarray(repaired_gray)
+
+            save_kwargs: Dict[str, Any] = {}
+            if output_path.lower().endswith((".jpg", ".jpeg")):
+                save_kwargs["quality"] = int(jpg_quality)
+                save_kwargs["optimize"] = True
+            save_image.save(output_path, **save_kwargs)
+
+            metadata_preserved = DocumentTextifier._copy_image_metadata_from_source(original_copy, output_path)
+
+            return {
+                "repaired": True,
+                "preset": preset_name,
+                "strength": round(strength_value, 1),
+                "preserve_color": bool(preserve_color),
+                "metadata_preserved": metadata_preserved,
+                "converted_to_jpg": should_convert_to_jpg,
+                "original_width": original_width,
+                "original_height": original_height,
+                "output_path": output_path,
+            }
+        except Exception as e:
+            logger.warning(f"Halftone repair failed for {Path(file_path).name}: {e}")
+            if original_copy and Path(original_copy).exists():
+                try:
+                    shutil.copy2(original_copy, file_path)
+                except Exception as restore_err:
+                    logger.warning(f"Could not restore original image after halftone repair failure: {restore_err}")
+            if output_path != file_path and Path(output_path).exists():
+                try:
+                    os.remove(output_path)
+                except Exception:
+                    pass
+            return {
+                "repaired": False,
+                "preset": preset_name,
+                "strength": round(strength_value, 1),
+                "preserve_color": bool(preserve_color),
+                "metadata_preserved": False,
+                "converted_to_jpg": False,
+                "output_path": file_path,
+                "error": str(e),
+            }
+        finally:
+            if original_copy and Path(original_copy).exists():
+                try:
+                    os.remove(original_copy)
+                except Exception:
+                    pass
+
+    def repair_halftone_image(
+        self,
+        file_path: str,
+        preset: str = "medium",
+        strength: Optional[float] = None,
+        preserve_color: bool = True,
+        convert_to_jpg: bool = False,
+        jpg_quality: int = 92,
+    ) -> Dict[str, Any]:
+        self._report(0.0, "Analysing halftone artefacts...")
+        repair_info = self._repair_halftone_image_preserving_metadata(
+            file_path,
+            preset=preset,
+            strength=strength,
+            preserve_color=preserve_color,
+            convert_to_jpg=convert_to_jpg,
+            jpg_quality=jpg_quality,
+        )
+        self._report(1.0, "Done")
+        output_path = str(repair_info.get("output_path") or file_path)
+        return {
+            "file_name": Path(output_path).name,
+            "output_path": output_path,
+            "halftone_repair_info": repair_info,
+        }
+
+    @staticmethod
     def _filter_sensitive_keywords(
         keywords: List[str], blocked_keywords: Optional[List[str]] = None
     ) -> Tuple[List[str], List[str]]:

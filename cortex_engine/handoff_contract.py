@@ -129,6 +129,127 @@ def _coerce_positive_float(value: Any, default: float, name: str) -> float:
     return parsed
 
 
+def _normalize_affiliation_type(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"current", "former", "board", "advisory", "consultant", "affiliate"}:
+        return text
+    return "current"
+
+
+def _normalize_affiliation_confidence(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"confirmed", "probable", "speculative"}:
+        return text
+    return "confirmed"
+
+
+def _normalize_affiliations(value: Any) -> list[Dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("stakeholder_profile_sync affiliations must be an array when provided")
+
+    normalized: list[Dict[str, Any]] = []
+    for idx, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f"stakeholder_profile_sync affiliations[{idx}] must be an object")
+        org_name_text = str(item.get("org_name_text") or item.get("org_name") or "").strip()
+        if not org_name_text:
+            continue
+        normalized.append(
+            {
+                "org_name_text": org_name_text,
+                "role": str(item.get("role") or "").strip(),
+                "affiliation_type": _normalize_affiliation_type(item.get("affiliation_type") or item.get("type")),
+                "confidence": _normalize_affiliation_confidence(item.get("confidence")),
+                "is_primary": 1 if _coerce_bool(item.get("is_primary"), False) else 0,
+                "start_date": str(item.get("start_date") or "").strip(),
+                "end_date": str(item.get("end_date") or "").strip(),
+                "source": str(item.get("source") or "").strip(),
+            }
+        )
+
+    if normalized and not any(item["is_primary"] for item in normalized):
+        normalized[0]["is_primary"] = 1
+
+    primary_seen = False
+    for item in normalized:
+        if item["is_primary"] and not primary_seen:
+            primary_seen = True
+            continue
+        if item["is_primary"]:
+            item["is_primary"] = 0
+    return normalized
+
+
+def _normalize_string_array(value: Any, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be an array when provided")
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        lowered = text.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized.append(text)
+    return normalized
+
+
+def _normalize_linkedin_connections(value: Any, field_name: str) -> list[Dict[str, str]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be an array when provided")
+    normalized: list[Dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for idx, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_name}[{idx}] must be an object")
+        member = str(item.get("member") or item.get("email") or "").strip()
+        degree = str(item.get("degree") or "").strip()
+        if not member:
+            continue
+        dedupe_key = (member.lower(), degree.lower())
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized.append({"member": member, "degree": degree})
+    return normalized
+
+
+def _normalize_watch_signals(value: Any, field_name: str) -> list[Dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be an array when provided")
+    normalized: list[Dict[str, Any]] = []
+    for idx, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_name}[{idx}] must be an object")
+        normalized.append(
+            {
+                "target_name": str(item.get("target_name") or item.get("name") or item.get("target") or "").strip(),
+                "target_type": str(item.get("target_type") or item.get("type") or "person").strip().lower() or "person",
+                "current_employer": str(item.get("current_employer") or item.get("employer") or "").strip(),
+                "headline": str(item.get("headline") or item.get("subject") or "").strip(),
+                "url": str(item.get("url") or item.get("primary_url") or item.get("source_url") or "").strip(),
+                "date": str(item.get("date") or item.get("received_at") or "").strip(),
+                "snippet": str(item.get("snippet") or item.get("summary") or item.get("text_note") or item.get("raw_text") or "").strip(),
+                "source_name": str(item.get("source_name") or item.get("publication") or "").strip(),
+                "source_type": str(item.get("source_type") or "").strip().lower(),
+                "confidence_hint": str(item.get("confidence_hint") or "").strip().lower(),
+                "tags": [str(tag).strip() for tag in item.get("tags") or [] if str(tag).strip()],
+            }
+        )
+    return normalized
+
+
 def normalize_textify_options(options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     options = dict(options or {})
     normalized: Dict[str, Any] = {
@@ -259,6 +380,7 @@ def validate_stakeholder_profile_sync_input(input_data: Optional[Dict[str, Any]]
         raise ValueError("stakeholder_profile_sync requires a non-empty profiles array")
 
     normalized_profiles = []
+    payload["org_alumni"] = _normalize_string_array(payload.get("org_alumni"), "stakeholder_profile_sync org_alumni")
     for idx, profile in enumerate(profiles):
         if not isinstance(profile, dict):
             raise ValueError(f"stakeholder_profile_sync profiles[{idx}] must be an object")
@@ -285,7 +407,15 @@ def validate_stakeholder_profile_sync_input(input_data: Optional[Dict[str, Any]]
         normalized["address"] = dict(address) if isinstance(address, dict) else {}
         normalized["aliases"] = [str(item).strip() for item in profile.get("aliases") or [] if str(item).strip()]
         normalized["known_employers"] = [str(item).strip() for item in profile.get("known_employers") or [] if str(item).strip()]
+        normalized["current_employer"] = str(profile.get("current_employer") or "").strip()
+        normalized["current_role"] = str(profile.get("current_role") or "").strip()
+        normalized["affiliations"] = _normalize_affiliations(profile.get("affiliations"))
         normalized["tags"] = [str(item).strip() for item in profile.get("tags") or [] if str(item).strip()]
+        normalized["alumni"] = _normalize_string_array(profile.get("alumni"), f"stakeholder_profile_sync profiles[{idx}] alumni")
+        normalized["linkedin_connections"] = _normalize_linkedin_connections(
+            profile.get("linkedin_connections"),
+            f"stakeholder_profile_sync profiles[{idx}] linkedin_connections",
+        )
         normalized_profiles.append(normalized)
 
     payload["profiles"] = normalized_profiles
@@ -351,9 +481,14 @@ def validate_signal_ingest_input(input_data: Optional[Dict[str, Any]] = None) ->
     if not payload["org_name"]:
         raise ValueError("signal_ingest requires org_name")
 
+    payload["source_system"] = str(payload.get("source_system") or payload.get("source") or "market_radar").strip()
+    payload["source_job"] = str(payload.get("source_job") or "").strip()
+    payload["submitted_by"] = str(payload.get("submitted_by") or "").strip()
+
     payload["subject"] = str(payload.get("subject") or "").strip()
     payload["raw_text"] = str(payload.get("raw_text") or payload.get("body") or "").strip()
-    if not payload["subject"] and not payload["raw_text"]:
+    payload["signals"] = _normalize_watch_signals(payload.get("signals"), "signal_ingest signals")
+    if not payload["subject"] and not payload["raw_text"] and not payload["signals"]:
         raise ValueError("signal_ingest requires subject or raw_text")
 
     payload["target_type"] = str(payload.get("target_type") or "person").strip().lower() or "person"
@@ -383,4 +518,16 @@ def validate_signal_digest_input(input_data: Optional[Dict[str, Any]] = None) ->
     payload["llm_provider"] = str(payload.get("llm_provider") or "ollama").strip().lower() or "ollama"
     payload["llm_model"] = str(payload.get("llm_model") or "").strip()
     payload["profile_keys"] = [str(item).strip() for item in payload.get("profile_keys") or [] if str(item).strip()]
+    payload["priority_profile_keys"] = [
+        str(item).strip() for item in payload.get("priority_profile_keys") or [] if str(item).strip()
+    ]
+    payload["member_alumni"] = _normalize_string_array(payload.get("member_alumni"), "signal_digest member_alumni")
+    payload["org_alumni"] = _normalize_string_array(payload.get("org_alumni"), "signal_digest org_alumni")
+    payload["digest_tier"] = str(payload.get("digest_tier") or "standard").strip().lower() or "standard"
+    if payload["digest_tier"] not in {"priority", "standard"}:
+        raise ValueError(f"Invalid digest_tier: {payload['digest_tier']!r}")
+    payload["report_depth"] = str(payload.get("report_depth") or "detailed").strip().lower() or "detailed"
+    if payload["report_depth"] not in {"summary", "detailed", "strategic"}:
+        raise ValueError(f"Invalid report_depth: {payload['report_depth']!r}")
+    payload["deep_analysis"] = _coerce_bool(payload.get("deep_analysis"), False)
     return payload

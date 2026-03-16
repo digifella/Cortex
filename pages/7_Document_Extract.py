@@ -16,11 +16,13 @@ import zipfile
 import io
 import unicodedata
 import subprocess
+import hashlib
 from datetime import datetime
 from typing import List, Dict, Optional
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
+from PIL import Image, ImageOps
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -311,6 +313,150 @@ def _write_photo_metadata_quick_edit(
         return {"success": False, "message": result.stderr.strip() or "metadata write failed"}
     except Exception as e:
         return {"success": False, "message": str(e)}
+
+
+def _halftone_strength_label(strength: float) -> str:
+    value = float(strength or 0.0)
+    if value < 34:
+        return "Light"
+    if value < 67:
+        return "Medium"
+    return "Strong"
+
+
+def _zoom_crop_image(image_path: str, zoom: float, focus_x: int, focus_y: int) -> Optional[Image.Image]:
+    try:
+        with Image.open(image_path) as img:
+            img = ImageOps.exif_transpose(img)
+            if img.mode not in {"RGB", "RGBA", "L"}:
+                img = img.convert("RGB")
+            if float(zoom) <= 1.05:
+                return img.copy()
+
+            width, height = img.size
+            crop_width = max(1, int(round(width / float(zoom))))
+            crop_height = max(1, int(round(height / float(zoom))))
+
+            center_x = int(round((max(0, min(100, int(focus_x))) / 100.0) * width))
+            center_y = int(round((max(0, min(100, int(focus_y))) / 100.0) * height))
+
+            left = max(0, min(width - crop_width, center_x - crop_width // 2))
+            top = max(0, min(height - crop_height, center_y - crop_height // 2))
+            box = (left, top, left + crop_width, top + crop_height)
+            return img.crop(box).copy()
+    except Exception:
+        return None
+
+
+def _resize_preview_image(image: Image.Image, target_width: int = 1400) -> Image.Image:
+    if image.width <= 0 or image.height <= 0:
+        return image
+    if image.width >= target_width:
+        return image
+    scale = float(target_width) / float(image.width)
+    target_height = max(1, int(round(image.height * scale)))
+    return image.resize((target_width, target_height), Image.Resampling.LANCZOS)
+
+
+def _build_ab_window_image(
+    original_image: Image.Image,
+    repaired_image: Image.Image,
+    split_pct: int,
+    target_width: int = 1400,
+) -> Optional[Image.Image]:
+    try:
+        left = original_image.convert("RGB")
+        right = repaired_image.convert("RGB")
+        if left.size != right.size:
+            right = right.resize(left.size, Image.Resampling.LANCZOS)
+
+        if left.width < target_width:
+            left = _resize_preview_image(left, target_width=target_width)
+            right = right.resize(left.size, Image.Resampling.LANCZOS)
+
+        split_x = int(round((max(0, min(100, int(split_pct))) / 100.0) * left.width))
+        merged = Image.new("RGB", left.size)
+        if split_x > 0:
+            merged.paste(left.crop((0, 0, split_x, left.height)), (0, 0))
+        if split_x < left.width:
+            merged.paste(right.crop((split_x, 0, right.width, right.height)), (split_x, 0))
+
+        band_half = 2
+        for offset in range(-band_half, band_half + 1):
+            x = split_x + offset
+            if 0 <= x < merged.width:
+                color = (255, 255, 255) if offset == 0 else (0, 0, 0)
+                for y in range(merged.height):
+                    merged.putpixel((x, y), color)
+        return merged
+    except Exception:
+        return None
+
+
+def _render_halftone_ab_compare(
+    original_path: str,
+    repaired_path: str,
+    strength: float,
+    widget_prefix: str,
+    heading: str = "A/B Window",
+) -> None:
+    if not original_path or not repaired_path:
+        return
+    if not Path(original_path).exists() or not Path(repaired_path).exists():
+        return
+
+    zoom = st.slider(
+        f"{heading} zoom",
+        min_value=1.0,
+        max_value=12.0,
+        value=3.0,
+        step=0.25,
+        key=f"{widget_prefix}_zoom",
+    )
+    focus_cols = st.columns(3)
+    with focus_cols[0]:
+        focus_x = st.slider("Focus X (%)", 0, 100, 50, 1, key=f"{widget_prefix}_focus_x")
+    with focus_cols[1]:
+        focus_y = st.slider("Focus Y (%)", 0, 100, 50, 1, key=f"{widget_prefix}_focus_y")
+    with focus_cols[2]:
+        split_position = st.slider("A/B split (%)", 0, 100, 50, 1, key=f"{widget_prefix}_split")
+
+    original_zoom = _zoom_crop_image(original_path, zoom, focus_x, focus_y)
+    repaired_zoom = _zoom_crop_image(repaired_path, zoom, focus_x, focus_y)
+
+    if original_zoom and repaired_zoom:
+        ab_window = _build_ab_window_image(
+            original_zoom,
+            repaired_zoom,
+            split_pct=split_position,
+            target_width=1600,
+        )
+        if ab_window:
+            st.markdown(
+                f"**{heading}**  \nZoom: {zoom:.2f}x · Strength: {int(round(float(strength)))} · {_halftone_strength_label(strength)}"
+            )
+            st.image(ab_window, use_column_width=True)
+            st.caption("Left of the divider is original. Right is repaired.")
+
+    detail_tabs = st.tabs(["Zoomed Original", "Zoomed Repair", "Full Image A/B"])
+    with detail_tabs[0]:
+        if original_zoom:
+            st.image(_resize_preview_image(original_zoom, target_width=1400), use_column_width=True)
+    with detail_tabs[1]:
+        if repaired_zoom:
+            st.image(_resize_preview_image(repaired_zoom, target_width=1400), use_column_width=True)
+    with detail_tabs[2]:
+        full_original = _zoom_crop_image(original_path, 1.0, 50, 50)
+        full_repaired = _zoom_crop_image(repaired_path, 1.0, 50, 50)
+        if full_original and full_repaired:
+            full_ab = _build_ab_window_image(
+                full_original,
+                full_repaired,
+                split_pct=split_position,
+                target_width=1400,
+            )
+            if full_ab:
+                st.image(full_ab, use_column_width=True)
 
 
 def _ascii_fold(text: str) -> str:
@@ -2162,6 +2308,22 @@ def _render_photo_keywords_tab():
             disabled=(not convert_to_jpg) or no_resize_selected,
             help="Only applies when JPG conversion is enabled.",
         )
+        halftone_strength = st.slider(
+            "Halftone repair strength",
+            min_value=0,
+            max_value=100,
+            value=42,
+            step=1,
+            key="photokw_halftone_strength",
+            help="Lower values are gentler. Higher values remove more screen pattern but can soften detail.",
+        )
+        st.caption(f"Current repair profile: {_halftone_strength_label(halftone_strength)}")
+        halftone_preserve_color = st.checkbox(
+            "Preserve colour during halftone repair",
+            value=True,
+            key="photokw_halftone_preserve_color",
+            help="When enabled, Cortex repairs the luminance channel and keeps colour information where possible.",
+        )
 
         anonymize_keywords = st.checkbox(
             "Anonymize sensitive keywords",
@@ -2252,7 +2414,6 @@ def _render_photo_keywords_tab():
 
                 # Keep a stable working copy path for this uploaded file across reruns,
                 # so quick metadata edits are not lost.
-                import hashlib
                 preview_sig = f"{preview_photo.name}:{len(preview_bytes)}:{hashlib.md5(preview_bytes).hexdigest()}"
                 existing_sig = st.session_state.get("photokw_single_upload_sig")
                 existing_path = st.session_state.get("photokw_single_working_path")
@@ -2356,6 +2517,84 @@ def _render_photo_keywords_tab():
                     else:
                         st.info(f"Metadata preview unavailable: {preview_meta.get('reason', 'Unknown reason')}")
 
+                halftone_preview_state = st.session_state.get("photokw_halftone_preview") or {}
+                halftone_preview_matches = (
+                    halftone_preview_state.get("source_sig") == preview_sig
+                    and float(halftone_preview_state.get("strength", -1)) == float(halftone_strength)
+                    and bool(halftone_preview_state.get("preserve_color")) == bool(halftone_preserve_color)
+                    and Path(str(halftone_preview_state.get("output_path") or "")).exists()
+                )
+
+                with st.expander("Halftone Repair Preview", expanded=True):
+                    st.caption(
+                        "Generate a repaired preview for the current strength, then inspect the full image and a zoomed crop before batch processing."
+                    )
+                    preview_button_cols = st.columns(2)
+                    generate_halftone_preview = preview_button_cols[0].button(
+                        "Generate Halftone Preview",
+                        key="photokw_generate_halftone_preview",
+                        use_container_width=True,
+                    )
+                    clear_halftone_preview = preview_button_cols[1].button(
+                        "Clear Preview",
+                        key="photokw_clear_halftone_preview",
+                        use_container_width=True,
+                    )
+
+                    if clear_halftone_preview:
+                        existing_preview = Path(str(halftone_preview_state.get("output_path") or ""))
+                        if existing_preview.exists():
+                            try:
+                                existing_preview.unlink()
+                            except Exception:
+                                pass
+                        st.session_state.pop("photokw_halftone_preview", None)
+                        halftone_preview_state = {}
+                        halftone_preview_matches = False
+
+                    if generate_halftone_preview:
+                        from cortex_engine.textifier import DocumentTextifier
+
+                        preview_output_path = preview_temp_dir / (
+                            f"{preview_path.stem}_halftone_preview_{int(halftone_strength)}"
+                            f"{'_color' if halftone_preserve_color else '_mono'}{preview_path.suffix}"
+                        )
+                        shutil.copy2(preview_path, preview_output_path)
+                        os.chmod(str(preview_output_path), 0o644)
+
+                        with st.spinner("Generating halftone preview..."):
+                            preview_result = DocumentTextifier(use_vision=False).repair_halftone_image(
+                                str(preview_output_path),
+                                strength=halftone_strength,
+                                preserve_color=halftone_preserve_color,
+                                convert_to_jpg=False,
+                            )
+                        preview_info = preview_result.get("halftone_repair_info", {})
+                        if preview_info.get("repaired"):
+                            st.session_state["photokw_halftone_preview"] = {
+                                "source_sig": preview_sig,
+                                "strength": float(halftone_strength),
+                                "preserve_color": bool(halftone_preserve_color),
+                                "output_path": str(preview_result.get("output_path") or preview_output_path),
+                            }
+                            halftone_preview_state = st.session_state["photokw_halftone_preview"]
+                            halftone_preview_matches = True
+                        else:
+                            st.error(f"Preview generation failed: {preview_info.get('error', 'Unknown error')}")
+
+                    if halftone_preview_state and not halftone_preview_matches:
+                        st.info("Preview settings changed. Generate a new preview to match the current strength and colour options.")
+
+                    if halftone_preview_matches:
+                        preview_output_path = str(halftone_preview_state["output_path"])
+                        _render_halftone_ab_compare(
+                            str(preview_path),
+                            preview_output_path,
+                            strength=float(halftone_strength),
+                            widget_prefix="photokw_halftone_preview_compare",
+                            heading="Preview A/B Window",
+                        )
+
             resolution_map = {
                 "Keep original dimensions": (None, None),
                 "Low (1920 x 1080)": (1920, 1080),
@@ -2363,11 +2602,12 @@ def _render_photo_keywords_tab():
             }
             max_width, max_height = resolution_map.get(resize_profile, (None, None))
 
-            action_cols = st.columns(2)
+            action_cols = st.columns(3)
             do_resize_only = action_cols[0].button("Resize Photos Only", use_container_width=True)
-            do_keywords = action_cols[1].button("Process Selected Metadata", type="primary", use_container_width=True)
+            do_halftone_repair = action_cols[1].button("Repair Halftone Artefacts", use_container_width=True)
+            do_keywords = action_cols[2].button("Process Selected Metadata", type="primary", use_container_width=True)
 
-            if do_resize_only or do_keywords:
+            if do_resize_only or do_halftone_repair or do_keywords:
                 if do_keywords and not any([generate_description, populate_location, apply_ownership]):
                     st.warning("Select at least one metadata action before processing.")
                     return
@@ -2402,8 +2642,16 @@ def _render_photo_keywords_tab():
 
                 textifier = DocumentTextifier(use_vision=True)
                 results = []
-                mode = "resize_only" if do_resize_only else "keyword_metadata"
-                progress = st.progress(0.0, "Starting resize..." if do_resize_only else "Starting metadata processing...")
+                if do_resize_only:
+                    mode = "resize_only"
+                    progress_message = "Starting resize..."
+                elif do_halftone_repair:
+                    mode = "halftone_repair"
+                    progress_message = "Starting halftone repair..."
+                else:
+                    mode = "keyword_metadata"
+                    progress_message = "Starting metadata processing..."
+                progress = st.progress(0.0, progress_message)
                 blocked_keywords = [k.strip().lower() for k in blocked_keywords_text.split(",") if k.strip()]
 
                 for idx, fpath in enumerate(file_paths):
@@ -2440,6 +2688,20 @@ def _render_photo_keywords_tab():
                                 result["keyword_anonymize_result"] = textifier.anonymize_existing_photo_keywords(
                                     output_path, blocked_keywords=blocked_keywords
                                 )
+                            if apply_ownership and ownership_notice.strip():
+                                result["ownership_result"] = textifier.write_ownership_metadata(
+                                    output_path, ownership_notice.strip()
+                                )
+                        elif do_halftone_repair:
+                            result = textifier.repair_halftone_image(
+                                fpath,
+                                strength=halftone_strength,
+                                preserve_color=halftone_preserve_color,
+                                convert_to_jpg=convert_to_jpg,
+                                jpg_quality=jpg_quality,
+                            )
+                            output_path = str(result.get("output_path", fpath))
+                            file_paths[idx] = output_path
                             if apply_ownership and ownership_notice.strip():
                                 result["ownership_result"] = textifier.write_ownership_metadata(
                                     output_path, ownership_notice.strip()
@@ -2500,6 +2762,22 @@ def _render_photo_keywords_tab():
                     st.metric("Resized", f"{resized_count}/{len(results)}")
                 with mc3:
                     st.metric("Sensitive Tags Removed", total_removed)
+                with mc4:
+                    st.metric("Ownership Written", f"{ownership_ok}/{len(results)}")
+            elif photokw_mode == "halftone_repair":
+                repaired_count = sum(1 for r in results if r.get("halftone_repair_info", {}).get("repaired"))
+                converted_count = sum(1 for r in results if r.get("halftone_repair_info", {}).get("converted_to_jpg"))
+                ownership_ok = sum(
+                    1 for r in results
+                    if not r.get("ownership_result") or r.get("ownership_result", {}).get("success")
+                )
+                mc1, mc2, mc3, mc4 = st.columns(4)
+                with mc1:
+                    st.metric("Photos Processed", len(results))
+                with mc2:
+                    st.metric("Repaired", f"{repaired_count}/{len(results)}")
+                with mc3:
+                    st.metric("Converted To JPG", converted_count)
                 with mc4:
                     st.metric("Ownership Written", f"{ownership_ok}/{len(results)}")
             else:
@@ -2568,6 +2846,7 @@ def _render_photo_keywords_tab():
                 # Single photo — show inline preview (like Textifier)
                 r = results[0]
                 resize_info = r.get("resize_info", {})
+                repair_info = r.get("halftone_repair_info", {})
                 ownership_result = r.get("ownership_result")
                 if photokw_mode == "resize_only":
                     if resize_info.get("skipped_resize"):
@@ -2582,6 +2861,19 @@ def _render_photo_keywords_tab():
                         st.success(f"Converted to JPG: {r['file_name']}")
                     else:
                         st.info(f"No resize needed for {r['file_name']}")
+                    if ownership_result:
+                        if ownership_result.get("success"):
+                            st.success("Ownership metadata written")
+                        else:
+                            st.warning(f"Ownership metadata write failed: {ownership_result.get('message', '')}")
+                elif photokw_mode == "halftone_repair":
+                    if repair_info.get("repaired"):
+                        st.success(
+                            f"Applied halftone repair strength {int(round(float(repair_info.get('strength', 0))))} "
+                            f"to {r['file_name']}"
+                        )
+                    else:
+                        st.error(f"Halftone repair failed: {repair_info.get('error', 'Unknown error')}")
                     if ownership_result:
                         if ownership_result.get("success"):
                             st.success("Ownership metadata written")
@@ -2640,6 +2932,25 @@ def _render_photo_keywords_tab():
                         )
                         if resize_info.get("skipped_resize"):
                             st.caption("Dimensions were left unchanged by request.")
+                    elif photokw_mode == "halftone_repair":
+                        strength_value = float(repair_info.get("strength", 0))
+                        st.markdown(
+                            f"**Repair strength:** {int(round(strength_value))} ({_halftone_strength_label(strength_value)})  \n"
+                            f"**Preserve colour:** {'Yes' if repair_info.get('preserve_color') else 'No'}  \n"
+                            f"**Metadata preserved after repair:** {'Yes' if repair_info.get('metadata_preserved') else 'Partial/Unknown'}"
+                        )
+                        if repair_info.get("converted_to_jpg"):
+                            st.caption("Converted repaired output to JPG.")
+                        original_compare_path = st.session_state.get("photokw_single_working_path")
+                        if original_compare_path and Path(str(original_compare_path)).exists() and file_paths:
+                            st.divider()
+                            _render_halftone_ab_compare(
+                                str(original_compare_path),
+                                str(file_paths[0]),
+                                strength=strength_value,
+                                widget_prefix="photokw_halftone_result_compare",
+                                heading="Result A/B Window",
+                            )
                     else:
                         desc = r["description"] or "(no description generated)"
                         st.markdown(f"**Description:**\n\n{desc}")
@@ -2721,6 +3032,19 @@ def _render_photo_keywords_tab():
                                     st.warning(
                                         f"Keyword anonymization failed: {anon_result.get('message', 'Unknown error')}"
                                     )
+                        elif photokw_mode == "halftone_repair":
+                            repair_info = r.get("halftone_repair_info", {})
+                            if repair_info.get("repaired"):
+                                strength_value = float(repair_info.get("strength", 0))
+                                st.caption(
+                                    f"Repair strength: {int(round(strength_value))} ({_halftone_strength_label(strength_value)}) | "
+                                    f"Preserve colour: {'Yes' if repair_info.get('preserve_color') else 'No'} | "
+                                    f"Metadata preserved: {'Yes' if repair_info.get('metadata_preserved') else 'Partial/Unknown'}"
+                                )
+                                if repair_info.get("converted_to_jpg"):
+                                    st.caption("Converted repaired output to JPG")
+                            else:
+                                st.error(f"Repair failed: {repair_info.get('error', 'Unknown error')}")
                         else:
                             desc = r.get('description') or '(no description)'
                             st.markdown(f"**Description:** {desc}")
@@ -2753,7 +3077,7 @@ def _render_photo_keywords_tab():
                                 st.error(f"EXIF write failed: {exif['message']}")
 
         elif uploaded:
-            st.info("Choose an action: **Resize Photos Only** or **Process Selected Metadata**")
+            st.info("Choose an action: **Resize Photos Only**, **Repair Halftone Artefacts**, or **Process Selected Metadata**")
         else:
             st.info("Upload photos from the left panel to get started")
 

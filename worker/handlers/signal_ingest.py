@@ -22,7 +22,7 @@ def handle(
     subject = payload["subject"]
     if not org_name:
         raise ValueError("signal_ingest requires input_data.org_name")
-    if not raw_text and not subject:
+    if not raw_text and not subject and not payload.get("signals"):
         raise ValueError("signal_ingest requires input_data.raw_text or input_data.subject")
 
     if progress_cb:
@@ -31,6 +31,27 @@ def handle(
         raise RuntimeError("Cancelled before signal ingest")
 
     store = StakeholderSignalStore()
+    if payload.get("signals"):
+        if progress_cb:
+            progress_cb(35, "Ingesting watch report signals", "ingest_watch_signals")
+        batch_result = store.ingest_watch_signals(payload)
+        if progress_cb:
+            progress_cb(100, f"Ingested {batch_result['ingested_count']} watch signals", "done")
+        return {
+            "output_data": {
+                "status": "ingested_batch",
+                "org_name": org_name,
+                "source_system": payload.get("source_system", ""),
+                "source_job": payload.get("source_job", ""),
+                "signal_count": batch_result["signal_count"],
+                "ingested_count": batch_result["ingested_count"],
+                "matched_signal_count": batch_result["matched_signal_count"],
+                "profiles_touched": batch_result["profiles_touched"],
+                "signal_ids": batch_result["signal_ids"],
+            },
+            "output_file": None,
+        }
+
     signal = store.ingest_signal(payload)
 
     if progress_cb:

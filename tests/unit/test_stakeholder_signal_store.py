@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pickle
+
 from cortex_engine.stakeholder_signal_store import StakeholderSignalStore, _ollama_watch_timeout_seconds
 
 
@@ -57,6 +59,124 @@ def test_signal_deduplicates_on_hash(tmp_path):
     assert len(state["signals"]) == 1
 
 
+def test_ingest_watch_signals_batch(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "canonical_name": "Jane Smith",
+                "target_type": "person",
+                "current_employer": "BigBank",
+            }
+        ],
+        source="market_radar",
+    )
+
+    result = store.ingest_watch_signals(
+        {
+            "org_name": "Longboardfella",
+            "source_system": "market_radar_watch",
+            "source_job": "321",
+            "signals": [
+                {
+                    "target_name": "Jane Smith",
+                    "target_type": "person",
+                    "current_employer": "BigBank",
+                    "headline": "Jane Smith joins BigBank digital team",
+                    "url": "https://example.com/jane",
+                    "date": "2026-03-16T00:00:00Z",
+                    "snippet": "Appointment confirmed in trade media.",
+                    "source_type": "news",
+                }
+            ],
+        }
+    )
+
+    assert result["signal_count"] == 1
+    assert result["ingested_count"] == 1
+    assert result["matched_signal_count"] == 1
+    assert len(result["profiles_touched"]) == 1
+
+
+def test_profile_sync_and_signal_ingest_build_stakeholder_graph(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "canonical_name": "Jane Smith",
+                "target_type": "person",
+                "current_employer": "BigBank",
+                "affiliations": [{"org_name_text": "BigBank", "role": "VP Digital", "is_primary": 1}],
+                "alumni": ["McKinsey"],
+                "linkedin_connections": [{"member": "paul@example.com", "degree": "1st"}],
+            }
+        ],
+        source="market_radar",
+    )
+    profile = store.list_profiles(org_name="Longboardfella")[0]
+    signal = store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Jane Smith joins BigBank digital team",
+            "raw_text": "Jane Smith has joined BigBank's digital team.",
+            "parsed_candidate_name": "Jane Smith",
+            "parsed_candidate_employer": "BigBank",
+            "source_name": "Trade Press",
+            "message_id": "<graph-signal>",
+        }
+    )
+
+    graph_path = tmp_path.parent / "knowledge_cortex.gpickle"
+    assert graph_path.exists()
+    with open(graph_path, "rb") as handle:
+        graph = pickle.load(handle)
+
+    profile_node = next(
+        node for node, attrs in graph.nodes(data=True)
+        if attrs.get("profile_key") == profile["profile_key"]
+    )
+    signal_node = next(node for node, attrs in graph.nodes(data=True) if attrs.get("signal_id") == signal["signal_id"])
+    assert any(attrs.get("relationship") == "tracked_by" for _, _, attrs in graph.edges(profile_node, data=True))
+    assert any(attrs.get("relationship") == "mentions_profile" for _, _, attrs in graph.edges(signal_node, data=True))
+
+
+def test_rebuild_stakeholder_graph_backfills_existing_state(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "canonical_name": "Jane Smith",
+                "target_type": "person",
+                "current_employer": "BigBank",
+                "alumni": ["McKinsey"],
+            }
+        ],
+        org_alumni=["McKinsey"],
+        source="market_radar",
+    )
+    store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Jane Smith joins BigBank digital team",
+            "raw_text": "Jane Smith has joined BigBank's digital team.",
+            "parsed_candidate_name": "Jane Smith",
+            "parsed_candidate_employer": "BigBank",
+            "message_id": "<rebuild-signal>",
+        }
+    )
+
+    result = store.rebuild_stakeholder_graph()
+
+    assert result["profiles_processed"] == 1
+    assert result["signals_processed"] == 1
+    assert result["org_contexts_processed"] == 1
+    assert result["graph_nodes"] > 0
+    assert result["graph_edges"] > 0
+
+
 def test_organisation_target_matches_without_person_fields(tmp_path):
     store = StakeholderSignalStore(base_path=tmp_path)
     store.upsert_profiles(
@@ -110,6 +230,102 @@ def test_generate_digest_writes_markdown(tmp_path):
     assert "Stakeholder Intelligence Digest" in digest_path.read_text(encoding="utf-8")
     assert digest["llm_synthesised"] is False
     assert digest["profiles_covered"] == 1
+
+
+def test_generate_digest_filters_exact_name_only_noise_domains(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "canonical_name": "Terry Symonds",
+                "current_employer": "Berry Street Yooralla",
+                "target_type": "person",
+            }
+        ],
+        source="market_radar",
+    )
+
+    store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Terry Symonds | Actor",
+            "raw_text": "IMDb actor page for Terry Symonds.",
+            "parsed_candidate_name": "Terry Symonds",
+            "primary_url": "https://www.imdb.com/name/nm4588154/",
+            "message_id": "<terry-imdb>",
+        }
+    )
+
+    digest = store.generate_digest(org_name="Longboardfella", report_depth="detailed")
+
+    assert digest["signal_count"] == 0
+    digest_text = (tmp_path / "digests" / f"{digest['digest_id']}.md").read_text(encoding="utf-8")
+    assert "No matching signals for this window." in digest_text
+
+
+def test_generate_digest_keeps_linkedin_exact_identity_match(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "canonical_name": "Dr Louise Schaper",
+                "current_employer": "Pulse-IT",
+                "target_type": "person",
+                "linkedin_url": "https://www.linkedin.com/in/louiseschaper/",
+            }
+        ],
+        source="market_radar",
+    )
+
+    store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Dr Louise Schaper - Pulse+IT | LinkedIn",
+            "raw_text": "Professional profile for Dr Louise Schaper at Pulse+IT.",
+            "parsed_candidate_name": "Dr Louise Schaper",
+            "primary_url": "https://www.linkedin.com/in/louiseschaper/",
+            "message_id": "<louise-linkedin>",
+        }
+    )
+
+    digest = store.generate_digest(org_name="Longboardfella", report_depth="detailed")
+
+    assert digest["signal_count"] == 1
+
+
+def test_generate_digest_filters_zoominfo_even_when_employer_anchored(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "canonical_name": "Bettina McMahon",
+                "current_employer": "Healthdirect Australia",
+                "target_type": "person",
+            }
+        ],
+        source="market_radar",
+    )
+
+    store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Bettina McMahon - Healthdirect Australia",
+            "raw_text": "Bettina McMahon is listed at Healthdirect Australia.",
+            "parsed_candidate_name": "Bettina McMahon",
+            "parsed_candidate_employer": "Healthdirect Australia",
+            "primary_url": "https://www.zoominfo.com/p/Bettina-Mcmahon/1634368121",
+            "message_id": "<bettina-zoominfo>",
+        }
+    )
+
+    digest = store.generate_digest(org_name="Longboardfella", report_depth="detailed")
+
+    assert digest["signal_count"] == 0
+    digest_text = (tmp_path / "digests" / f"{digest['digest_id']}.md").read_text(encoding="utf-8")
+    assert "No matching signals for this window." in digest_text
 
 
 def test_industry_target_matches_from_tags_and_name(tmp_path):
@@ -348,6 +564,60 @@ def test_profile_sync_without_external_id_does_not_duplicate_on_employer_change(
     assert profiles[0]["current_employer"] == "Silverchain"
 
 
+def test_profile_sync_preserves_affiliations_and_matches_non_primary_employer(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        org_alumni=["SMS", "Escient"],
+        profiles=[
+            {
+                "canonical_name": "Jane Smith",
+                "target_type": "person",
+                "affiliations": [
+                    {
+                        "org_name_text": "Acme Corp",
+                        "role": "Chief Strategy Officer",
+                        "affiliation_type": "current",
+                        "confidence": "confirmed",
+                        "is_primary": 1,
+                    },
+                    {
+                        "org_name_text": "Board Co",
+                        "role": "Non-Executive Director",
+                        "affiliation_type": "board",
+                        "confidence": "probable",
+                        "is_primary": 0,
+                    },
+                ],
+            }
+        ],
+        source="market_radar",
+    )
+
+    profiles = store.list_profiles(org_name="Longboardfella")
+    assert len(profiles) == 1
+    assert profiles[0]["current_employer"] == "Acme Corp"
+    assert profiles[0]["current_role"] == "Chief Strategy Officer"
+    assert len(profiles[0]["affiliations"]) == 2
+    assert profiles[0]["known_employers"] == ["Acme Corp", "Board Co"]
+    assert store.get_org_context("Longboardfella")["org_alumni"] == ["SMS", "Escient"]
+
+    signal = store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "target_type": "person",
+            "subject": "Jane Smith joined the Board Co advisory council",
+            "raw_text": "Jane Smith joined the Board Co advisory council as a Non-Executive Director.",
+            "parsed_candidate_name": "Jane Smith",
+            "parsed_candidate_employer": "Board Co",
+        }
+    )
+
+    assert len(signal["matches"]) == 1
+    assert signal["matches"][0]["canonical_name"] == "Jane Smith"
+    assert signal["matches"][0]["affiliations"][1]["org_name_text"] == "Board Co"
+
+
 def test_profile_sync_upgrades_legacy_profile_to_external_profile_id(tmp_path):
     store = StakeholderSignalStore(base_path=tmp_path)
     store.upsert_profiles(
@@ -460,13 +730,16 @@ def test_generate_digest_can_use_llm_synthesis_and_profile_filter(tmp_path, monk
         }
     )
 
-    def fake_synth(self, raw_data, org_name, provider, model):
+    def fake_synth(self, raw_data, org_name, provider, model, report_depth):
         assert org_name == "Longboardfella"
         assert provider == "ollama"
         assert model == "qwen2.5:14b"
+        assert report_depth == "detailed"
         assert "Carolyn Bell" in raw_data
         assert "Silverchain expands community care services" not in raw_data
-        return "# WATCH Report\n\n## Individual Updates\n- Carolyn Bell moved roles.", "qwen2.5:14b"
+        assert '"relationship_context"' in raw_data
+        assert '"priority_signals"' in raw_data
+        return "# WATCH Report\n\n## Individual Updates\n- Carolyn Bell moved roles.", "ollama", "qwen2.5:14b"
 
     monkeypatch.setattr(StakeholderSignalStore, "_llm_synthesise", fake_synth)
 
@@ -483,9 +756,281 @@ def test_generate_digest_can_use_llm_synthesis_and_profile_filter(tmp_path, monk
     assert digest["llm_synthesised"] is True
     assert digest["profiles_covered"] == 1
     assert digest["period_end"]
+    assert digest["llm_provider"] == "ollama"
     assert digest["llm_model"] == "qwen2.5:14b"
     assert "# WATCH Report" in digest_text
     assert "Carolyn Bell moved roles." in digest_text
+
+
+def test_generate_digest_strips_empty_llm_filler_sections(tmp_path, monkeypatch):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "canonical_name": "Carolyn Bell",
+                "target_type": "person",
+                "current_employer": "Silverchain",
+            }
+        ],
+        source="market_radar",
+    )
+    store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Carolyn Bell started a new role",
+            "raw_text": "Carolyn Bell started a new role as ED Aged Care at Silverchain.",
+            "parsed_candidate_name": "Carolyn Bell",
+            "parsed_candidate_employer": "Silverchain",
+            "message_id": "<carolyn-filler-test>",
+        }
+    )
+
+    def fake_synth(self, raw_data, org_name, provider, model, report_depth):
+        return (
+            "# Stakeholder Intelligence Digest\n\n"
+            "## Stakeholder Digest for Longboardfella\n\n"
+            "### Carolyn Bell\n"
+            "- Update retained.\n\n"
+            "### Alumni Context\n"
+            "- No relevant alumni context provided for the organization Longboardfella.\n\n"
+            "### Weak Linkage Context\n"
+            "- No alumni or weak linkage context available for the provided signals.\n",
+            "ollama",
+            "qwen2.5:14b",
+        )
+
+    monkeypatch.setattr(StakeholderSignalStore, "_llm_synthesise", fake_synth)
+
+    digest = store.generate_digest(
+        org_name="Longboardfella",
+        llm_synthesis=True,
+        llm_provider="ollama",
+        llm_model="qwen2.5:14b",
+    )
+
+    digest_text = (tmp_path / "digests" / f"{digest['digest_id']}.md").read_text(encoding="utf-8")
+    assert "Update retained." in digest_text
+    assert "Alumni Context" not in digest_text
+    assert "Weak Linkage Context" not in digest_text
+    assert "No relevant alumni context" not in digest_text
+    assert "No alumni or weak linkage context" not in digest_text
+
+
+def test_llm_synthesise_falls_back_to_anthropic_when_ollama_fails(tmp_path, monkeypatch):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "canonical_name": "Carolyn Bell",
+                "target_type": "person",
+                "current_employer": "Silverchain",
+            }
+        ],
+        source="market_radar",
+    )
+    store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Carolyn Bell started a new role",
+            "raw_text": "Carolyn Bell started a new role as ED Aged Care at Silverchain.",
+            "parsed_candidate_name": "Carolyn Bell",
+            "parsed_candidate_employer": "Silverchain",
+            "message_id": "<carolyn-fallback>",
+        }
+    )
+
+    def fake_ollama(self, system, user, model):
+        return None, "qwen2.5:14b"
+
+    def fake_anthropic(self, system, user, model):
+        assert "Carolyn Bell" in user
+        assert model == "claude-haiku-4-5-20251001"
+        return "# Claude Digest\n\n- Synthesised fallback output.", model
+
+    monkeypatch.setattr(StakeholderSignalStore, "_call_ollama", fake_ollama)
+    monkeypatch.setattr(StakeholderSignalStore, "_call_anthropic", fake_anthropic)
+
+    digest = store.generate_digest(
+        org_name="Longboardfella",
+        llm_synthesis=True,
+        llm_provider="ollama",
+        llm_model="qwen2.5:14b",
+    )
+
+    digest_text = (tmp_path / "digests" / f"{digest['digest_id']}.md").read_text(encoding="utf-8")
+    assert digest["llm_synthesised"] is True
+    assert digest["llm_provider"] == "anthropic"
+    assert digest["llm_model"] == "claude-haiku-4-5-20251001"
+    assert "Synthesised fallback output." in digest_text
+
+
+def test_generate_digest_summary_sets_escalation_metadata(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "external_profile_id": "1",
+                "canonical_name": "Steve Hodgkinson",
+                "target_type": "person",
+                "current_employer": "Vic Police",
+                "current_role": "Chief Digital Officer",
+            }
+        ],
+        source="market_radar",
+    )
+    profile = store.list_profiles(org_name="Longboardfella")[0]
+
+    store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Steve Hodgkinson started a new role as Chief Information Officer at Silverchain",
+            "raw_text": "Steve Hodgkinson started a new role as Chief Information Officer at Silverchain.",
+            "parsed_candidate_name": "Steve Hodgkinson",
+            "parsed_candidate_employer": "Silverchain",
+            "message_id": "<digest-summary-escalate>",
+        }
+    )
+
+    digest = store.generate_digest(
+        org_name="Longboardfella",
+        profile_keys=[profile["profile_key"]],
+        report_depth="summary",
+        digest_tier="priority",
+        priority_profile_keys=[profile["profile_key"]],
+        deep_analysis=True,
+    )
+
+    digest_text = (tmp_path / "digests" / f"{digest['digest_id']}.md").read_text(encoding="utf-8")
+    assert digest["report_depth"] == "summary"
+    assert digest["digest_tier"] == "priority"
+    assert digest["deep_analysis"] is True
+    assert digest["escalate"] is True
+    assert digest["escalate_profiles"] == [profile["profile_key"]]
+    assert "leadership change" in digest["escalate_reason"]
+    assert "## Key Signals" in digest_text
+
+
+def test_generate_digest_includes_alumni_context_signals(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[{"external_profile_id": "1", "canonical_name": "Carolyn Bell", "target_type": "person"}],
+        org_alumni=["SMS", "Deloitte"],
+        source="market_radar",
+    )
+
+    store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Deloitte appoints new health sector lead",
+            "raw_text": "Deloitte has appointed a new health sector lead in Australia.",
+            "message_id": "<alumni-only-signal>",
+        }
+    )
+
+    digest = store.generate_digest(
+        org_name="Longboardfella",
+        report_depth="summary",
+        matched_only=True,
+    )
+
+    digest_text = (tmp_path / "digests" / f"{digest['digest_id']}.md").read_text(encoding="utf-8")
+    assert digest["signal_count"] == 1
+    assert digest["org_alumni"] == ["SMS", "Deloitte"]
+    assert digest["signals"][0]["alumni_hits"] == ["Deloitte"]
+    assert "Alumni context: SMS, Deloitte" in digest_text
+    assert "[alumni: Deloitte]" in digest_text
+
+
+def test_generate_digest_adds_relationship_temporal_and_scoring_metadata(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "external_profile_id": "1",
+                "canonical_name": "Jane Smith",
+                "target_type": "person",
+                "current_employer": "BigBank",
+                "known_employers": ["BigBank", "McKinsey"],
+                "alumni": ["McKinsey"],
+                "linkedin_connections": [{"member": "paul@example.com", "degree": "1st"}],
+                "watch_status": "watch",
+            },
+            {
+                "external_profile_id": "2",
+                "canonical_name": "Bob Jones",
+                "target_type": "person",
+                "current_employer": "OtherBank",
+                "known_employers": ["OtherBank", "McKinsey"],
+                "alumni": ["McKinsey"],
+                "watch_status": "watch",
+            },
+        ],
+        org_alumni=["McKinsey"],
+        source="market_radar",
+    )
+    profiles = store.list_profiles(org_name="Longboardfella")
+    jane_key = next(item["profile_key"] for item in profiles if item["canonical_name"] == "Jane Smith")
+    bob_key = next(item["profile_key"] for item in profiles if item["canonical_name"] == "Bob Jones")
+
+    store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Jane Smith joins BigBank digital team",
+            "raw_text": "Official announcement confirms Jane Smith joined BigBank.",
+            "parsed_candidate_name": "Jane Smith",
+            "parsed_candidate_employer": "BigBank",
+            "primary_url": "https://www.bigbank.com.au/media/jane",
+            "source_type": "official",
+            "received_at": "2026-03-16T00:00:00Z",
+            "message_id": "<jane-1>",
+        }
+    )
+    store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Jane Smith joins BigBank digital team",
+            "raw_text": "Trade press also reports Jane Smith moved to BigBank.",
+            "parsed_candidate_name": "Jane Smith",
+            "parsed_candidate_employer": "BigBank",
+            "primary_url": "https://news.example.com/jane",
+            "source_type": "news",
+            "received_at": "2026-03-15T00:00:00Z",
+            "message_id": "<jane-2>",
+        }
+    )
+    store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Bob Jones shares BigBank strategy panel",
+            "raw_text": "Bob Jones and Jane Smith both appeared on a BigBank strategy panel.",
+            "parsed_candidate_name": "Bob Jones",
+            "parsed_candidate_employer": "OtherBank",
+            "received_at": "2026-03-16T01:00:00Z",
+            "message_id": "<bob-1>",
+        }
+    )
+
+    digest = store.generate_digest(
+        org_name="Longboardfella",
+        profile_keys=[jane_key, bob_key],
+        since_ts="2026-03-14T00:00:00Z",
+        report_depth="detailed",
+    )
+
+    digest_text = (tmp_path / "digests" / f"{digest['digest_id']}.md").read_text(encoding="utf-8")
+    assert digest["relationship_intelligence_count"] > 0
+    assert digest["top_signal_scores"]
+    assert digest["signals"][0]["confidence_band"] in {"High", "Medium", "Low", "User-confirmed"}
+    assert "## Relationship Intelligence" in digest_text
+    assert "graph shows a 1st-degree LinkedIn path via paul@example.com" in digest_text
+    assert "shares graph alumni bridges with the org: McKinsey" in digest_text
+    assert "linked in the graph via alumni groups: McKinsey" in digest_text
+    assert "## Highest-Scoring Signals" in digest_text
 
 
 def test_resolve_ollama_model_prefers_qwen35_and_falls_back_to_installed(tmp_path, monkeypatch):

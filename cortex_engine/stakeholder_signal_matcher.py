@@ -32,6 +32,18 @@ def _normalize_domain(value: str) -> str:
     return host
 
 
+def _unique_normalized_texts(values: List[str]) -> List[str]:
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for value in values:
+        normalized = normalize_lookup(value)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ordered
+
+
 def match_signal_to_profiles(
     signal: Dict[str, Any],
     profiles: List[Dict[str, Any]],
@@ -67,11 +79,19 @@ def match_signal_to_profiles(
         website_domain = _normalize_domain(website_url)
         canonical_name = normalize_lookup(profile.get("canonical_name") or "")
         aliases = [normalize_lookup(alias) for alias in profile.get("aliases") or [] if normalize_lookup(alias)]
-        employers = [normalize_lookup(emp) for emp in profile.get("known_employers") or [] if normalize_lookup(emp)]
+        employers = [str(emp).strip() for emp in profile.get("known_employers") or [] if str(emp).strip()]
+        affiliation_roles = [
+            str(item.get("role") or "").strip()
+            for item in profile.get("affiliations") or []
+            if isinstance(item, dict) and str(item.get("role") or "").strip()
+        ]
+        employers = _unique_normalized_texts(employers)
         current_employer = normalize_lookup(profile.get("current_employer") or "")
         if current_employer:
             employers.append(current_employer)
+        employers = _unique_normalized_texts(employers)
         role = normalize_lookup(profile.get("current_role") or "")
+        roles = _unique_normalized_texts([profile.get("current_role") or "", *affiliation_roles])
         parent_entity = normalize_lookup(profile.get("parent_entity") or "")
         industry = normalize_lookup(profile.get("industry") or "")
         function_name = normalize_lookup(profile.get("function") or "")
@@ -109,6 +129,11 @@ def match_signal_to_profiles(
             if role and _text_contains_phrase(haystack, role):
                 score += 0.08
                 reasons.append("current role found in text")
+            elif roles:
+                role_hit = next((item for item in roles if item and _text_contains_phrase(haystack, item)), "")
+                if role_hit:
+                    score += 0.06
+                    reasons.append(f"affiliation role found in text: {role_hit}")
             if function_name and _text_contains_phrase(haystack, function_name):
                 score += 0.06
                 reasons.append("function found in text")
@@ -153,6 +178,7 @@ def match_signal_to_profiles(
                 "acn_abn": profile.get("acn_abn", ""),
                 "phone": profile.get("phone", ""),
                 "address": profile.get("address", {}),
+                "affiliations": profile.get("affiliations") or [],
                 "score": final_score,
                 "reasons": reasons,
             }

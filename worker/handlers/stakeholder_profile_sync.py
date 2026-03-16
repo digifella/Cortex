@@ -33,6 +33,7 @@ def handle(
     result = store.upsert_profiles(
         org_name=org_name,
         profiles=profiles,
+        org_alumni=payload.get("org_alumni") or [],
         source=str(payload.get("source_system") or "market_radar").strip(),
         trace_id=str(payload.get("trace_id") or "").strip(),
         replace_org_scope=True,
@@ -46,6 +47,7 @@ def handle(
             "status": "synced",
             "org_name": org_name,
             "profiles_received": len(profiles),
+            "org_alumni_count": len(payload.get("org_alumni") or []),
             **result,
         },
         "output_file": None,

@@ -47,6 +47,7 @@ def make_cfg() -> Config:
         secret_key="secret",
         poll_interval=15,
         worker_id="worker-test",
+        worker_type="cortex_worker",
         supported_types="youtube_summarise",
         log_level="INFO",
         temp_dir=Path("/tmp"),
@@ -78,6 +79,25 @@ def test_complete_posts_action_and_id_in_form_body(monkeypatch, tmp_path):
     assert call["data"]["id"] == "61"
     assert json.loads(call["data"]["output_data"]) == {"trace_id": "trace-123", "ok": True}
     assert call["files"]["file"][0] == "result.md"
+
+
+def test_worker_checkin_posts_form_encoded_status(monkeypatch):
+    session = FakeSession([FakeResponse(payload={"success": True, "server_time": "2026-03-16T12:00:00Z"})])
+    monkeypatch.setattr("worker.worker.requests.Session", lambda: session)
+
+    client = QueueClient(make_cfg())
+    client.worker_checkin("processing job #349")
+
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://example.com/admin/queue_worker_api.php"
+    assert call["params"] == {}
+    assert call["data"]["action"] == "worker_checkin"
+    assert call["data"]["worker_id"] == "worker-test"
+    assert call["data"]["worker_type"] == "cortex_worker"
+    assert call["data"]["supported_types"] == "youtube_summarise"
+    assert call["data"]["status"] == "processing job #349"
 
 
 def test_complete_raises_on_non_json_response(monkeypatch):

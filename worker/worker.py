@@ -56,6 +56,7 @@ class Config:
     secret_key: str
     poll_interval: int
     worker_id: str
+    worker_type: str
     supported_types: str
     log_level: str
     temp_dir: Path
@@ -83,7 +84,8 @@ def read_config() -> Config:
         server_url=get("QUEUE_SERVER_URL", "").strip(),
         secret_key=get("QUEUE_SECRET_KEY", "").strip(),
         poll_interval=int(get("POLL_INTERVAL", "15")),
-        worker_id=get("WORKER_ID", "worker-local-1").strip(),
+        worker_id=get("WORKER_ID", "cortex-worker-1").strip(),
+        worker_type=get("WORKER_TYPE", "cortex_worker").strip() or "cortex_worker",
         supported_types=get("SUPPORTED_TYPES", "pdf_anonymise").strip(),
         log_level=get("LOG_LEVEL", "INFO").strip().upper(),
         temp_dir=Path(get("TEMP_DIR", str(ROOT / "worker" / "tmp"))),
@@ -197,6 +199,18 @@ class QueueClient:
     def heartbeat(self, job_id: int) -> None:
         self._request("POST", {"action": "heartbeat", "id": str(job_id)})
 
+    def worker_checkin(self, status: str) -> None:
+        self._request(
+            "POST",
+            {"action": "worker_checkin"},
+            data={
+                "worker_id": self.cfg.worker_id,
+                "worker_type": self.cfg.worker_type,
+                "supported_types": self.cfg.supported_types,
+                "status": status.strip() or "idle",
+            },
+        )
+
     def fail(self, job_id: int, error_message: str) -> None:
         self._request(
             "POST",
@@ -216,7 +230,7 @@ class QueueClient:
                 data=data,
                 files=files,
             )
-            logging.info("Queue complete payload for job id=%s: %s", job_id, payload)
+            logging.debug("Queue complete payload for job id=%s: %s", job_id, payload)
         finally:
             if files:
                 files["file"][1].close()
@@ -239,6 +253,50 @@ class HeartbeatThread(threading.Thread):
                 self.client.heartbeat(self.job_id)
             except Exception:
                 logging.exception("Heartbeat failed for job %s", self.job_id)
+
+
+class WorkerCheckinThread(threading.Thread):
+    def __init__(self, client: QueueClient, interval: int):
+        super().__init__(daemon=True, name="worker-checkin")
+        self.client = client
+        self.interval = max(15, int(interval or 60))
+        self._stop_event = threading.Event()
+        self._status_lock = threading.Lock()
+        self._status = "idle"
+        self._poke_event = threading.Event()
+        self._last_error_log_ts = 0.0
+
+    def stop(self):
+        self._stop_event.set()
+        self._poke_event.set()
+
+    def set_status(self, status: str, *, immediate: bool = False) -> None:
+        with self._status_lock:
+            self._status = status.strip() or "idle"
+        if immediate:
+            self._poke_event.set()
+
+    def _current_status(self) -> str:
+        with self._status_lock:
+            return self._status
+
+    def _send_checkin(self) -> None:
+        self.client.worker_checkin(self._current_status())
+
+    def run(self) -> None:
+        self._poke_event.set()
+        while not self._stop_event.is_set():
+            fired = self._poke_event.wait(self.interval)
+            self._poke_event.clear()
+            if self._stop_event.is_set():
+                break
+            try:
+                self._send_checkin()
+            except Exception as exc:
+                now = time.time()
+                if now - self._last_error_log_ts >= 30:
+                    logging.warning("Worker check-in failed: %s", exc)
+                    self._last_error_log_ts = now
 
 
 class JobCancelledError(RuntimeError):
@@ -446,7 +504,7 @@ def sync_cortex_meta(cfg: Config) -> bool:
                 timeout=10,
             )
         resp.raise_for_status()
-        logging.info("Cortex meta sync pushed: api=%s, collections=%d", api_status, len(collections))
+        logging.debug("Cortex meta sync pushed: api=%s, collections=%d", api_status, len(collections))
         return True
     except Exception as e:
         logging.warning("Cortex meta sync failed: %s", e)
@@ -493,6 +551,8 @@ def main() -> int:
 
     client = QueueClient(cfg)
     store = QueueMonitorStore(cfg.queue_monitor_state_path)
+    worker_checkin = WorkerCheckinThread(client, cfg.heartbeat_interval)
+    worker_checkin.start()
     store.set_worker(
         status="running",
         worker_id=cfg.worker_id,
@@ -527,10 +587,14 @@ def main() -> int:
 
             if not job:
                 store.set_worker(status="idle", worker_id=cfg.worker_id)
+                worker_checkin.set_status("idle", immediate=True)
                 time.sleep(cfg.poll_interval)
                 continue
             store.set_worker(status="processing", worker_id=cfg.worker_id)
+            job_id = int(job.get("id", 0) or 0)
+            worker_checkin.set_status(f"processing job #{job_id}", immediate=True)
             process_job(client, cfg, store, job)
+            worker_checkin.set_status("idle", immediate=True)
         except requests.ConnectionError as e:
             consecutive_conn_errors += 1
             backoff_seconds = min(max(cfg.poll_interval, 5) * (2 ** min(consecutive_conn_errors - 1, 5)), 300)
@@ -553,6 +617,7 @@ def main() -> int:
                 )
                 last_conn_error_log_ts = now
             store.set_worker(status="disconnected", worker_id=cfg.worker_id)
+            worker_checkin.set_status("disconnected", immediate=True)
             time.sleep(backoff_seconds)
         except requests.Timeout as e:
             consecutive_conn_errors += 1
@@ -572,22 +637,27 @@ def main() -> int:
                 )
                 last_conn_error_log_ts = now
             store.set_worker(status="degraded", worker_id=cfg.worker_id)
+            worker_checkin.set_status("degraded", immediate=True)
             time.sleep(backoff_seconds)
         except requests.HTTPError as e:
             consecutive_conn_errors = 0
             logging.error("HTTP error while polling/processing: %s", e)
             store.append_event(f"HTTP error: {e}", level="error")
             store.set_worker(status="error", worker_id=cfg.worker_id)
+            worker_checkin.set_status("error", immediate=True)
             time.sleep(cfg.poll_interval)
         except Exception:
             consecutive_conn_errors = 0
             logging.exception("Worker loop error")
             store.append_event("Worker loop error", level="error")
             store.set_worker(status="error", worker_id=cfg.worker_id)
+            worker_checkin.set_status("error", immediate=True)
             time.sleep(cfg.poll_interval)
 
     meta_sync.stop()
     meta_sync.join(timeout=3)
+    worker_checkin.stop()
+    worker_checkin.join(timeout=3)
     logging.info("Queue worker stopped")
     store.set_worker(status="stopped", worker_id=cfg.worker_id)
     store.append_event("Queue worker stopped", level="info")

@@ -96,12 +96,21 @@ def main() -> int:
                 )
                 for warning in result.get("warnings") or []:
                     logging.warning("Intel mailbox extraction warning trace_id=%s: %s", result.get("trace_id", ""), warning)
-            logging.info(
-                "Intel mailbox poll complete: processed=%s skipped=%s failures=%s",
-                summary.get("processed", 0),
-                summary.get("skipped", 0),
-                summary.get("failures", 0),
-            )
+            processed = int(summary.get("processed", 0) or 0)
+            skipped = int(summary.get("skipped", 0) or 0)
+            failures = int(summary.get("failures", 0) or 0)
+            if processed or failures:
+                logging.info(
+                    "Intel mailbox poll complete: processed=%s skipped=%s failures=%s",
+                    processed,
+                    skipped,
+                    failures,
+                )
+            elif skipped:
+                logging.debug(
+                    "Intel mailbox poll skipped=%s with no new processed messages",
+                    skipped,
+                )
         except Exception:
             logging.exception("Intel mailbox poll failed")
         if stop_event.wait(poll_interval):
