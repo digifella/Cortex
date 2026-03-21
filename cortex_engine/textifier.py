@@ -163,6 +163,16 @@ class DocumentTextifier:
         normalized = "\n".join(out_lines).strip()
         return normalized + "\n" if normalized else ""
 
+    @staticmethod
+    def _docling_text_is_substantive(markdown_text: str) -> bool:
+        text = str(markdown_text or "")
+        if not text.strip():
+            return False
+        stripped = text.replace("<!-- image -->", " ")
+        alpha_count = len(re.findall(r"[A-Za-z]", stripped))
+        line_count = len([line for line in stripped.splitlines() if line.strip()])
+        return alpha_count >= 1200 or line_count >= 40
+
     def _init_vlm(self):
         """Lazy-init the Ollama VLM client, preferring Qwen3-VL models."""
         if self._vlm_client is not None:
@@ -1773,6 +1783,13 @@ class DocumentTextifier:
 
         if not self.use_vision:
             return text.replace(marker, "> **[Image]**: [Image: vision model disabled]")
+
+        if self._docling_text_is_substantive(text):
+            logger.info(
+                "Skipping Docling image marker enrichment for %s because extracted text is already substantive",
+                Path(file_path).name,
+            )
+            return text.replace(marker, "")
 
         figures = figures or []
         descriptions: List[str] = []

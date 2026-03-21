@@ -16,6 +16,7 @@ from .intel_extract import handle as intel_extract_handle
 from .stakeholder_profile_sync import handle as stakeholder_profile_sync_handle
 from .signal_ingest import handle as signal_ingest_handle
 from .signal_digest import handle as signal_digest_handle
+from .stakeholder_graph_view import handle as stakeholder_graph_view_handle
 
 HANDLERS = {
     'pdf_anonymise':   pdf_anonymise_handle,
@@ -28,4 +29,5 @@ HANDLERS = {
     'stakeholder_profile_sync': stakeholder_profile_sync_handle,
     'signal_ingest': signal_ingest_handle,
     'signal_digest': signal_digest_handle,
+    'stakeholder_graph_view': stakeholder_graph_view_handle,
 }

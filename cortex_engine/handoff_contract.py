@@ -18,6 +18,7 @@ SUPPORTED_JOB_TYPES = [
     "stakeholder_profile_sync",
     "signal_ingest",
     "signal_digest",
+    "stakeholder_graph_view",
 ]
 
 SUPPORTED_ANONYMIZER_OPTIONS = [
@@ -223,6 +224,83 @@ def _normalize_linkedin_connections(value: Any, field_name: str) -> list[Dict[st
     return normalized
 
 
+def _normalize_industry_affiliations(value: Any, field_name: str) -> list[Dict[str, str]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be an array when provided")
+    normalized: list[Dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for idx, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_name}[{idx}] must be an object")
+        industry_profile_key = str(
+            item.get("industry_profile_key") or item.get("profile_key") or item.get("industry_id") or ""
+        ).strip()
+        industry_name = str(
+            item.get("industry_name") or item.get("canonical_name") or item.get("name") or ""
+        ).strip()
+        if not industry_profile_key and not industry_name:
+            continue
+        role = str(item.get("role") or "").strip()
+        affiliation_type = str(item.get("affiliation_type") or item.get("type") or "active").strip().lower() or "active"
+        dedupe_key = (industry_profile_key.lower(), industry_name.lower(), role.lower())
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized.append(
+            {
+                "industry_profile_key": industry_profile_key,
+                "industry_name": industry_name,
+                "role": role,
+                "affiliation_type": affiliation_type,
+                "source": str(item.get("source") or "").strip(),
+            }
+        )
+    return normalized
+
+
+def _normalize_org_strategic_profile(value: Any, field_name: str) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object when provided")
+
+    industries_value = value.get("industries")
+    industries: list[str] = []
+    if industries_value is not None:
+        if not isinstance(industries_value, list):
+            raise ValueError(f"{field_name}.industries must be an array when provided")
+        seen: set[str] = set()
+        for idx, item in enumerate(industries_value):
+            if isinstance(item, dict):
+                name = str(
+                    item.get("industry_name")
+                    or item.get("canonical_name")
+                    or item.get("name")
+                    or item.get("label")
+                    or ""
+                ).strip()
+            else:
+                name = str(item or "").strip()
+            if not name:
+                continue
+            lowered = name.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            industries.append(name)
+
+    return {
+        "description": str(value.get("description") or "").strip(),
+        "industries": industries,
+        "priority_industries": _normalize_string_array(value.get("priority_industries"), f"{field_name}.priority_industries"),
+        "key_themes": _normalize_string_array(value.get("key_themes"), f"{field_name}.key_themes"),
+        "strategic_objectives": _normalize_string_array(value.get("strategic_objectives"), f"{field_name}.strategic_objectives"),
+        "updated_at": str(value.get("updated_at") or "").strip(),
+    }
+
+
 def _normalize_watch_signals(value: Any, field_name: str) -> list[Dict[str, Any]]:
     if value is None:
         return []
@@ -245,6 +323,12 @@ def _normalize_watch_signals(value: Any, field_name: str) -> list[Dict[str, Any]
                 "source_type": str(item.get("source_type") or "").strip().lower(),
                 "confidence_hint": str(item.get("confidence_hint") or "").strip().lower(),
                 "tags": [str(tag).strip() for tag in item.get("tags") or [] if str(tag).strip()],
+                "source_org_name": str(item.get("source_org_name") or item.get("org_name") or "").strip(),
+                "visible_to_orgs": _normalize_string_array(item.get("visible_to_orgs"), f"{field_name}[{idx}] visible_to_orgs"),
+                "shared_with_orgs": _normalize_string_array(item.get("shared_with_orgs"), f"{field_name}[{idx}] shared_with_orgs"),
+                "scope_profile_key": str(item.get("scope_profile_key") or item.get("industry_profile_key") or "").strip(),
+                "child_profile_keys": [str(val).strip() for val in item.get("child_profile_keys") or [] if str(val).strip()],
+                "child_org_names": [str(val).strip() for val in item.get("child_org_names") or [] if str(val).strip()],
             }
         )
     return normalized
@@ -381,6 +465,10 @@ def validate_stakeholder_profile_sync_input(input_data: Optional[Dict[str, Any]]
 
     normalized_profiles = []
     payload["org_alumni"] = _normalize_string_array(payload.get("org_alumni"), "stakeholder_profile_sync org_alumni")
+    payload["org_strategic_profile"] = _normalize_org_strategic_profile(
+        payload.get("org_strategic_profile"),
+        "stakeholder_profile_sync org_strategic_profile",
+    )
     for idx, profile in enumerate(profiles):
         if not isinstance(profile, dict):
             raise ValueError(f"stakeholder_profile_sync profiles[{idx}] must be an object")
@@ -400,6 +488,13 @@ def validate_stakeholder_profile_sync_input(input_data: Optional[Dict[str, Any]]
         normalized["last_verified_at"] = str(profile.get("last_verified_at") or "").strip()
         normalized["watch_status"] = str(profile.get("watch_status") or "off").strip().lower() or "off"
         normalized["website_url"] = str(profile.get("website_url") or "").strip()
+        normalized["description"] = str(profile.get("description") or "").strip()
+        normalized["key_themes"] = _normalize_string_array(
+            profile.get("key_themes") if profile.get("key_themes") is not None else profile.get("key_themes_json"),
+            f"stakeholder_profile_sync profiles[{idx}] key_themes",
+        )
+        normalized["regulatory_context"] = str(profile.get("regulatory_context") or "").strip()
+        normalized["market_size"] = str(profile.get("market_size") or "").strip()
         normalized["acn_abn"] = str(profile.get("acn_abn") or "").strip()
         normalized["phone"] = str(profile.get("phone") or "").strip()
         normalized["parent_entity"] = str(profile.get("parent_entity") or "").strip()
@@ -410,6 +505,10 @@ def validate_stakeholder_profile_sync_input(input_data: Optional[Dict[str, Any]]
         normalized["current_employer"] = str(profile.get("current_employer") or "").strip()
         normalized["current_role"] = str(profile.get("current_role") or "").strip()
         normalized["affiliations"] = _normalize_affiliations(profile.get("affiliations"))
+        normalized["industry_affiliations"] = _normalize_industry_affiliations(
+            profile.get("industry_affiliations"),
+            f"stakeholder_profile_sync profiles[{idx}] industry_affiliations",
+        )
         normalized["tags"] = [str(item).strip() for item in profile.get("tags") or [] if str(item).strip()]
         normalized["alumni"] = _normalize_string_array(profile.get("alumni"), f"stakeholder_profile_sync profiles[{idx}] alumni")
         normalized["linkedin_connections"] = _normalize_linkedin_connections(
@@ -475,6 +574,46 @@ def validate_intel_extract_input(input_data: Optional[Dict[str, Any]] = None) ->
     return payload
 
 
+def validate_csv_profile_import_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(input_data or {})
+    payload["org_name"] = str(payload.get("org_name") or "").strip()
+    if not payload["org_name"]:
+        raise ValueError("csv_profile_import requires org_name")
+    payload["on_behalf_of"] = str(payload.get("on_behalf_of") or "").strip().lower()
+    if not payload["on_behalf_of"]:
+        raise ValueError("csv_profile_import requires on_behalf_of")
+    payload["dry_run"] = _coerce_bool(payload.get("dry_run"), False)
+
+    rows = payload.get("rows") or []
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("csv_profile_import requires rows")
+    if len(rows) > 500:
+        raise ValueError("csv_profile_import supports at most 500 rows")
+
+    normalized_rows = []
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"csv_profile_import rows[{idx}] must be an object")
+        canonical_name = str(row.get("canonical_name") or "").strip()
+        if not canonical_name:
+            raise ValueError(f"csv_profile_import rows[{idx}] canonical_name is required")
+        normalized = {str(key).strip(): str(value).strip() for key, value in row.items() if str(key).strip()}
+        normalized["canonical_name"] = canonical_name
+        normalized["target_type"] = (
+            str(normalized.get("target_type") or "person").strip().lower() or "person"
+        )
+        if normalized["target_type"] not in {"person", "organisation"}:
+            normalized["target_type"] = "person"
+        if "watch" in normalized:
+            normalized["watch"] = "yes" if _coerce_bool(normalized["watch"], False) else "no"
+        if "status" in normalized:
+            status = str(normalized["status"]).strip().lower()
+            normalized["status"] = status if status in {"active", "archived"} else "active"
+        normalized_rows.append(normalized)
+    payload["rows"] = normalized_rows
+    return payload
+
+
 def validate_signal_ingest_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     payload = dict(input_data or {})
     payload["org_name"] = str(payload.get("org_name") or "").strip()
@@ -484,6 +623,15 @@ def validate_signal_ingest_input(input_data: Optional[Dict[str, Any]] = None) ->
     payload["source_system"] = str(payload.get("source_system") or payload.get("source") or "market_radar").strip()
     payload["source_job"] = str(payload.get("source_job") or "").strip()
     payload["submitted_by"] = str(payload.get("submitted_by") or "").strip()
+    payload["source_org_name"] = str(payload.get("source_org_name") or "").strip()
+    payload["visible_to_orgs"] = _normalize_string_array(payload.get("visible_to_orgs"), "signal_ingest visible_to_orgs")
+    payload["shared_with_orgs"] = _normalize_string_array(payload.get("shared_with_orgs"), "signal_ingest shared_with_orgs")
+    payload["scope_profile_key"] = str(payload.get("scope_profile_key") or payload.get("industry_profile_key") or "").strip()
+    payload["child_profile_keys"] = [str(item).strip() for item in payload.get("child_profile_keys") or [] if str(item).strip()]
+    payload["child_org_names"] = [str(item).strip() for item in payload.get("child_org_names") or [] if str(item).strip()]
+    payload["key_themes"] = _normalize_string_array(payload.get("key_themes"), "signal_ingest key_themes")
+    payload["regulatory_context"] = str(payload.get("regulatory_context") or "").strip()
+    payload["market_size"] = str(payload.get("market_size") or "").strip()
 
     payload["subject"] = str(payload.get("subject") or "").strip()
     payload["raw_text"] = str(payload.get("raw_text") or payload.get("body") or "").strip()
@@ -521,6 +669,16 @@ def validate_signal_digest_input(input_data: Optional[Dict[str, Any]] = None) ->
     payload["priority_profile_keys"] = [
         str(item).strip() for item in payload.get("priority_profile_keys") or [] if str(item).strip()
     ]
+    payload["scope_type"] = str(payload.get("scope_type") or "org").strip().lower() or "org"
+    if payload["scope_type"] not in {"org", "industry"}:
+        raise ValueError(f"Invalid scope_type: {payload['scope_type']!r}")
+    payload["scope_profile_key"] = str(payload.get("scope_profile_key") or payload.get("industry_profile_key") or "").strip()
+    payload["child_profile_keys"] = [str(item).strip() for item in payload.get("child_profile_keys") or [] if str(item).strip()]
+    payload["child_org_names"] = [str(item).strip() for item in payload.get("child_org_names") or [] if str(item).strip()]
+    payload["key_themes"] = _normalize_string_array(payload.get("key_themes"), "signal_digest key_themes")
+    payload["regulatory_context"] = str(payload.get("regulatory_context") or "").strip()
+    payload["market_size"] = str(payload.get("market_size") or "").strip()
+    payload["shared_with_orgs"] = _normalize_string_array(payload.get("shared_with_orgs"), "signal_digest shared_with_orgs")
     payload["member_alumni"] = _normalize_string_array(payload.get("member_alumni"), "signal_digest member_alumni")
     payload["org_alumni"] = _normalize_string_array(payload.get("org_alumni"), "signal_digest org_alumni")
     payload["digest_tier"] = str(payload.get("digest_tier") or "standard").strip().lower() or "standard"
@@ -530,4 +688,65 @@ def validate_signal_digest_input(input_data: Optional[Dict[str, Any]] = None) ->
     if payload["report_depth"] not in {"summary", "detailed", "strategic"}:
         raise ValueError(f"Invalid report_depth: {payload['report_depth']!r}")
     payload["deep_analysis"] = _coerce_bool(payload.get("deep_analysis"), False)
+    return payload
+
+
+def validate_stakeholder_graph_view_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(input_data or {})
+    payload["org_name"] = str(payload.get("org_name") or "").strip()
+    if not payload["org_name"]:
+        raise ValueError("stakeholder_graph_view requires org_name")
+
+    payload["view_mode"] = str(payload.get("view_mode") or "watch_network").strip().lower() or "watch_network"
+    if payload["view_mode"] not in {"watch_network", "ego", "org_focus", "warm_intro", "alumni_cluster", "cross_target", "industry_network"}:
+        raise ValueError(f"Invalid view_mode: {payload['view_mode']!r}")
+
+    payload["profile_keys"] = [str(item).strip() for item in payload.get("profile_keys") or [] if str(item).strip()]
+    payload["focus_profile_key"] = str(payload.get("focus_profile_key") or payload.get("industry_profile_key") or "").strip()
+    payload["focus_org_name"] = str(payload.get("focus_org_name") or "").strip()
+    payload["child_profile_keys"] = [str(item).strip() for item in payload.get("child_profile_keys") or [] if str(item).strip()]
+    payload["since_ts"] = str(payload.get("since_ts") or "").strip()
+    payload["max_hops"] = min(4, _coerce_positive_int(payload.get("max_hops"), 2, "max_hops"))
+    payload["max_nodes"] = min(250, _coerce_positive_int(payload.get("max_nodes"), 100, "max_nodes"))
+    payload["max_edges"] = min(600, _coerce_positive_int(payload.get("max_edges"), 200, "max_edges"))
+    payload["top_k_paths"] = min(20, _coerce_positive_int(payload.get("top_k_paths"), 5, "top_k_paths"))
+    payload["include_signals"] = _coerce_bool(payload.get("include_signals"), True)
+    payload["include_sources"] = _coerce_bool(payload.get("include_sources"), False)
+    payload["include_lab_members"] = _coerce_bool(payload.get("include_lab_members"), True)
+    payload["include_alumni"] = _coerce_bool(payload.get("include_alumni"), True)
+    payload["include_unwatched_bridges"] = _coerce_bool(payload.get("include_unwatched_bridges"), False)
+    payload["min_edge_weight"] = float(payload.get("min_edge_weight") or 0.2)
+    payload["min_confidence"] = float(payload.get("min_confidence") or 5.0)
+    payload["layout_hint"] = str(payload.get("layout_hint") or "force").strip().lower() or "force"
+    if payload["layout_hint"] not in {"force", "concentric", "cose", "breadthfirst"}:
+        raise ValueError(f"Invalid layout_hint: {payload['layout_hint']!r}")
+
+    allowed_edge_types = {
+        "works_at",
+        "affiliated_with",
+        "alumni_of",
+        "linkedin_connection",
+        "tracked_by",
+        "mentions_profile",
+        "mentions_organization",
+        "published_by",
+        "co_mentioned",
+        "org_alumni_context",
+        "belongs_to_industry",
+    }
+    raw_edge_types = payload.get("edge_types") or list(allowed_edge_types)
+    if not isinstance(raw_edge_types, list):
+        raise ValueError("stakeholder_graph_view edge_types must be an array when provided")
+    edge_types = [str(item).strip() for item in raw_edge_types if str(item).strip()]
+    invalid_edge_types = [item for item in edge_types if item not in allowed_edge_types]
+    if invalid_edge_types:
+        raise ValueError(f"Invalid edge_types: {invalid_edge_types!r}")
+    payload["edge_types"] = edge_types or list(allowed_edge_types)
+
+    if payload["view_mode"] == "ego" and not payload["focus_profile_key"]:
+        raise ValueError("stakeholder_graph_view ego view requires focus_profile_key")
+    if payload["view_mode"] == "org_focus" and not payload["focus_org_name"]:
+        raise ValueError("stakeholder_graph_view org_focus view requires focus_org_name")
+    if payload["view_mode"] == "industry_network" and not (payload["focus_profile_key"] or payload["profile_keys"] or payload["child_profile_keys"]):
+        raise ValueError("stakeholder_graph_view industry_network view requires focus_profile_key, profile_keys, or child_profile_keys")
     return payload

@@ -66,6 +66,21 @@ _LOW_VALUE_PERSON_SIGNAL_DOMAINS = {
     "medium.com",
     "www.medium.com",
 }
+_GRAPH_EDGE_BASE_WEIGHTS = {
+    "linkedin_connection": 0.95,
+    "works_at": 0.9,
+    "belongs_to_industry": 0.86,
+    "strategic_focus": 0.84,
+    "tracked_by": 0.88,
+    "affiliated_with": 0.8,
+    "alumni_of": 0.75,
+    "org_alumni_context": 0.72,
+    "strategic_theme": 0.68,
+    "co_mentioned": 0.6,
+    "mentions_profile": 0.55,
+    "mentions_organization": 0.5,
+    "published_by": 0.35,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -310,6 +325,62 @@ def _normalize_linkedin_connections(values: Any) -> List[Dict[str, str]]:
     return normalized
 
 
+def _normalize_industry_affiliations(values: Any) -> List[Dict[str, str]]:
+    normalized: List[Dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in values or []:
+        if not isinstance(item, dict):
+            continue
+        industry_profile_key = str(
+            item.get("industry_profile_key") or item.get("profile_key") or item.get("industry_id") or ""
+        ).strip()
+        industry_name = str(
+            item.get("industry_name") or item.get("canonical_name") or item.get("name") or ""
+        ).strip()
+        if not industry_profile_key and not industry_name:
+            continue
+        role = str(item.get("role") or "").strip()
+        affiliation_type = str(item.get("affiliation_type") or item.get("type") or "active").strip().lower() or "active"
+        dedupe_key = (industry_profile_key.lower(), normalize_lookup(industry_name), role.lower())
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized.append(
+            {
+                "industry_profile_key": industry_profile_key,
+                "industry_name": industry_name,
+                "role": role,
+                "affiliation_type": affiliation_type,
+                "source": str(item.get("source") or "").strip(),
+            }
+        )
+    return normalized
+
+
+def _normalize_strategic_profile(values: Any) -> Dict[str, Any]:
+    if not isinstance(values, dict):
+        return {}
+    return {
+        "description": str(values.get("description") or "").strip(),
+        "industries": _normalize_org_name_list(values.get("industries") or []),
+        "priority_industries": _normalize_org_name_list(values.get("priority_industries") or []),
+        "key_themes": _normalize_org_name_list(values.get("key_themes") or []),
+        "strategic_objectives": _normalize_org_name_list(values.get("strategic_objectives") or []),
+        "updated_at": str(values.get("updated_at") or "").strip(),
+    }
+
+
+def _signal_visible_to_org(signal: Dict[str, Any], org_name: str) -> bool:
+    if not org_name:
+        return True
+    if orgs_compatible(signal.get("org_name", ""), org_name):
+        return True
+    visible_to = _normalize_org_name_list(signal.get("visible_to_orgs") or [])
+    shared_with = _normalize_org_name_list(signal.get("shared_with_orgs") or [])
+    candidates = [*visible_to, *shared_with]
+    return any(orgs_compatible(candidate, org_name) for candidate in candidates)
+
+
 def _parse_timestamp(value: str) -> Optional[datetime]:
     text = str(value or "").strip()
     if not text:
@@ -331,11 +402,21 @@ def _stakeholder_graph_node_id(kind: str, key: str) -> str:
 
 
 def _profile_graph_node_id(profile: Dict[str, Any]) -> str:
-    profile_kind = "person" if str(profile.get("target_type") or "").strip().lower() == "person" else "entity"
+    target_type = str(profile.get("target_type") or "").strip().lower()
+    profile_kind = _target_type_graph_kind(target_type)
     return _stakeholder_graph_node_id(
         profile_kind,
         str(profile.get("profile_key") or profile.get("canonical_name") or ""),
     )
+
+
+def _target_type_graph_kind(target_type: str) -> str:
+    normalized = str(target_type or "").strip().lower()
+    if normalized == "person":
+        return "person"
+    if normalized == "industry":
+        return "industry"
+    return "entity"
 
 
 def _text_contains_org_hint(text: str, org_name: str) -> bool:
@@ -632,6 +713,7 @@ class StakeholderSignalStore:
             "signals": [],
             "observed_facts": [],
             "update_suggestions": [],
+            "intel_notes": [],
             "org_contexts": {},
         }
 
@@ -645,6 +727,7 @@ class StakeholderSignalStore:
             payload.setdefault("signals", [])
             payload.setdefault("observed_facts", [])
             payload.setdefault("update_suggestions", [])
+            payload.setdefault("intel_notes", [])
             payload.setdefault("org_contexts", {})
             payload.setdefault("updated_at", _utc_now_iso())
             return payload
@@ -679,11 +762,18 @@ class StakeholderSignalStore:
         state = self._read_state()
         signals = list(state.get("signals") or [])
         if org_name:
-            signals = [s for s in signals if orgs_compatible(s.get("org_name", ""), org_name)]
+            signals = [s for s in signals if _signal_visible_to_org(s, org_name)]
         if matched_only:
             signals = [s for s in signals if s.get("matches")]
         signals = sorted(signals, key=lambda item: item.get("received_at", ""), reverse=True)
         return signals[:limit]
+
+    def list_intel_notes(self, org_name: str = "", limit: int = 200) -> List[Dict[str, Any]]:
+        state = self._read_state()
+        notes = list(state.get("intel_notes") or [])
+        if org_name:
+            notes = [item for item in notes if orgs_compatible(item.get("org_name", ""), org_name)]
+        return sorted(notes, key=lambda item: item.get("note_date", ""), reverse=True)[:limit]
 
     def list_update_suggestions(self, org_name: str = "", status: str = "", limit: int = 200) -> List[Dict[str, Any]]:
         state = self._read_state()
@@ -719,7 +809,542 @@ class StakeholderSignalStore:
         context = dict((state.get("org_contexts") or {}).get(key) or {})
         context.setdefault("org_name", org_name)
         context.setdefault("org_alumni", [])
+        context.setdefault("org_strategic_profile", {})
         return context
+
+    def _graph_view_node_type(
+        self,
+        node_id: str,
+        attrs: Dict[str, Any],
+        tracked_profile_keys: set[str],
+    ) -> str:
+        entity_type = str(attrs.get("entity_type") or "").strip()
+        target_type = str(attrs.get("target_type") or "").strip().lower()
+        if entity_type == "industry" or target_type == "industry":
+            return "industry"
+        if entity_type == "entity" and str(attrs.get("profile_key") or "").strip() in tracked_profile_keys:
+            return "tracked_org"
+        if entity_type == "entity":
+            return "organization"
+        return entity_type or "unknown"
+
+    def _graph_view_allowed_node(
+        self,
+        attrs: Dict[str, Any],
+        *,
+        include_signals: bool,
+        include_sources: bool,
+        include_lab_members: bool,
+        include_alumni: bool,
+    ) -> bool:
+        entity_type = str(attrs.get("entity_type") or "").strip()
+        if entity_type == "stakeholder_signal" and not include_signals:
+            return False
+        if entity_type == "source" and not include_sources:
+            return False
+        if entity_type == "lab_member" and not include_lab_members:
+            return False
+        if entity_type == "alumni_group" and not include_alumni:
+            return False
+        return entity_type in {
+            "person",
+            "entity",
+            "industry",
+            "organization",
+            "alumni_group",
+            "lab_member",
+            "subscriber_org",
+            "stakeholder_signal",
+            "source",
+        }
+
+    def _graph_view_edge_weight(self, relationship: str, edge_attrs: Dict[str, Any]) -> float:
+        base = _GRAPH_EDGE_BASE_WEIGHTS.get(relationship, 0.4)
+        confidence = edge_attrs.get("confidence")
+        if confidence is None:
+            confidence_score = base * 10.0
+        else:
+            try:
+                confidence_value = float(confidence)
+            except Exception:
+                confidence_value = 0.0
+            confidence_score = confidence_value * 10.0 if confidence_value <= 1.0 else confidence_value
+        return round(min(1.0, (base * 0.65) + ((max(0.0, min(10.0, confidence_score)) / 10.0) * 0.35)), 3)
+
+    def _graph_view_actionability_score(self, relationship: str) -> float:
+        if relationship == "linkedin_connection":
+            return 9.2
+        if relationship == "belongs_to_industry":
+            return 8.0
+        if relationship in {"works_at", "tracked_by"}:
+            return 7.8
+        if relationship in {"alumni_of", "org_alumni_context"}:
+            return 7.1
+        if relationship == "co_mentioned":
+            return 5.8
+        return 4.5
+
+    def _graph_view_signal_counters(
+        self,
+        signals: List[Dict[str, Any]],
+        since_ts: str,
+    ) -> tuple[Counter, Counter]:
+        since_dt = _parse_timestamp(since_ts)
+        total_counts: Counter = Counter()
+        recent_counts: Counter = Counter()
+        for signal in signals:
+            signal_dt = _parse_timestamp(signal.get("received_at", ""))
+            for profile_key in [str(item).strip() for item in signal.get("matched_profile_keys") or [] if str(item).strip()]:
+                total_counts[profile_key] += 1
+                if since_dt is None or (signal_dt and signal_dt >= since_dt):
+                    recent_counts[profile_key] += 1
+        return total_counts, recent_counts
+
+    def _graph_view_focus_profiles(
+        self,
+        profiles: List[Dict[str, Any]],
+        *,
+        view_mode: str,
+        profile_keys: List[str],
+        focus_profile_key: str,
+    ) -> List[Dict[str, Any]]:
+        profiles_by_key = {str(profile.get("profile_key") or "").strip(): profile for profile in profiles}
+        if view_mode == "ego" and focus_profile_key:
+            wanted = profiles_by_key.get(focus_profile_key)
+            return [wanted] if wanted else []
+        if view_mode == "industry_network":
+            if focus_profile_key:
+                wanted = profiles_by_key.get(focus_profile_key)
+                return [wanted] if wanted else []
+            industry_profiles = [profile for profile in profiles if str(profile.get("target_type") or "").strip().lower() == "industry"]
+            return industry_profiles or profiles
+        if profile_keys:
+            return [profiles_by_key[key] for key in profile_keys if key in profiles_by_key]
+        watched = [profile for profile in profiles if str(profile.get("watch_status") or "").strip().lower() == "watch"]
+        return watched or profiles
+
+    def build_graph_view(
+        self,
+        org_name: str,
+        view_mode: str = "watch_network",
+        profile_keys: Optional[List[str]] = None,
+        child_profile_keys: Optional[List[str]] = None,
+        focus_profile_key: str = "",
+        focus_org_name: str = "",
+        since_ts: str = "",
+        max_hops: int = 2,
+        max_nodes: int = 100,
+        max_edges: int = 200,
+        include_signals: bool = True,
+        include_sources: bool = False,
+        include_lab_members: bool = True,
+        include_alumni: bool = True,
+        include_unwatched_bridges: bool = False,
+        edge_types: Optional[List[str]] = None,
+        min_edge_weight: float = 0.2,
+        min_confidence: float = 5.0,
+        layout_hint: str = "force",
+        top_k_paths: int = 5,
+    ) -> Dict[str, Any]:
+        graph_manager = self._load_graph_manager()
+        profiles = self.list_profiles(org_name=org_name)
+        child_profile_keys = [str(item).strip() for item in child_profile_keys or [] if str(item).strip()]
+        if not include_unwatched_bridges:
+            profiles = [
+                profile
+                for profile in profiles
+                if str(profile.get("watch_status") or "").strip().lower() == "watch"
+                or str(profile.get("profile_key") or "").strip() in {str(item).strip() for item in profile_keys or [] if str(item).strip()}
+                or str(profile.get("profile_key") or "").strip() in set(child_profile_keys)
+                or str(profile.get("profile_key") or "").strip() == str(focus_profile_key or "").strip()
+            ] or profiles
+        tracked_profile_keys = {
+            str(profile.get("profile_key") or "").strip()
+            for profile in profiles
+            if str(profile.get("profile_key") or "").strip()
+        }
+        focus_profiles = self._graph_view_focus_profiles(
+            profiles,
+            view_mode=view_mode,
+            profile_keys=[str(item).strip() for item in [*(profile_keys or []), *child_profile_keys] if str(item).strip()],
+            focus_profile_key=str(focus_profile_key or "").strip(),
+        )
+        org_context = self.get_org_context(org_name)
+        signals = self.list_signals(org_name=org_name, matched_only=False, limit=2000)
+        total_signal_counts, recent_signal_counts = self._graph_view_signal_counters(signals, since_ts)
+
+        if graph_manager is None:
+            graph_manager = self._load_graph_manager(create=True)
+        graph = graph_manager.graph if graph_manager is not None else nx.Graph()
+        allowed_edge_types = set(edge_types or _GRAPH_EDGE_BASE_WEIGHTS.keys())
+
+        subscriber_node = _stakeholder_graph_node_id("subscriber_org", org_name)
+        start_nodes: List[str] = []
+        if subscriber_node in graph:
+            start_nodes.append(subscriber_node)
+        for profile in focus_profiles:
+            profile_node = _profile_graph_node_id(profile)
+            if profile_node in graph and profile_node not in start_nodes:
+                start_nodes.append(profile_node)
+        if focus_org_name:
+            org_node = _stakeholder_graph_node_id("organization", focus_org_name)
+            if org_node in graph and org_node not in start_nodes:
+                start_nodes.append(org_node)
+            for profile in profiles:
+                if profile.get("target_type") == "organisation" and _weak_org_link_match(profile.get("canonical_name", ""), focus_org_name):
+                    profile_node = _profile_graph_node_id(profile)
+                    if profile_node in graph and profile_node not in start_nodes:
+                        start_nodes.append(profile_node)
+        if not start_nodes:
+            for profile in focus_profiles[:5]:
+                profile_node = _profile_graph_node_id(profile)
+                if profile_node not in start_nodes:
+                    start_nodes.append(profile_node)
+
+        visited: set[str] = set()
+        node_hops: Dict[str, int] = {}
+        queue: List[tuple[str, int]] = [(node_id, 0) for node_id in start_nodes]
+        collected_edges: set[tuple[str, str]] = set()
+
+        while queue and len(visited) < max_nodes:
+            node_id, hops = queue.pop(0)
+            if node_id in visited or node_id not in graph:
+                continue
+            attrs = dict(graph.nodes.get(node_id, {}))
+            if not self._graph_view_allowed_node(
+                attrs,
+                include_signals=include_signals,
+                include_sources=include_sources,
+                include_lab_members=include_lab_members,
+                include_alumni=include_alumni,
+            ):
+                continue
+            visited.add(node_id)
+            node_hops[node_id] = hops
+            if hops >= max_hops:
+                continue
+            for neighbor in graph.neighbors(node_id):
+                if len(collected_edges) >= max_edges:
+                    break
+                neighbor_attrs = dict(graph.nodes.get(neighbor, {}))
+                if not self._graph_view_allowed_node(
+                    neighbor_attrs,
+                    include_signals=include_signals,
+                    include_sources=include_sources,
+                    include_lab_members=include_lab_members,
+                    include_alumni=include_alumni,
+                ):
+                    continue
+                edge_attrs = dict(graph.get_edge_data(node_id, neighbor) or {})
+                relationship = str(edge_attrs.get("relationship") or "").strip()
+                if relationship not in allowed_edge_types:
+                    continue
+                edge_key = tuple(sorted((node_id, neighbor)))
+                if edge_key not in collected_edges:
+                    collected_edges.add(edge_key)
+                if neighbor not in visited:
+                    queue.append((neighbor, hops + 1))
+
+        focus_node_ids = [node_id for node_id in start_nodes if node_id in visited]
+        focus_node_set = set(focus_node_ids)
+        profiles_by_key = {
+            str(profile.get("profile_key") or "").strip(): profile
+            for profile in profiles
+            if str(profile.get("profile_key") or "").strip()
+        }
+
+        nodes: List[Dict[str, Any]] = []
+        node_lookup: Dict[str, Dict[str, Any]] = {}
+        for node_id in sorted(visited):
+            attrs = dict(graph.nodes.get(node_id, {}))
+            profile_key = str(attrs.get("profile_key") or "").strip()
+            profile = profiles_by_key.get(profile_key)
+            node_type = self._graph_view_node_type(node_id, attrs, tracked_profile_keys)
+            watched = bool(profile and str(profile.get("watch_status") or "").strip().lower() == "watch")
+            recent_signal_count = recent_signal_counts.get(profile_key, 0) if profile_key else 0
+            total_signal_count = total_signal_counts.get(profile_key, 0) if profile_key else 0
+            importance = 3.5
+            if watched:
+                importance += 2.0
+            if node_id in focus_node_set:
+                importance += 1.5
+            importance += min(2.0, recent_signal_count * 0.4)
+            importance += min(1.5, total_signal_count * 0.15)
+            if node_type in {"lab_member", "alumni_group"}:
+                importance += 0.5
+            confidence_score = 6.0
+            if profile_key and total_signal_count:
+                confidence_score = min(10.0, 5.5 + (recent_signal_count * 0.5) + min(2.0, total_signal_count * 0.2))
+            meta: Dict[str, Any] = {
+                "entity_type": str(attrs.get("entity_type") or "").strip(),
+                "graph_hops": node_hops.get(node_id, 0),
+            }
+            if profile:
+                meta.update(
+                    {
+                        "target_type": profile.get("target_type", ""),
+                        "current_employer": profile.get("current_employer", ""),
+                        "current_role": profile.get("current_role", ""),
+                        "alumni": profile.get("alumni") or [],
+                        "known_employers": profile.get("known_employers") or [],
+                    }
+                )
+            subtitle = ""
+            if profile:
+                subtitle = str(profile.get("current_employer") or profile.get("current_role") or "").strip()
+            elif node_type == "alumni_group":
+                subtitle = "Alumni group"
+            elif node_type == "lab_member":
+                subtitle = "Lab member"
+            node_payload = {
+                "id": node_id,
+                "type": node_type,
+                "label": str(attrs.get("name") or profile.get("canonical_name") if profile else attrs.get("name") or node_id).strip() if attrs or profile else node_id,
+                "subtitle": subtitle,
+                "org_name": org_name,
+                "profile_key": profile_key,
+                "watch_status": str(profile.get("watch_status") or "").strip() if profile else "",
+                "is_focus": node_id in focus_node_set,
+                "is_watched": watched,
+                "importance_score": round(min(10.0, importance), 1),
+                "confidence_score": round(confidence_score, 1),
+                "signal_count": total_signal_count,
+                "recent_signal_count": recent_signal_count,
+                "tags": [tag for tag in ["focus" if node_id in focus_node_set else "", "watched" if watched else ""] if tag],
+                "meta": meta,
+            }
+            nodes.append(node_payload)
+            node_lookup[node_id] = node_payload
+
+        edges: List[Dict[str, Any]] = []
+        for idx, (left, right) in enumerate(sorted(collected_edges)):
+            if left not in node_lookup or right not in node_lookup:
+                continue
+            edge_attrs = dict(graph.get_edge_data(left, right) or {})
+            relationship = str(edge_attrs.get("relationship") or "").strip()
+            weight = self._graph_view_edge_weight(relationship, edge_attrs)
+            confidence_value = edge_attrs.get("confidence")
+            try:
+                confidence_score = float(confidence_value) * 10.0 if float(confidence_value) <= 1.0 else float(confidence_value)
+            except Exception:
+                confidence_score = round(weight * 10.0, 1)
+            if weight < float(min_edge_weight) or confidence_score < float(min_confidence):
+                continue
+            edges.append(
+                {
+                    "id": f"edge_{idx + 1}",
+                    "source": left,
+                    "target": right,
+                    "type": relationship,
+                    "label": relationship.replace("_", " "),
+                    "weight": weight,
+                    "confidence_score": round(min(10.0, confidence_score), 1),
+                    "recency_score": 8.0 if relationship in {"co_mentioned", "mentions_profile", "mentions_organization"} else 6.5,
+                    "actionability_score": self._graph_view_actionability_score(relationship),
+                    "evidence_count": 1,
+                    "is_direct": left in focus_node_set or right in focus_node_set,
+                    "is_inferred": False,
+                    "path_role": relationship,
+                    "meta": {
+                        key: value
+                        for key, value in edge_attrs.items()
+                        if key not in {"relationship"}
+                    },
+                }
+            )
+
+        edge_id_by_nodes = {
+            tuple(sorted((edge["source"], edge["target"]))): edge["id"]
+            for edge in edges
+        }
+        subgraph = graph.subgraph([node["id"] for node in nodes]).copy()
+
+        tracked_profile_nodes = {
+            _profile_graph_node_id(profile): profile
+            for profile in profiles
+            if _profile_graph_node_id(profile) in subgraph
+        }
+        lab_member_nodes = [node_id for node_id, attrs in subgraph.nodes(data=True) if str(attrs.get("entity_type") or "").strip() == "lab_member"]
+        alumni_nodes = [node_id for node_id, attrs in subgraph.nodes(data=True) if str(attrs.get("entity_type") or "").strip() == "alumni_group"]
+
+        paths: List[Dict[str, Any]] = []
+        for member_node in lab_member_nodes:
+            for profile_node in tracked_profile_nodes:
+                try:
+                    path_nodes = nx.shortest_path(subgraph, member_node, profile_node)
+                except Exception:
+                    continue
+                if len(path_nodes) - 1 > max_hops:
+                    continue
+                edge_ids = [
+                    edge_id_by_nodes.get(tuple(sorted((path_nodes[i], path_nodes[i + 1]))), "")
+                    for i in range(len(path_nodes) - 1)
+                ]
+                path_strength = 0.0
+                if edge_ids:
+                    matching_edges = [edge for edge in edges if edge["id"] in edge_ids]
+                    if matching_edges:
+                        path_strength = round(sum(edge["weight"] for edge in matching_edges) / len(matching_edges), 3)
+                paths.append(
+                    {
+                        "id": f"path_warm_{len(paths) + 1}",
+                        "type": "warm_intro",
+                        "source_node_id": member_node,
+                        "target_node_id": profile_node,
+                        "hop_count": len(path_nodes) - 1,
+                        "strength": path_strength,
+                        "explanation": f"{self._graph_node_label(member_node)} -> {self._graph_node_label(profile_node)} warm path",
+                        "node_ids": path_nodes,
+                        "edge_ids": [item for item in edge_ids if item],
+                    }
+                )
+                if len(paths) >= top_k_paths:
+                    break
+            if len(paths) >= top_k_paths:
+                break
+
+        for idx, left_node in enumerate(sorted(tracked_profile_nodes)):
+            for right_node in sorted(list(tracked_profile_nodes))[idx + 1:]:
+                shared_alumni = self._graph_common_neighbor_details(left_node, right_node, {"alumni_group"})
+                if shared_alumni:
+                    paths.append(
+                        {
+                            "id": f"path_alumni_{len(paths) + 1}",
+                            "type": "shared_alumni",
+                            "source_node_id": left_node,
+                            "target_node_id": right_node,
+                            "hop_count": 2,
+                            "strength": 0.72,
+                            "explanation": f"Shared alumni bridge via {shared_alumni[0]['name']}",
+                            "node_ids": [left_node, shared_alumni[0]["node_id"], right_node],
+                            "edge_ids": [
+                                edge_id_by_nodes.get(tuple(sorted((left_node, shared_alumni[0]["node_id"]))), ""),
+                                edge_id_by_nodes.get(tuple(sorted((shared_alumni[0]["node_id"], right_node))), ""),
+                            ],
+                        }
+                    )
+                    if len(paths) >= top_k_paths:
+                        break
+            if len(paths) >= top_k_paths:
+                break
+
+        insights: List[Dict[str, Any]] = []
+        if lab_member_nodes and paths:
+            first_path = next((path for path in paths if path["type"] == "warm_intro"), None)
+            if first_path:
+                insights.append(
+                    {
+                        "id": "insight_warm_intro",
+                        "type": "warm_intro",
+                        "severity": "medium",
+                        "score": 8.4,
+                        "title": "Warm introduction path available",
+                        "summary": first_path["explanation"],
+                        "node_ids": first_path["node_ids"],
+                        "edge_ids": [item for item in first_path["edge_ids"] if item],
+                        "source_signal_ids": [],
+                    }
+                )
+        if alumni_nodes:
+            insights.append(
+                {
+                    "id": "insight_alumni_cluster",
+                    "type": "alumni_cluster",
+                    "severity": "medium",
+                    "score": 7.6,
+                    "title": "Shared alumni bridges detected",
+                    "summary": f"{len(alumni_nodes)} alumni-group nodes connect this scoped network.",
+                    "node_ids": alumni_nodes[:5],
+                    "edge_ids": [],
+                    "source_signal_ids": [],
+                }
+            )
+        co_mentioned_edges = [edge for edge in edges if edge["type"] == "co_mentioned"]
+        if co_mentioned_edges:
+            insights.append(
+                {
+                    "id": "insight_cross_target",
+                    "type": "cross_target_overlap",
+                    "severity": "low",
+                    "score": 6.9,
+                    "title": "Cross-target co-mentions present",
+                    "summary": f"{len(co_mentioned_edges)} direct co-mention link(s) found in the scoped network.",
+                    "node_ids": [],
+                    "edge_ids": [edge["id"] for edge in co_mentioned_edges[:5]],
+                    "source_signal_ids": [],
+                }
+            )
+
+        generated_at = _utc_now_iso()
+        graph_id = f"graph_{hashlib.sha1(f'{org_name}|{view_mode}|{generated_at}'.encode('utf-8')).hexdigest()[:16]}"
+        output_dir = self.root / "graph_views"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{graph_id}.json"
+
+        payload = {
+            "graph_id": graph_id,
+            "org_name": org_name,
+            "view_mode": view_mode,
+            "generated_at": generated_at,
+            "filters": {
+                "since_ts": since_ts,
+                "max_hops": max_hops,
+                "max_nodes": max_nodes,
+                "max_edges": max_edges,
+                "include_signals": include_signals,
+                "include_sources": include_sources,
+                "include_lab_members": include_lab_members,
+                "include_alumni": include_alumni,
+                "include_unwatched_bridges": include_unwatched_bridges,
+                "min_edge_weight": min_edge_weight,
+                "min_confidence": min_confidence,
+                "layout_hint": layout_hint,
+                "edge_types": sorted(allowed_edge_types),
+            },
+            "summary": {
+                "watched_people": len([node for node in nodes if node["type"] == "person" and node["is_watched"]]),
+                "watched_orgs": len([node for node in nodes if node["type"] == "tracked_org"]),
+                "watched_industries": len([node for node in nodes if node["type"] == "industry"]),
+                "alumni_groups": len(alumni_nodes),
+                "warm_intro_paths": len([path for path in paths if path["type"] == "warm_intro"]),
+                "cross_target_links": len([edge for edge in edges if edge["type"] == "co_mentioned"]),
+            },
+            "nodes": nodes,
+            "edges": edges,
+            "paths": paths[:top_k_paths],
+            "insights": insights[:8],
+            "legend": {
+                "node_types": {
+                    "person": "Watched stakeholder",
+                    "tracked_org": "Tracked organisation profile",
+                    "industry": "Industry profile",
+                    "organization": "Organisation bridge",
+                    "alumni_group": "Alumni group",
+                    "lab_member": "Lab member connector",
+                    "subscriber_org": "Subscriber organisation",
+                    "stakeholder_signal": "Signal overlay",
+                    "source": "Source node",
+                },
+                "edge_types": {
+                    edge_type: edge_type.replace("_", " ")
+                    for edge_type in sorted(allowed_edge_types)
+                },
+            },
+        }
+        output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return {
+            "graph_id": graph_id,
+            "org_name": org_name,
+            "view_mode": view_mode,
+            "generated_at": generated_at,
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "focus_node_ids": focus_node_ids,
+            "output_path": str(output_path),
+            "has_paths": bool(paths),
+            "has_signal_overlay": bool(include_signals),
+            "summary": payload["summary"],
+        }
 
     def _graph_file_path(self) -> Path:
         return self.root.parent / "knowledge_cortex.gpickle"
@@ -883,12 +1508,177 @@ class StakeholderSignalStore:
             return best_path_summary
         return f"knowledge-graph path length {best_length} between {best_pair[0]} and {best_pair[1]}"
 
+    def find_relationship_paths(
+        self,
+        org_name: str,
+        target_names: List[str],
+        max_hops: int = 4,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        manager = self._load_graph_manager()
+        if manager is None:
+            return []
+
+        source_nodes: List[str] = []
+        subscriber_node = _stakeholder_graph_node_id("subscriber_org", org_name)
+        if subscriber_node in manager.graph:
+            source_nodes.append(subscriber_node)
+        for node_id, attrs in manager.graph.nodes(data=True):
+            if str(attrs.get("entity_type") or "").strip() == "lab_member":
+                source_nodes.append(node_id)
+
+        target_nodes: List[str] = []
+        for target_name in target_names or []:
+            target_nodes.extend(self._graph_exact_nodes(target_name))
+
+        seen: set[tuple[str, str]] = set()
+        output: List[Dict[str, Any]] = []
+        for source_node in source_nodes[:20]:
+            for target_node in target_nodes[:20]:
+                pair = (source_node, target_node)
+                if pair in seen or source_node == target_node:
+                    continue
+                seen.add(pair)
+                try:
+                    path_nodes = nx.shortest_path(manager.graph, source_node, target_node)
+                except Exception:
+                    continue
+                hop_count = len(path_nodes) - 1
+                if hop_count <= 0 or hop_count > max_hops:
+                    continue
+                via_nodes = [self._graph_node_label(node) for node in path_nodes[1:-1] if self._graph_node_label(node)]
+                output.append(
+                    {
+                        "from": self._graph_node_label(source_node),
+                        "to": self._graph_node_label(target_node),
+                        "via": via_nodes[0] if via_nodes else "",
+                        "strength": "warm_intro" if hop_count <= 3 else "indirect",
+                        "hop_count": hop_count,
+                    }
+                )
+
+        output.sort(key=lambda item: (item.get("hop_count", 99), item.get("from", ""), item.get("to", "")))
+        return output[: max(0, int(limit))]
+
+    def reconcile_intel_note_delivery(
+        self,
+        org_name: str,
+        trace_id: str,
+        payload: Dict[str, Any],
+        response: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        note = dict(payload.get("note") or {})
+        primary = dict(payload.get("primary_entity") or {})
+        intel_id = str(response.get("intel_id") or "").strip() or f"note_{hashlib.sha1(str(trace_id).encode('utf-8')).hexdigest()[:12]}"
+        note_title = str(note.get("title") or "").strip()
+        note_date = str(note.get("note_date") or "").strip()
+        primary_name = str(primary.get("name") or "").strip()
+        content_hash = hashlib.sha1(
+            "|".join([org_name, note_date, primary_name, str(note.get("content") or note.get("original_text") or "")]).encode("utf-8", "ignore")
+        ).hexdigest()[:20]
+
+        state = self._read_state()
+        intel_notes = [item for item in state.get("intel_notes") or [] if str(item.get("intel_id") or "").strip() != intel_id]
+        intel_notes.append(
+            {
+                "intel_id": intel_id,
+                "org_name": org_name,
+                "trace_id": trace_id,
+                "title": note_title,
+                "note_date": note_date,
+                "primary_entity_name": primary_name,
+                "primary_target_type": str(primary.get("target_type") or "").strip(),
+                "content_hash": content_hash,
+                "submitted_by": str(note.get("submitted_by") or "").strip(),
+                "website_response": dict(response or {}),
+                "created_at": _utc_now_iso(),
+            }
+        )
+        state["intel_notes"] = sorted(intel_notes, key=lambda item: item.get("created_at", ""), reverse=True)
+        self._write_state(state)
+
+        manager = self._load_graph_manager(create=True)
+        if manager is None:
+            return {"intel_id": intel_id, "linked_entities": 0}
+
+        note_node = _stakeholder_graph_node_id("intel_note", intel_id)
+        manager.add_entity(
+            note_node,
+            "intel_note",
+            name=note_title or primary_name or intel_id,
+            intel_id=intel_id,
+            trace_id=trace_id,
+            org_name=org_name,
+            note_date=note_date,
+            submitted_by=str(note.get("submitted_by") or "").strip(),
+            source="ingest_intel_note",
+        )
+
+        linked_entities = 0
+        entity_specs: List[Dict[str, Any]] = []
+        if primary_name:
+            entity_specs.append(
+                {
+                    "name": primary_name,
+                    "target_type": str(primary.get("target_type") or "").strip(),
+                    "relationship": "note_primary",
+                }
+            )
+        for item in payload.get("referenced_entities") or []:
+            if not isinstance(item, dict):
+                continue
+            entity_specs.append(
+                {
+                    "name": str(item.get("name") or "").strip(),
+                    "target_type": str(item.get("target_type") or "").strip(),
+                    "relationship": "intel_reference",
+                    "reference_type": str(item.get("reference_type") or "").strip(),
+                    "confidence": str(item.get("confidence") or "").strip(),
+                }
+            )
+
+        profile_by_name = {
+            normalize_lookup(profile.get("canonical_name") or ""): profile
+            for profile in self.list_profiles(org_name=org_name)
+        }
+        for entity in entity_specs:
+            entity_name = str(entity.get("name") or "").strip()
+            if not entity_name:
+                continue
+            lookup = normalize_lookup(entity_name)
+            profile = profile_by_name.get(lookup)
+            if profile:
+                entity_node = _profile_graph_node_id(profile)
+            else:
+                target_type = str(entity.get("target_type") or "organization").strip().lower() or "organization"
+                graph_kind = _target_type_graph_kind(target_type)
+                entity_node = _stakeholder_graph_node_id(graph_kind, entity_name)
+                manager.add_entity(
+                    entity_node,
+                    graph_kind,
+                    name=entity_name,
+                    target_type=target_type,
+                    source="ingest_intel_note",
+                )
+            manager.add_relationship(
+                note_node,
+                entity_node,
+                relationship=str(entity.get("relationship") or "intel_reference"),
+                reference_type=str(entity.get("reference_type") or "").strip(),
+                confidence=str(entity.get("confidence") or "").strip(),
+            )
+            linked_entities += 1
+
+        self._save_graph_manager()
+        return {"intel_id": intel_id, "linked_entities": linked_entities}
+
     def _upsert_profile_graph(self, profile: Dict[str, Any], subscriber_org: str) -> None:
         manager = self._load_graph_manager(create=True)
         if manager is None:
             return
 
-        profile_kind = "person" if str(profile.get("target_type") or "").strip().lower() == "person" else "entity"
+        target_type = str(profile.get("target_type") or "").strip().lower()
+        profile_kind = _target_type_graph_kind(target_type)
         profile_node = _stakeholder_graph_node_id(profile_kind, str(profile.get("profile_key") or profile.get("canonical_name") or ""))
         manager.add_entity(
             profile_node,
@@ -935,6 +1725,40 @@ class StakeholderSignalStore:
                 is_primary=int(affiliation.get("is_primary") or 0),
             )
 
+        for industry_affiliation in profile.get("industry_affiliations") or []:
+            if not isinstance(industry_affiliation, dict):
+                continue
+            industry_key = str(industry_affiliation.get("industry_profile_key") or "").strip()
+            industry_name = str(industry_affiliation.get("industry_name") or "").strip()
+            if not industry_key and not industry_name:
+                continue
+            industry_node = _stakeholder_graph_node_id("industry", industry_key or industry_name)
+            manager.add_entity(
+                industry_node,
+                "industry",
+                name=industry_name or industry_key,
+                profile_key=industry_key,
+                target_type="industry",
+                source="stakeholder_profile_sync",
+            )
+            manager.add_relationship(
+                profile_node,
+                industry_node,
+                relationship="belongs_to_industry",
+                role=str(industry_affiliation.get("role") or "").strip(),
+                affiliation_type=str(industry_affiliation.get("affiliation_type") or "").strip(),
+                source=str(industry_affiliation.get("source") or "").strip(),
+            )
+
+        if target_type == "industry":
+            for theme in profile.get("key_themes") or []:
+                theme_text = str(theme or "").strip()
+                if not theme_text:
+                    continue
+                theme_node = _stakeholder_graph_node_id("industry_theme", theme_text)
+                manager.add_entity(theme_node, "source", name=theme_text, source="stakeholder_profile_sync")
+                manager.add_relationship(profile_node, theme_node, relationship="published_by")
+
         for alumni_name in profile.get("alumni") or []:
             alumni_text = str(alumni_name or "").strip()
             if not alumni_text:
@@ -958,7 +1782,7 @@ class StakeholderSignalStore:
                 degree=str(connection.get("degree") or "").strip(),
             )
 
-    def _upsert_org_context_graph(self, org_name: str, org_alumni: List[str]) -> None:
+    def _upsert_org_context_graph(self, org_name: str, org_alumni: List[str], org_strategic_profile: Optional[Dict[str, Any]] = None) -> None:
         manager = self._load_graph_manager(create=True)
         if manager is None:
             return
@@ -977,6 +1801,29 @@ class StakeholderSignalStore:
             alumni_node = _stakeholder_graph_node_id("alumni", alumni_text)
             manager.add_entity(alumni_node, "alumni_group", name=alumni_text, source="stakeholder_profile_sync")
             manager.add_relationship(subscriber_node, alumni_node, relationship="org_alumni_context")
+
+        strategic_profile = _normalize_strategic_profile(org_strategic_profile)
+        for industry_name in strategic_profile.get("industries") or []:
+            industry_text = str(industry_name or "").strip()
+            if not industry_text:
+                continue
+            industry_node = _stakeholder_graph_node_id("industry", industry_text)
+            manager.add_entity(
+                industry_node,
+                "industry",
+                name=industry_text,
+                target_type="industry",
+                source="stakeholder_profile_sync",
+            )
+            manager.add_relationship(subscriber_node, industry_node, relationship="strategic_focus")
+
+        for theme_name in strategic_profile.get("key_themes") or []:
+            theme_text = str(theme_name or "").strip()
+            if not theme_text:
+                continue
+            theme_node = _stakeholder_graph_node_id("industry_theme", theme_text)
+            manager.add_entity(theme_node, "source", name=theme_text, source="stakeholder_profile_sync")
+            manager.add_relationship(subscriber_node, theme_node, relationship="strategic_theme")
 
     def _upsert_signal_graph(self, signal: Dict[str, Any]) -> None:
         manager = self._load_graph_manager(create=True)
@@ -999,7 +1846,7 @@ class StakeholderSignalStore:
             canonical_name = str(match.get("canonical_name") or "").strip()
             if not profile_key and not canonical_name:
                 continue
-            match_kind = "person" if str(match.get("target_type") or "").strip().lower() == "person" else "entity"
+            match_kind = _target_type_graph_kind(str(match.get("target_type") or "").strip().lower())
             profile_node = _stakeholder_graph_node_id(match_kind, profile_key or canonical_name)
             manager.add_entity(
                 profile_node,
@@ -1021,6 +1868,14 @@ class StakeholderSignalStore:
             manager.add_entity(employer_node, "organization", name=employer, source="signal_ingest")
             manager.add_relationship(signal_node, employer_node, relationship="mentions_organization")
 
+        for industry_name in signal.get("key_themes") or []:
+            industry_text = str(industry_name or "").strip()
+            if not industry_text:
+                continue
+            industry_node = _stakeholder_graph_node_id("industry_theme", industry_text)
+            manager.add_entity(industry_node, "source", name=industry_text, source="signal_ingest")
+            manager.add_relationship(signal_node, industry_node, relationship="published_by")
+
         source_name = str(signal.get("source_name") or "").strip()
         if source_name:
             source_node = _stakeholder_graph_node_id("source", source_name)
@@ -1029,9 +1884,7 @@ class StakeholderSignalStore:
 
         if len(signal.get("matched_profile_keys") or []) > 1:
             kind_by_key = {
-                str(match.get("profile_key") or "").strip(): (
-                    "person" if str(match.get("target_type") or "").strip().lower() == "person" else "entity"
-                )
+                str(match.get("profile_key") or "").strip(): _target_type_graph_kind(str(match.get("target_type") or "").strip().lower())
                 for match in signal.get("matches") or []
                 if str(match.get("profile_key") or "").strip()
             }
@@ -1058,7 +1911,11 @@ class StakeholderSignalStore:
             org_name = str(org_context.get("org_name") or "").strip()
             if not org_name:
                 continue
-            self._upsert_org_context_graph(org_name, _normalize_org_name_list(org_context.get("org_alumni") or []))
+            self._upsert_org_context_graph(
+                org_name,
+                _normalize_org_name_list(org_context.get("org_alumni") or []),
+                _normalize_strategic_profile(org_context.get("org_strategic_profile") or {}),
+            )
             org_contexts_processed += 1
 
         for profile in state.get("profiles") or []:
@@ -1232,6 +2089,7 @@ class StakeholderSignalStore:
         org_name: str,
         profiles: List[Dict[str, Any]],
         org_alumni: Optional[List[str]] = None,
+        org_strategic_profile: Optional[Dict[str, Any]] = None,
         source: str = "",
         trace_id: str = "",
         replace_org_scope: bool = False,
@@ -1293,15 +2151,23 @@ class StakeholderSignalStore:
         context_key = normalize_lookup(org_name)
         org_contexts = dict(state.get("org_contexts") or {})
         existing_context = dict(org_contexts.get(context_key) or {})
+        strategic_profile = _normalize_strategic_profile(
+            org_strategic_profile if org_strategic_profile is not None else existing_context.get("org_strategic_profile") or {}
+        )
         org_contexts[context_key] = {
             "org_name": org_name,
             "org_alumni": _normalize_org_name_list(org_alumni if org_alumni is not None else existing_context.get("org_alumni") or []),
+            "org_strategic_profile": strategic_profile,
             "source": str(source or existing_context.get("source") or "").strip(),
             "trace_id": str(trace_id or existing_context.get("trace_id") or "").strip(),
             "updated_at": _utc_now_iso(),
         }
         state["org_contexts"] = org_contexts
-        self._upsert_org_context_graph(org_name, state["org_contexts"][context_key].get("org_alumni") or [])
+        self._upsert_org_context_graph(
+            org_name,
+            state["org_contexts"][context_key].get("org_alumni") or [],
+            state["org_contexts"][context_key].get("org_strategic_profile") or {},
+        )
         self._write_state(state)
         self._save_graph_manager()
         return {
@@ -1310,6 +2176,7 @@ class StakeholderSignalStore:
             "added": added,
             "updated": updated,
             "org_alumni_count": len(state["org_contexts"][context_key].get("org_alumni") or []),
+            "org_strategic_industry_count": len(state["org_contexts"][context_key].get("org_strategic_profile", {}).get("industries") or []),
         }
 
     @staticmethod
@@ -1356,6 +2223,15 @@ class StakeholderSignalStore:
             "trace_id": str(payload.get("trace_id") or "").strip(),
             "source_system": str(payload.get("source_system") or payload.get("source") or "market_radar_watch").strip() or "market_radar_watch",
             "source_job": str(payload.get("source_job") or "").strip(),
+            "source_org_name": str(item.get("source_org_name") or payload.get("source_org_name") or payload["org_name"]).strip(),
+            "visible_to_orgs": item.get("visible_to_orgs") or payload.get("visible_to_orgs") or [],
+            "shared_with_orgs": item.get("shared_with_orgs") or payload.get("shared_with_orgs") or [],
+            "scope_profile_key": str(item.get("scope_profile_key") or payload.get("scope_profile_key") or "").strip(),
+            "child_profile_keys": list(item.get("child_profile_keys") or payload.get("child_profile_keys") or []),
+            "child_org_names": list(item.get("child_org_names") or payload.get("child_org_names") or []),
+            "key_themes": list(item.get("key_themes") or payload.get("key_themes") or []),
+            "regulatory_context": str(item.get("regulatory_context") or payload.get("regulatory_context") or "").strip(),
+            "market_size": str(item.get("market_size") or payload.get("market_size") or "").strip(),
             "signal_type": "watch_report_signal",
             "target_type": target_type,
             "target_name": target_name,
@@ -1438,7 +2314,15 @@ class StakeholderSignalStore:
         self,
         org_name: str,
         since_ts: str = "",
+        scope_type: str = "org",
+        scope_profile_key: str = "",
         profile_keys: Optional[List[str]] = None,
+        child_profile_keys: Optional[List[str]] = None,
+        child_org_names: Optional[List[str]] = None,
+        key_themes: Optional[List[str]] = None,
+        regulatory_context: str = "",
+        market_size: str = "",
+        shared_with_orgs: Optional[List[str]] = None,
         member_alumni: Optional[List[str]] = None,
         org_alumni: Optional[List[str]] = None,
         report_depth: str = "detailed",
@@ -1453,6 +2337,20 @@ class StakeholderSignalStore:
         llm_model: str = "",
     ) -> Dict[str, Any]:
         state = self._read_state()
+        scope_type = str(scope_type or "org").strip().lower() or "org"
+        if scope_type not in {"org", "industry"}:
+            scope_type = "org"
+        scope_profile_key = str(scope_profile_key or "").strip()
+        child_profile_keys = [str(item).strip() for item in child_profile_keys or [] if str(item).strip()]
+        child_org_names = _normalize_org_name_list(child_org_names or [])
+        key_themes = _normalize_org_name_list(key_themes or [])
+        shared_with_orgs = _normalize_org_name_list(shared_with_orgs or [])
+        industry_profile = self.get_profile(scope_profile_key) if scope_type == "industry" and scope_profile_key else None
+        if industry_profile:
+            key_themes = _normalize_org_name_list([*key_themes, *(industry_profile.get("key_themes") or [])])
+            regulatory_context = str(regulatory_context or industry_profile.get("regulatory_context") or "").strip()
+            market_size = str(market_size or industry_profile.get("market_size") or "").strip()
+
         stored_org_alumni = self.get_org_context(org_name).get("org_alumni") or []
         member_alumni = _normalize_org_name_list(member_alumni)
         org_alumni = _normalize_org_name_list(org_alumni if org_alumni is not None else stored_org_alumni)
@@ -1476,23 +2374,58 @@ class StakeholderSignalStore:
             enriched["profile_alumni_links"] = _find_profile_alumni_links(top_match, alumni_context) if top_match else []
             enriched_signals.append(enriched)
         signals = enriched_signals
-        if profile_keys:
-            wanted = set(profile_keys)
+        scope_profile_keys = [str(item).strip() for item in profile_keys or [] if str(item).strip()]
+        if scope_type == "industry":
+            scope_profile_keys = _normalize_org_name_list([*scope_profile_keys, *child_profile_keys])  # type: ignore[arg-type]
+            scope_profile_keys = [item for item in scope_profile_keys if item]
+            if scope_profile_key and scope_profile_key not in scope_profile_keys:
+                scope_profile_keys.append(scope_profile_key)
+        if scope_profile_keys:
+            wanted = set(scope_profile_keys)
             signals = [
                 signal
                 for signal in signals
                 if wanted.intersection(set(signal.get("matched_profile_keys") or []))
+                or (
+                    scope_type == "industry"
+                    and (
+                        any(_text_contains_org_hint(" ".join([signal.get("subject", ""), signal.get("raw_text", ""), signal.get("text_note", "")]), item) for item in child_org_names)
+                        or any(_text_contains_org_hint(" ".join([signal.get("subject", ""), signal.get("raw_text", ""), signal.get("text_note", "")]), item) for item in key_themes)
+                        or str(signal.get("scope_profile_key") or "").strip() == scope_profile_key
+                    )
+                )
             ]
         if matched_only:
-            signals = [signal for signal in signals if signal.get("matches") or signal.get("alumni_hits")]
+            signals = [
+                signal
+                for signal in signals
+                if signal.get("matches")
+                or signal.get("alumni_hits")
+                or (
+                    scope_type == "industry"
+                    and (
+                        str(signal.get("scope_profile_key") or "").strip() == scope_profile_key
+                        or any(_text_contains_org_hint(" ".join([signal.get("subject", ""), signal.get("raw_text", ""), signal.get("text_note", "")]), item) for item in child_org_names)
+                        or any(_text_contains_org_hint(" ".join([signal.get("subject", ""), signal.get("raw_text", ""), signal.get("text_note", "")]), item) for item in key_themes)
+                    )
+                )
+            ]
         if not include_needs_review:
             signals = [signal for signal in signals if not signal.get("needs_review")]
         signals = [
             signal
             for signal in signals
             if _should_include_signal_in_digest(signal, report_depth)
+            or (
+                scope_type == "industry"
+                and (
+                    str(signal.get("scope_profile_key") or "").strip() == scope_profile_key
+                    or any(_text_contains_org_hint(" ".join([signal.get("subject", ""), signal.get("raw_text", ""), signal.get("text_note", "")]), item) for item in child_org_names)
+                    or any(_text_contains_org_hint(" ".join([signal.get("subject", ""), signal.get("raw_text", ""), signal.get("text_note", "")]), item) for item in key_themes)
+                )
+            )
         ]
-        selected_profile_keys = [str(item).strip() for item in profile_keys or [] if str(item).strip()]
+        selected_profile_keys = scope_profile_keys
         signals, intelligence_context = self._enrich_digest_signals(
             signals,
             state=state,
@@ -1548,12 +2481,24 @@ class StakeholderSignalStore:
             generated_at=generated_at,
             alumni_context=alumni_context,
             intelligence_context=intelligence_context,
+            scope_type=scope_type,
+            scope_profile=industry_profile or {},
+            child_org_names=child_org_names,
+            key_themes=key_themes,
+            regulatory_context=regulatory_context,
+            market_size=market_size,
         )
         if llm_synthesis and signals:
             raw_data = self._prepare_digest_data(
                 signals,
                 state=state,
                 org_name=org_name,
+                scope_type=scope_type,
+                scope_profile=industry_profile or {},
+                child_org_names=child_org_names,
+                key_themes=key_themes,
+                regulatory_context=regulatory_context,
+                market_size=market_size,
                 member_alumni=member_alumni,
                 org_alumni=org_alumni,
                 intelligence_context=intelligence_context,
@@ -1562,13 +2507,24 @@ class StakeholderSignalStore:
                 priority_profile_keys=priority_profile_keys,
                 deep_analysis=deep_analysis,
             )
-            synthesised, actual_llm_provider, actual_llm_model = self._llm_synthesise(
-                raw_data=raw_data,
-                org_name=org_name,
-                provider=llm_provider,
-                model=llm_model,
-                report_depth=report_depth,
-            )
+            try:
+                synthesised, actual_llm_provider, actual_llm_model = self._llm_synthesise(
+                    raw_data=raw_data,
+                    org_name=org_name,
+                    scope_type=scope_type,
+                    scope_profile_name=str((industry_profile or {}).get("canonical_name") or "").strip(),
+                    provider=llm_provider,
+                    model=llm_model,
+                    report_depth=report_depth,
+                )
+            except TypeError:
+                synthesised, actual_llm_provider, actual_llm_model = self._llm_synthesise(
+                    raw_data,
+                    org_name,
+                    llm_provider,
+                    llm_model,
+                    report_depth,
+                )
             if synthesised:
                 body_lines = _strip_empty_digest_sections(synthesised).splitlines()
                 llm_synthesised = True
@@ -1585,6 +2541,8 @@ class StakeholderSignalStore:
             f"org_name: {org_name}",
             f"generated_at: {generated_at}",
             f"since_ts: {since_ts}",
+            f"scope_type: {scope_type}",
+            f"scope_profile_key: {scope_profile_key}",
             f"signal_count: {len(signals)}",
             f"report_depth: {report_depth}",
             f"digest_tier: {digest_tier}",
@@ -1596,12 +2554,17 @@ class StakeholderSignalStore:
             f"llm_model: {actual_llm_model}",
             "---",
             "",
-            "# Strategic Intelligence Brief" if report_depth == "strategic" else "# Stakeholder Intelligence Digest",
+            "# Strategic Intelligence Brief" if report_depth == "strategic" else ("# Industry Intelligence Digest" if scope_type == "industry" else "# Stakeholder Intelligence Digest"),
             "",
             f"Organisation: {org_name}",
             f"Generated: {generated_at}",
             "",
         ]
+        if scope_type == "industry":
+            lines.extend([
+                f"Scope: {str((industry_profile or {}).get('canonical_name') or scope_profile_key or 'Industry').strip()}",
+                "",
+            ])
         if alumni_context:
             lines.extend([f"Alumni context: {', '.join(alumni_context)}", ""])
         lines.extend(body_lines)
@@ -1613,6 +2576,14 @@ class StakeholderSignalStore:
             "signal_count": len(signals),
             "signals": signals,
             "output_path": str(output_path),
+            "scope_type": scope_type,
+            "scope_profile_key": scope_profile_key,
+            "child_profile_keys": child_profile_keys,
+            "child_org_names": child_org_names,
+            "key_themes": key_themes,
+            "regulatory_context": regulatory_context,
+            "market_size": market_size,
+            "shared_with_orgs": shared_with_orgs,
             "llm_synthesised": llm_synthesised,
             "profiles_covered": profiles_covered,
             "member_alumni": member_alumni,
@@ -1651,9 +2622,29 @@ class StakeholderSignalStore:
         generated_at: str,
         alumni_context: List[str],
         intelligence_context: Dict[str, Any],
+        scope_type: str = "org",
+        scope_profile: Optional[Dict[str, Any]] = None,
+        child_org_names: Optional[List[str]] = None,
+        key_themes: Optional[List[str]] = None,
+        regulatory_context: str = "",
+        market_size: str = "",
     ) -> List[str]:
         if not signals:
             return ["No matching signals for this window."]
+
+        if scope_type == "industry":
+            return self._build_industry_digest_lines(
+                signals,
+                report_depth=report_depth,
+                since_ts=since_ts,
+                generated_at=generated_at,
+                intelligence_context=intelligence_context,
+                scope_profile=scope_profile or {},
+                child_org_names=child_org_names or [],
+                key_themes=key_themes or [],
+                regulatory_context=regulatory_context,
+                market_size=market_size,
+            )
 
         if report_depth == "summary":
             return self._build_summary_digest_lines(
@@ -1666,6 +2657,96 @@ class StakeholderSignalStore:
         if report_depth == "strategic":
             return self._build_strategic_digest_lines(signals, alumni_context=alumni_context, intelligence_context=intelligence_context)
         return self._build_detailed_digest_lines(signals, alumni_context=alumni_context, intelligence_context=intelligence_context)
+
+    def _build_industry_digest_lines(
+        self,
+        signals: List[Dict[str, Any]],
+        report_depth: str,
+        since_ts: str,
+        generated_at: str,
+        intelligence_context: Dict[str, Any],
+        scope_profile: Dict[str, Any],
+        child_org_names: List[str],
+        key_themes: List[str],
+        regulatory_context: str,
+        market_size: str,
+    ) -> List[str]:
+        lines: List[str] = [
+            "## Sector Overview",
+            f"**Period:** {since_ts or 'All available'} -> {generated_at}",
+            f"**Signals:** {len(signals)}",
+        ]
+        if child_org_names:
+            lines.append(f"**Child organisations:** {', '.join(child_org_names[:8])}")
+        if key_themes:
+            lines.append(f"**Key themes:** {', '.join(key_themes[:8])}")
+        if regulatory_context:
+            lines.append(f"**Regulatory context:** {regulatory_context}")
+        if market_size:
+            lines.append(f"**Market size:** {market_size}")
+
+        org_buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        stakeholder_buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for signal in signals:
+            top_match = (signal.get("matches") or [{}])[0]
+            stakeholder_name = str(top_match.get("canonical_name") or signal.get("parsed_candidate_name") or "").strip()
+            employer = str(top_match.get("current_employer") or signal.get("parsed_candidate_employer") or "").strip()
+            if employer:
+                org_buckets[employer].append(signal)
+            if stakeholder_name:
+                stakeholder_buckets[stakeholder_name].append(signal)
+
+        lines.extend(["", "## Key Organisation Updates"])
+        for org_name, items in sorted(org_buckets.items(), key=lambda item: (-len(item[1]), item[0].lower()))[:6]:
+            lines.append(f"### {org_name}")
+            for signal in items[: min(3, 2 if report_depth == 'summary' else 3)]:
+                lines.append(
+                    f"- **{signal.get('subject', signal.get('signal_id', 'signal'))}** "
+                    f"[{self._classify_signal_category(signal)} | conf {signal.get('confidence_score', 0):.1f}/10]"
+                )
+
+        lines.extend(["", "## Stakeholder Movements"])
+        for name, items in sorted(stakeholder_buckets.items(), key=lambda item: (-len(item[1]), item[0].lower()))[:6]:
+            trend = self._summarise_signal_trend(items)
+            lines.append(f"- **{name}**: {trend}")
+
+        regulatory_signals = [signal for signal in signals if self._classify_signal_category(signal) == "Regulatory"]
+        if regulatory_signals or regulatory_context:
+            lines.extend(["", "## Regulatory & Policy Changes"])
+            if regulatory_context:
+                lines.append(f"- Sector backdrop: {regulatory_context}")
+            for signal in regulatory_signals[:5]:
+                lines.append(f"- **{signal.get('subject', signal.get('signal_id', 'signal'))}**")
+
+        if key_themes:
+            lines.extend(["", "## Emerging Themes & Opportunities"])
+            for theme in key_themes[:6]:
+                theme_hits = [
+                    signal for signal in signals
+                    if _text_contains_org_hint(" ".join([signal.get("subject", ""), signal.get("raw_text", ""), signal.get("text_note", "")]), theme)
+                ]
+                if theme_hits:
+                    lines.append(f"- **{theme}** appears in {len(theme_hits)} current-window signal(s)")
+
+        relationship_context = intelligence_context.get("relationship_context", {})
+        if any(relationship_context.get(key) for key in ("network_lines", "cross_target_lines", "talent_flow_lines")):
+            lines.extend(["", "## Relationship Intelligence"])
+            for key in ("network_lines", "cross_target_lines", "talent_flow_lines"):
+                for item in relationship_context.get(key) or []:
+                    lines.append(f"- {item}")
+
+        if intelligence_context.get("temporal_lines"):
+            lines.extend(["", "## Temporal Patterns"])
+            lines.extend(f"- {item}" for item in intelligence_context.get("temporal_lines") or [])
+
+        if report_depth == "strategic":
+            lines.extend([
+                "",
+                "## Strategic Implications",
+                f"- {self._summarise_signal_trend(signals)}",
+                f"- Industry focus: {str(scope_profile.get('description') or 'Sector-level activity is consolidating around the highest-signal organisations and people.').strip()}",
+            ])
+        return lines
 
     def _build_summary_digest_lines(
         self,
@@ -2202,7 +3283,7 @@ class StakeholderSignalStore:
         }
         historical_signals = [
             signal for signal in state.get("signals") or []
-            if orgs_compatible(signal.get("org_name", ""), org_name)
+            if _signal_visible_to_org(signal, org_name)
         ]
         corroboration = Counter(self._signal_corroboration_key(signal) for signal in signals)
         relationship_context = self._build_relationship_intelligence(signals, profiles_by_key, org_name, alumni_context)
@@ -2238,6 +3319,12 @@ class StakeholderSignalStore:
         signals: List[Dict[str, Any]],
         state: Dict[str, Any],
         org_name: str,
+        scope_type: str,
+        scope_profile: Dict[str, Any],
+        child_org_names: List[str],
+        key_themes: List[str],
+        regulatory_context: str,
+        market_size: str,
         member_alumni: List[str],
         org_alumni: List[str],
         intelligence_context: Dict[str, Any],
@@ -2308,6 +3395,16 @@ class StakeholderSignalStore:
         return json.dumps(
             {
                 "org_name": org_name,
+                "scope_type": scope_type,
+                "scope_profile": {
+                    "profile_key": str(scope_profile.get("profile_key") or "").strip(),
+                    "canonical_name": str(scope_profile.get("canonical_name") or "").strip(),
+                    "description": str(scope_profile.get("description") or "").strip(),
+                },
+                "child_org_names": child_org_names,
+                "key_themes": key_themes,
+                "regulatory_context": regulatory_context,
+                "market_size": market_size,
                 "report_depth": report_depth,
                 "digest_tier": digest_tier,
                 "priority_profile_keys": priority_profile_keys,
@@ -2347,6 +3444,8 @@ class StakeholderSignalStore:
         self,
         raw_data: str,
         org_name: str,
+        scope_type: str,
+        scope_profile_name: str,
         provider: str,
         model: str,
         report_depth: str,
@@ -2385,7 +3484,9 @@ class StakeholderSignalStore:
                 "Do not format confidence scores or labels as markdown links.\n"
                 "Use only the provided data. Do not fabricate facts."
             )
-        user_prompt = f"Generate a {report_depth} stakeholder digest for organisation: {org_name}\n\nSignal data:\n{raw_data}"
+        scope_label = "industry" if scope_type == "industry" else "organisation"
+        scope_subject = scope_profile_name or org_name
+        user_prompt = f"Generate a {report_depth} {scope_label} digest for organisation: {org_name} and scope: {scope_subject}\n\nSignal data:\n{raw_data}"
 
         if provider_name == "ollama":
             ollama_text, ollama_model = self._call_ollama(system_prompt, user_prompt, model or _DEFAULT_OLLAMA_WATCH_MODEL)
@@ -2550,6 +3651,7 @@ class StakeholderSignalStore:
                 known_employers.append(employer)
         if current_employer and current_employer not in known_employers:
             known_employers.append(current_employer)
+        industry_affiliations = _normalize_industry_affiliations(raw_profile.get("industry_affiliations"))
 
         key_basis = external_profile_id or linkedin_url or website_url or canonical_name
         key_material = "|".join([normalize_lookup(org_name), target_type, normalize_lookup(key_basis)])
@@ -2570,6 +3672,10 @@ class StakeholderSignalStore:
             "current_role": current_role,
             "linkedin_url": linkedin_url,
             "website_url": website_url,
+            "description": str(raw_profile.get("description") or "").strip(),
+            "key_themes": _normalize_org_name_list(raw_profile.get("key_themes") or raw_profile.get("key_themes_json") or []),
+            "regulatory_context": str(raw_profile.get("regulatory_context") or "").strip(),
+            "market_size": str(raw_profile.get("market_size") or "").strip(),
             "address": _normalize_address(raw_profile.get("address") or {}),
             "acn_abn": str(raw_profile.get("acn_abn") or "").strip(),
             "phone": str(raw_profile.get("phone") or "").strip(),
@@ -2580,6 +3686,7 @@ class StakeholderSignalStore:
             "aliases": aliases,
             "known_employers": known_employers,
             "affiliations": affiliations,
+            "industry_affiliations": industry_affiliations,
             "alumni": _normalize_profile_alumni(raw_profile.get("alumni")),
             "linkedin_connections": _normalize_linkedin_connections(raw_profile.get("linkedin_connections")),
             "source": str(source or raw_profile.get("source") or "").strip(),
@@ -2620,6 +3727,15 @@ class StakeholderSignalStore:
             "org_name": org_name,
             "submitted_by": str(payload.get("submitted_by") or "").strip(),
             "source_job": str(payload.get("source_job") or "").strip(),
+            "source_org_name": str(payload.get("source_org_name") or "").strip(),
+            "visible_to_orgs": _normalize_org_name_list(payload.get("visible_to_orgs") or []),
+            "shared_with_orgs": _normalize_org_name_list(payload.get("shared_with_orgs") or []),
+            "scope_profile_key": str(payload.get("scope_profile_key") or payload.get("industry_profile_key") or "").strip(),
+            "child_profile_keys": [str(item).strip() for item in payload.get("child_profile_keys") or [] if str(item).strip()],
+            "child_org_names": _normalize_org_name_list(payload.get("child_org_names") or []),
+            "key_themes": _normalize_org_name_list(payload.get("key_themes") or []),
+            "regulatory_context": str(payload.get("regulatory_context") or "").strip(),
+            "market_size": str(payload.get("market_size") or "").strip(),
             "received_at": received_at,
             "message_id": message_id,
             "subject": subject,

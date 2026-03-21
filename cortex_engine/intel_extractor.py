@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from cortex_engine.org_chart_extractor import extract_org_chart_structured, looks_like_org_chart_attachment
 from cortex_engine.stakeholder_signal_matcher import match_signal_to_profiles, normalize_lookup
 from cortex_engine.stakeholder_signal_store import StakeholderSignalStore
 from cortex_engine.textifier import DocumentTextifier
@@ -21,6 +22,22 @@ logger = logging.getLogger(__name__)
 
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+_LINKEDIN_PERSON_VIEW_RE = re.compile(r"View\s+(.+?)(?:'s|\u2019s)\s+profile", re.IGNORECASE)
+_LINKEDIN_COMPANY_VIEW_RE = re.compile(r"View\s+company:\s+(.+)", re.IGNORECASE)
+_LINKEDIN_URL_RE = re.compile(r"https?://[^\s<>]+linkedin\.com/(?:in|company)/[^\s<>]+", re.IGNORECASE)
+_CONTACT_CARD_MARKERS = ("linkedin", "twitter", "zoom", "acn", "ph", "phone", "mobile", "www.", "http", "https")
+_EMAIL_WRAPPER_PREFIX_RE = re.compile(r"^\s*(?:from|sent|to|cc|bcc|subject|date)\s*:\s*", re.IGNORECASE)
+_EMAIL_WRAPPER_NOISE_RE = re.compile(
+    r"^\s*(?:-+\s*original message\s*-+|begin forwarded message:|forwarded message|external email|caution: external email)\s*$",
+    re.IGNORECASE,
+)
+_MAIL_SUBJECT_PREFIX_RE = re.compile(r"^\s*((?:re|fw|fwd)\s*:\s*)+", re.IGNORECASE)
+_EMAIL_TRIAGE_MODELS = (
+    "qwen3.5:9b",
+    "qwen3.5:9b-q8_0",
+    "qwen2.5:14b-instruct-q4_K_M",
+    "qwen2.5:14b",
+)
 
 
 def _anthropic_client():
@@ -102,6 +119,328 @@ def _ocr_image_text(path_obj: Path) -> str:
     return candidates[0]
 
 
+def _is_weak_document_text(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return True
+    normalized = normalize_lookup(value)
+    if not normalized:
+        return True
+    weak_markers = (
+        "image could not be described",
+        "image description timed out",
+        "vision model unavailable",
+        "logo icon omitted",
+    )
+    if any(marker in normalized for marker in weak_markers):
+        return True
+    return len(re.findall(r"[A-Za-z]", value)) < 80
+
+
+def _should_force_pdf_ocr_fallback(filename: str, text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return True
+    if not looks_like_org_chart_attachment(filename, value):
+        return False
+
+    normalized = normalize_lookup(value)
+    generic_chart_markers = (
+        "the image is an organizational chart",
+        "the image is an organisational chart",
+        "shows the structure with various departments and roles",
+        "shows the structure with departments and roles",
+        "page 1 image summary",
+    )
+    if any(marker in normalized for marker in generic_chart_markers):
+        return True
+
+    structured = extract_org_chart_structured(
+        attachment_texts=[f"Attachment: {filename}\n{value}"],
+        attachment_summaries=[{"filename": filename, "status": "processed"}],
+        employer_hint="",
+    )
+    return not bool(structured.get("people"))
+
+
+def _run_capture_text(command: List[str], timeout: int = 45) -> str:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return str(result.stdout or "").strip()
+
+
+def _extract_pdf_text_local(path_obj: Path) -> str:
+    parts: List[str] = []
+    if shutil.which("pdftotext"):
+        text = _run_capture_text(["pdftotext", str(path_obj), "-"])
+        if text:
+            parts.append(text)
+
+    if shutil.which("pdftoppm") and shutil.which("tesseract"):
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                prefix = Path(temp_dir) / "page"
+                subprocess.run(
+                    ["pdftoppm", "-f", "1", "-l", "3", "-png", str(path_obj), str(prefix)],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=True,
+                )
+                ocr_blocks: List[str] = []
+                for image_path in sorted(Path(temp_dir).glob("page-*.png")):
+                    text = _ocr_image_text(image_path)
+                    if text:
+                        ocr_blocks.append(text)
+                if ocr_blocks:
+                    parts.append("\n\n".join(ocr_blocks))
+        except Exception:
+            pass
+
+    merged = "\n\n".join(part.strip() for part in parts if str(part or "").strip()).strip()
+    return merged
+
+
+def _clean_subject_text(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    while True:
+        updated = _MAIL_SUBJECT_PREFIX_RE.sub("", text).strip()
+        if updated == text:
+            break
+        text = updated
+    text = re.sub(r"\s+", " ", text).strip(" -|:")
+    return text
+
+
+def _looks_like_contact_card_text(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    lowered = value.lower()
+    marker_hits = sum(1 for marker in _CONTACT_CARD_MARKERS if marker in lowered)
+    email_hits = len(_EMAIL_RE.findall(value))
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    if marker_hits >= 3:
+        return True
+    if marker_hits >= 2 and email_hits >= 1:
+        return True
+    return marker_hits >= 1 and email_hits >= 1 and len(lines) <= 12 and len(value) <= 1200
+
+
+def _should_suppress_email_wrapper_for_document(payload: Dict[str, Any], attachment_texts: List[str]) -> bool:
+    attachments = payload.get("attachments") or []
+    has_document = any(str(item.get("kind") or "").strip().lower() == "document" for item in attachments)
+    if not has_document:
+        return False
+    attachment_text = "\n\n".join(str(item or "").strip() for item in attachment_texts if str(item or "").strip())
+    if len(attachment_text) < 1500:
+        return False
+    wrapper_text = "\n\n".join(
+        part for part in [
+            str(payload.get("raw_text") or "").strip(),
+            _strip_html(payload.get("html_text", "")),
+        ]
+        if part
+    ).strip()
+    return _looks_like_contact_card_text(wrapper_text)
+
+
+def _clean_email_wrapper_text(text: str) -> str:
+    lines = [str(line or "").rstrip() for line in str(text or "").splitlines()]
+    cleaned: List[str] = []
+    wrapper_run = 0
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            if cleaned and cleaned[-1] != "":
+                cleaned.append("")
+            continue
+        normalized = normalize_lookup(line)
+        if _EMAIL_WRAPPER_NOISE_RE.match(line):
+            wrapper_run += 1
+            continue
+        if _EMAIL_WRAPPER_PREFIX_RE.match(line):
+            wrapper_run += 1
+            continue
+        if normalized in {"fw", "fwd", "re", "fwd:", "fw:", "re:"}:
+            wrapper_run += 1
+            continue
+        if wrapper_run >= 2 and len(line) < 4:
+            continue
+        cleaned.append(line)
+        wrapper_run = 0
+    return "\n".join(cleaned).strip()
+
+
+def _triage_attachment_defaults(attachments: List[Dict[str, Any]]) -> Dict[str, Any]:
+    selected: List[str] = []
+    ignored: List[str] = []
+    for item in attachments:
+        filename = str(item.get("filename") or "").strip()
+        lowered = normalize_lookup(filename)
+        kind = str(item.get("kind") or "").strip().lower()
+        if not filename:
+            continue
+        if kind == "image" and any(token in lowered for token in ("logo", "outlook", "signature", "icon", "header")):
+            ignored.append(filename)
+            continue
+        selected.append(filename)
+    return {
+        "include_attachment_filenames": selected,
+        "ignore_attachment_filenames": ignored,
+    }
+
+
+def _extract_chat_content(response: Any) -> str:
+    if isinstance(response, dict):
+        if isinstance(response.get("message"), dict):
+            return str(response["message"].get("content") or "").strip()
+        return str(response.get("response") or "").strip()
+    message = getattr(response, "message", None)
+    if message is not None:
+        return str(getattr(message, "content", "") or "").strip()
+    return str(getattr(response, "response", "") or "").strip()
+
+
+def _choose_email_triage_model(client: Any) -> str:
+    try:
+        listing = client.list()
+    except Exception:
+        return ""
+    if isinstance(listing, dict):
+        models = listing.get("models") or []
+    else:
+        models = getattr(listing, "models", []) or []
+    names: List[str] = []
+    for item in models:
+        if isinstance(item, dict):
+            name = str(item.get("model") or item.get("name") or "").strip()
+        else:
+            name = str(getattr(item, "model", "") or getattr(item, "name", "") or "").strip()
+        if name:
+            names.append(name)
+    for candidate in _EMAIL_TRIAGE_MODELS:
+        if candidate in names:
+            return candidate
+    return ""
+
+
+def _default_email_triage(payload: Dict[str, Any]) -> Dict[str, Any]:
+    attachments = list(payload.get("attachments") or [])
+    attachment_defaults = _triage_attachment_defaults(attachments)
+    wrapper_text = "\n\n".join(
+        part for part in [
+            str(payload.get("raw_text") or "").strip(),
+            _strip_html(payload.get("html_text", "")),
+        ]
+        if part
+    ).strip()
+    actionable_body = _clean_email_wrapper_text(str(payload.get("raw_text") or "").strip())
+    if _looks_like_contact_card_text(wrapper_text):
+        actionable_body = ""
+    return {
+        "processing_mode": "attachments_only" if any(str(item.get("kind") or "").strip().lower() == "document" for item in attachments) else "body_plus_attachments",
+        "clean_subject": _clean_subject_text(str(payload.get("subject") or "").strip()),
+        "actionable_body_text": actionable_body,
+        "wrapper_text": _clean_email_wrapper_text(wrapper_text) if actionable_body else wrapper_text,
+        "signature_text": wrapper_text if _looks_like_contact_card_text(wrapper_text) else "",
+        "include_attachment_filenames": attachment_defaults["include_attachment_filenames"],
+        "ignore_attachment_filenames": attachment_defaults["ignore_attachment_filenames"],
+        "confidence": 0.35,
+        "used_model": "",
+    }
+
+
+def _triage_email_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    triage = _default_email_triage(payload)
+    attachments = list(payload.get("attachments") or [])
+    body_text = "\n\n".join(
+        part for part in [
+            str(payload.get("raw_text") or "").strip(),
+            _strip_html(payload.get("html_text", "")),
+        ]
+        if part
+    ).strip()
+    if not body_text and not attachments:
+        return triage
+    if len(body_text) < 80 and len(attachments) <= 1:
+        return triage
+    try:
+        import ollama
+
+        client = ollama.Client(timeout=30)
+        model = _choose_email_triage_model(client)
+        if not model:
+            return triage
+        attachment_meta = [
+            {
+                "filename": str(item.get("filename") or "").strip(),
+                "kind": str(item.get("kind") or "").strip(),
+                "mime_type": str(item.get("mime_type") or "").strip(),
+                "size_bytes": int(item.get("size_bytes") or 0) if str(item.get("size_bytes") or "").strip() else 0,
+            }
+            for item in attachments
+        ]
+        prompt = (
+            "You are triaging a forwarded intelligence email before extraction.\n"
+            "Separate actionable analyst content from forwarding wrappers and sender signatures.\n"
+            "Return ONLY valid JSON with keys:\n"
+            "{\"processing_mode\":\"body_only|attachments_only|body_plus_attachments\","
+            "\"clean_subject\":\"string\","
+            "\"actionable_body_text\":\"string\","
+            "\"wrapper_text\":\"string\","
+            "\"signature_text\":\"string\","
+            "\"include_attachment_filenames\":[\"...\"],"
+            "\"ignore_attachment_filenames\":[\"...\"],"
+            "\"confidence\":0.0}\n"
+            "Rules:\n"
+            "- If the email body is mostly forwarding junk or a signature block and there are substantive document attachments, choose attachments_only.\n"
+            "- Prefer dropping sender signatures and contact cards unless they are clearly the intended intelligence.\n"
+            "- Keep multiple attachments if they all look relevant.\n"
+            "- Preserve only substantive analyst note text in actionable_body_text.\n"
+            "- clean_subject must remove Re:/Fwd: prefixes and transport junk.\n\n"
+            f"Subject: {payload.get('subject', '')}\n\n"
+            f"Body:\n{body_text[:6000]}\n\n"
+            f"Attachments JSON:\n{json.dumps(attachment_meta, ensure_ascii=True)}"
+        )
+        response = client.chat(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            options={"temperature": 0.1, "num_predict": 800},
+        )
+        parsed = _extract_json_object(_extract_chat_content(response))
+        if not parsed:
+            return triage
+        mode = str(parsed.get("processing_mode") or "").strip()
+        if mode in {"body_only", "attachments_only", "body_plus_attachments"}:
+            triage["processing_mode"] = mode
+        triage["clean_subject"] = _clean_subject_text(str(parsed.get("clean_subject") or triage["clean_subject"] or ""))
+        triage["actionable_body_text"] = str(parsed.get("actionable_body_text") or "").strip()
+        triage["wrapper_text"] = str(parsed.get("wrapper_text") or "").strip()
+        triage["signature_text"] = str(parsed.get("signature_text") or "").strip()
+        known_names = {str(item.get("filename") or "").strip() for item in attachments if str(item.get("filename") or "").strip()}
+        selected = [str(item).strip() for item in parsed.get("include_attachment_filenames") or [] if str(item).strip() in known_names]
+        ignored = [str(item).strip() for item in parsed.get("ignore_attachment_filenames") or [] if str(item).strip() in known_names]
+        if selected:
+            triage["include_attachment_filenames"] = selected
+        triage["ignore_attachment_filenames"] = ignored
+        try:
+            triage["confidence"] = float(parsed.get("confidence") or triage["confidence"])
+        except Exception:
+            pass
+        triage["used_model"] = model
+        return triage
+    except Exception as exc:
+        logger.debug("email triage unavailable, falling back to rules: %s", exc)
+        return triage
+
+
 def _read_attachment_text(attachment: Dict[str, Any], textifier: Optional[DocumentTextifier]) -> Tuple[str, Dict[str, Any]]:
     filename = str(attachment.get("filename") or "").strip()
     stored_path = _normalize_attachment_path(attachment.get("stored_path") or "")
@@ -144,9 +483,19 @@ def _read_attachment_text(attachment: Dict[str, Any], textifier: Optional[Docume
                 return "", summary
         elif suffix in {".pdf", ".docx", ".pptx"}:
             if textifier is None:
-                summary["warning"] = "Document textifier unavailable"
+                text = ""
+            else:
+                text = textifier.textify_file(str(path_obj))
+            if suffix == ".pdf" and (
+                _is_weak_document_text(text)
+                or _should_force_pdf_ocr_fallback(filename, text)
+            ):
+                fallback_text = _extract_pdf_text_local(path_obj)
+                if fallback_text:
+                    text = fallback_text
+            if not text:
+                summary["warning"] = "No document text extracted"
                 return "", summary
-            text = textifier.textify_file(str(path_obj))
         else:
             summary["warning"] = f"Unsupported attachment type: {suffix or mime_type or 'unknown'}"
             return "", summary
@@ -329,6 +678,7 @@ def _normalize_people(items: Any) -> List[Dict[str, Any]]:
                 "linkedin_url": str(item.get("linkedin_url") or "").strip(),
                 "confidence": _normalized_confidence(item.get("confidence"), 0.65),
                 "evidence": str(item.get("evidence") or "").strip(),
+                "extraction_method": str(item.get("extraction_method") or "").strip(),
             }
         )
     return normalized
@@ -357,6 +707,7 @@ def _normalize_organisations(items: Any) -> List[Dict[str, Any]]:
                 "email": str(item.get("email") or "").strip(),
                 "confidence": _normalized_confidence(item.get("confidence"), 0.65),
                 "evidence": str(item.get("evidence") or item.get("notes") or "").strip(),
+                "extraction_method": str(item.get("extraction_method") or "").strip(),
             }
         )
     return normalized
@@ -405,6 +756,22 @@ def _normalize_career_events(items: Any) -> List[Dict[str, Any]]:
     return events
 
 
+def _assign_org_chart_employers(
+    people: List[Dict[str, Any]],
+    organisations: List[Dict[str, Any]],
+) -> None:
+    org_names = [str(item.get("name") or "").strip() for item in organisations or [] if str(item.get("name") or "").strip()]
+    if len(org_names) != 1:
+        return
+    employer = org_names[0]
+    for item in people:
+        if str(item.get("extraction_method") or "").strip() != "org_chart_heuristic":
+            continue
+        if str(item.get("current_employer") or "").strip():
+            continue
+        item["current_employer"] = employer
+
+
 def _merge_structured_results(*items: Dict[str, Any]) -> Dict[str, Any]:
     merged: Dict[str, Any] = {
         "people": [],
@@ -433,11 +800,211 @@ def _merge_structured_results(*items: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
-def _candidate_signal(payload: Dict[str, Any], target_type: str, name: str, employer: str = "", note: str = "") -> Dict[str, Any]:
+def _clean_feed_lines(text: str) -> List[str]:
+    cleaned: List[str] = []
+    for raw_line in str(text or "").splitlines():
+        line = re.sub(r"\s+", " ", str(raw_line or "").strip())
+        if not line:
+            continue
+        cleaned.append(line)
+    return cleaned
+
+
+def _is_noise_line(line: str) -> bool:
+    normalized = normalize_lookup(line)
+    if not normalized:
+        return True
+    if normalized in {
+        "feed post",
+        "sort by top",
+        "sort by",
+        "like",
+        "comment",
+        "repost",
+        "send",
+        "promoted",
+    }:
+        return True
+    if re.match(r"^\d+\s*(comments?|reactions?|reposts?)$", normalized):
+        return True
+    if re.match(r"^\d+\s*[smhdwymo]+\s*$", normalized):
+        return True
+    if normalized.startswith("view company"):
+        return False
+    if normalized.startswith("view ") and normalized.endswith(" profile"):
+        return False
+    return False
+
+
+def _normalize_linkedin_role_line(line: str, name: str = "") -> str:
+    cleaned = str(line or "")
+    if name:
+        cleaned = re.sub(re.escape(name), " ", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.replace("•", " ").replace("·", " ")
+    cleaned = re.sub(r"\b\d+(?:st|nd|rd|th)\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip(" |-")
+
+
+def _normalize_linkedin_entity_name(value: str) -> str:
+    cleaned = str(value or "")
+    cleaned = re.sub(r"<https?://[^>]+>", " ", cleaned)
+    cleaned = cleaned.replace("[", " ").replace("]", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip(" |,-")
+
+
+def _linkedin_block_signal_type(lines: List[str], index: int) -> str:
+    nearby = " ".join(lines[max(0, index - 3): index + 12]).lower()
+    if "commented on this" in nearby or re.search(r"\bcommented\b", nearby):
+        return "commented"
+    if re.search(r"\bliked this\b|\breacted\b|\bfollow(?:ed|s)?\b|\bpromoted\b", nearby):
+        return "passive"
+    return "authored"
+
+
+def _looks_like_authored_content(lines: List[str], index: int, entity_name: str) -> bool:
+    substantive = 0
+    for look_ahead in lines[index + 1:index + 12]:
+        normalized = normalize_lookup(look_ahead)
+        if not normalized:
+            continue
+        if normalize_lookup(entity_name) and normalized == normalize_lookup(entity_name):
+            continue
+        if _is_noise_line(look_ahead):
+            continue
+        if _LINKEDIN_URL_RE.search(look_ahead):
+            continue
+        if "followers" in normalized or "connections" in normalized:
+            continue
+        if re.match(r"^\d+\s*/\s*\d+$", normalized):
+            continue
+        if len(normalized) < 25:
+            continue
+        substantive += 1
+        if substantive >= 1:
+            return True
+    return False
+
+
+def _extract_linkedin_feed_structured(text: str) -> Dict[str, Any]:
+    lines = _clean_feed_lines(text)
+    people: List[Dict[str, Any]] = []
+    organisations: List[Dict[str, Any]] = []
+    seen_people: set[str] = set()
+    seen_orgs: set[str] = set()
+
+    for index, line in enumerate(lines):
+        person_match = _LINKEDIN_PERSON_VIEW_RE.search(line)
+        company_match = _LINKEDIN_COMPANY_VIEW_RE.search(line)
+        if person_match:
+            name = _normalize_linkedin_entity_name(person_match.group(1))
+            signal_type = _linkedin_block_signal_type(lines, index)
+            if signal_type == "passive":
+                continue
+            if signal_type != "commented" and not _looks_like_authored_content(lines, index, name):
+                continue
+            key = normalize_lookup(name)
+            if not name or key in seen_people:
+                continue
+            seen_people.add(key)
+            linkedin_url = ""
+            role_parts: List[str] = []
+            for look_ahead in lines[index + 1:index + 8]:
+                if _LINKEDIN_URL_RE.search(look_ahead) and "/in/" in look_ahead:
+                    linkedin_url = _LINKEDIN_URL_RE.search(look_ahead).group(0)
+                    continue
+                if normalize_lookup(look_ahead) == key:
+                    continue
+                if _is_noise_line(look_ahead):
+                    if role_parts:
+                        break
+                    continue
+                if look_ahead in {"•", "-", "·"}:
+                    continue
+                cleaned_role = _normalize_linkedin_role_line(look_ahead, name=name)
+                if not cleaned_role:
+                    continue
+                role_parts.append(cleaned_role)
+                if len(role_parts) >= 2:
+                    break
+            role_text = " | ".join(role_parts[:2]).strip(" |")
+            people.append(
+                {
+                    "name": name,
+                    "current_role": role_text,
+                    "linkedin_url": linkedin_url,
+                    "confidence": 0.72 if role_text or linkedin_url else 0.58,
+                    "evidence": f"LinkedIn feed block: {line[:140]}",
+                    "extraction_method": "linkedin_feed_heuristic",
+                    "signal_kind": signal_type,
+                }
+            )
+            continue
+
+        if company_match:
+            name = _normalize_linkedin_entity_name(company_match.group(1))
+            signal_type = _linkedin_block_signal_type(lines, index)
+            if signal_type == "passive":
+                continue
+            if signal_type != "commented" and not _looks_like_authored_content(lines, index, name):
+                continue
+            key = normalize_lookup(name)
+            if not name or key in seen_orgs:
+                continue
+            seen_orgs.add(key)
+            company_url = ""
+            descriptor_parts: List[str] = []
+            for look_ahead in lines[index + 1:index + 7]:
+                if _LINKEDIN_URL_RE.search(look_ahead) and "/company/" in look_ahead:
+                    company_url = _LINKEDIN_URL_RE.search(look_ahead).group(0)
+                    continue
+                if normalize_lookup(look_ahead) == key:
+                    continue
+                if _is_noise_line(look_ahead):
+                    if descriptor_parts:
+                        break
+                    continue
+                descriptor_parts.append(look_ahead)
+                if len(descriptor_parts) >= 2:
+                    break
+            organisations.append(
+                {
+                    "name": name,
+                    "website_url": company_url,
+                    "industry": descriptor_parts[0] if descriptor_parts else "",
+                    "confidence": 0.68 if company_url or descriptor_parts else 0.56,
+                    "evidence": f"LinkedIn company block: {line[:140]}",
+                    "extraction_method": "linkedin_feed_heuristic",
+                    "signal_kind": signal_type,
+                }
+            )
+
+    summary_parts: List[str] = []
+    if people:
+        summary_parts.append(f"Heuristic LinkedIn parsing recovered {len(people)} people")
+    if organisations:
+        summary_parts.append(f"{len(organisations)} organisations")
+    return {
+        "people": people,
+        "organisations": organisations,
+        "emails": [],
+        "career_events": [],
+        "summary": ". ".join(summary_parts),
+    }
+
+
+def _candidate_signal(
+    payload: Dict[str, Any],
+    target_type: str,
+    name: str,
+    employer: str = "",
+    note: str = "",
+    primary_url: str = "",
+) -> Dict[str, Any]:
     base = " ".join(
         part for part in [
             payload.get("subject", ""),
-            payload.get("raw_text", ""),
             note,
         ] if str(part or "").strip()
     )
@@ -449,7 +1016,7 @@ def _candidate_signal(payload: Dict[str, Any], target_type: str, name: str, empl
         "subject": payload.get("subject", ""),
         "raw_text": base,
         "text_note": payload.get("text_note", ""),
-        "primary_url": payload.get("primary_url", ""),
+        "primary_url": primary_url or payload.get("primary_url", ""),
         "parsed_candidate_name": name,
         "parsed_candidate_employer": employer,
         "received_at": payload.get("received_at", ""),
@@ -566,13 +1133,21 @@ def _build_markdown_summary(result: Dict[str, Any]) -> str:
 
 
 def extract_intel(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Path]]:
+    triage = _triage_email_payload(payload)
+    selected_names = {str(item).strip() for item in triage.get("include_attachment_filenames") or [] if str(item).strip()}
+    ignored_names = {str(item).strip() for item in triage.get("ignore_attachment_filenames") or [] if str(item).strip()}
+    attachments = list(payload.get("attachments") or [])
+    if selected_names:
+        attachments = [item for item in attachments if str(item.get("filename") or "").strip() in selected_names]
+    if ignored_names:
+        attachments = [item for item in attachments if str(item.get("filename") or "").strip() not in ignored_names]
     attachment_texts: List[str] = []
     attachment_summaries: List[Dict[str, Any]] = []
     warnings: List[str] = []
-    textifier = _maybe_textifier() if payload.get("attachments") else None
+    textifier = _maybe_textifier() if attachments else None
     image_structured_items: List[Dict[str, Any]] = []
 
-    for attachment in payload.get("attachments") or []:
+    for attachment in attachments:
         text, summary = _read_attachment_text(attachment, textifier)
         attachment_summaries.append(summary)
         if text:
@@ -588,11 +1163,22 @@ def extract_intel(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Pat
             warnings.append(f"{summary.get('filename') or 'attachment'}: image extraction failed: {exc}")
             logger.warning("intel_extract image extraction failed for %s: %s", summary.get("filename", ""), exc)
 
+    email_body_text = str(triage.get("actionable_body_text") or "").strip()
+    html_body_text = ""
+    if not email_body_text:
+        email_body_text = _clean_email_wrapper_text(str(payload.get("raw_text") or "").strip())
+        html_body_text = _clean_email_wrapper_text(_strip_html(payload.get("html_text", "")))
+    if str(triage.get("processing_mode") or "").strip() == "attachments_only" or _should_suppress_email_wrapper_for_document({**payload, "attachments": attachments}, attachment_texts):
+        email_body_text = ""
+        html_body_text = ""
+    elif str(triage.get("processing_mode") or "").strip() == "body_only":
+        attachment_texts = []
+
     combined_text = "\n\n".join(
         part for part in [
-            payload.get("subject", ""),
-            payload.get("raw_text", ""),
-            _strip_html(payload.get("html_text", "")),
+            triage.get("clean_subject") or payload.get("subject", ""),
+            email_body_text,
+            html_body_text,
             "\n\n".join(attachment_texts),
         ] if str(part or "").strip()
     ).strip()
@@ -605,10 +1191,17 @@ def extract_intel(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Pat
         except Exception as exc:
             warnings.append(f"Haiku extraction failed: {exc}")
             logger.warning("intel_extract anthropic call failed: %s", exc)
-    structured = _merge_structured_results(structured, *image_structured_items)
+    heuristic_structured = _extract_linkedin_feed_structured(combined_text)
+    org_chart_structured = extract_org_chart_structured(
+        attachment_texts=attachment_texts,
+        attachment_summaries=attachment_summaries,
+        employer_hint=str(payload.get("parsed_candidate_employer") or "").strip(),
+    )
+    structured = _merge_structured_results(structured, heuristic_structured, org_chart_structured, *image_structured_items)
 
     people = _normalize_people(structured.get("people"))
     organisations = _normalize_organisations(structured.get("organisations"))
+    _assign_org_chart_employers(people, organisations)
     emails = _normalize_emails(structured.get("emails"), regex_emails)
     career_events = _normalize_career_events(structured.get("career_events"))
     summary = str(structured.get("summary") or "").strip()
@@ -623,8 +1216,16 @@ def extract_intel(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Pat
         target_type = str(candidate.get("target_type") or "person")
         candidate_name = str(candidate.get("name") or "").strip()
         employer = str(candidate.get("current_employer") or "").strip()
-        signal = _candidate_signal(payload, target_type, candidate_name, employer, candidate.get("evidence", ""))
-        matches = match_signal_to_profiles(signal, profiles, threshold=0.45)
+        is_heuristic_feed = str(candidate.get("extraction_method") or "").strip() == "linkedin_feed_heuristic"
+        signal = _candidate_signal(
+            payload,
+            target_type,
+            candidate_name,
+            employer,
+            candidate.get("evidence", ""),
+            candidate.get("linkedin_url") or candidate.get("website_url") or "",
+        )
+        matches = match_signal_to_profiles(signal, profiles, threshold=0.75 if is_heuristic_feed else 0.45)
         entities.append(_build_entity_record(candidate))
         matches_summary.append(
             {
@@ -634,7 +1235,7 @@ def extract_intel(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Pat
                 "matches": matches,
             }
         )
-        if matches:
+        if matches and not is_heuristic_feed:
             field_list = ["email", "current_employer", "current_role", "linkedin_url"] if target_type == "person" else ["email", "website_url", "industry", "parent_entity"]
             facts, suggestions = _build_field_artifacts(
                 signal_id=signal["signal_id"],
@@ -651,7 +1252,7 @@ def extract_intel(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Pat
         "org_name": payload["org_name"],
         "intel_id": payload.get("intel_id", ""),
         "message_id": payload.get("message_id", ""),
-        "subject": payload.get("subject", ""),
+        "subject": triage.get("clean_subject") or payload.get("subject", ""),
         "target_type": payload.get("target_type", ""),
         "summary": summary,
         "entity_count": len(entities),
@@ -665,6 +1266,7 @@ def extract_intel(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Pat
         "target_update_suggestions": update_suggestions,
         "attachments": attachment_summaries,
         "warnings": warnings,
+        "email_triage": triage,
     }
 
     output_path: Optional[Path] = None

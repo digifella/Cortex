@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pickle
 
 from cortex_engine.stakeholder_signal_store import StakeholderSignalStore, _ollama_watch_timeout_seconds
@@ -175,6 +176,132 @@ def test_rebuild_stakeholder_graph_backfills_existing_state(tmp_path):
     assert result["org_contexts_processed"] == 1
     assert result["graph_nodes"] > 0
     assert result["graph_edges"] > 0
+
+
+def test_build_graph_view_returns_scoped_network_payload(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "canonical_name": "Jane Smith",
+                "target_type": "person",
+                "current_employer": "BigBank",
+                "current_role": "VP Digital",
+                "watch_status": "watch",
+                "affiliations": [{"org_name_text": "BigBank", "role": "VP Digital", "is_primary": 1}],
+                "alumni": ["McKinsey"],
+                "linkedin_connections": [{"member": "paul@example.com", "degree": "1st"}],
+            },
+            {
+                "canonical_name": "John Roe",
+                "target_type": "person",
+                "current_employer": "Medibank",
+                "current_role": "Chief Strategy Officer",
+                "watch_status": "watch",
+                "affiliations": [{"org_name_text": "Medibank", "role": "Chief Strategy Officer", "is_primary": 1}],
+                "alumni": ["McKinsey"],
+            },
+        ],
+        org_alumni=["McKinsey"],
+        source="market_radar",
+    )
+    store.ingest_signal(
+        {
+            "org_name": "Longboardfella",
+            "subject": "Jane Smith joins BigBank digital team",
+            "raw_text": "Jane Smith joins BigBank digital team.",
+            "parsed_candidate_name": "Jane Smith",
+            "parsed_candidate_employer": "BigBank",
+            "source_name": "Trade Press",
+            "message_id": "<graph-view-1>",
+        }
+    )
+
+    graph_view = store.build_graph_view(
+        org_name="Longboardfella",
+        view_mode="watch_network",
+        include_signals=True,
+        include_sources=True,
+        include_lab_members=True,
+        include_alumni=True,
+        max_hops=2,
+        max_nodes=50,
+        max_edges=50,
+        top_k_paths=5,
+    )
+
+    assert graph_view["node_count"] > 0
+    assert graph_view["edge_count"] > 0
+    assert graph_view["has_paths"] is True
+    output_path = tmp_path / "graph_views" / f"{graph_view['graph_id']}.json"
+    assert output_path.exists()
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    node_types = {node["type"] for node in payload["nodes"]}
+    edge_types = {edge["type"] for edge in payload["edges"]}
+    path_types = {path["type"] for path in payload["paths"]}
+
+    assert {"person", "organization", "alumni_group", "lab_member", "subscriber_org"}.issubset(node_types)
+    assert {"works_at", "alumni_of", "linkedin_connection"}.issubset(edge_types)
+    assert {"warm_intro", "shared_alumni"}.intersection(path_types)
+    assert payload["summary"]["warm_intro_paths"] >= 1
+
+
+def test_build_graph_view_supports_industry_network(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "external_profile_id": "ind-1",
+                "canonical_name": "Digital Health",
+                "target_type": "industry",
+                "watch_status": "watch",
+                "key_themes": ["telehealth", "privacy"],
+                "description": "Digital health sector",
+            },
+            {
+                "external_profile_id": "org-1",
+                "canonical_name": "Healthdirect Australia",
+                "target_type": "organisation",
+                "watch_status": "watch",
+                "industry_affiliations": [{"industry_profile_key": "ind-1", "industry_name": "Digital Health", "role": "key player"}],
+            },
+            {
+                "external_profile_id": "person-1",
+                "canonical_name": "Jane Smith",
+                "target_type": "person",
+                "watch_status": "watch",
+                "current_employer": "Healthdirect Australia",
+                "affiliations": [{"org_name_text": "Healthdirect Australia", "role": "Executive", "is_primary": 1}],
+                "industry_affiliations": [{"industry_profile_key": "ind-1", "industry_name": "Digital Health", "role": "speaker"}],
+            },
+        ],
+        source="market_radar",
+    )
+    profiles = store.list_profiles(org_name="Longboardfella")
+    industry_key = next(item["profile_key"] for item in profiles if item["target_type"] == "industry")
+    org_key = next(item["profile_key"] for item in profiles if item["canonical_name"] == "Healthdirect Australia")
+
+    graph_view = store.build_graph_view(
+        org_name="Longboardfella",
+        view_mode="industry_network",
+        focus_profile_key=industry_key,
+        child_profile_keys=[org_key],
+        include_signals=False,
+        include_alumni=True,
+        max_hops=2,
+        max_nodes=50,
+        max_edges=50,
+    )
+
+    payload = json.loads((tmp_path / "graph_views" / f"{graph_view['graph_id']}.json").read_text(encoding="utf-8"))
+    node_types = {node["type"] for node in payload["nodes"]}
+    edge_types = {edge["type"] for edge in payload["edges"]}
+    assert "industry" in node_types
+    assert "belongs_to_industry" in edge_types
+    assert payload["summary"]["watched_industries"] >= 1
 
 
 def test_organisation_target_matches_without_person_fields(tmp_path):
@@ -618,6 +745,80 @@ def test_profile_sync_preserves_affiliations_and_matches_non_primary_employer(tm
     assert signal["matches"][0]["affiliations"][1]["org_name_text"] == "Board Co"
 
 
+def test_profile_sync_persists_org_strategic_profile_context(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    result = store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "canonical_name": "Digital Health",
+                "target_type": "industry",
+            }
+        ],
+        org_strategic_profile={
+            "description": "Primary sector strategy",
+            "industries": ["Digital Health", "Healthcare"],
+            "key_themes": ["transformation"],
+        },
+        source="market_radar",
+    )
+
+    context = store.get_org_context("Longboardfella")
+    assert result["org_strategic_industry_count"] == 2
+    assert context["org_strategic_profile"]["industries"] == ["Digital Health", "Healthcare"]
+    assert context["org_strategic_profile"]["key_themes"] == ["transformation"]
+
+
+def test_reconcile_intel_note_delivery_records_note_and_graph_links(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "canonical_name": "Mic Cavazzini",
+                "target_type": "person",
+                "watch_status": "watch",
+            },
+            {
+                "canonical_name": "RACP",
+                "target_type": "organisation",
+            },
+        ],
+        source="market_radar",
+    )
+
+    result = store.reconcile_intel_note_delivery(
+        org_name="Longboardfella",
+        trace_id="trace-note-1",
+        payload={
+            "note": {
+                "title": "Meeting with Mic Cavazzini",
+                "note_date": "2026-03-19",
+                "submitted_by": "paul@example.com",
+                "content": "Discussed strategic transformation.",
+            },
+            "primary_entity": {
+                "name": "Mic Cavazzini",
+                "target_type": "person",
+            },
+            "referenced_entities": [
+                {
+                    "name": "RACP",
+                    "target_type": "organisation",
+                    "reference_type": "meeting",
+                    "confidence": "confirmed",
+                }
+            ],
+        },
+        response={"intel_id": "note_abc123"},
+    )
+
+    assert result["intel_id"] == "note_abc123"
+    assert result["linked_entities"] >= 2
+    notes = store.list_intel_notes(org_name="Longboardfella")
+    assert notes[0]["intel_id"] == "note_abc123"
+
+
 def test_profile_sync_upgrades_legacy_profile_to_external_profile_id(tmp_path):
     store = StakeholderSignalStore(base_path=tmp_path)
     store.upsert_profiles(
@@ -943,6 +1144,83 @@ def test_generate_digest_includes_alumni_context_signals(tmp_path):
     assert digest["signals"][0]["alumni_hits"] == ["Deloitte"]
     assert "Alumni context: SMS, Deloitte" in digest_text
     assert "[alumni: Deloitte]" in digest_text
+
+
+def test_generate_digest_supports_industry_scope_and_shared_visibility(tmp_path):
+    store = StakeholderSignalStore(base_path=tmp_path)
+    store.upsert_profiles(
+        org_name="Longboardfella",
+        profiles=[
+            {
+                "external_profile_id": "ind-1",
+                "canonical_name": "Digital Health",
+                "target_type": "industry",
+                "watch_status": "watch",
+                "description": "Sector profile",
+                "key_themes": ["telehealth", "privacy"],
+                "regulatory_context": "Privacy reform",
+                "market_size": "$10B",
+            },
+            {
+                "external_profile_id": "org-1",
+                "canonical_name": "Healthdirect Australia",
+                "target_type": "organisation",
+                "watch_status": "watch",
+                "industry_affiliations": [{"industry_profile_key": "ind-1", "industry_name": "Digital Health", "role": "key player"}],
+            },
+            {
+                "external_profile_id": "person-1",
+                "canonical_name": "Jane Smith",
+                "target_type": "person",
+                "watch_status": "watch",
+                "current_employer": "Healthdirect Australia",
+                "affiliations": [{"org_name_text": "Healthdirect Australia", "role": "Executive", "is_primary": 1}],
+                "industry_affiliations": [{"industry_profile_key": "ind-1", "industry_name": "Digital Health", "role": "speaker"}],
+            },
+        ],
+        source="market_radar",
+    )
+    profiles = store.list_profiles(org_name="Longboardfella")
+    industry_key = next(item["profile_key"] for item in profiles if item["target_type"] == "industry")
+    org_key = next(item["profile_key"] for item in profiles if item["canonical_name"] == "Healthdirect Australia")
+    person_key = next(item["profile_key"] for item in profiles if item["canonical_name"] == "Jane Smith")
+
+    store.ingest_signal(
+        {
+            "org_name": "Escient",
+            "source_org_name": "Escient",
+            "visible_to_orgs": ["Longboardfella", "Escient"],
+            "shared_with_orgs": ["Longboardfella"],
+            "scope_profile_key": industry_key,
+            "child_profile_keys": [org_key, person_key],
+            "child_org_names": ["Healthdirect Australia"],
+            "key_themes": ["telehealth"],
+            "subject": "Healthdirect expands telehealth advisory program",
+            "raw_text": "Healthdirect Australia expands a telehealth advisory program led by Jane Smith.",
+            "parsed_candidate_name": "Jane Smith",
+            "parsed_candidate_employer": "Healthdirect Australia",
+            "message_id": "<industry-shared-1>",
+        }
+    )
+
+    digest = store.generate_digest(
+        org_name="Longboardfella",
+        scope_type="industry",
+        scope_profile_key=industry_key,
+        child_profile_keys=[org_key, person_key],
+        child_org_names=["Healthdirect Australia"],
+        key_themes=["telehealth"],
+        regulatory_context="Privacy reform",
+        market_size="$10B",
+        report_depth="detailed",
+    )
+
+    digest_text = (tmp_path / "digests" / f"{digest['digest_id']}.md").read_text(encoding="utf-8")
+    assert digest["scope_type"] == "industry"
+    assert digest["signal_count"] == 1
+    assert "Industry Intelligence Digest" in digest_text
+    assert "Healthdirect Australia" in digest_text
+    assert "telehealth" in digest_text.lower()
 
 
 def test_generate_digest_adds_relationship_temporal_and_scoring_metadata(tmp_path):

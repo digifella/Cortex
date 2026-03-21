@@ -49,3 +49,18 @@ def test_init_vlm_falls_back_to_llava_latest(monkeypatch):
 
     assert textifier._vlm_client is client
     assert textifier._vlm_model == "llava:latest"
+
+
+def test_docling_image_marker_enrichment_skips_when_text_is_substantive(monkeypatch):
+    textifier = DocumentTextifier()
+    markdown_text = ("Meaningful extracted text.\n" * 80) + "\n<!-- image -->\n"
+
+    def _fail_describe(_image_bytes):
+        raise AssertionError("describe_image should not run when Docling text is already substantive")
+
+    monkeypatch.setattr(textifier, "_describe_image_with_timeout", _fail_describe)
+
+    enriched = textifier._enrich_docling_image_markers(markdown_text, "/tmp/sample.pdf", figures=[])
+
+    assert "<!-- image -->" not in enriched
+    assert "Meaningful extracted text." in enriched
