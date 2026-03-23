@@ -31,9 +31,10 @@ from cortex_engine.industry_classifier import classify_entity_industry
 from cortex_engine.intel_extractor import extract_intel
 from cortex_engine.intel_note_classifier import classify_mailbox_message
 from cortex_engine.intel_note_processor import IntelNoteProcessor
+from cortex_engine.org_chart_extractor import looks_like_org_chart_attachment
 from cortex_engine.strategic_doc_analyser import clean_strategic_role_label
 from cortex_engine.stakeholder_signal_matcher import normalize_lookup
-from cortex_engine.stakeholder_signal_store import StakeholderSignalStore
+from cortex_engine.stakeholder_signal_store import StakeholderSignalStore, orgs_compatible
 from cortex_engine.utils import convert_windows_to_wsl_path
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,9 @@ _GENERIC_DOC_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 _MAIL_SUBJECT_PREFIX_RE = re.compile(r"^\s*((?:re|fw|fwd)\s*:\s*)+", re.IGNORECASE)
+_SUBJECT_ENTITY_OVERRIDE_RE = re.compile(
+    r"(?i)(?:^|[\s\[\]()|;])(?:entity|org|organisation|organization)\s*:\s*([^|\];,\n]+)"
+)
 _YEAR_RANGE_RE = re.compile(r"\b(20\d{2})\s*(?:to|[-–])\s*(20\d{2})\b", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(20\d{2})\b")
 _MANAGED_NOTE_SECTIONS = {
@@ -78,6 +82,33 @@ _KPI_FOCUS_STOPWORDS = {
     "strategy",
     "support",
     "training",
+}
+_SUBJECT_ORG_HINT_STOPWORDS = {
+    "annual",
+    "attachment",
+    "call",
+    "chart",
+    "document",
+    "email",
+    "fyi",
+    "image",
+    "industry",
+    "intro",
+    "introduction",
+    "meeting",
+    "note",
+    "notes",
+    "org",
+    "organisation",
+    "organization",
+    "plan",
+    "report",
+    "screenshot",
+    "screen",
+    "shot",
+    "strategic",
+    "strategy",
+    "update",
 }
 
 
@@ -170,11 +201,31 @@ def _normalized_mail_subject(value: str) -> str:
     if not text:
         return ""
     while True:
+        updated = re.sub(r"^\s*subject\s*:\s*", "", text, flags=re.IGNORECASE).strip()
+        if updated == text:
+            break
+        text = updated
+    while True:
         updated = _MAIL_SUBJECT_PREFIX_RE.sub("", text).strip()
         if updated == text:
             break
         text = updated
     text = re.sub(r"\s+", " ", text).strip(" -|:")
+    return text
+
+
+def _extract_subject_entity_override(value: str) -> str:
+    text = str(value or "")
+    match = _SUBJECT_ENTITY_OVERRIDE_RE.search(text)
+    if not match:
+        return ""
+    return _clean_display_label(match.group(1))
+
+
+def _strip_subject_entity_override(value: str) -> str:
+    text = _SUBJECT_ENTITY_OVERRIDE_RE.sub(" ", str(value or ""))
+    text = re.sub(r"\s*[|;,]\s*", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" -|:;,")
     return text
 
 
@@ -211,6 +262,29 @@ def _looks_like_useful_subject_title(value: str) -> bool:
     if _looks_like_generic_document_name(cleaned):
         return False
     return True
+
+
+def _subject_org_hint(value: str) -> str:
+    text = _clean_display_label(value)
+    if not text or not _looks_like_useful_subject_title(text):
+        return ""
+    candidate = re.sub(
+        r"\b(?:org(?:anisation|anization)?\s+chart|strategic\s+plan|strategic\s+direction|annual\s+report|industry\s+report|sector\s+report|report|plan|strategy|direction|roadmap)\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    candidate = re.sub(r"\b20\d{2}(?:\s*[-–to]+\s*20\d{2})?\b", " ", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"\s+", " ", candidate).strip(" -|:;,")
+    if not candidate:
+        return ""
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", candidate) if word]
+    if not words or len(words) > 6:
+        return ""
+    lowered_words = [normalize_lookup(word) for word in words]
+    if any(word in _SUBJECT_ORG_HINT_STOPWORDS for word in lowered_words):
+        return ""
+    return candidate
 
 
 def _document_label(doc_type: str, context_text: str) -> str:
@@ -706,15 +780,105 @@ class IntelMailboxPoller:
             return True
         return sender in self.config.allowed_senders
 
-    def _build_extract_payload(self, message: Dict[str, Any], persisted: Dict[str, Any], trace_id: str) -> Dict[str, Any]:
+    def _known_org_scopes(self) -> List[str]:
+        names = {str(self.config.org_name or "").strip()}
+        try:
+            profiles = self.signal_store.list_profiles(org_name="")
+        except Exception:
+            profiles = []
+        for profile in profiles:
+            org_name = str(profile.get("org_name") or "").strip()
+            if org_name:
+                names.add(org_name)
+        try:
+            state = self.signal_store.get_state()
+        except Exception:
+            state = {}
+        for key, context in dict(state.get("org_contexts") or {}).items():
+            del key
+            org_name = str((context or {}).get("org_name") or "").strip()
+            if org_name:
+                names.add(org_name)
+        return sorted(name for name in names if name)
+
+    def _match_known_org_scope(self, requested_org_name: str) -> str:
+        requested = str(requested_org_name or "").strip()
+        if not requested:
+            return ""
+        wanted = normalize_lookup(requested)
+        exact_matches = [
+            candidate
+            for candidate in self._known_org_scopes()
+            if normalize_lookup(candidate) == wanted
+        ]
+        if exact_matches:
+            return exact_matches[0]
+        compatible_matches = [
+            candidate
+            for candidate in self._known_org_scopes()
+            if orgs_compatible(candidate, requested)
+        ]
+        if compatible_matches:
+            compatible_matches.sort(key=lambda item: (len(normalize_lookup(item)), item))
+            return compatible_matches[0]
+        return ""
+
+    def _resolve_message_routing(self, message: Dict[str, Any], persisted: Dict[str, Any]) -> Dict[str, Any]:
+        raw_subject = str(message.get("subject") or "").strip()
+        requested_org_name = _extract_subject_entity_override(raw_subject)
+        subject_without_override = _strip_subject_entity_override(raw_subject)
+        clean_subject = _normalized_mail_subject(subject_without_override or raw_subject)
+        matched_org_name = self._match_known_org_scope(requested_org_name)
+        effective_org_name = matched_org_name or self.config.org_name
+        attachments = list(persisted.get("attachments") or [])
+        has_document_attachment = any(
+            str(item.get("kind") or "").strip().lower() == "document"
+            for item in attachments
+        )
+        has_org_chart_image_attachment = any(
+            str(item.get("kind") or "").strip().lower() == "image"
+            and looks_like_org_chart_attachment(
+                str(item.get("filename") or "").strip(),
+                clean_subject,
+            )
+            for item in attachments
+        )
+        subject_org_hint = _subject_org_hint(clean_subject) if (has_document_attachment or has_org_chart_image_attachment) else ""
+        status = "default"
+        if requested_org_name and matched_org_name:
+            status = "matched_override"
+        elif requested_org_name:
+            status = "unmatched_override"
+        return {
+            "default_org_name": self.config.org_name,
+            "requested_org_name": requested_org_name,
+            "matched_org_name": matched_org_name,
+            "effective_org_name": effective_org_name,
+            "status": status,
+            "clean_subject": clean_subject,
+            "subject_org_hint": subject_org_hint,
+            "has_document_attachment": has_document_attachment,
+            "has_org_chart_image_attachment": has_org_chart_image_attachment,
+        }
+
+    def _build_extract_payload(
+        self,
+        message: Dict[str, Any],
+        persisted: Dict[str, Any],
+        trace_id: str,
+        routing: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        routing = routing or {}
         tags = ["email_intake"]
         if any(item.get("kind") == "image" for item in persisted.get("attachments") or []):
             tags.append("image_attachment")
         if any(item.get("kind") == "document" for item in persisted.get("attachments") or []):
             tags.append("document_attachment")
-        clean_subject = _normalized_mail_subject(message.get("subject", ""))
+        clean_subject = str(routing.get("clean_subject") or _normalized_mail_subject(message.get("subject", ""))).strip()
+        subject_org_hint = str(routing.get("subject_org_hint") or "").strip()
+        effective_org_name = str(routing.get("effective_org_name") or self.config.org_name).strip()
         return {
-            "org_name": self.config.org_name,
+            "org_name": effective_org_name,
             "source_system": self.config.source_system,
             "trace_id": trace_id,
             "signal_type": "email_intel",
@@ -726,21 +890,24 @@ class IntelMailboxPoller:
             "html_text": message.get("html_text", ""),
             "primary_url": "",
             "text_note": "",
-            "parsed_candidate_name": "",
-            "parsed_candidate_employer": "",
+            "parsed_candidate_name": subject_org_hint,
+            "parsed_candidate_employer": subject_org_hint,
             "target_type": "",
             "attachments": list(persisted.get("attachments") or []),
             "tags": tags,
+            "mailbox_routing": dict(routing),
         }
 
-    def _subscriber_strategic_profile(self) -> Dict[str, Any]:
-        return dict(self.signal_store.get_org_context(self.config.org_name).get("org_strategic_profile") or {})
+    def _subscriber_strategic_profile(self, scope_org_name: str = "") -> Dict[str, Any]:
+        org_name = str(scope_org_name or self.config.org_name).strip()
+        return dict(self.signal_store.get_org_context(org_name).get("org_strategic_profile") or {})
 
-    def _lookup_org_profile(self, org_name: str) -> Dict[str, Any]:
+    def _lookup_org_profile(self, org_name: str, scope_org_name: str = "") -> Dict[str, Any]:
         wanted = normalize_lookup(org_name)
         if not wanted:
             return {}
-        for profile in self.signal_store.list_profiles(org_name=self.config.org_name):
+        effective_scope = str(scope_org_name or self.config.org_name).strip()
+        for profile in self.signal_store.list_profiles(org_name=effective_scope):
             if str(profile.get("target_type") or "").strip().lower() != "organisation":
                 continue
             if normalize_lookup(profile.get("canonical_name") or "") == wanted:
@@ -750,13 +917,13 @@ class IntelMailboxPoller:
                     return profile
         return {}
 
-    def _infer_industry_name(self, message: Dict[str, Any], entity: Dict[str, Any]) -> str:
+    def _infer_industry_name(self, message: Dict[str, Any], entity: Dict[str, Any], scope_org_name: str = "") -> str:
         explicit = str(entity.get("industry") or "").strip()
         if explicit:
             return explicit
 
         org_name = str(entity.get("canonical_name") or entity.get("name") or entity.get("current_employer") or "").strip()
-        org_profile = self._lookup_org_profile(org_name)
+        org_profile = self._lookup_org_profile(org_name, scope_org_name=scope_org_name)
         affiliations = org_profile.get("industry_affiliations") or []
         if affiliations:
             first = affiliations[0]
@@ -770,8 +937,8 @@ class IntelMailboxPoller:
         return classify_entity_industry(
             entity=entity,
             message=message,
-            strategic_profile=self._subscriber_strategic_profile(),
-            org_profile_lookup=self._lookup_org_profile,
+            strategic_profile=self._subscriber_strategic_profile(scope_org_name),
+            org_profile_lookup=lambda item: self._lookup_org_profile(item, scope_org_name=scope_org_name),
         )
 
     def _extract_note_urls(self, message: Dict[str, Any], markdown_text: str) -> List[Dict[str, str]]:
@@ -813,6 +980,37 @@ class IntelMailboxPoller:
                 "employer": str(item.get("current_employer") or item.get("employer") or "").strip(),
             }
         return {"target_type": "", "name": "", "employer": ""}
+
+    @staticmethod
+    def _choose_subject_primary_entity(subject_org_hint: str, output_data: Dict[str, Any]) -> Dict[str, str]:
+        wanted = normalize_lookup(subject_org_hint)
+        if not wanted:
+            return {"target_type": "", "name": "", "employer": ""}
+
+        for item in output_data.get("entities") or []:
+            if str(item.get("target_type") or "").strip().lower() != "organisation":
+                continue
+            name = str(item.get("canonical_name") or item.get("name") or "").strip()
+            if name and normalize_lookup(name) == wanted:
+                return {"target_type": "organisation", "name": name, "employer": ""}
+            if name and orgs_compatible(name, subject_org_hint):
+                return {"target_type": "organisation", "name": subject_org_hint, "employer": ""}
+
+        for item in output_data.get("organisations") or []:
+            name = str(item.get("canonical_name") or item.get("name") or "").strip()
+            if name and normalize_lookup(name) == wanted:
+                return {"target_type": "organisation", "name": name, "employer": ""}
+            if name and orgs_compatible(name, subject_org_hint):
+                return {"target_type": "organisation", "name": subject_org_hint, "employer": ""}
+
+        for item in output_data.get("people") or []:
+            employer = str(item.get("current_employer") or item.get("employer") or "").strip()
+            if employer and normalize_lookup(employer) == wanted:
+                return {"target_type": "organisation", "name": employer, "employer": ""}
+            if employer and orgs_compatible(employer, subject_org_hint):
+                return {"target_type": "organisation", "name": subject_org_hint, "employer": ""}
+
+        return {"target_type": "organisation", "name": subject_org_hint, "employer": ""}
 
     def _choose_document_primary_entity(
         self,
@@ -1110,24 +1308,50 @@ class IntelMailboxPoller:
         signal: Dict[str, Any],
         markdown_text: str,
         message_kind: str,
+        scope_org_name: str = "",
+        routing: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        scope_org_name = str(scope_org_name or self.config.org_name).strip()
+        routing = dict(routing or {})
         processing_meta = dict(output_data.get("processing_meta") or {})
         strategic_doc = dict(processing_meta.get("strategic_doc") or {})
         strategic_org_name = str(strategic_doc.get("org_name") or "").strip()
         email_triage = dict(processing_meta.get("email_triage") or {})
-        clean_subject = str(email_triage.get("clean_subject") or _normalized_mail_subject(message.get("subject", ""))).strip()
+        clean_subject = str(
+            routing.get("clean_subject")
+            or email_triage.get("clean_subject")
+            or _normalized_mail_subject(message.get("subject", ""))
+        ).strip()
+        subject_org_hint = str(routing.get("subject_org_hint") or "").strip()
         primary = self._choose_primary_entity(output_data)
-        document_primary = self._choose_document_primary_entity(output_data, strategic_doc) if message_kind == "document_analysis" else {"target_type": "", "name": "", "employer": ""}
+        can_use_document_subject_hint = message_kind in {"document_analysis", "org_chart"} or bool(routing.get("has_org_chart_image_attachment"))
+        subject_primary = self._choose_subject_primary_entity(subject_org_hint, output_data) if can_use_document_subject_hint else {"target_type": "", "name": "", "employer": ""}
+        document_primary = self._choose_document_primary_entity(output_data, strategic_doc) if can_use_document_subject_hint else {"target_type": "", "name": "", "employer": ""}
+        if subject_primary.get("name") and document_primary.get("name"):
+            subject_key = normalize_lookup(subject_primary.get("name") or "")
+            document_key = normalize_lookup(document_primary.get("name") or "")
+            if (
+                subject_key and document_key
+                and subject_key != document_key
+                and (subject_key in document_key or orgs_compatible(subject_primary.get("name") or "", document_primary.get("name") or ""))
+            ):
+                document_primary = {"target_type": "", "name": "", "employer": ""}
         if document_primary.get("name"):
             primary = document_primary
+        elif subject_primary.get("name") and (
+            not primary.get("name")
+            or primary.get("target_type") != "organisation"
+            or orgs_compatible(primary.get("name") or "", subject_primary.get("name") or "")
+        ):
+            primary = subject_primary
         elif strategic_org_name and not _looks_like_generic_document_name(strategic_org_name) and (
             not primary.get("name")
             or (
-                message_kind == "document_analysis" and primary.get("target_type") != "organisation"
+                can_use_document_subject_hint and primary.get("target_type") != "organisation"
             )
             or (
                 primary.get("target_type") == "person"
-                and normalize_lookup(primary.get("employer") or "") == normalize_lookup(self.config.org_name)
+                and normalize_lookup(primary.get("employer") or "") == normalize_lookup(scope_org_name)
             )
         ):
             primary = {
@@ -1162,7 +1386,7 @@ class IntelMailboxPoller:
                     "context": str(entity.get("evidence") or "").strip()[:240],
                 }
             )
-            industry_name = self._infer_industry_name(message, entity)
+            industry_name = self._infer_industry_name(message, entity, scope_org_name=scope_org_name)
             if target_type == "organisation" and industry_name:
                 industry_key = (normalize_lookup(industry_name), "industry")
                 if industry_key not in seen_refs:
@@ -1274,7 +1498,7 @@ class IntelMailboxPoller:
             )
         )
         relationship_paths = self.signal_store.find_relationship_paths(
-            org_name=self.config.org_name,
+            org_name=scope_org_name,
             target_names=[
                 primary.get("name", ""),
                 *[str(item.get("name") or "").strip() for item in referenced_entities if str(item.get("target_type") or "").strip().lower() == "person"],
@@ -1286,7 +1510,15 @@ class IntelMailboxPoller:
         return {
             "action": "ingest_intel_note",
             "secret": self.config.callback_secret,
-            "org_name": self.config.org_name,
+            "org_name": scope_org_name,
+            "mailbox_routing": {
+                "default_org_name": str(routing.get("default_org_name") or self.config.org_name).strip(),
+                "requested_org_name": str(routing.get("requested_org_name") or "").strip(),
+                "matched_org_name": str(routing.get("matched_org_name") or "").strip(),
+                "effective_org_name": scope_org_name,
+                "status": str(routing.get("status") or "default").strip(),
+                "subject_org_hint": subject_org_hint,
+            },
             "note": {
                 "source_type": self._infer_note_source_type(message, output_data, message_kind),
                 "title": note_title,
@@ -1371,17 +1603,25 @@ class IntelMailboxPoller:
             },
         }
 
-    def _ingest_signal(self, message: Dict[str, Any], output_data: Dict[str, Any], trace_id: str) -> Dict[str, Any]:
+    def _ingest_signal(
+        self,
+        message: Dict[str, Any],
+        output_data: Dict[str, Any],
+        trace_id: str,
+        scope_org_name: str = "",
+        clean_subject: str = "",
+    ) -> Dict[str, Any]:
+        scope_org_name = str(scope_org_name or self.config.org_name).strip()
         primary = self._choose_primary_entity(output_data)
         payload = {
-            "org_name": self.config.org_name,
+            "org_name": scope_org_name,
             "trace_id": trace_id,
             "source_system": self.config.source_system,
             "signal_type": "email_intel",
             "submitted_by": message.get("from_email", ""),
             "message_id": message.get("message_id", ""),
             "received_at": message.get("received_at", ""),
-            "subject": message.get("subject", ""),
+            "subject": clean_subject or message.get("subject", ""),
             "raw_text": message.get("raw_text", ""),
             "primary_url": "",
             "text_note": "",
@@ -1400,7 +1640,11 @@ class IntelMailboxPoller:
         trace_id: str,
         output_data: Dict[str, Any],
         signal: Dict[str, Any],
+        scope_org_name: str = "",
+        routing: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        scope_org_name = str(scope_org_name or self.config.org_name).strip()
+        routing = dict(routing or {})
         output_entities = list(output_data.get("entities") or [])
         if not output_entities:
             for candidate in output_data.get("people") or []:
@@ -1434,7 +1678,7 @@ class IntelMailboxPoller:
         output_warnings = output_data.get("warnings") or []
         return {
             "result_type": "intel_extract_result",
-            "org_name": self.config.org_name,
+            "org_name": scope_org_name,
             "trace_id": trace_id,
             "source_system": self.config.source_system,
             "message_id": message.get("message_id", ""),
@@ -1456,6 +1700,14 @@ class IntelMailboxPoller:
                 "signal_id": signal.get("signal_id", ""),
                 "matched_profile_keys": signal.get("matched_profile_keys") or [],
                 "needs_review": bool(signal.get("needs_review")),
+            },
+            "mailbox_routing": {
+                "default_org_name": str(routing.get("default_org_name") or self.config.org_name).strip(),
+                "requested_org_name": str(routing.get("requested_org_name") or "").strip(),
+                "matched_org_name": str(routing.get("matched_org_name") or "").strip(),
+                "effective_org_name": scope_org_name,
+                "status": str(routing.get("status") or "default").strip(),
+                "subject_org_hint": str(routing.get("subject_org_hint") or "").strip(),
             },
             "output_data": output_data,
         }
@@ -1484,10 +1736,12 @@ class IntelMailboxPoller:
         trace_id: str,
         csv_result: Dict[str, Any],
         reply_delivery: Dict[str, Any],
+        scope_org_name: str = "",
     ) -> Dict[str, Any]:
+        scope_org_name = str(scope_org_name or self.config.org_name).strip()
         return {
             "result_type": "csv_profile_import_result",
-            "org_name": self.config.org_name,
+            "org_name": scope_org_name,
             "trace_id": trace_id,
             "source_system": self.config.source_system,
             "message_id": message.get("message_id", ""),
@@ -1525,10 +1779,12 @@ class IntelMailboxPoller:
         reply_subject: str,
         reply_body: str,
         reply_delivery: Dict[str, Any],
+        scope_org_name: str = "",
     ) -> Dict[str, Any]:
+        scope_org_name = str(scope_org_name or self.config.org_name).strip()
         return {
             "result_type": "csv_profile_import_result",
-            "org_name": self.config.org_name,
+            "org_name": scope_org_name,
             "trace_id": trace_id,
             "source_system": self.config.source_system,
             "message_id": message.get("message_id", ""),
@@ -1566,12 +1822,30 @@ class IntelMailboxPoller:
         trace_id = f"trace-{hashlib.sha1(trace_seed.encode('utf-8', 'ignore')).hexdigest()[:32]}"
 
         message_kind = classify_mailbox_message(message, persisted)
+        routing = self._resolve_message_routing(message, persisted)
+        effective_org_name = str(routing.get("effective_org_name") or self.config.org_name).strip()
+        clean_subject = str(routing.get("clean_subject") or _normalized_mail_subject(message.get("subject", ""))).strip()
 
         if message_kind == "csv_profile_import":
             try:
-                csv_result = self.csv_importer.process_message(message, persisted, self.config.org_name)
+                csv_result = self.csv_importer.process_message(message, persisted, effective_org_name)
                 reply_delivery = self._send_reply(message, csv_result["reply_subject"], csv_result["reply_body"])
-                result_payload = self._build_csv_result_payload(message, persisted, trace_id, csv_result, reply_delivery)
+                result_payload = self._build_csv_result_payload(
+                    message,
+                    persisted,
+                    trace_id,
+                    csv_result,
+                    reply_delivery,
+                    scope_org_name=effective_org_name,
+                )
+                result_payload["mailbox_routing"] = {
+                    "default_org_name": self.config.org_name,
+                    "requested_org_name": str(routing.get("requested_org_name") or "").strip(),
+                    "matched_org_name": str(routing.get("matched_org_name") or "").strip(),
+                    "effective_org_name": effective_org_name,
+                    "status": str(routing.get("status") or "default").strip(),
+                    "subject_org_hint": str(routing.get("subject_org_hint") or "").strip(),
+                }
                 delivery = {
                     "status": "processed",
                     "created": int(csv_result.get("created") or 0),
@@ -1604,7 +1878,16 @@ class IntelMailboxPoller:
                     reply_subject,
                     reply_body,
                     reply_delivery,
+                    scope_org_name=effective_org_name,
                 )
+                result_payload["mailbox_routing"] = {
+                    "default_org_name": self.config.org_name,
+                    "requested_org_name": str(routing.get("requested_org_name") or "").strip(),
+                    "matched_org_name": str(routing.get("matched_org_name") or "").strip(),
+                    "effective_org_name": effective_org_name,
+                    "status": str(routing.get("status") or "default").strip(),
+                    "subject_org_hint": str(routing.get("subject_org_hint") or "").strip(),
+                }
                 delivery = {"status": "failed", "error": str(exc), "reply": reply_delivery}
                 self.store.record_processed(persisted["message_key"], trace_id, result_payload, delivery)
                 return {
@@ -1619,15 +1902,23 @@ class IntelMailboxPoller:
                     "warnings": [str(exc)],
                 }
 
-        payload = self._build_extract_payload(message, persisted, trace_id)
+        payload = self._build_extract_payload(message, persisted, trace_id, routing=routing)
         output_data, _output_file, processing_meta = self.note_processor.process(payload, message_kind)
         output_data["processing_meta"] = processing_meta
         markdown_text = ""
         if _output_file and Path(_output_file).exists():
             markdown_text = Path(_output_file).read_text(encoding="utf-8", errors="ignore")
         if message_kind == "intel_extract":
-            signal = self._ingest_signal(message, output_data, trace_id)
-            result_payload = self._build_result_payload(message, persisted, trace_id, output_data, signal)
+            signal = self._ingest_signal(message, output_data, trace_id, scope_org_name=effective_org_name, clean_subject=clean_subject)
+            result_payload = self._build_result_payload(
+                message,
+                persisted,
+                trace_id,
+                output_data,
+                signal,
+                scope_org_name=effective_org_name,
+                routing=routing,
+            )
             delivery = self.result_client.deliver(persisted["message_key"], result_payload)
         else:
             delivery_payload = self._build_ingest_note_payload(
@@ -1637,9 +1928,19 @@ class IntelMailboxPoller:
                 {},
                 markdown_text,
                 message_kind,
+                scope_org_name=effective_org_name,
+                routing=routing,
             )
-            signal = self._ingest_signal(message, output_data, trace_id)
-            result_payload = self._build_result_payload(message, persisted, trace_id, output_data, signal)
+            signal = self._ingest_signal(message, output_data, trace_id, scope_org_name=effective_org_name, clean_subject=clean_subject)
+            result_payload = self._build_result_payload(
+                message,
+                persisted,
+                trace_id,
+                output_data,
+                signal,
+                scope_org_name=effective_org_name,
+                routing=routing,
+            )
             result_payload["website_payload"] = {**delivery_payload, "secret": "[redacted]"}
             delivery = self.result_client.deliver(
                 persisted["message_key"],
@@ -1650,7 +1951,7 @@ class IntelMailboxPoller:
             response = dict(delivery.get("response") or {})
             if response.get("intel_id"):
                 reconciliation = self.signal_store.reconcile_intel_note_delivery(
-                    org_name=self.config.org_name,
+                    org_name=effective_org_name,
                     trace_id=trace_id,
                     payload=delivery_payload,
                     response=response,

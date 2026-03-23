@@ -13,6 +13,7 @@ SUPPORTED_JOB_TYPES = [
     "pdf_anonymise",
     "pdf_textify",
     "url_ingest",
+    "org_profile_refresh",
     "cortex_sync",
     "intel_extract",
     "stakeholder_profile_sync",
@@ -414,6 +415,49 @@ def validate_url_ingest_input(input_data: Optional[Dict[str, Any]] = None) -> Di
 
     top_level_textify = {k: payload[k] for k in SUPPORTED_TEXTIFY_OPTION_KEYS if k in payload}
     payload["textify_options"] = normalize_textify_options(top_level_textify)
+    return payload
+
+
+def validate_org_profile_refresh_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(input_data or {})
+    payload["profile_id"] = str(payload.get("profile_id") or "").strip()
+    payload["org_name"] = str(payload.get("org_name") or "").strip()
+    if not payload["org_name"]:
+        raise ValueError("org_profile_refresh requires org_name")
+
+    payload["target_org_name"] = str(payload.get("target_org_name") or "").strip()
+    if not payload["target_org_name"]:
+        raise ValueError("org_profile_refresh requires target_org_name")
+
+    current_profile_snapshot = payload.get("current_profile_snapshot")
+    if current_profile_snapshot is None:
+        current_profile_snapshot = {}
+    if not isinstance(current_profile_snapshot, dict):
+        raise ValueError("org_profile_refresh current_profile_snapshot must be an object")
+    payload["current_profile_snapshot"] = dict(current_profile_snapshot)
+
+    payload["discovery_mode"] = str(payload.get("discovery_mode") or "official_sources_first").strip().lower() or "official_sources_first"
+    if payload["discovery_mode"] not in {"official_sources_first", "official_only"}:
+        raise ValueError(f"Invalid discovery_mode: {payload['discovery_mode']!r}")
+
+    payload["requested_docs"] = _normalize_string_array(
+        payload.get("requested_docs") or ["annual_report", "strategic_plan", "org_chart"],
+        "org_profile_refresh requested_docs",
+    )
+    allowed_docs = {"annual_report", "strategic_plan", "org_chart", "about_page"}
+    invalid_docs = [item for item in payload["requested_docs"] if item not in allowed_docs]
+    if invalid_docs:
+        raise ValueError(f"Invalid requested_docs: {invalid_docs!r}")
+
+    payload["max_sources"] = min(12, _coerce_positive_int(payload.get("max_sources"), 6, "max_sources"))
+    payload["timeout_seconds"] = _coerce_positive_int(payload.get("timeout_seconds"), 25, "timeout_seconds")
+    payload["use_vision"] = _coerce_bool(payload.get("use_vision"), True)
+    payload["website_url"] = str(
+        payload.get("website_url")
+        or payload["current_profile_snapshot"].get("website_url")
+        or payload["current_profile_snapshot"].get("url")
+        or ""
+    ).strip()
     return payload
 
 

@@ -51,6 +51,20 @@ def test_init_vlm_falls_back_to_llava_latest(monkeypatch):
     assert textifier._vlm_model == "llava:latest"
 
 
+def test_resolve_ollama_model_name_matches_qualified_llava_name():
+    textifier = DocumentTextifier()
+    client = _FakeClient(["ai/llava:7b"])
+
+    assert textifier._resolve_ollama_model_name(client, "llava:7b") == "ai/llava:7b"
+
+
+def test_resolve_ollama_model_name_matches_qwen_family_variant():
+    textifier = DocumentTextifier()
+    client = _FakeClient(["qwen2.5-vl:7b-instruct-q4_K_M"])
+
+    assert textifier._resolve_ollama_model_name(client, "qwen2.5vl:7b") == "qwen2.5-vl:7b-instruct-q4_K_M"
+
+
 def test_docling_image_marker_enrichment_skips_when_text_is_substantive(monkeypatch):
     textifier = DocumentTextifier()
     markdown_text = ("Meaningful extracted text.\n" * 80) + "\n<!-- image -->\n"

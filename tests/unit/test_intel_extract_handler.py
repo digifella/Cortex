@@ -1,5 +1,9 @@
 import sys
 import types
+import io
+from base64 import b64decode
+
+from PIL import Image
 
 from worker.handlers import intel_extract as handler
 from cortex_engine.intel_extractor import (
@@ -7,7 +11,9 @@ from cortex_engine.intel_extractor import (
     _extract_linkedin_feed_structured,
     _merge_structured_results,
     _ocr_image_text,
+    _prepare_anthropic_image_bytes,
     _triage_email_payload,
+    _call_haiku_image_extract,
     extract_intel,
 )
 from cortex_engine.org_chart_extractor import analyse_org_chart_attachments, extract_org_chart_structured
@@ -256,6 +262,55 @@ def test_extract_intel_does_not_emit_profile_updates_from_heuristic_feed_noise(m
 
     assert any(item["canonical_name"] == "Rachel Choong" for item in result["entities"])
     assert result["target_update_suggestions"] == []
+
+
+def test_prepare_anthropic_image_bytes_downscales_oversized_png(tmp_path):
+    image_path = tmp_path / "org-chart.png"
+    Image.new("RGB", (9001, 240), color="white").save(image_path, format="PNG")
+
+    prepared_bytes, prepared_mime = _prepare_anthropic_image_bytes(image_path, "image/png")
+
+    assert prepared_mime in {"image/png", "image/jpeg"}
+    with Image.open(image_path) as original_img:
+        original_size = original_img.size
+    with Image.open(io.BytesIO(prepared_bytes)) as prepared_img:
+        assert max(prepared_img.size) <= 4096
+        assert prepared_img.size[0] < original_size[0]
+
+
+def test_call_haiku_image_extract_sends_resized_image_to_anthropic(monkeypatch, tmp_path):
+    image_path = tmp_path / "org-chart.png"
+    Image.new("RGB", (9001, 240), color="white").save(image_path, format="PNG")
+    captured = {}
+
+    class _FakeResponse:
+        content = [types.SimpleNamespace(text='{"people":[],"organisations":[],"emails":[],"career_events":[],"summary":"ok"}')]
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return _FakeResponse()
+
+    class _FakeClient:
+        messages = _FakeMessages()
+
+    monkeypatch.setattr("cortex_engine.intel_extractor._anthropic_client", lambda: _FakeClient())
+
+    result = _call_haiku_image_extract(
+        {"org_name": "Escient", "subject": "Barwon Water"},
+        {
+            "filename": "org-chart.png",
+            "stored_path": str(image_path),
+            "mime_type": "image/png",
+        },
+    )
+
+    assert result["summary"] == "ok"
+    source = captured["messages"][0]["content"][1]["source"]
+    prepared_bytes = b64decode(source["data"])
+    assert source["media_type"] in {"image/png", "image/jpeg"}
+    with Image.open(io.BytesIO(prepared_bytes)) as prepared_img:
+        assert max(prepared_img.size) <= 4096
 
 
 def test_extract_org_chart_structured_recovers_name_and_role_pairs():

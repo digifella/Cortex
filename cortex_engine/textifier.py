@@ -28,8 +28,16 @@ class DocumentTextifier:
     """Converts documents to Markdown with optional VLM image descriptions."""
 
     # Preferred vision models in order of priority
-    VISION_MODELS = ["qwen3-vl:8b", "qwen3-vl:4b", "qwen3-vl"]
-    VISION_FALLBACK_MODELS = ["llava:latest", "llava"]
+    VISION_MODELS = [
+        "qwen3-vl:8b",
+        "qwen3-vl:4b",
+        "qwen3-vl",
+        "qwen2.5vl:7b",
+        "qwen2.5vl:3b",
+        "qwen2.5vl:latest",
+        "qwen2.5vl",
+    ]
+    VISION_FALLBACK_MODELS = ["llava:7b", "llava:latest", "llava"]
 
     def __init__(
         self,
@@ -184,11 +192,12 @@ class DocumentTextifier:
             # Try preferred Qwen3-VL models first
             for model in self.VISION_MODELS:
                 try:
-                    if not self._ollama_model_available(client, model):
+                    resolved_model = self._resolve_ollama_model_name(client, model)
+                    if not resolved_model:
                         continue
                     self._vlm_client = client
-                    self._vlm_model = model
-                    logger.info(f"Textifier using vision model: {model}")
+                    self._vlm_model = resolved_model
+                    logger.info(f"Textifier using vision model: {resolved_model}")
                     return
                 except Exception:
                     continue
@@ -201,15 +210,26 @@ class DocumentTextifier:
                 if name and name not in fallback_candidates:
                     fallback_candidates.append(name)
             for model in fallback_candidates:
-                if not self._ollama_model_available(client, model):
+                resolved_model = self._resolve_ollama_model_name(client, model)
+                if not resolved_model:
                     continue
                 self._vlm_client = client
-                self._vlm_model = model
-                logger.info(f"Textifier falling back to vision model: {model}")
+                self._vlm_model = resolved_model
+                logger.info(f"Textifier falling back to vision model: {resolved_model}")
                 return
-            raise RuntimeError(f"no supported vision model installed (tried: {', '.join(fallback_candidates)})")
+            all_candidates: List[str] = []
+            for model in [*self.VISION_MODELS, *fallback_candidates]:
+                name = str(model or "").strip()
+                if name and name not in all_candidates:
+                    all_candidates.append(name)
+            installed = sorted(self._available_ollama_models or [])
+            installed_suffix = f"; installed models: {', '.join(installed)}" if installed else ""
+            raise RuntimeError(
+                f"no supported local Ollama vision model installed (tried: {', '.join(all_candidates)})"
+                f"{installed_suffix}"
+            )
         except Exception as e:
-            logger.warning(f"No vision model available: {e}")
+            logger.info(f"Local Ollama vision model unavailable: {e}")
             self._vlm_client = None
             self._vlm_model = None
 
@@ -236,21 +256,71 @@ class DocumentTextifier:
         return names
 
     def _ollama_model_available(self, client, model: str) -> bool:
+        return bool(self._resolve_ollama_model_name(client, model))
+
+    @staticmethod
+    def _vision_model_family(model: str) -> str:
         name = str(model or "").strip()
         if not name:
-            return False
+            return ""
+        lowered = name.lower()
+        if "qwen" in lowered and "vl" in lowered:
+            return "qwen_vl"
+        if "llava" in lowered:
+            return "llava"
+        return lowered.split(":", 1)[0]
+
+    def _resolve_ollama_model_name(self, client, model: str) -> str:
+        name = str(model or "").strip()
+        if not name:
+            return ""
         if self._available_ollama_models is None:
             try:
                 self._refresh_ollama_models(client)
             except Exception:
                 pass
         if self._available_ollama_models is not None:
-            return name in self._available_ollama_models
+            name_lower = name.lower()
+            exact_or_qualified_matches = [
+                candidate
+                for candidate in sorted(self._available_ollama_models)
+                if candidate == name
+                or candidate.lower() == name_lower
+                or candidate.lower().endswith(f"/{name_lower}")
+            ]
+            if exact_or_qualified_matches:
+                return exact_or_qualified_matches[0]
+            requested_family = self._vision_model_family(name)
+            requested_tag = name.split(":", 1)[1] if ":" in name else ""
+            family_matches = [
+                candidate
+                for candidate in sorted(self._available_ollama_models)
+                if self._vision_model_family(candidate) == requested_family
+            ]
+            if requested_tag:
+                for candidate in family_matches:
+                    if candidate.lower().endswith(f":{requested_tag.lower()}"):
+                        return candidate
+            if family_matches:
+                return family_matches[0]
+            requested_base = name.split(":", 1)[0]
+            prefix_matches = [
+                candidate
+                for candidate in sorted(self._available_ollama_models)
+                if candidate == requested_base
+                or candidate.lower() == requested_base.lower()
+                or candidate.lower().startswith(f"{requested_base.lower()}:")
+                or candidate.lower().endswith(f"/{requested_base.lower()}")
+                or candidate.lower().endswith(f"/{requested_base.lower()}:latest")
+            ]
+            if prefix_matches:
+                return prefix_matches[0]
+            return ""
         try:
             client.show(name)
-            return True
+            return name
         except Exception:
-            return False
+            return ""
 
     def _vlm_model_candidates(self, include_current: bool = True) -> List[str]:
         """Return a de-duplicated ordered list of Qwen VLM model names to try."""
@@ -653,16 +723,24 @@ class DocumentTextifier:
             prepared_bytes = self._prepare_vlm_image_bytes(image_bytes)
             encoded = base64.b64encode(prepared_bytes).decode("utf-8")
             models_tried: List[str] = []
-            for idx, model in enumerate(self._vlm_model_candidates(include_current=True)):
+            for idx, requested_model in enumerate(self._vlm_model_candidates(include_current=True)):
+                model = requested_model
                 try:
-                    if idx > 0 and not self._ollama_model_available(self._vlm_client, model):
-                        self._vlm_skip_models.add(model)
+                    if idx > 0:
+                        resolved_model = self._resolve_ollama_model_name(self._vlm_client, requested_model)
+                        if not resolved_model:
+                            self._vlm_skip_models.add(requested_model)
+                            continue
+                        model = resolved_model
+                    elif self._vlm_model:
+                        model = str(self._vlm_model).strip()
+                    if not model:
                         continue
                     result = self._describe_with_model(model, encoded, simple_prompt=True)
                 except Exception as model_error:
                     err_text = str(model_error)
                     if "status code: 404" in err_text:
-                        self._vlm_skip_models.add(model)
+                        self._vlm_skip_models.add(requested_model)
                     if "unexpectedly stopped" in err_text and model == self._vlm_model:
                         self._reset_vlm_session(f"{model} runner stopped unexpectedly")
                     logger.warning(f"VLM describe failed for model {model}: {model_error}")

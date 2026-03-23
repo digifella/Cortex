@@ -10,6 +10,7 @@ from .pdf_anonymise import handle as pdf_anonymise_handle
 from .cortex_sync import handle as cortex_sync_handle
 from .pdf_textify import handle as pdf_textify_handle
 from .url_ingest import handle as url_ingest_handle
+from .org_profile_refresh import handle as org_profile_refresh_handle
 from .youtube_summarise import handle as youtube_summarise_handle
 from .signal_episode import handle as signal_episode_handle
 from .intel_extract import handle as intel_extract_handle
@@ -24,6 +25,7 @@ HANDLERS = {
     'cortex_sync':     cortex_sync_handle,
     'pdf_textify':     pdf_textify_handle,
     'url_ingest':      url_ingest_handle,
+    'org_profile_refresh': org_profile_refresh_handle,
     'youtube_summarise': youtube_summarise_handle,
     'signal_episode':  signal_episode_handle,
     'intel_extract': intel_extract_handle,

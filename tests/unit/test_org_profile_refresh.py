@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+
+from cortex_engine.org_profile_refresh import OfficialSourceDiscoverer, run_org_profile_refresh
+
+
+def test_official_source_discoverer_uses_sitemap_links(monkeypatch):
+    discoverer = OfficialSourceDiscoverer(timeout=5)
+
+    def _fake_fetch_html(url, raise_on_error=True):
+        if url == "https://barwonwater.vic.gov.au":
+            return url, "<html><head><title>Barwon Water</title></head><body><a href='/about'>About</a></body></html>"
+        if url.endswith("/about"):
+            return url, "<html><head><title>About Barwon Water</title></head><body>About</body></html>"
+        return url, ""
+
+    def _fake_fetch_text(url, raise_on_error=True):
+        if url.endswith("/sitemap.xml"):
+            return url, """<?xml version='1.0' encoding='UTF-8'?>
+            <urlset>
+              <url><loc>https://barwonwater.vic.gov.au/reports/annual-report-2025.pdf</loc></url>
+              <url><loc>https://barwonwater.vic.gov.au/our-strategy</loc></url>
+            </urlset>""", "application/xml"
+        return url, "", "text/html"
+
+    monkeypatch.setattr(discoverer, "_fetch_html", _fake_fetch_html)
+    monkeypatch.setattr(discoverer, "_fetch_text", _fake_fetch_text)
+
+    sources = discoverer.discover_sources(
+        website_url="https://barwonwater.vic.gov.au",
+        requested_docs=["annual_report", "strategic_plan", "org_chart"],
+        max_sources=6,
+    )
+
+    assert any(item["type"] == "annual_report" for item in sources)
+    assert any(item["type"] == "strategic_plan" for item in sources)
+
+
+def test_org_profile_refresh_builds_structured_output(monkeypatch, tmp_path):
+    strategic_md = tmp_path / "barwon-strategy.md"
+    strategic_md.write_text(
+        "\n".join(
+            [
+                "# Barwon Water Strategic Plan 2025",
+                "Mission",
+                "Deliver reliable and sustainable water services for the region.",
+                "Strategic priorities",
+                "Drought resilience",
+                "Customer stewardship",
+                "Shaun Cumming",
+                "Managing Director",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    org_chart_md = tmp_path / "barwon-org-chart.md"
+    org_chart_md.write_text(
+        "\n".join(
+            [
+                "Leadership Team",
+                "Shaun Cumming",
+                "Managing Director",
+                "Anna Murray",
+                "General Manager Strategy",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class _FakeDiscoverer:
+        def __init__(self, timeout: int = 25):
+            self.timeout = timeout
+
+        def discover_sources(self, website_url: str, requested_docs: list[str], max_sources: int = 6):
+            return [
+                {
+                    "type": "strategic_plan",
+                    "title": "Barwon Water Strategic Plan 2025",
+                    "url": "https://barwonwater.vic.gov.au/strategy",
+                    "year": "2025",
+                    "source_label": "Strategic Plan",
+                },
+                {
+                    "type": "org_chart",
+                    "title": "Leadership Team",
+                    "url": "https://barwonwater.vic.gov.au/leadership",
+                    "year": "2025",
+                    "source_label": "Leadership Team",
+                },
+            ]
+
+    def _fake_process_urls(self, urls, convert_to_md, use_vision_for_md, textify_options, capture_web_md_on_no_pdf):
+        return [
+            SimpleNamespace(
+                input_url="https://barwonwater.vic.gov.au/strategy",
+                final_url="https://barwonwater.vic.gov.au/strategy",
+                md_path=str(strategic_md),
+                pdf_path="",
+                status="web_markdown",
+            ),
+            SimpleNamespace(
+                input_url="https://barwonwater.vic.gov.au/leadership",
+                final_url="https://barwonwater.vic.gov.au/leadership",
+                md_path=str(org_chart_md),
+                pdf_path="",
+                status="web_markdown",
+            ),
+        ]
+
+    monkeypatch.setattr("cortex_engine.org_profile_refresh.OfficialSourceDiscoverer", _FakeDiscoverer)
+    monkeypatch.setattr("cortex_engine.org_profile_refresh.URLIngestor.process_urls", _fake_process_urls)
+
+    output = run_org_profile_refresh(
+        payload={
+            "profile_id": "123",
+            "org_name": "Escient",
+            "target_org_name": "Barwon Water",
+            "website_url": "https://barwonwater.vic.gov.au",
+            "current_profile_snapshot": {"website_url": ""},
+            "requested_docs": ["strategic_plan", "org_chart"],
+            "max_sources": 4,
+            "timeout_seconds": 10,
+            "use_vision": True,
+            "discovery_mode": "official_sources_first",
+        },
+        run_dir=Path(tmp_path),
+    )
+
+    assert output["status"] == "refreshed"
+    assert output["auto_apply"]["website_url"]["value"] == "https://barwonwater.vic.gov.au"
+    assert output["proposed"]["mission_statement"]["value"] == "Deliver reliable and sustainable water services for the region."
+    assert "strategic_priorities" in output["proposed"]
+    assert any(item["name"] == "Shaun Cumming" for item in output["leadership_candidates"])
+    assert len(output["discovered_sources"]) == 2
+
+
+def test_org_profile_refresh_returns_manual_document_prompt_when_sources_blocked(monkeypatch, tmp_path):
+    class _FakeDiscoverer:
+        def __init__(self, timeout: int = 25):
+            self.timeout = timeout
+
+        def discover_sources(self, website_url: str, requested_docs: list[str], max_sources: int = 6):
+            return [
+                {
+                    "type": "about_page",
+                    "title": "Barwon Water",
+                    "url": "https://www.barwonwater.vic.gov.au/",
+                    "year": "",
+                    "source_label": "Organisation website",
+                }
+            ]
+
+    def _fake_process_urls(self, urls, convert_to_md, use_vision_for_md, textify_options, capture_web_md_on_no_pdf):
+        return [
+            SimpleNamespace(
+                input_url="https://www.barwonwater.vic.gov.au/",
+                final_url="https://www.barwonwater.vic.gov.au/",
+                md_path="",
+                pdf_path="",
+                status="failed",
+                reason="paywalled_or_forbidden",
+            )
+        ]
+
+    monkeypatch.setattr("cortex_engine.org_profile_refresh.OfficialSourceDiscoverer", _FakeDiscoverer)
+    monkeypatch.setattr("cortex_engine.org_profile_refresh.URLIngestor.process_urls", _fake_process_urls)
+
+    output = run_org_profile_refresh(
+        payload={
+            "profile_id": "123",
+            "org_name": "Escient",
+            "target_org_name": "Barwon Water",
+            "website_url": "https://www.barwonwater.vic.gov.au/",
+            "current_profile_snapshot": {"website_url": "https://www.barwonwater.vic.gov.au/"},
+            "requested_docs": ["annual_report", "strategic_plan", "org_chart"],
+            "max_sources": 4,
+            "timeout_seconds": 10,
+            "use_vision": True,
+            "discovery_mode": "official_sources_first",
+        },
+        run_dir=Path(tmp_path),
+    )
+
+    assert output["requires_manual_documents"] is True
+    assert "email or upload" in output["user_message"].lower()
+    assert output["blocked_source_urls"] == ["https://www.barwonwater.vic.gov.au/"]

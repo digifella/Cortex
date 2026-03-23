@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import base64
+import io
 import json
 import logging
 import os
@@ -570,6 +571,74 @@ def _call_haiku_extract(payload: Dict[str, Any], combined_text: str) -> Dict[str
     return _extract_json_object("\n".join(parts))
 
 
+def _prepare_anthropic_image_bytes(path_obj: Path, mime_type: str) -> Tuple[bytes, str]:
+    original_bytes = path_obj.read_bytes()
+    normalized_mime = str(mime_type or "").strip().lower() or "image/png"
+    max_edge = int(float(os.getenv("CORTEX_ANTHROPIC_IMAGE_MAX_EDGE_PX", "4096") or 4096))
+    max_input_bytes = int(
+        float(os.getenv("CORTEX_ANTHROPIC_IMAGE_MAX_INPUT_BYTES", str(5 * 1024 * 1024)) or (5 * 1024 * 1024))
+    )
+    if not original_bytes or max_edge <= 0:
+        return original_bytes, normalized_mime
+
+    try:
+        from PIL import Image
+    except Exception:
+        return original_bytes, normalized_mime
+
+    try:
+        with Image.open(io.BytesIO(original_bytes)) as img:
+            width, height = img.size
+            if max(width, height) <= max_edge and len(original_bytes) <= max_input_bytes:
+                return original_bytes, normalized_mime
+
+            working = img.copy()
+            if max(width, height) > max_edge:
+                working.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+
+            preserve_png = normalized_mime == "image/png" or path_obj.suffix.lower() == ".png"
+            out = io.BytesIO()
+            prepared_mime = normalized_mime
+
+            if preserve_png:
+                if working.mode not in {"RGB", "RGBA", "L", "P"}:
+                    working = working.convert("RGBA")
+                working.save(out, format="PNG", optimize=True)
+                prepared_mime = "image/png"
+            else:
+                if working.mode != "RGB":
+                    working = working.convert("RGB")
+                working.save(out, format="JPEG", quality=88, optimize=True)
+                prepared_mime = "image/jpeg"
+
+            prepared_bytes = out.getvalue()
+            if len(prepared_bytes) > max_input_bytes:
+                jpeg_out = io.BytesIO()
+                jpeg_ready = working if working.mode == "RGB" else working.convert("RGB")
+                jpeg_ready.save(jpeg_out, format="JPEG", quality=82, optimize=True)
+                jpeg_bytes = jpeg_out.getvalue()
+                if jpeg_bytes:
+                    prepared_bytes = jpeg_bytes
+                    prepared_mime = "image/jpeg"
+
+            if prepared_bytes:
+                logger.info(
+                    "Prepared Anthropic image from %sx%s (%s KB) to %sx%s (%s KB, %s)",
+                    width,
+                    height,
+                    max(1, len(original_bytes) // 1024),
+                    working.size[0],
+                    working.size[1],
+                    max(1, len(prepared_bytes) // 1024),
+                    prepared_mime,
+                )
+                return prepared_bytes, prepared_mime
+    except Exception as exc:
+        logger.debug("Could not preprocess Anthropic image %s: %s", path_obj, exc)
+
+    return original_bytes, normalized_mime
+
+
 def _call_haiku_image_extract(payload: Dict[str, Any], attachment: Dict[str, Any]) -> Dict[str, Any]:
     stored_path = _normalize_attachment_path(attachment.get("stored_path") or "")
     if not stored_path:
@@ -589,7 +658,8 @@ def _call_haiku_image_extract(payload: Dict[str, Any], attachment: Dict[str, Any
             ".gif": "image/gif",
         }.get(suffix, "image/png")
 
-    data = base64.b64encode(path_obj.read_bytes()).decode("utf-8")
+    prepared_bytes, prepared_mime_type = _prepare_anthropic_image_bytes(path_obj, mime_type)
+    data = base64.b64encode(prepared_bytes).decode("utf-8")
     client = _anthropic_client()
     system_prompt = (
         "You extract visible stakeholder/contact information from screenshots and image attachments. "
@@ -631,7 +701,7 @@ def _call_haiku_image_extract(payload: Dict[str, Any], attachment: Dict[str, Any
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": mime_type,
+                            "media_type": prepared_mime_type,
                             "data": data,
                         },
                     },

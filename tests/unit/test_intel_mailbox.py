@@ -72,6 +72,57 @@ def _intel_subject_message_bytes() -> bytes:
     return msg.as_bytes()
 
 
+def _routed_document_message_bytes() -> bytes:
+    msg = EmailMessage()
+    msg["Subject"] = "entity: Escient | Barwon Water"
+    msg["From"] = "Intel Feed <intel.longboardfella@gmail.com>"
+    msg["To"] = "intel.longboardfella@gmail.com"
+    msg["Date"] = "Thu, 12 Mar 2026 11:28:09 +1100"
+    msg["Message-ID"] = "<msg-routed-doc@example.com>"
+    msg.set_content("Uploading Barwon Water organisation material.")
+    msg.add_attachment(
+        b"%PDF-1.4 fake pdf bytes",
+        maintype="application",
+        subtype="pdf",
+        filename="barwon-water-org-chart.pdf",
+    )
+    return msg.as_bytes()
+
+
+def _prefixed_routed_document_message_bytes() -> bytes:
+    msg = EmailMessage()
+    msg["Subject"] = "Subject: entity: Escient | Barwon Water"
+    msg["From"] = "Intel Feed <intel.longboardfella@gmail.com>"
+    msg["To"] = "intel.longboardfella@gmail.com"
+    msg["Date"] = "Thu, 12 Mar 2026 11:28:09 +1100"
+    msg["Message-ID"] = "<msg-prefixed-routed-doc@example.com>"
+    msg.set_content("Uploading Barwon Water organisation material.")
+    msg.add_attachment(
+        b"%PDF-1.4 fake pdf bytes",
+        maintype="application",
+        subtype="pdf",
+        filename="barwon-water-strategy.pdf",
+    )
+    return msg.as_bytes()
+
+
+def _prefixed_routed_org_chart_message_bytes() -> bytes:
+    msg = EmailMessage()
+    msg["Subject"] = "Subject: entity: Escient | Barwon Water"
+    msg["From"] = "Intel Feed <intel.longboardfella@gmail.com>"
+    msg["To"] = "intel.longboardfella@gmail.com"
+    msg["Date"] = "Thu, 12 Mar 2026 11:28:09 +1100"
+    msg["Message-ID"] = "<msg-prefixed-routed-org-chart@example.com>"
+    msg.set_content("Uploading Barwon Water org chart.")
+    msg.add_attachment(
+        b"fake-image-bytes",
+        maintype="image",
+        subtype="png",
+        filename="barwon-water-org-chart.png",
+    )
+    return msg.as_bytes()
+
+
 def test_parse_email_bytes_extracts_bodies_and_attachments():
     parsed = parse_email_bytes(_sample_message_bytes())
 
@@ -118,6 +169,9 @@ class _FakeSignalStore:
         del org_name, trace_id, payload, response
         return {"intel_id": "intel_note_1", "linked_entities": 1}
 
+    def get_state(self):
+        return {}
+
 
 class _FakeIMAP:
     def __init__(self, _host, _port):
@@ -153,6 +207,21 @@ class _FakeIntelIMAP(_FakeIMAP):
         return "OK", [(b"1 (RFC822 {123})", _intel_subject_message_bytes())]
 
 
+class _FakeRoutedDocumentIMAP(_FakeIMAP):
+    def fetch(self, _imap_id, _query):
+        return "OK", [(b"1 (RFC822 {123})", _routed_document_message_bytes())]
+
+
+class _FakePrefixedRoutedDocumentIMAP(_FakeIMAP):
+    def fetch(self, _imap_id, _query):
+        return "OK", [(b"1 (RFC822 {123})", _prefixed_routed_document_message_bytes())]
+
+
+class _FakePrefixedRoutedOrgChartIMAP(_FakeIMAP):
+    def fetch(self, _imap_id, _query):
+        return "OK", [(b"1 (RFC822 {123})", _prefixed_routed_org_chart_message_bytes())]
+
+
 class _FakeReplyClient:
     def send(self, to_email, subject, body, in_reply_to=""):
         return {
@@ -178,6 +247,34 @@ class _RecordingResultClient:
             }
         )
         return {"status": "posted", "http_status": 200, "response": {"ok": True, "intel_id": "intel_note_1"}}
+
+
+class _RoutingSignalStore(_FakeSignalStore):
+    def list_profiles(self, org_name=""):
+        profiles = [
+            {
+                "org_name": "Escient",
+                "target_type": "organisation",
+                "canonical_name": "Escient",
+                "aliases": [],
+            }
+        ]
+        if org_name:
+            return [item for item in profiles if item["org_name"] == org_name]
+        return profiles
+
+
+class _OrgContextOnlySignalStore(_FakeSignalStore):
+    def get_state(self):
+        return {
+            "org_contexts": {
+                "escient": {
+                    "org_name": "Escient",
+                    "org_alumni": [],
+                    "org_strategic_profile": {},
+                }
+            }
+        }
 
 
 def test_mailbox_poller_processes_message_and_writes_outbox(tmp_path):
@@ -321,6 +418,266 @@ def test_mailbox_poller_uses_note_callback_url_for_structured_note_posts(tmp_pat
     assert result_client.calls
     assert result_client.calls[0]["callback_url_override"] == "https://example.com/lab/market_radar_api.php?action=ingest_intel_note"
     assert result_client.calls[0]["delivery_payload"]["action"] == "ingest_intel_note"
+
+
+def test_mailbox_routing_override_and_subject_org_hint_flow_into_note_payload(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    result_client = _RecordingResultClient()
+
+    def _extractor(payload):
+        out = tmp_path / "extract.md"
+        out.write_text("# Extract", encoding="utf-8")
+        assert payload["org_name"] == "Escient"
+        assert payload["subject"] == "Barwon Water"
+        assert payload["parsed_candidate_employer"] == "Barwon Water"
+        return (
+            {
+                "status": "extracted",
+                "entity_count": 1,
+                "people": [{"canonical_name": "Jane Smith", "current_employer": "", "current_role": "Managing Director"}],
+                "organisations": [],
+                "entities": [
+                    {
+                        "canonical_name": "Jane Smith",
+                        "name": "Jane Smith",
+                        "target_type": "person",
+                        "current_employer": "",
+                        "current_role": "Managing Director",
+                        "confidence": 0.9,
+                        "evidence": "Org chart OCR pair",
+                    }
+                ],
+                "emails": [],
+                "target_update_suggestions": [],
+                "warnings": [],
+                "attachments": [{"filename": "barwon-water-org-chart.pdf", "status": "processed", "excerpt": "Barwon Water organisation chart"}],
+                "processing_meta": {},
+            },
+            out,
+        )
+
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="https://example.com/admin/queue_worker_api.php?action=import_cortex_extract",
+        note_callback_url="https://example.com/lab/market_radar_api.php?action=ingest_intel_note",
+        callback_secret="secret",
+        callback_timeout=30,
+        profile_import_url="https://example.com/lab/market_radar_api.php?action=bulk_import_profiles",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=_extractor,
+        imap_factory=_FakeRoutedDocumentIMAP,
+        signal_store=_RoutingSignalStore(),
+        result_client=result_client,
+    )
+
+    summary = poller.poll_once()
+
+    assert summary["processed"] == 1
+    assert result_client.calls
+    delivery_payload = result_client.calls[0]["delivery_payload"]
+    assert delivery_payload["org_name"] == "Escient"
+    assert delivery_payload["primary_entity"]["name"] == "Barwon Water"
+    assert delivery_payload["primary_entity"]["target_type"] == "organisation"
+    assert delivery_payload["mailbox_routing"]["status"] == "matched_override"
+    assert delivery_payload["mailbox_routing"]["requested_org_name"] == "Escient"
+    assert delivery_payload["mailbox_routing"]["subject_org_hint"] == "Barwon Water"
+
+
+def test_mailbox_routing_strips_literal_subject_prefix_and_matches_org_context(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    result_client = _RecordingResultClient()
+
+    def _extractor(payload):
+        out = tmp_path / "extract.md"
+        out.write_text("# Extract", encoding="utf-8")
+        assert payload["org_name"] == "Escient"
+        assert payload["subject"] == "Barwon Water"
+        assert payload["parsed_candidate_employer"] == "Barwon Water"
+        return (
+            {
+                "status": "extracted",
+                "entity_count": 1,
+                "people": [],
+                "organisations": [{"canonical_name": "Barwon Water"}],
+                "entities": [
+                    {
+                        "canonical_name": "Barwon Water",
+                        "name": "Barwon Water",
+                        "target_type": "organisation",
+                        "confidence": 0.95,
+                        "evidence": "Document title and subject line",
+                    }
+                ],
+                "emails": [],
+                "target_update_suggestions": [],
+                "warnings": [],
+                "attachments": [{"filename": "barwon-water-strategy.pdf", "status": "processed", "excerpt": "Barwon Water Strategy 2030"}],
+                "processing_meta": {},
+            },
+            out,
+        )
+
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="https://example.com/admin/queue_worker_api.php?action=import_cortex_extract",
+        note_callback_url="https://example.com/lab/market_radar_api.php?action=ingest_intel_note",
+        callback_secret="secret",
+        callback_timeout=30,
+        profile_import_url="https://example.com/lab/market_radar_api.php?action=bulk_import_profiles",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=_extractor,
+        imap_factory=_FakePrefixedRoutedDocumentIMAP,
+        signal_store=_OrgContextOnlySignalStore(),
+        result_client=result_client,
+    )
+
+    summary = poller.poll_once()
+
+    assert summary["processed"] == 1
+    delivery_payload = result_client.calls[0]["delivery_payload"]
+    assert delivery_payload["org_name"] == "Escient"
+    assert delivery_payload["mailbox_routing"]["status"] == "matched_override"
+    assert delivery_payload["mailbox_routing"]["requested_org_name"] == "Escient"
+    assert delivery_payload["mailbox_routing"]["subject_org_hint"] == "Barwon Water"
+    assert delivery_payload["primary_entity"]["name"] == "Barwon Water"
+
+
+def test_mailbox_org_chart_image_uses_subject_org_hint_as_primary_entity(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    result_client = _RecordingResultClient()
+
+    def _extractor(payload):
+        out = tmp_path / "extract.md"
+        out.write_text("# Extract", encoding="utf-8")
+        return (
+            {
+                "status": "extracted",
+                "entity_count": 2,
+                "people": [{"canonical_name": "Shaun Cumming", "current_employer": "Barwon Water", "current_role": "Managing Director"}],
+                "organisations": [
+                    {"canonical_name": "Longboardfella Consulting Pty Ltd"},
+                    {"canonical_name": "Barwon Water"},
+                ],
+                "entities": [
+                    {
+                        "canonical_name": "Shaun Cumming",
+                        "name": "Shaun Cumming",
+                        "target_type": "person",
+                        "current_employer": "Barwon Water",
+                        "current_role": "Managing Director",
+                        "confidence": 0.95,
+                        "evidence": "Listed as Managing Director in org chart",
+                    },
+                    {
+                        "canonical_name": "Longboardfella Consulting Pty Ltd",
+                        "name": "Longboardfella Consulting Pty Ltd",
+                        "target_type": "organisation",
+                        "confidence": 0.8,
+                        "evidence": "Sender signature",
+                    },
+                    {
+                        "canonical_name": "Barwon Water",
+                        "name": "Barwon Water",
+                        "target_type": "organisation",
+                        "confidence": 0.95,
+                        "evidence": "Organizational chart and email subject line reference Barwon Water",
+                    },
+                ],
+                "emails": [],
+                "target_update_suggestions": [],
+                "warnings": [],
+                "attachments": [{"filename": "barwon-water-org-chart.png", "status": "processed", "excerpt": "Barwon Water org chart"}],
+                "processing_meta": {},
+            },
+            out,
+        )
+
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="https://example.com/admin/queue_worker_api.php?action=import_cortex_extract",
+        note_callback_url="https://example.com/lab/market_radar_api.php?action=ingest_intel_note",
+        callback_secret="secret",
+        callback_timeout=30,
+        profile_import_url="https://example.com/lab/market_radar_api.php?action=bulk_import_profiles",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=_extractor,
+        imap_factory=_FakePrefixedRoutedOrgChartIMAP,
+        signal_store=_OrgContextOnlySignalStore(),
+        result_client=result_client,
+    )
+
+    summary = poller.poll_once()
+
+    assert summary["processed"] == 1
+    delivery_payload = result_client.calls[0]["delivery_payload"]
+    assert delivery_payload["org_name"] == "Escient"
+    assert delivery_payload["note"]["title"] == "Barwon Water"
+    assert delivery_payload["primary_entity"]["name"] == "Barwon Water"
+    assert delivery_payload["primary_entity"]["target_type"] == "organisation"
+    assert delivery_payload["mailbox_routing"]["status"] == "matched_override"
 
 
 def test_find_duplicate_note_uses_attachment_fingerprint_for_document_resends(tmp_path):
@@ -957,6 +1314,88 @@ def test_mailbox_handoff_enriches_annual_report_note_content_and_performance_sig
     assert "Operating result" in headlines
 
 
+def test_mailbox_handoff_prefers_subject_org_hint_over_compatible_formal_org_name_for_annual_report(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "entity: Escient | Barwon Water annual report",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-23T09:00:00+00:00",
+            "raw_text": "",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [
+                {"name": "Barwon Region Water Corporation", "canonical_name": "Barwon Region Water Corporation", "target_type": "organisation", "confidence": 0.95},
+                {
+                    "name": "Shaun Cumming",
+                    "canonical_name": "Shaun Cumming",
+                    "target_type": "person",
+                    "current_employer": "Barwon Region Water Corporation",
+                    "current_role": "Managing Director",
+                    "confidence": 0.95,
+                    "evidence": "Leadership listing in annual report",
+                },
+            ],
+            "organisations": [{"canonical_name": "Barwon Region Water Corporation"}],
+            "attachments": [{"filename": "barwon-water-annual-report.pdf", "status": "processed", "excerpt": "Barwon Water annual report"}],
+            "summary": "Barwon Water annual report.",
+            "target_update_suggestions": [],
+            "processing_meta": {
+                "strategic_doc": {
+                    "doc_type": "annual_report",
+                    "org_name": "Barwon Region Water Corporation",
+                    "strategic_summary": "Annual report for Barwon Water.",
+                    "themes": [],
+                    "initiatives": [],
+                    "strategic_signals": [],
+                    "key_stakeholders": [],
+                    "performance_indicators": [],
+                }
+            },
+        },
+        signal={},
+        markdown_text="# Extract",
+        message_kind="document_analysis",
+        routing={"subject_org_hint": "Barwon Water", "clean_subject": "Barwon Water annual report"},
+    )
+
+    assert payload["primary_entity"]["name"] == "Barwon Water"
+
+
 def test_mailbox_handoff_omits_low_signal_kpi_focus_lines_from_annual_report_notes(tmp_path):
     store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
     cfg = IntelMailboxConfig(
@@ -1302,6 +1741,93 @@ def test_intel_note_processor_filters_noisy_annual_report_entities_to_curated_st
         "Steffen Faurby",
         "Royal Australasian College of Physicians",
     ]
+
+
+def test_intel_note_processor_annual_report_strips_bullets_and_drops_management_headings(tmp_path):
+    def _extractor(_payload):
+        return (
+            {
+                "status": "extracted",
+                "summary": "Barwon Water annual report.",
+                "entity_count": 8,
+                "entities": [
+                    {
+                        "canonical_name": "• Des Powell",
+                        "name": "• Des Powell",
+                        "target_type": "person",
+                        "current_employer": "Barwon Region Water Corporation",
+                        "current_role": "Chair",
+                        "confidence": 0.88,
+                        "evidence": "Annual report leadership listing",
+                    },
+                    {
+                        "canonical_name": "• Risk Management",
+                        "name": "• Risk Management",
+                        "target_type": "person",
+                        "current_employer": "",
+                        "current_role": "",
+                        "confidence": 0.55,
+                        "evidence": "Bullet heading from annual report",
+                    },
+                    {
+                        "canonical_name": "Integrated Water Management",
+                        "name": "Integrated Water Management",
+                        "target_type": "person",
+                        "current_employer": "",
+                        "current_role": "",
+                        "confidence": 0.55,
+                        "evidence": "Heading from annual report",
+                    },
+                    {
+                        "canonical_name": "Barwon Region Water Corporation",
+                        "name": "Barwon Region Water Corporation",
+                        "target_type": "organisation",
+                        "confidence": 0.94,
+                        "evidence": "Source document is 2025 Annual Report",
+                    },
+                ],
+                "people": [],
+                "organisations": [
+                    {
+                        "canonical_name": "Barwon Region Water Corporation",
+                        "evidence": "Source document is 2025 Annual Report",
+                    }
+                ],
+                "attachments": [
+                    {
+                        "filename": "barwon-water-annual-report-2025.pdf",
+                        "status": "processed",
+                        "excerpt": (
+                            "Barwon Water Group Annual Report 2025\n"
+                            "Des Powell\n"
+                            "Chair\n"
+                            "Shaun Cumming\n"
+                            "Managing Director\n"
+                            "Barwon Region Water Corporation"
+                        ),
+                    }
+                ],
+            },
+            tmp_path / "extract.md",
+        )
+
+    processor = IntelNoteProcessor(_extractor)
+    output_data, _output_file, analysis = processor.process(
+        {
+            "subject": "Barwon Water annual report",
+            "raw_text": "",
+        },
+        "document_analysis",
+    )
+
+    names = [item["canonical_name"] for item in output_data["entities"]]
+
+    assert analysis["strategic_doc"]["doc_type"] == "annual_report"
+    assert "Des Powell" in names
+    assert "• Des Powell" not in names
+    assert "• Risk Management" not in names
+    assert "Integrated Water Management" not in names
+    assert "Barwon Region Water Corporation" in names
 
 
 def test_mailbox_handoff_strips_re_fwd_subject_prefixes(tmp_path):

@@ -10,6 +10,7 @@ This folder contains the local/offline queue worker for the website work queue A
 - `handlers/pdf_anonymise.py`: `pdf_anonymise` handler (reuses `cortex_engine.anonymizer`).
 - `handlers/pdf_textify.py`: `pdf_textify` handler (reuses `cortex_engine.textifier`).
 - `handlers/url_ingest.py`: `url_ingest` handler (open-access PDF discovery + optional textify).
+- `handlers/org_profile_refresh.py`: `org_profile_refresh` handler (official-source organisation refresh with structured profile proposals).
 - `handlers/youtube_summarise.py`: `youtube_summarise` handler (video summary workflows).
 - `handlers/cortex_sync.py`: `cortex_sync` handler (website knowledge files -> Cortex ingestion pipeline).
 - `handlers/signal_episode.py`: `signal_episode` handler (Signal Studio audio generation).
@@ -48,6 +49,7 @@ venv/bin/python worker/intel_mailbox_worker.py
 - `pdf_anonymise`
 - `pdf_textify`
 - `url_ingest`
+- `org_profile_refresh`
 - `youtube_summarise`
 - `signal_episode`
 - `cortex_sync`

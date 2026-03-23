@@ -35,6 +35,98 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+_GEO_FOCUS_KEYS = (
+    "geography",
+    "geographic_scope",
+    "geo_scope",
+    "jurisdiction",
+    "country",
+    "market",
+    "region",
+    "location",
+)
+
+_AUSTRALIA_POSITIVE_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\baustralia\b",
+        r"\baustralian\b",
+        r"\bvictoria\b",
+        r"\bvictorian\b",
+        r"\bmelbourne\b",
+        r"\bnew south wales\b",
+        r"\bnsw\b",
+        r"\bsydney\b",
+        r"\bqueensland\b",
+        r"\bqld\b",
+        r"\bbrisbane\b",
+        r"\bsouth australia\b",
+        r"\badelaide\b",
+        r"\bwestern australia\b",
+        r"\bperth\b",
+        r"\btasmania\b",
+        r"\bhobart\b",
+        r"\bcanberra\b",
+        r"\bnorthern territory\b",
+        r"\bdarwin\b",
+        r"\bessential services commission\b",
+        r"\bipart\b",
+        r"\bwater services association of australia\b",
+        r"\bwsaa\b",
+    )
+]
+
+_AUSTRALIA_NEGATIVE_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\buk\b",
+        r"\bu\.k\.\b",
+        r"\bunited kingdom\b",
+        r"\bbritain\b",
+        r"\bbritish\b",
+        r"\bengland\b",
+        r"\bscotland\b",
+        r"\bwales\b",
+        r"\blondon\b",
+        r"\bofwat\b",
+        r"\beurope\b",
+        r"\beuropean\b",
+        r"\beu\b",
+        r"\bglobal\b",
+        r"\binternational\b",
+        r"\bno australian\b",
+        r"\bunited states\b",
+        r"\busa\b",
+        r"\bu\.s\.\b",
+        r"\bcanada\b",
+        r"\bcanadian\b",
+        r"\bnew zealand\b",
+        r"\bnz\b",
+    )
+]
+
+_AUSTRALIA_SUBREGION_TERMS = (
+    ("victoria", "Victoria"),
+    ("victorian", "Victoria"),
+    ("melbourne", "Melbourne"),
+    ("new south wales", "New South Wales"),
+    ("nsw", "NSW"),
+    ("sydney", "Sydney"),
+    ("queensland", "Queensland"),
+    ("qld", "Queensland"),
+    ("brisbane", "Brisbane"),
+    ("south australia", "South Australia"),
+    ("adelaide", "Adelaide"),
+    ("western australia", "Western Australia"),
+    ("perth", "Perth"),
+    ("tasmania", "Tasmania"),
+    ("hobart", "Hobart"),
+    ("canberra", "Canberra"),
+    ("act", "ACT"),
+    ("northern territory", "Northern Territory"),
+    ("darwin", "Darwin"),
+)
+
 
 # ── Anthropic client (lazy) ──
 
@@ -52,6 +144,163 @@ def _domain(url: str) -> str:
         return urlparse(url).netloc.lstrip("www.") or url
     except Exception:
         return url
+
+
+def _first_non_empty(*values) -> str:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _recent_year_terms() -> str:
+    this_year = date.today().year
+    return f"{this_year - 1} {this_year}"
+
+
+def _normalise_geography_label(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if any(term in lowered for term in ("australia", "australian", "au")):
+        return "Australia"
+    return text
+
+
+def _target_context_text(target: dict | None) -> str:
+    if not target:
+        return ""
+    return " ".join(
+        part for part in (
+            target.get("name", ""),
+            target.get("notes", ""),
+            target.get("extra_context", ""),
+            target.get("current_employer", ""),
+            target.get("address_country", ""),
+            target.get("address_state", ""),
+            target.get("address_city", ""),
+        )
+        if str(part).strip()
+    )
+
+
+def _build_geography_policy(focus: dict | None = None, target: dict | None = None, source_sites: dict | None = None) -> dict:
+    focus = focus or {}
+    source_sites = source_sites or {}
+    target = target or {}
+
+    explicit_geo = _first_non_empty(*(focus.get(key, "") for key in _GEO_FOCUS_KEYS))
+    include_sites = " ".join(source_sites.get("include", []) or [])
+    target_context = _target_context_text(target)
+    inferred_geo = "Australia" if any(
+        marker in " ".join([include_sites.lower(), target_context.lower()])
+        for marker in (".au", "australia", "australian", "victoria", "nsw", "queensland")
+    ) else ""
+    primary = _normalise_geography_label(explicit_geo or inferred_geo or "Australia")
+
+    extra_terms = []
+    if primary == "Australia":
+        target_context_lower = target_context.lower()
+        for marker, label in _AUSTRALIA_SUBREGION_TERMS:
+            if marker in target_context_lower and label not in extra_terms:
+                extra_terms.append(label)
+        query_terms = ["Australia", "Australian"] + extra_terms[:2]
+        instruction = (
+            "Australia is the primary market. Strongly prioritise Australian organisations, "
+            "regulators, conditions, and sources. If an overseas entity or regulator appears, "
+            "exclude it unless it is directly tied to Australian operations or the user explicitly requested it."
+        )
+        strict = True
+    else:
+        query_terms = [primary]
+        instruction = (
+            f"{primary} is the primary market. Prioritise organisations, regulators, and sector conditions "
+            f"from {primary}; treat unrelated foreign examples as out of scope."
+        )
+        strict = bool(primary)
+
+    return {
+        "primary": primary,
+        "query_terms": query_terms,
+        "instruction": instruction,
+        "strict": strict,
+    }
+
+
+def _signal_text(signal: dict) -> str:
+    return " ".join(
+        str(signal.get(field, "") or "")
+        for field in ("headline", "snippet", "source", "url")
+    )
+
+
+def _score_australia_signal(signal: dict) -> tuple[int, int]:
+    text = _signal_text(signal)
+    url = (signal.get("url", "") or "").lower()
+    domain = _domain(url).lower()
+
+    positive = sum(1 for pattern in _AUSTRALIA_POSITIVE_PATTERNS if pattern.search(text))
+    negative = sum(1 for pattern in _AUSTRALIA_NEGATIVE_PATTERNS if pattern.search(text))
+
+    if domain.endswith(".au") or ".gov.au" in domain or ".com.au" in domain or ".org.au" in domain:
+        positive += 2
+    if domain.endswith(".uk") or ".co.uk" in domain or ".gov.uk" in domain:
+        negative += 2
+
+    return positive, negative
+
+
+def _filter_signals_for_geography(
+    signals: list,
+    geo_policy: dict,
+    *,
+    target_name: str = "",
+    require_geo_match: bool = False,
+) -> list:
+    if not signals or not geo_policy.get("strict"):
+        return signals[:10]
+    if geo_policy.get("primary") != "Australia":
+        return signals[:10]
+
+    filtered = []
+    dropped = 0
+    target_name_lower = (target_name or "").lower()
+    for signal in signals:
+        headline = signal.get("headline", "") or ""
+        if headline.startswith("[PINNED") or headline.startswith("[SHARED"):
+            filtered.append(signal)
+            continue
+
+        positive, negative = _score_australia_signal(signal)
+        text = _signal_text(signal).lower()
+        namesake_match = bool(target_name_lower and target_name_lower in text)
+
+        keep = False
+        if positive > negative:
+            keep = True
+        elif negative > positive:
+            keep = False
+        elif require_geo_match:
+            keep = positive > 0
+        else:
+            keep = namesake_match or positive > 0
+
+        if keep:
+            filtered.append(signal)
+        else:
+            dropped += 1
+
+    if dropped:
+        logger.info(
+            "[market_radar] Geography filter dropped %s non-Australian signal(s) for %s",
+            dropped,
+            target_name or "broad market scan",
+        )
+    return filtered[:10]
 
 
 # ── Local LLM helpers (Ollama) ──
@@ -229,6 +478,7 @@ def _gather_broad_market_signals(client, source_sites: dict, focus: dict) -> dic
     industry = focus.get("industry", "")
     themes   = focus.get("themes", [])
     context_terms = " ".join(filter(None, [topic, industry] + (themes[:3] if themes else [])))
+    geo_policy = _build_geography_policy(focus=focus, source_sites=source_sites)
 
     if not context_terms:
         return {"name": "Market Overview", "type": "broad", "notes": "", "signals": []}
@@ -236,13 +486,14 @@ def _gather_broad_market_signals(client, source_sites: dict, focus: dict) -> dic
     web_tool   = _make_web_search_tool(excludes, max_uses=4)
     system_msg = (
         f"You are a market intelligence researcher scanning for broad market trends and opportunities "
-        f"in: {context_terms}. Search for recent news, industry movements, regulatory changes, "
+        f"in: {context_terms}. {geo_policy['instruction']} Search for recent news, industry movements, regulatory changes, "
         f"leadership announcements, digital transformation initiatives, and market activity. "
         f"Return a JSON array of signal objects, each with: headline, url, date (ISO), snippet, source. "
         f"Return ONLY the JSON array, no other text."
     )
-    query = f"Latest news and market intelligence: {context_terms} 2024 2025"
+    query = f"Latest news and market intelligence: {' '.join(geo_policy['query_terms'])} {context_terms} {_recent_year_terms()}".strip()
     signals = _run_web_search(client, system_msg, query, web_tool)
+    signals = _filter_signals_for_geography(signals, geo_policy, require_geo_match=True)
     logger.info(f"[market_radar] Broad market scan found {len(signals)} signals")
     return {"name": "Market Overview", "type": "broad", "notes": "", "signals": signals}
 
@@ -294,11 +545,14 @@ def _gather_signals_for_target(client, target: dict, source_sites: dict, focus: 
     industry = focus.get("industry", "")
     themes   = focus.get("themes", [])
     context_terms = " ".join(filter(None, [topic, industry] + (themes[:2] if themes else [])))
+    geo_policy = _build_geography_policy(focus=focus, target=target, source_sites=source_sites)
 
     web_tool   = _make_web_search_tool(excludes, max_uses=3)
     system_msg = (
         f"You are a market intelligence researcher. Search for recent news and signals about "
         f"{'company' if target_type == 'company' else 'person'}: {target_name}. "
+        f"{geo_policy['instruction']} "
+        f"If the name matches entities in multiple countries, prefer the Australian entity and discard foreign namesakes. "
         f"Look for: new leadership, digital initiatives, restructures, funding, challenges, "
         f"regulatory pressures, strategic announcements, and consulting opportunities. "
         f"{'Also look for: ' + context_terms + '.' if context_terms else ''} "
@@ -306,8 +560,9 @@ def _gather_signals_for_target(client, target: dict, source_sites: dict, focus: 
         f"Return a JSON array of signal objects, each with: headline, url, date (ISO), snippet, source. "
         f"Return ONLY the JSON array, no other text."
     )
-    query = f"{target_name} {context_terms} news announcements 2024 2025".strip()
+    query = f"{target_name} {' '.join(geo_policy['query_terms'])} {context_terms} news announcements {_recent_year_terms()}".strip()
     signals = _run_web_search(client, system_msg, query, web_tool)
+    signals = _filter_signals_for_geography(signals, geo_policy, target_name=target_name)
     # Prepend shared intel items (contributed by team members via Intel Board)
     shared_signals = _build_shared_intel_signals(target.get("shared_intel_items", []) or [])
     if shared_signals:
@@ -345,17 +600,20 @@ def _gather_competitor_signals(client, target: dict, source_sites: dict, focus: 
     excludes    = source_sites.get("exclude", [])
     topic       = focus.get("topic", "")
     industry    = focus.get("industry", "")
+    geo_policy  = _build_geography_policy(focus=focus, target=target, source_sites=source_sites)
     web_tool    = _make_web_search_tool(excludes, max_uses=4)
     system_msg  = (
         f"You are a competitive intelligence researcher. Search for recent news about competitor firm: {target_name}. "
+        f"{geo_policy['instruction']} "
         f"Look specifically for: client wins or losses, new service offerings, leadership hires or departures, "
         f"pricing changes, public failures or criticisms, strategic announcements, and partnerships. "
         f"Industry context: {topic} {industry}. "
         f"Return a JSON array of signal objects with: headline, url, date (ISO), snippet, source. "
         f"Return ONLY the JSON array."
     )
-    query = f"{target_name} consulting news wins losses clients strategy 2024 2025 {industry}".strip()
+    query = f"{target_name} {' '.join(geo_policy['query_terms'])} consulting news wins losses clients strategy {_recent_year_terms()} {industry}".strip()
     signals = _run_web_search(client, system_msg, query, web_tool)
+    signals = _filter_signals_for_geography(signals, geo_policy, target_name=target_name)
     # Prepend shared intel items (contributed by team members via Intel Board)
     shared_signals = _build_shared_intel_signals(target.get("shared_intel_items", []) or [])
     if shared_signals:
@@ -481,6 +739,7 @@ def _gather_stakeholder_signals(client, target: dict, source_sites: dict, focus:
     excludes         = source_sites.get("exclude", [])
     topic            = focus.get("topic", "")
     industry         = focus.get("industry", "")
+    geo_policy       = _build_geography_policy(focus=focus, target=target, source_sites=source_sites)
 
     # Inject user-pinned intel items as pre-seeded high-priority signals
     intel_items = target.get("intel_items", []) or []
@@ -607,6 +866,7 @@ def _gather_stakeholder_signals(client, target: dict, source_sites: dict, focus:
     system_msg = (
         f"You are tracking an EXTERNAL industry contact: {target_name}{employer_desc}. "
         f"This person is NOT affiliated with our company — they are an independent contact we monitor. "
+        f"{geo_policy['instruction']} "
         f"Search for their recent PUBLIC activity: new job or role change, promotions, board appointments, "
         f"publications or articles written, conference speeches or podcasts, awards, interviews, and announcements. "
         f"Also search LinkedIn specifically for recent posts where they announced a career move, shared news, "
@@ -621,7 +881,8 @@ def _gather_stakeholder_signals(client, target: dict, source_sites: dict, focus:
     # Pass 1: broad career/activity search with employer for disambiguation
     # Employer helps avoid wrong people (e.g. "Carolyn Bell" at Peoples Bank TX vs Silverchain)
     employer_q = f' "{current_employer}"' if current_employer else (f' {industry}' if industry else "")
-    query = f'"{target_name}"{employer_q} role appointment article announcement {last_year} {this_year}'.strip()
+    geo_q = " ".join(geo_policy["query_terms"])
+    query = f'"{target_name}"{employer_q} {geo_q} role appointment article announcement {last_year} {this_year}'.strip()
     all_signals = _run_web_search(client, system_msg, query, web_tool)
 
     time.sleep(12)  # Pause between passes to avoid token rate limit
@@ -630,6 +891,7 @@ def _gather_stakeholder_signals(client, target: dict, source_sites: dict, focus:
     # Uses plain web search (not site:linkedin.com) since LinkedIn feed posts are login-gated
     transition_system = (
         f"Search for recent career transitions or announcements involving {target_name}{employer_desc}. "
+        f"{geo_policy['instruction']} "
         f"Look specifically for: leaving or departing a role, joining a new organisation, "
         f"new appointments, board roles, advisory positions, or any announcement of a career change. "
         f"Search broadly — check news sites, company announcements, industry publications, and "
@@ -637,9 +899,10 @@ def _gather_stakeholder_signals(client, target: dict, source_sites: dict, focus:
         f"Return a JSON array of signal objects with: headline, url, date (ISO), snippet, source. "
         f"Return ONLY the JSON array."
     )
-    transition_query = f'"{target_name}" (joins OR appointed OR "new role" OR "leaving" OR "moving on" OR "departure" OR "delighted to announce" OR "excited to announce") {this_year}'
+    transition_query = f'"{target_name}" {geo_q} (joins OR appointed OR "new role" OR "leaving" OR "moving on" OR "departure" OR "delighted to announce" OR "excited to announce") {this_year}'
     transition_signals = _run_web_search(client, transition_system, transition_query, _make_web_search_tool(excludes, max_uses=3))
     all_signals = all_signals + transition_signals
+    all_signals = _filter_signals_for_geography(all_signals, geo_policy, target_name=target_name)
 
     # Filter signals by relevance.
     # Primary: signal explicitly names the person.
@@ -778,6 +1041,7 @@ def _synthesise_leads(client, all_target_data: list, focus: dict, my_company: di
     my_company_value    = my_company.get("value_prop", "")
     my_company_clients  = my_company.get("target_clients", "")
 
+    geo_policy = _build_geography_policy(focus=focus)
     system_prompt = system_prompt_template
     system_prompt = system_prompt.replace("{{my_company_name}}", my_company_name)
     system_prompt = system_prompt.replace("{{my_company_services}}", my_company_services)
@@ -789,6 +1053,7 @@ def _synthesise_leads(client, all_target_data: list, focus: dict, my_company: di
         "If a signal is marked [SHARED] or [SHARED NOTE], it was contributed by a team member "
         "and should be incorporated with the same priority as [PINNED] signals."
     )
+    system_prompt += f"\n\nGeography rules: {geo_policy['instruction']}"
 
     # Build signal blocks — include employer in heading for person targets
     signal_blocks = []
@@ -817,6 +1082,7 @@ def _synthesise_leads(client, all_target_data: list, focus: dict, my_company: di
 
     focus_desc = (
         f"Topic: {focus.get('topic','')}, Industry: {focus.get('industry','')}, "
+        f"Geography: {geo_policy.get('primary','')}, "
         f"Themes: {', '.join(focus.get('themes',[]))}"
     )
     json_schema = textwrap.dedent("""
@@ -897,6 +1163,7 @@ def _synthesise_leads(client, all_target_data: list, focus: dict, my_company: di
             ---
             Based on the signals above, produce a structured lead intelligence report.
             Prioritise based on genuine buying signals for {my_company_name}.
+            Do not generalise from overseas examples when the geography rules above require Australia-first coverage.
             {delta_instruction}
 
             Return ONLY valid JSON in this exact schema:
@@ -1141,6 +1408,9 @@ def _build_report(config_name: str, leads: dict, all_target_data: list, today: s
     if focus.get("topic") or focus.get("industry"):
         focus_parts = [x for x in [focus.get("topic"), focus.get("industry")] if x]
         preamble.append(f"**Focus:** {' · '.join(focus_parts)}")
+    geo_policy = _build_geography_policy(focus=focus, source_sites=source_sites)
+    if geo_policy.get("primary"):
+        preamble.append(f"**Geography:** {geo_policy['primary']}")
     themes = focus.get("themes", [])
     if isinstance(themes, list) and themes:
         preamble.append(f"**Themes:** {', '.join(themes)}")

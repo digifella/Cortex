@@ -6,6 +6,7 @@ from cortex_engine.handoff_contract import (
     validate_csv_profile_import_input,
     validate_cortex_sync_input,
     validate_intel_extract_input,
+    validate_org_profile_refresh_input,
     validate_pdf_textify_input,
     validate_stakeholder_graph_view_input,
     validate_signal_ingest_input,
@@ -94,6 +95,30 @@ def test_url_ingest_coerces_booleans_timeout_and_textify():
     assert payload["timeout_seconds"] == 35
     assert payload["textify_options"]["pdf_strategy"] == "hybrid"
     assert payload["textify_options"]["docling_timeout_seconds"] == 240.0
+
+
+def test_org_profile_refresh_requires_org_and_target():
+    with pytest.raises(ValueError, match="requires org_name"):
+        validate_org_profile_refresh_input({"target_org_name": "Barwon Water"})
+
+    with pytest.raises(ValueError, match="requires target_org_name"):
+        validate_org_profile_refresh_input({"org_name": "Escient"})
+
+
+def test_org_profile_refresh_uses_snapshot_website_and_defaults():
+    payload = validate_org_profile_refresh_input(
+        {
+            "profile_id": 123,
+            "org_name": "Escient",
+            "target_org_name": "Barwon Water",
+            "current_profile_snapshot": {"website_url": "https://barwonwater.vic.gov.au"},
+        }
+    )
+
+    assert payload["profile_id"] == "123"
+    assert payload["website_url"] == "https://barwonwater.vic.gov.au"
+    assert payload["requested_docs"] == ["annual_report", "strategic_plan", "org_chart"]
+    assert payload["discovery_mode"] == "official_sources_first"
 
 
 def test_cortex_sync_validates_required_fields():

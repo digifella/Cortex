@@ -12,7 +12,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import requests
 
@@ -22,6 +22,272 @@ _OLLAMA_URL = "http://localhost:11434/api/chat"
 _OLLAMA_MODEL = "qwen2.5:14b"
 _OLLAMA_TIMEOUT = 600  # 10 minutes for large reports
 _ANTHROPIC_FALLBACK_MODEL = "claude-haiku-4-5-20251001"
+_OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
+
+
+def _first_non_empty(*values) -> str:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _resolve_report_geography(report_scope: dict, strategic_context: dict) -> str:
+    explicit = _first_non_empty(
+        *(report_scope.get(key, "") for key in ("geography", "geographic_scope", "country", "jurisdiction", "market")),
+        *(strategic_context.get(key, "") for key in ("geography", "geographic_scope", "country", "jurisdiction", "market")),
+    )
+    if explicit:
+        return explicit
+
+    for profile in (report_scope.get("organisations", []) or []) + (report_scope.get("industry_profiles", []) or []):
+        country = _first_non_empty(
+            profile.get("country", ""),
+            profile.get("address_country", ""),
+            (profile.get("address") or {}).get("country", "") if isinstance(profile.get("address"), dict) else "",
+        )
+        if country:
+            return country
+
+    return "Australia"
+
+
+def _looks_like_url(value: Any) -> bool:
+    text = str(value or "").strip()
+    return text.startswith("http://") or text.startswith("https://")
+
+
+def _normalize_model_name(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text if ":" in text else f"{text}:latest"
+
+
+def _select_installed_ollama_model(candidates: list[str], installed_models: list[str]) -> str:
+    installed_normalized = {_normalize_model_name(name) for name in installed_models if _normalize_model_name(name)}
+    for candidate in candidates:
+        normalized = _normalize_model_name(candidate)
+        if normalized and normalized in installed_normalized:
+            return normalized
+    return _normalize_model_name(candidates[0] if candidates else "")
+
+
+def _resolve_ollama_model() -> str:
+    candidates = [
+        str(os.environ.get("CORTEX_WEEKLY_OLLAMA_MODEL") or "").strip(),
+        str(os.environ.get("CORTEX_WATCH_OLLAMA_MODEL") or "").strip(),
+        str(os.environ.get("LOCAL_LLM_SYNTHESIS_MODEL") or "").strip(),
+        _OLLAMA_MODEL,
+        "mistral-small3.2:latest",
+        "mistral:latest",
+    ]
+    candidates = [candidate for candidate in candidates if candidate]
+    try:
+        response = requests.get(_OLLAMA_TAGS_URL, timeout=15)
+        if response.status_code == 200:
+            data = response.json()
+            installed_models = [str(item.get("name") or "").strip() for item in data.get("models") or []]
+            selected = _select_installed_ollama_model(candidates, installed_models)
+            if selected:
+                return selected
+    except Exception as exc:
+        logger.warning("Unable to inspect installed Ollama models for weekly report: %s", exc)
+    return _normalize_model_name(candidates[0] if candidates else _OLLAMA_MODEL)
+
+
+def _submitter_label(item: dict) -> str:
+    display_name = _first_non_empty(item.get("submitted_by_name"), item.get("from_name"))
+    email = _first_non_empty(item.get("submitted_by"), item.get("from_email"))
+    if display_name and email and display_name.lower() != email.lower():
+        return f"{display_name} <{email}>"
+    return display_name or email or "Unknown submitter"
+
+
+def _is_submitter_identity_noise(entity_name: str, submitter: str, summary: str, reference_url: str) -> bool:
+    entity_key = _normalize_reference_text(entity_name)
+    submitter_key = _normalize_reference_text(submitter)
+    if not entity_key or not submitter_key:
+        return False
+    if entity_key == submitter_key or entity_key in submitter_key or submitter_key in entity_key:
+        return True
+    if "longboardfella" in entity_key and "longboardfella" in submitter_key:
+        return True
+    if submitter_key and submitter_key in _normalize_reference_text(summary):
+        return True
+    if submitter_key and submitter_key in _normalize_reference_text(reference_url):
+        return True
+    return False
+
+
+def _normalize_reference_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().replace("@", " ").replace("/", " ").replace("|", " ").split())
+
+
+def _prefer_subject_entity(item: dict) -> str:
+    candidates = [
+        item.get("primary_entity_name"),
+        item.get("target_name"),
+        item.get("organisation_name"),
+        item.get("subject_org_hint"),
+        item.get("stakeholder_name"),
+        item.get("org_name"),
+    ]
+    submitter = _submitter_label(item)
+    reference_url = _first_non_empty(
+        item.get("url"),
+        item.get("primary_url"),
+        item.get("content") if _looks_like_url(item.get("content")) else "",
+    )
+    summary = _first_non_empty(
+        item.get("text_note"),
+        item.get("summary"),
+        item.get("snippet"),
+        item.get("content") if not _looks_like_url(item.get("content")) else "",
+        item.get("raw_text"),
+    )
+    for candidate in candidates:
+        cleaned = _first_non_empty(candidate)
+        if cleaned and not _is_submitter_identity_noise(cleaned, submitter, summary, reference_url):
+            return cleaned
+    return _first_non_empty(*candidates, "Unspecified entity")
+
+
+def _is_document_like_submission(item: dict) -> bool:
+    combined = " ".join(
+        str(item.get(key) or "")
+        for key in ("source_type", "intel_type", "title", "headline", "subject")
+    ).lower()
+    return any(token in combined for token in ("org chart", "strategic", "annual report", "document", "pdf", "plan", "report"))
+
+
+def _brief_provenance_label(item: dict) -> str:
+    submitter = _submitter_label(item)
+    date = _first_non_empty(item.get("intel_date"), item.get("submitted_at"), item.get("note_date"), item.get("received_at"))
+    parts = []
+    if submitter and submitter != "Unknown submitter":
+        parts.append(f"Submitted by {submitter}")
+    if date:
+        parts.append(date)
+    return "; ".join(parts)
+
+
+def _format_submitted_intel_section(submitted_intel: list[dict]) -> str:
+    if not submitted_intel:
+        return "## Submitted Intelligence\nNo submitted intel found for the selected scope and date range."
+
+    intel_lines = []
+    for item in submitted_intel:
+        entity_name = _prefer_subject_entity(item)
+        title = _first_non_empty(
+            item.get("title"),
+            item.get("headline"),
+            item.get("subject"),
+            item.get("intel_type"),
+            "Submitted intelligence",
+        )
+        date = _first_non_empty(item.get("intel_date"), item.get("submitted_at"), item.get("note_date"), item.get("received_at"))
+        submitter = _submitter_label(item)
+        source_type = _first_non_empty(item.get("source_type"), item.get("intel_type"), "submitted_intelligence")
+        reference_url = _first_non_empty(
+            item.get("url"),
+            item.get("primary_url"),
+            item.get("content") if _looks_like_url(item.get("content")) else "",
+        )
+        summary = _first_non_empty(
+            item.get("text_note"),
+            item.get("summary"),
+            item.get("snippet"),
+            item.get("content") if not _looks_like_url(item.get("content")) else "",
+            item.get("raw_text"),
+        )
+        provenance = _brief_provenance_label(item)
+        if _is_document_like_submission(item) and entity_name and entity_name != "Unspecified entity":
+            headline = f"{entity_name}: {title}"
+        else:
+            headline = title
+        line = f"- **{headline}**"
+        details = []
+        if entity_name and entity_name != "Unspecified entity":
+            details.append(f"Entity: {entity_name}")
+        if date:
+            details.append(f"Date: {date}")
+        if source_type:
+            details.append(f"Type: {source_type}")
+        if details:
+            line += "\n  " + " | ".join(details)
+        if provenance:
+            line += f"\n  Provenance: {provenance}"
+        if reference_url:
+            line += f"\n  Reference: {reference_url}"
+        if summary:
+            line += f"\n  Summary: {summary[:1200]}"
+        intel_lines.append(line)
+
+    return f"## Submitted Intelligence ({len(submitted_intel)} items)\n" + "\n".join(intel_lines)
+
+
+def _format_web_intel_section(web_intel: Any) -> str:
+    if isinstance(web_intel, dict) and web_intel.get("deferred"):
+        return (
+            "## Internet-Sourced Intelligence\n"
+            "Web research was deferred due to high target count. "
+            "Please incorporate any publicly available recent news about the listed entities."
+        )
+
+    if not isinstance(web_intel, list) or not web_intel:
+        return "## Internet-Sourced Intelligence\nNo internet-sourced research was provided for the selected scope and date range."
+
+    web_lines = []
+    for index, item in enumerate(web_intel):
+        if not isinstance(item, dict):
+            continue
+        headline = _first_non_empty(
+            item.get("headline"),
+            item.get("title"),
+            item.get("name"),
+            item.get("type"),
+            f"Web signal {index + 1}",
+        )
+        date = _first_non_empty(item.get("date"), item.get("published_at"), item.get("received_at"))
+        source = _first_non_empty(item.get("source"), item.get("source_name"))
+        reference_url = _first_non_empty(item.get("url"), item.get("primary_url"))
+        summary = _first_non_empty(item.get("snippet"), item.get("summary"), item.get("content"), item.get("text"))
+
+        line = f"- **{headline}**"
+        details = []
+        if date:
+            details.append(f"Date: {date}")
+        if source:
+            details.append(f"Source: {source}")
+        if reference_url:
+            details.append(f"Reference: {reference_url}")
+        if details:
+            line += "\n  " + " | ".join(details)
+        if summary:
+            line += f"\n  Summary: {summary[:1500]}"
+        web_lines.append(line)
+
+    if not web_lines:
+        return "## Internet-Sourced Intelligence\nNo internet-sourced research was provided for the selected scope and date range."
+
+    return f"## Internet-Sourced Intelligence ({len(web_lines)} items)\n" + "\n".join(web_lines)
+
+
+def _source_separation_instruction() -> str:
+    return (
+        "Keep submitted intelligence and internet-sourced intelligence as two clearly separate evidence streams. "
+        "When both are present, include a dedicated 'Submitted Intelligence' section and a separate "
+        "'Internet-Sourced Intelligence' section. "
+        "For submitted intelligence, treat the submitter as provenance only unless the content itself is actually about that person or organisation. "
+        "Do not create a stakeholder profile, highlight section, or strategic inference about a submitter solely because they emailed the material in. "
+        "If the submitted item is a document such as an org chart or strategic plan, focus on the document subject/entity and use the submitter only as a brief provenance note. "
+        "For internet-sourced intelligence, cite the source/publication and URL whenever provided. "
+        "Do not present submitted intelligence as independently verified public reporting unless the same claim also appears in the provided web research."
+    )
 
 
 def handle(
@@ -41,6 +307,13 @@ def handle(
     synthesis_instructions = input_data.get("synthesis_instructions", "")
     strategic_context = input_data.get("strategic_context", {})
     source_mode = input_data.get("source_mode", "submitted_only")
+    geography = _resolve_report_geography(report_scope, strategic_context)
+    geography_instruction = (
+        f"The report's primary geography is {geography}. Prioritise that market heavily. "
+        f"Do not treat foreign organisations, regulators, or sector conditions as representative unless they are "
+        f"directly tied to {geography} operations or were explicitly requested in the provided data."
+    )
+    source_separation_instruction = _source_separation_instruction()
 
     if progress_cb:
         progress_cb(10, "Building synthesis prompt", "prepare")
@@ -77,6 +350,7 @@ def handle(
         scope_lines.append(f"Stakeholders: {', '.join(s['name'] + ' (' + (s.get('role') or s.get('employer') or '') + ')' for s in stakeholders)}")
     if scope_lines:
         data_sections.append("## Report Scope\n" + "\n".join(scope_lines))
+    data_sections.append("## Geographic Scope\n" + geography_instruction)
 
     # Organisation profiles
     if organisations:
@@ -103,35 +377,10 @@ def handle(
         data_sections.append("## Stakeholder Profiles\n" + "\n".join(stk_lines))
 
     # Submitted intelligence
-    if submitted_intel:
-        intel_lines = []
-        for item in submitted_intel:
-            name = item.get("stakeholder_name", "Unknown")
-            title = item.get("title", "")
-            content = item.get("content", "")
-            note = item.get("text_note", "")
-            date = item.get("intel_date", "")
-            line = f"- **{name}** ({date}): {title}"
-            if content:
-                line += f"\n  URL: {content}"
-            if note:
-                line += f"\n  Notes: {note}"
-            intel_lines.append(line)
-        data_sections.append(f"## Submitted Intelligence ({len(submitted_intel)} items)\n" + "\n".join(intel_lines))
-    else:
-        data_sections.append("## Submitted Intelligence\nNo submitted intel found for the selected scope and date range.")
+    data_sections.append(_format_submitted_intel_section(submitted_intel))
 
     # Web research results
-    if web_intel and not isinstance(web_intel, dict):
-        # web_intel is a list of {type, content} blocks from inline Sonnet search
-        web_texts = [item.get("content", "") for item in web_intel if item.get("content")]
-        if web_texts:
-            data_sections.append("## Web Research Results\n" + "\n---\n".join(web_texts))
-    elif isinstance(web_intel, dict) and web_intel.get("deferred"):
-        data_sections.append(
-            "## Web Research\nWeb research was deferred due to high target count. "
-            "Please incorporate any publicly available recent news about the listed entities."
-        )
+    data_sections.append(_format_web_intel_section(web_intel))
 
     if is_cancelled_cb and is_cancelled_cb():
         raise RuntimeError("Cancelled before LLM synthesis")
@@ -148,7 +397,9 @@ def handle(
         "Be analytical, not just descriptive. Highlight what matters and why.\n"
         "If information is thin for a section, say so briefly rather than padding.\n"
         "Do not fabricate facts. Use only the provided data.\n"
-        "Do not include confidence scores or metadata labels in the output."
+        "Do not include confidence scores or metadata labels in the output.\n"
+        f"{source_separation_instruction}\n"
+        f"{geography_instruction}"
     )
 
     user_prompt = f"{synthesis_instructions}\n\n" + "\n\n".join(data_sections)
@@ -159,11 +410,7 @@ def handle(
     llm_model = ""
 
     # Resolve preferred model
-    preferred_model = (
-        os.environ.get("CORTEX_WEEKLY_OLLAMA_MODEL")
-        or os.environ.get("CORTEX_WATCH_OLLAMA_MODEL")
-        or _OLLAMA_MODEL
-    ).strip()
+    preferred_model = _resolve_ollama_model()
 
     try:
         response = requests.post(
@@ -257,6 +504,15 @@ def handle(
             "llm_provider": llm_provider,
             "llm_model": llm_model,
             "source_mode": source_mode,
+            "submitted_intel_count": len(submitted_intel),
+            "web_intel_count": len(web_intel) if isinstance(web_intel, list) else 0,
+            "submitter_count": len(
+                {
+                    _submitter_label(item)
+                    for item in submitted_intel
+                    if isinstance(item, dict) and _submitter_label(item) != "Unknown submitter"
+                }
+            ),
             "industries": industries,
         },
         "output_file": output_path,

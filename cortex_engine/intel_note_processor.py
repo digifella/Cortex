@@ -38,12 +38,21 @@ _STRATEGIC_CREDIT_MARKERS = (
 _ANNUAL_REPORT_PERSON_STOPWORDS = (
     "attendance",
     "committee",
+    "integrated water management",
+    "risk management",
     "review",
     "governance reform",
     "current directors",
     "term ceased",
     "cpd",
 )
+
+
+def _clean_annual_report_name(name: str) -> str:
+    text = str(name or "").strip()
+    text = text.lstrip("•*-· ").strip()
+    text = " ".join(text.split())
+    return text
 
 
 def _merge_strategic_leadership_entities(output_data: Dict[str, Any], analysis: Dict[str, Any]) -> None:
@@ -181,14 +190,15 @@ def _should_keep_strategic_entity(entity: Dict[str, Any], strategic_org_name: st
 
 
 def _looks_like_curated_stakeholder_name(name: str) -> bool:
-    lowered = normalize_lookup(name)
+    cleaned = _clean_annual_report_name(name)
+    lowered = normalize_lookup(cleaned)
     if not lowered:
         return False
     if any(marker in lowered for marker in _ANNUAL_REPORT_PERSON_STOPWORDS):
         return False
-    if any(char.isdigit() for char in name):
+    if any(char.isdigit() for char in cleaned):
         return False
-    parts = [part for part in str(name or "").replace(",", " ").split() if part]
+    parts = [part for part in cleaned.replace(",", " ").split() if part]
     if len(parts) < 2 or len(parts) > 7:
         return False
     return True
@@ -203,24 +213,36 @@ def _filter_annual_report_entities(output_data: Dict[str, Any], strategic_doc: D
         if _looks_like_curated_stakeholder_name(str(item.get("name") or "").strip())
     ]
     curated_people_keys = {
-        normalize_lookup(str(item.get("name") or "").strip())
+        normalize_lookup(_clean_annual_report_name(str(item.get("name") or "").strip()))
         for item in curated_people
         if str(item.get("name") or "").strip()
     }
 
     filtered_entities = []
+    organisation_candidates = []
     for item in list(output_data.get("entities") or []):
         target_type = str(item.get("target_type") or "").strip().lower()
-        name = str(item.get("canonical_name") or item.get("name") or "").strip()
+        name = _clean_annual_report_name(str(item.get("canonical_name") or item.get("name") or "").strip())
         name_key = normalize_lookup(name)
         if not name:
             continue
         if target_type == "organisation":
+            clean_item = dict(item)
+            clean_item["canonical_name"] = name
+            clean_item["name"] = name
+            organisation_candidates.append(clean_item)
             if strategic_org_key and name_key == strategic_org_key:
-                filtered_entities.append(item)
+                filtered_entities.append(clean_item)
             continue
         if target_type == "person" and name_key in curated_people_keys:
+            item = dict(item)
+            item["canonical_name"] = name
+            item["name"] = name
             filtered_entities.append(item)
+
+    if organisation_candidates and not any(str(item.get("target_type") or "").strip().lower() == "organisation" for item in filtered_entities):
+        best_org = max(organisation_candidates, key=lambda item: float(item.get("confidence") or 0.0))
+        filtered_entities.append(best_org)
 
     # Ensure curated stakeholders are restored even when extractor missed them.
     seen_keys = {
@@ -229,7 +251,7 @@ def _filter_annual_report_entities(output_data: Dict[str, Any], strategic_doc: D
         if str(item.get("canonical_name") or item.get("name") or "").strip()
     }
     for person in curated_people:
-        name = str(person.get("name") or "").strip()
+        name = _clean_annual_report_name(str(person.get("name") or "").strip())
         key = normalize_lookup(name)
         if not name or key in seen_keys:
             continue
@@ -252,22 +274,27 @@ def _filter_annual_report_entities(output_data: Dict[str, Any], strategic_doc: D
     output_data["entity_count"] = len(filtered_entities)
 
     output_data["people"] = [
-        item
+        {
+            **item,
+            "canonical_name": _clean_annual_report_name(str(item.get("canonical_name") or item.get("name") or "").strip()),
+            "name": _clean_annual_report_name(str(item.get("canonical_name") or item.get("name") or "").strip()),
+        }
         for item in list(output_data.get("people") or [])
-        if normalize_lookup(str(item.get("canonical_name") or item.get("name") or "").strip()) in curated_people_keys
+        if normalize_lookup(_clean_annual_report_name(str(item.get("canonical_name") or item.get("name") or "").strip())) in curated_people_keys
     ]
     existing_people_keys = {
-        normalize_lookup(str(item.get("canonical_name") or item.get("name") or "").strip())
+        normalize_lookup(_clean_annual_report_name(str(item.get("canonical_name") or item.get("name") or "").strip()))
         for item in output_data["people"]
     }
     for person in curated_people:
-        key = normalize_lookup(str(person.get("name") or "").strip())
+        clean_name = _clean_annual_report_name(str(person.get("name") or "").strip())
+        key = normalize_lookup(clean_name)
         if not key or key in existing_people_keys:
             continue
         output_data["people"].append(
             {
-                "canonical_name": str(person.get("name") or "").strip(),
-                "name": str(person.get("name") or "").strip(),
+                "canonical_name": clean_name,
+                "name": clean_name,
                 "current_employer": str(person.get("current_employer") or strategic_org_name).strip(),
                 "current_role": clean_strategic_role_label(str(person.get("current_role") or "").strip(), strategic_org_name),
                 "confidence": float(person.get("confidence") or 0.92),
@@ -281,6 +308,15 @@ def _filter_annual_report_entities(output_data: Dict[str, Any], strategic_doc: D
         for item in list(output_data.get("organisations") or [])
         if normalize_lookup(str(item.get("canonical_name") or item.get("name") or "").strip()) == strategic_org_key
     ]
+    if not output_data["organisations"] and organisation_candidates:
+        best_org = max(organisation_candidates, key=lambda item: float(item.get("confidence") or 0.0))
+        output_data["organisations"] = [
+            {
+                "canonical_name": str(best_org.get("canonical_name") or best_org.get("name") or "").strip(),
+                "name": str(best_org.get("name") or best_org.get("canonical_name") or "").strip(),
+                "evidence": str(best_org.get("evidence") or "").strip(),
+            }
+        ]
 
 
 def _filter_strategic_document_entities(output_data: Dict[str, Any], analysis: Dict[str, Any]) -> None:
