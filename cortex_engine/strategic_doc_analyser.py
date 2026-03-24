@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List
+from urllib.parse import unquote
 
 from cortex_engine.stakeholder_signal_matcher import normalize_lookup
 
@@ -219,6 +220,64 @@ _ROLE_LINE_EXCLUSION_MARKERS = (
 _ORG_NAME_STOPWORDS = {"a", "an", "and", "at", "for", "in", "of", "on", "or", "the", "to", "with"}
 _PERFORMANCE_INDICATOR_SPECS = (
     {
+        "label": "Annual revenue",
+        "category": "financial_performance",
+        "patterns": (
+            r"Revenue for the year increased to \$(\d+(?:\.\d+)?)\s+million,\s+up from \$(\d+(?:\.\d+)?)\s+million",
+        ),
+        "value_template": "${0} million (from ${1} million)",
+    },
+    {
+        "label": "Net result",
+        "category": "financial_performance",
+        "patterns": (
+            r"contributing towards a \$(\d+(?:\.\d+)?)\s+million\s+net surplus",
+        ),
+        "value_template": "${0} million net surplus",
+    },
+    {
+        "label": "Capital works program",
+        "category": "capital_investment",
+        "patterns": (
+            r"delivered a \$(\d+(?:\.\d+)?)\s+million capital works program",
+            r"We delivered \$(\d+(?:\.\d+)?)\s+million of capital and related infrastructure works",
+        ),
+        "value_template": "${0} million",
+    },
+    {
+        "label": "Total assets",
+        "category": "financial_capacity",
+        "patterns": (
+            r"total assets reached \$(\d+(?:\.\d+)?)\s+billion",
+        ),
+        "value_template": "${0} billion",
+    },
+    {
+        "label": "Total debt",
+        "category": "financial_capacity",
+        "patterns": (
+            r"Total debt increased by \$(\d+(?:\.\d+)?)\s+million to \$(\d+(?:\.\d+)?)\s+million",
+        ),
+        "value_template": "${1} million total debt",
+    },
+    {
+        "label": "Cash position",
+        "category": "financial_capacity",
+        "patterns": (
+            r"cash and cash equivalents increasing by \$(\d+(?:\.\d+)?)\s+million to \$(\d+(?:\.\d+)?)\s+million",
+        ),
+        "value_template": "${1} million cash",
+    },
+    {
+        "label": "Water recycling rate",
+        "category": "operational_performance",
+        "patterns": (
+            r"We achieved (\d+(?:\.\d+)?)%\s+water recycling",
+            r"recycling rate rose to more than (\d+(?:\.\d+)?)%",
+        ),
+        "value_template": "{0}%",
+    },
+    {
         "label": "Membership scale",
         "category": "member_scale",
         "patterns": (
@@ -321,6 +380,10 @@ _PERFORMANCE_INDICATOR_SPECS = (
         ),
         "value_template": "{0}%",
     },
+)
+_PROJECT_AMOUNT_RE = re.compile(
+    r"(?:and\s+the\s+|and\s+|the\s+)?([A-Z][A-Za-z0-9&'’()./\- ]{2,90}?)\s*\(\$(\d+(?:\.\d+)?)\s*(million|billion|m|bn)\)",
+    re.IGNORECASE,
 )
 
 
@@ -473,7 +536,7 @@ def _extract_org_name(lines: List[str], attachment_names: List[str]) -> str:
         if matches:
             return max(matches, key=_org_name_rank)
     for name in attachment_names:
-        cleaned = Path(name).stem.replace("_", " ").replace("-", " ")
+        cleaned = Path(unquote(name)).stem.replace("_", " ").replace("-", " ")
         cleaned = re.sub(
             r"\b(annual report|strategic plan|strategic direction|strategy|report|compressed|draft|final|copy|\d{4})\b",
             " ",
@@ -884,7 +947,60 @@ def _extract_performance_indicators(blob: str, doc_type: str) -> List[Dict[str, 
                 }
             )
             break
-    return indicators[:8]
+    return indicators[:12]
+
+
+def _clean_project_name(name: str) -> str:
+    text = re.sub(r"\s+", " ", str(name or "").strip(" ,.;:-"))
+    text = re.sub(r"^(?:and\s+the|and|the)\s+", "", text, flags=re.IGNORECASE)
+    return text.strip(" ,.;:-")
+
+
+def _normalise_project_value(amount: str, unit: str) -> str:
+    numeric = str(amount or "").strip()
+    unit_text = str(unit or "").strip().lower()
+    if not numeric or not unit_text:
+        return ""
+    if unit_text == "m":
+        unit_text = "million"
+    elif unit_text == "bn":
+        unit_text = "billion"
+    return f"${numeric} {unit_text}"
+
+
+def _extract_major_projects(blob: str, doc_type: str) -> List[Dict[str, str]]:
+    if doc_type != "annual_report":
+        return []
+
+    text = re.sub(r"\s+", " ", str(blob or "")).strip()
+    if not text:
+        return []
+
+    project_windows = re.finditer(
+        r"(?:largest [^.]{0,120}? investments? (?:included|include)|largest investments? include)\s+(.{0,700}?)(?:\.(?=\s+[A-Z]|\s*$)|Table \d+:)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    projects: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    for match in project_windows:
+        window_text = match.group(0).strip()
+        segment = match.group(1).strip()
+        for project_match in _PROJECT_AMOUNT_RE.finditer(segment):
+            name = _clean_project_name(project_match.group(1))
+            amount = _normalise_project_value(project_match.group(2), project_match.group(3))
+            key = normalize_lookup(name)
+            if not name or not amount or key in seen:
+                continue
+            seen.add(key)
+            projects.append(
+                {
+                    "name": name,
+                    "value": amount,
+                    "evidence": clean_indicator_evidence_text(window_text, max_words=40),
+                }
+            )
+    return projects[:8]
 
 
 def _extract_kpi_focuses(lines: List[str], doc_type: str) -> List[str]:
@@ -943,6 +1059,7 @@ def analyse_strategic_documents(
     org_name = _extract_org_name(document_lines or lines, names)
     leadership_people = _extract_leadership_people(document_lines or lines, org_name)
     performance_indicators = _extract_performance_indicators("\n".join(lines), doc_type)
+    major_projects = _extract_major_projects("\n".join(lines), doc_type)
     kpi_focuses = _extract_kpi_focuses(lines, doc_type)
     key_stakeholders = [
         {
@@ -976,6 +1093,16 @@ def analyse_strategic_documents(
             )
             + "."
         )
+    if major_projects:
+        summary_parts.append(
+            "Key projects: "
+            + ", ".join(
+                f"{item['name']} ({item['value']})"
+                for item in major_projects[:4]
+                if str(item.get("name") or "").strip() and str(item.get("value") or "").strip()
+            )
+            + "."
+        )
     if key_stakeholders:
         summary_parts.append(
             "Key stakeholders: "
@@ -1001,6 +1128,7 @@ def analyse_strategic_documents(
         "leadership_people": leadership_people,
         "key_stakeholders": key_stakeholders,
         "performance_indicators": performance_indicators,
+        "major_projects": major_projects,
         "kpi_focuses": kpi_focuses,
         "strategic_signals": strategic_signals,
         "has_strategy_markers": bool(strategic_signals or themes or initiatives or vision or mission or values or doc_type in {"strategic_plan", "annual_report"}),

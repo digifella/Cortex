@@ -7,6 +7,7 @@ from cortex_engine.intel_mailbox import (
     IntelMailboxConfig,
     IntelMailboxPoller,
     IntelMailboxStore,
+    _subject_org_hint,
     parse_email_bytes,
 )
 from cortex_engine.intel_note_processor import IntelNoteProcessor
@@ -678,6 +679,198 @@ def test_mailbox_org_chart_image_uses_subject_org_hint_as_primary_entity(tmp_pat
     assert delivery_payload["primary_entity"]["name"] == "Barwon Water"
     assert delivery_payload["primary_entity"]["target_type"] == "organisation"
     assert delivery_payload["mailbox_routing"]["status"] == "matched_override"
+    assert delivery_payload["note"]["source_type"] == "org_chart"
+    assert delivery_payload["note"]["content"].startswith("## Summary")
+    assert "# Intel Extraction Result" not in delivery_payload["note"]["content"]
+    assert "Longboardfella Consulting" not in delivery_payload["note"]["content"]
+    assert "## Leadership Team" in delivery_payload["note"]["content"]
+    assert "Shaun Cumming | Managing Director | Barwon Water" in delivery_payload["note"]["content"]
+
+
+def test_mailbox_org_chart_subject_hint_beats_sender_org_when_extractor_is_noisy(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "org chart for Barwon Water",
+            "from_name": "Paul Cooper",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-24T00:41:08+00:00",
+            "raw_text": "Dr. Paul Cooper\nDirector\nLongboardfella Consulting Pty Ltd",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [
+                {
+                    "canonical_name": "Longboardfella Consulting Pty Ltd",
+                    "name": "Longboardfella Consulting Pty Ltd",
+                    "target_type": "organisation",
+                    "confidence": 0.8,
+                    "evidence": "Sender signature",
+                },
+                {
+                    "canonical_name": "Barwon Water",
+                    "name": "Barwon Water",
+                    "target_type": "organisation",
+                    "confidence": 0.95,
+                    "evidence": "Org chart subject and image content",
+                },
+            ],
+            "people": [
+                {
+                    "canonical_name": "Shaun Cumming",
+                    "name": "Shaun Cumming",
+                    "current_employer": "Barwon Water",
+                    "current_role": "Managing Director",
+                }
+            ],
+            "organisations": [
+                {"canonical_name": "Longboardfella Consulting Pty Ltd"},
+                {"canonical_name": "Barwon Water"},
+            ],
+            "attachments": [{"filename": "barwon-water-org-chart.png", "status": "processed", "excerpt": "Barwon Water org chart"}],
+            "summary": "Email contains org chart for Barwon Water. Sender Dr. Paul Cooper is Director of Longboardfella Consulting.",
+            "target_update_suggestions": [],
+            "processing_meta": {},
+        },
+        signal={},
+        markdown_text="# Intel Extraction Result\n\nNoisy org chart extractor summary",
+        message_kind="org_chart",
+        routing={"subject_org_hint": "Barwon Water", "clean_subject": "org chart for Barwon Water", "has_org_chart_image_attachment": True},
+    )
+
+    assert payload["primary_entity"]["name"] == "Barwon Water"
+    assert payload["note"]["title"] == "Barwon Water org chart"
+    assert "Longboardfella Consulting Pty Ltd" not in payload["note"]["content"]
+
+
+def test_mailbox_org_chart_note_uses_entities_when_people_bucket_missing(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "org chart for Barwon Water",
+            "from_name": "Paul Cooper",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-24T00:51:10+00:00",
+            "raw_text": "Dr. Paul Cooper\nDirector\nLongboardfella Consulting Pty Ltd",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "people": None,
+            "entities": [
+                {
+                    "canonical_name": "Dr. Paul Cooper",
+                    "name": "Dr. Paul Cooper",
+                    "target_type": "person",
+                    "current_employer": "Longboardfella Consulting Pty Ltd",
+                    "current_role": "Director",
+                    "evidence": "Contact details and credentials provided in source document",
+                },
+                {
+                    "canonical_name": "Shaun Cumming",
+                    "name": "Shaun Cumming",
+                    "target_type": "person",
+                    "current_employer": "Barwon Water",
+                    "current_role": "Managing Director",
+                    "evidence": "Listed as Managing Director in org chart dated July 2025",
+                },
+                {
+                    "canonical_name": "Anna Murray",
+                    "name": "Anna Murray",
+                    "target_type": "person",
+                    "current_employer": "Barwon Water",
+                    "current_role": "General Manager, Operations",
+                    "evidence": "Listed as General Manager in org chart",
+                },
+                {"canonical_name": "Barwon Water", "name": "Barwon Water", "target_type": "organisation"},
+                {"canonical_name": "Longboardfella Consulting Pty Ltd", "name": "Longboardfella Consulting Pty Ltd", "target_type": "organisation"},
+            ],
+            "organisations": [{"canonical_name": "Barwon Water"}],
+            "attachments": [{"filename": "barwon-water-org-chart.png", "status": "processed", "excerpt": "Barwon Water org chart"}],
+            "summary": "Noisy org chart extraction summary",
+            "target_update_suggestions": [],
+            "processing_meta": {},
+        },
+        signal={},
+        markdown_text="# Intel Extraction Result\n\nNoisy org chart extractor summary",
+        message_kind="org_chart",
+        routing={"subject_org_hint": "Barwon Water", "clean_subject": "org chart for Barwon Water", "has_org_chart_image_attachment": True},
+    )
+
+    assert "## Leadership Team" in payload["note"]["content"]
+    assert "Shaun Cumming | Managing Director | Barwon Water" in payload["note"]["content"]
+    assert "Anna Murray | General Manager, Operations | Barwon Water" in payload["note"]["content"]
+    assert "Dr. Paul Cooper" not in payload["note"]["content"]
+
+
+def test_subject_org_hint_strips_leading_for_from_document_subjects():
+    assert _subject_org_hint("org chart for Barwon Water") == "Barwon Water"
+    assert _subject_org_hint("strategy for Barwon Water") == "Barwon Water"
 
 
 def test_find_duplicate_note_uses_attachment_fingerprint_for_document_resends(tmp_path):
@@ -894,6 +1087,51 @@ def test_analyse_strategic_documents_extracts_annual_report_performance_and_stak
     assert indicators["Stakeholder engagement"]["evidence"].startswith("15 meetings with MPs and other key stakeholders")
     assert indicators["Operating result"]["evidence"].startswith("The deficit of $0.1m")
     assert "strong foundation for the College's future" in strategic_signals["Indigenous health and cultural safety are core business"]["snippet"].replace("\u2019", "'")
+
+
+def test_analyse_strategic_documents_extracts_barwon_financial_highlights_and_major_projects():
+    analysis = analyse_strategic_documents(
+        [
+            {
+                "filename": "Barwon-Water-Group-Annual-Report-2025-accessible.pdf",
+                "status": "processed",
+                "excerpt": (
+                    "Barwon Water Annual Report 2024-25 "
+                    "Revenue for the year increased to $344.2 million, up from $292.8 million. "
+                    "During the financial year, we received revenue of $344.2 million, contributing towards a $29.4 million net surplus. "
+                    "Further, we delivered a $158.1 million capital works program, as total assets reached $3.9 billion. "
+                    "Total debt increased by $114.0 million to $721.9 million, with cash and cash equivalents increasing by $2.4 million to $15.0 million. "
+                    "We delivered $158.1 million of capital and related infrastructure works during 2024-25. "
+                    "The largest water supply investments included the Melbourne to Geelong Pipeline extension to Pettavel ($16 million), "
+                    "the Water Reticulation Main Renewal ($5.8 million), the Gellibrand Water Treatment Plant Upgrade ($5.4 million) "
+                    "and the Marengo Basin Upgrade ($4.9 million). "
+                    "The largest wastewater system investments included the Mains Rehabilitation and Replacement ($14 million), "
+                    "the Northern Growth Area Advanced Works ($15.2 million) and the Ocean Grove Rising Main No. 2 ($6.1 million). "
+                    "We achieved 15.2% water recycling in 2024-25. "
+                    "Jo Plummer\nChair\nBarwon Water\nShaun Cumming\nManaging Director\nBarwon Water"
+                ),
+            }
+        ],
+        extracted_summary="Barwon Water annual report covering drought response, capital delivery and financial resilience.",
+        subject="Barwon Water annual report 2024-25",
+        raw_text="",
+    )
+
+    indicators = {item["label"]: item for item in analysis["performance_indicators"]}
+    project_names = [item["name"] for item in analysis["major_projects"]]
+
+    assert analysis["doc_type"] == "annual_report"
+    assert analysis["org_name"] == "Barwon Water"
+    assert indicators["Annual revenue"]["value"] == "$344.2 million (from $292.8 million)"
+    assert indicators["Net result"]["value"] == "$29.4 million net surplus"
+    assert indicators["Capital works program"]["value"] == "$158.1 million"
+    assert indicators["Total assets"]["value"] == "$3.9 billion"
+    assert indicators["Total debt"]["value"] == "$721.9 million total debt"
+    assert indicators["Cash position"]["value"] == "$15.0 million cash"
+    assert indicators["Water recycling rate"]["value"] == "15.2%"
+    assert "Melbourne to Geelong Pipeline extension to Pettavel" in project_names
+    assert "Northern Growth Area Advanced Works" in project_names
+    assert "Ocean Grove Rising Main No. 2" in project_names
 
 
 def test_strategic_doc_cleanup_helpers_normalise_roles_and_trim_ocr_tails():
@@ -1287,6 +1525,13 @@ def test_mailbox_handoff_enriches_annual_report_note_content_and_performance_sig
                             "evidence": "The deficit of $0.1m ($3.7m 2023) reflects investment in education renewal and technology.",
                         },
                     ],
+                    "major_projects": [
+                        {
+                            "name": "Training Management Platform",
+                            "value": "$2.4 million",
+                            "evidence": "The new Training Management Platform went live in December 2024.",
+                        }
+                    ],
                 }
             },
         },
@@ -1311,7 +1556,10 @@ def test_mailbox_handoff_enriches_annual_report_note_content_and_performance_sig
     assert "Steffen Faurby | Chief Executive Officer | Royal Australasian College of Physicians" in note_content
     assert "## Performance Snapshot" in note_content
     assert "Membership scale: 32,347 members" in note_content
+    assert "## Key Projects" in note_content
+    assert "Training Management Platform: $2.4 million" in note_content
     assert "Operating result" in headlines
+    assert "Major project: Training Management Platform" in headlines
 
 
 def test_mailbox_handoff_prefers_subject_org_hint_over_compatible_formal_org_name_for_annual_report(tmp_path):
@@ -1394,6 +1642,91 @@ def test_mailbox_handoff_prefers_subject_org_hint_over_compatible_formal_org_nam
     )
 
     assert payload["primary_entity"]["name"] == "Barwon Water"
+    assert payload["note"]["title"].lower() == "barwon water annual report"
+    assert "Barwon Region Water Corporation" not in payload["primary_entity"]["name"]
+
+
+def test_mailbox_handoff_normalizes_annual_report_summary_org_label_and_filters_pseudo_stakeholders(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "entity: Escient | Barwon Water annual report",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-23T09:00:00+00:00",
+            "raw_text": "",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [{"name": "Barwon Water", "target_type": "organisation", "confidence": 0.95}],
+            "attachments": [{"filename": "barwon-water-annual-report.pdf", "status": "processed"}],
+            "summary": (
+                "Document from Barwon Water Group accessible. Leadership identified: Shaun Cumming (Chair), "
+                "Jo Plummer (Chair, Barwon Water)."
+            ),
+            "target_update_suggestions": [],
+            "processing_meta": {
+                "strategic_doc": {
+                    "doc_type": "annual_report",
+                    "org_name": "Barwon Region Water Corporation",
+                    "strategic_summary": "Annual report for Barwon Water.",
+                    "strategic_signals": [],
+                    "key_stakeholders": [
+                        {"name": "Shaun Cumming", "current_role": "Chair", "current_employer": "Barwon Water"},
+                        {"name": "• Des Powell", "current_role": "Barwon Asset Solutions Board", "current_employer": "Barwon Water"},
+                        {
+                            "name": "Barwon Region Water Corporation",
+                            "current_role": "Directors’ and Chief Finance and Accounting Officer’s declaration",
+                            "current_employer": "Barwon Water",
+                        },
+                    ],
+                    "performance_indicators": [],
+                }
+            },
+        },
+        signal={},
+        markdown_text="# Extract",
+        message_kind="document_analysis",
+        routing={"subject_org_hint": "Barwon Water", "clean_subject": "Barwon Water annual report"},
+    )
+
+    note_content = payload["note"]["content"]
+    assert "Document from Barwon Water." in note_content
+    assert "Barwon Water Group accessible" not in note_content
+    assert "- Des Powell | Barwon Asset Solutions Board | Barwon Water" in note_content
+    assert "Barwon Region Water Corporation | Directors’ and Chief Finance and Accounting Officer’s declaration" not in note_content
 
 
 def test_mailbox_handoff_omits_low_signal_kpi_focus_lines_from_annual_report_notes(tmp_path):
@@ -1462,6 +1795,80 @@ def test_mailbox_handoff_omits_low_signal_kpi_focus_lines_from_annual_report_not
     )
 
     assert "## KPI Focus Areas" not in payload["note"]["content"]
+
+
+def test_mailbox_handoff_uses_compact_provenance_for_attachment_led_signature_only_email(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "Barwon Water annual report",
+            "from_name": "Paul Cooper",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-24T08:47:21+00:00",
+            "raw_text": "Dr. Paul Cooper, Ph.D\nDirector\nwww.longboardfella.com\npaul@longboardfella.com.au\nLinkedIn: https://linkedin.com/in/digitalfella",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [{"name": "Barwon Water", "target_type": "organisation", "confidence": 0.95}],
+            "attachments": [{"filename": "barwon-water-annual-report.pdf", "status": "processed"}],
+            "summary": "Barwon Water annual report.",
+            "target_update_suggestions": [],
+            "processing_meta": {
+                "email_triage": {
+                    "processing_mode": "attachments_only",
+                    "actionable_body_text": "",
+                    "signature_text": "Dr. Paul Cooper, Ph.D\nDirector\nwww.longboardfella.com",
+                },
+                "strategic_doc": {
+                    "doc_type": "annual_report",
+                    "org_name": "Barwon Water",
+                    "strategic_summary": "Annual report for Barwon Water.",
+                    "strategic_signals": [],
+                    "key_stakeholders": [],
+                    "performance_indicators": [],
+                },
+            },
+        },
+        signal={},
+        markdown_text="# Extract",
+        message_kind="document_analysis",
+    )
+
+    assert payload["note"]["original_text"] == "Paul Cooper <paul@longboardfella.com.au> | 2026-03-24T08:47:21+00:00"
+    assert "LinkedIn" not in payload["note"]["original_text"]
 
 
 def test_intel_note_processor_filters_weak_and_credit_entities_for_strategic_docs(tmp_path):

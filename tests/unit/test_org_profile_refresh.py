@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from cortex_engine.org_profile_refresh import OfficialSourceDiscoverer, run_org_profile_refresh
+from cortex_engine.org_profile_refresh import OfficialSourceDiscoverer, _limit_relevant_sources, run_org_profile_refresh
 
 
 def test_official_source_discoverer_uses_sitemap_links(monkeypatch):
@@ -73,7 +73,7 @@ def test_org_profile_refresh_builds_structured_output(monkeypatch, tmp_path):
         def __init__(self, timeout: int = 25):
             self.timeout = timeout
 
-        def discover_sources(self, website_url: str, requested_docs: list[str], max_sources: int = 6):
+        def discover_sources(self, website_url: str, requested_docs: list[str], target_org_name: str = "", max_sources: int = 6):
             return [
                 {
                     "type": "strategic_plan",
@@ -141,7 +141,7 @@ def test_org_profile_refresh_returns_manual_document_prompt_when_sources_blocked
         def __init__(self, timeout: int = 25):
             self.timeout = timeout
 
-        def discover_sources(self, website_url: str, requested_docs: list[str], max_sources: int = 6):
+        def discover_sources(self, website_url: str, requested_docs: list[str], target_org_name: str = "", max_sources: int = 6):
             return [
                 {
                     "type": "about_page",
@@ -186,3 +186,124 @@ def test_org_profile_refresh_returns_manual_document_prompt_when_sources_blocked
     assert output["requires_manual_documents"] is True
     assert "email or upload" in output["user_message"].lower()
     assert output["blocked_source_urls"] == ["https://www.barwonwater.vic.gov.au/"]
+
+
+def test_org_profile_refresh_prefers_current_target_sources_over_predecessor_reports(monkeypatch, tmp_path):
+    filtered = _limit_relevant_sources(
+        [
+            {
+                "type": "annual_report",
+                "title": "Greater Western Water Annual Report 2024-25",
+                "url": "https://www.gww.com.au/sites/default/files/2025-11/GWW_Annual_Report_2024-25.pdf",
+                "year": "2025",
+                "source_label": "Greater Western Water Annual Report 2024-25",
+            },
+            {
+                "type": "annual_report",
+                "title": "Annual reports | Greater Western Water",
+                "url": "https://www.gww.com.au/about/corporate-information/our-strategies-plans-reports/annual-reports",
+                "year": "2025",
+                "source_label": "Annual reports | Greater Western Water",
+            },
+            {
+                "type": "annual_report",
+                "title": "City West Water Annual Report 2015",
+                "url": "https://www.gww.com.au/sites/default/files/2022-09/City_West_Water_Annual_Report_2015.pdf",
+                "year": "2015",
+                "source_label": "City West Water Annual Report 2015",
+            },
+        ],
+        target_org_name="Greater Western Water",
+        max_sources=6,
+    )
+    filtered_urls = [item["url"] for item in filtered]
+
+    assert all("City_West_Water" not in url for url in filtered_urls)
+    assert any("GWW_Annual_Report_2024-25.pdf" in url for url in filtered_urls)
+
+    current_md = tmp_path / "greater-western-water-annual-report.md"
+    current_md.write_text(
+        "\n".join(
+            [
+                "Greater Western Water Annual Report 2024-25",
+                "Greater Western Water is a Victorian Government water corporation.",
+                "Lisa Neville",
+                "Chair",
+                "Greater Western Water",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    listing_md = tmp_path / "annual-reports-page.md"
+    listing_md.write_text(
+        "\n".join(
+            [
+                "Annual reports | Greater Western Water",
+                "Greater Western Water's Annual Report for 2024-25",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class _FakeDiscoverer:
+        def __init__(self, timeout: int = 25):
+            self.timeout = timeout
+
+        def discover_sources(self, website_url: str, requested_docs: list[str], target_org_name: str = "", max_sources: int = 6):
+            return [
+                {
+                    "type": "annual_report",
+                    "title": "Greater Western Water Annual Report 2024-25",
+                    "url": "https://www.gww.com.au/sites/default/files/2025-11/GWW_Annual_Report_2024-25.pdf",
+                    "year": "2025",
+                    "source_label": "Greater Western Water Annual Report 2024-25",
+                },
+                {
+                    "type": "annual_report",
+                    "title": "Annual reports | Greater Western Water",
+                    "url": "https://www.gww.com.au/about/corporate-information/our-strategies-plans-reports/annual-reports",
+                    "year": "2025",
+                    "source_label": "Annual reports | Greater Western Water",
+                },
+            ]
+
+    def _fake_process_urls(self, urls, convert_to_md, use_vision_for_md, textify_options, capture_web_md_on_no_pdf):
+        return [
+            SimpleNamespace(
+                input_url="https://www.gww.com.au/sites/default/files/2025-11/GWW_Annual_Report_2024-25.pdf",
+                final_url="https://www.gww.com.au/sites/default/files/2025-11/GWW_Annual_Report_2024-25.pdf",
+                md_path=str(current_md),
+                pdf_path="",
+                status="downloaded",
+            ),
+            SimpleNamespace(
+                input_url="https://www.gww.com.au/about/corporate-information/our-strategies-plans-reports/annual-reports",
+                final_url="https://www.gww.com.au/about/corporate-information/our-strategies-plans-reports/annual-reports",
+                md_path=str(listing_md),
+                pdf_path="",
+                status="web_markdown",
+            ),
+        ]
+
+    monkeypatch.setattr("cortex_engine.org_profile_refresh.OfficialSourceDiscoverer", _FakeDiscoverer)
+    monkeypatch.setattr("cortex_engine.org_profile_refresh.URLIngestor.process_urls", _fake_process_urls)
+
+    output = run_org_profile_refresh(
+        payload={
+            "profile_id": "456",
+            "org_name": "Escient",
+            "target_org_name": "Greater Western Water",
+            "website_url": "https://www.gww.com.au/",
+            "current_profile_snapshot": {"website_url": ""},
+            "requested_docs": ["annual_report", "strategic_plan", "org_chart"],
+            "max_sources": 6,
+            "timeout_seconds": 10,
+            "use_vision": True,
+            "discovery_mode": "official_sources_first",
+        },
+        run_dir=Path(tmp_path),
+    )
+
+    discovered_urls = [item["url"] for item in output["discovered_sources"]]
+    assert any("GWW_Annual_Report_2024-25.pdf" in url for url in discovered_urls)
+    assert output["discovery_debug"]["processed_sources"][0]["filename"].startswith("Greater Western Water Annual Report 2024-25")

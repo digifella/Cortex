@@ -5,12 +5,13 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
 from cortex_engine.org_chart_extractor import extract_org_chart_structured
+from cortex_engine.stakeholder_signal_store import orgs_compatible
 from cortex_engine.stakeholder_signal_matcher import normalize_lookup
 from cortex_engine.strategic_doc_analyser import analyse_strategic_documents
 from cortex_engine.url_ingestor import URLIngestor
@@ -70,8 +71,111 @@ def _extract_year(*values: str) -> str:
     return ""
 
 
+def _org_acronym(value: str) -> str:
+    tokens = [token for token in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", str(value or "")) if token]
+    if len(tokens) < 2:
+        return ""
+    acronym = "".join(token[0].upper() for token in tokens if token and token[0].isalpha())
+    return acronym if 2 <= len(acronym) <= 8 else ""
+
+
 def _same_host(left: str, right: str) -> bool:
     return (urlparse(left).netloc or "").lower() == (urlparse(right).netloc or "").lower()
+
+
+def _source_targets_org(source: Dict[str, Any], target_org_name: str) -> bool:
+    target = str(target_org_name or "").strip()
+    if not target:
+        return True
+    title = unquote(str(source.get("title") or ""))
+    label = unquote(str(source.get("source_label") or source.get("label") or ""))
+    url = unquote(str(source.get("url") or ""))
+    candidates = [title, label]
+    if any(orgs_compatible(candidate, target) for candidate in candidates if str(candidate).strip()):
+        return True
+    haystack = normalize_lookup(" ".join([title, label, url]))
+    target_key = normalize_lookup(target)
+    if target_key and target_key in haystack:
+        return True
+    acronym = normalize_lookup(_org_acronym(target))
+    if acronym:
+        tokens = set(re.findall(r"[a-z0-9]+", haystack))
+        if acronym in tokens:
+            return True
+    return False
+
+
+def _source_sort_key(source: Dict[str, Any], target_org_name: str) -> tuple[int, int, int, int, str]:
+    source_type = str(source.get("type") or "")
+    title = unquote(str(source.get("title") or ""))
+    url = unquote(str(source.get("url") or ""))
+    year_text = str(source.get("year") or _extract_year(title, url) or "")
+    try:
+        year_value = int(year_text)
+    except Exception:
+        year_value = 0
+    direct_document = 1 if url.lower().endswith(".pdf") else 0
+    targeted = 1 if _source_targets_org(source, target_org_name) else 0
+    return (
+        _SOURCE_TYPE_ORDER.get(source_type, 9),
+        -targeted,
+        -year_value,
+        -direct_document,
+        normalize_lookup(title or url),
+    )
+
+
+def _limit_relevant_sources(
+    sources: List[Dict[str, Any]],
+    target_org_name: str,
+    max_sources: int,
+) -> List[Dict[str, Any]]:
+    if not sources:
+        return []
+    per_type_limits = {
+        "annual_report": 2,
+        "strategic_plan": 2,
+        "org_chart": 2,
+        "about_page": 1,
+    }
+    ordered = sorted(sources, key=lambda item: _source_sort_key(item, target_org_name))
+    selected: List[Dict[str, Any]] = []
+    counts: Dict[str, int] = {}
+    fallback: List[Dict[str, Any]] = []
+    for source in ordered:
+        source_type = str(source.get("type") or "")
+        limit = per_type_limits.get(source_type, 1)
+        if _source_targets_org(source, target_org_name):
+            if counts.get(source_type, 0) >= limit:
+                continue
+            selected.append(source)
+            counts[source_type] = counts.get(source_type, 0) + 1
+        else:
+            fallback.append(source)
+        if len(selected) >= max_sources:
+            return selected[:max_sources]
+    for source in fallback:
+        source_type = str(source.get("type") or "")
+        limit = per_type_limits.get(source_type, 1)
+        if counts.get(source_type, 0) >= limit:
+            continue
+        selected.append(source)
+        counts[source_type] = counts.get(source_type, 0) + 1
+        if len(selected) >= max_sources:
+            break
+    return selected[:max_sources]
+
+
+def _attachment_filename(source: Dict[str, Any], result: Any) -> str:
+    title = unquote(str(source.get("title") or source.get("source_label") or "")).strip()
+    url_name = Path(unquote(urlparse(str(source.get("url") or "")).path)).name
+    suffix = Path(url_name).suffix or Path(str(getattr(result, "pdf_path", "") or getattr(result, "md_path", ""))).suffix
+    base = title or Path(url_name).stem or "document"
+    base = re.sub(r"[\\/:*?\"<>|]+", "-", base)
+    base = re.sub(r"\s+", " ", base).strip(" .-_")
+    if suffix and not base.lower().endswith(suffix.lower()):
+        return f"{base}{suffix}"
+    return base or "document"
 
 
 def _discover_source_type(text: str, url: str = "") -> str:
@@ -262,6 +366,7 @@ class OfficialSourceDiscoverer:
         self,
         website_url: str,
         requested_docs: List[str],
+        target_org_name: str = "",
         max_sources: int = 6,
     ) -> List[Dict[str, Any]]:
         homepage = _normalise_url(website_url)
@@ -397,11 +502,7 @@ class OfficialSourceDiscoverer:
                     }
                 )
 
-        ordered = sorted(
-            discovered.values(),
-            key=lambda item: (_SOURCE_TYPE_ORDER.get(str(item.get("type") or ""), 9), str(item.get("title") or "")),
-        )
-        return ordered[:max_sources]
+        return _limit_relevant_sources(list(discovered.values()), target_org_name=target_org_name, max_sources=max_sources)
 
 
 def _merge_people(people: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -475,6 +576,7 @@ def run_org_profile_refresh(
     discovered_sources = discoverer.discover_sources(
         website_url=website_url,
         requested_docs=requested_docs,
+        target_org_name=target_org_name,
         max_sources=int(payload.get("max_sources") or 6),
     )
     debug_info["discovered_sources"] = [
@@ -568,7 +670,7 @@ def run_org_profile_refresh(
                 str(result.status or ""),
             )
             continue
-        filename = Path(result.md_path or result.pdf_path or source.get("url") or "document").name
+        filename = _attachment_filename(source, result)
         attachments.append(
             {
                 "filename": filename,
