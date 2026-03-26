@@ -22,6 +22,7 @@ _OLLAMA_URL = "http://localhost:11434/api/chat"
 _OLLAMA_MODEL = "qwen2.5:14b"
 _OLLAMA_TIMEOUT = 600  # 10 minutes for large reports
 _ANTHROPIC_FALLBACK_MODEL = "claude-haiku-4-5-20251001"
+_ANTHROPIC_WEB_MODEL = os.environ.get("CORTEX_WEEKLY_ANTHROPIC_WEB_MODEL", "").strip() or "claude-sonnet-4-20250514"
 _OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
 
 
@@ -97,6 +98,199 @@ def _resolve_ollama_model() -> str:
     except Exception as exc:
         logger.warning("Unable to inspect installed Ollama models for weekly report: %s", exc)
     return _normalize_model_name(candidates[0] if candidates else _OLLAMA_MODEL)
+
+
+def _internet_enriched_mode(source_mode: str, web_intel: Any) -> bool:
+    if str(source_mode or "").strip().lower() == "submitted_and_internet":
+        return True
+    if isinstance(web_intel, list) and any(isinstance(item, dict) for item in web_intel):
+        return True
+    if isinstance(web_intel, dict) and web_intel.get("deferred"):
+        return True
+    return False
+
+
+def _preferred_synthesis_provider(source_mode: str, web_intel: Any) -> str:
+    return "anthropic" if _internet_enriched_mode(source_mode, web_intel) else "ollama"
+
+
+def _count_web_intel_items(web_intel: Any) -> int:
+    if not isinstance(web_intel, list):
+        return 0
+    return sum(1 for item in web_intel if isinstance(item, dict))
+
+
+def _deferred_web_intel_notice(web_intel: Any) -> Optional[dict]:
+    if not isinstance(web_intel, dict) or not web_intel.get("deferred"):
+        return None
+    target_count = int(web_intel.get("target_count") or 0)
+    targets = [str(item).strip() for item in (web_intel.get("targets") or []) if str(item).strip()]
+    summary = "Target-specific web research was deferred upstream due to the number of requested targets."
+    if target_count:
+        summary += f" Deferred target count: {target_count}."
+    if targets:
+        summary += f" Deferred targets included: {', '.join(targets[:8])}."
+    return {
+        "headline": "Deferred target web research",
+        "source": "Cortex weekly report preflight",
+        "summary": summary,
+        "type": "deferred_web_research",
+    }
+
+
+def _merge_web_intel(existing_web_intel: Any, sector_sweep_items: list[dict]) -> Any:
+    if not sector_sweep_items:
+        return existing_web_intel
+    merged: list[dict] = [dict(item) for item in sector_sweep_items if isinstance(item, dict)]
+    if isinstance(existing_web_intel, list):
+        merged.extend(dict(item) for item in existing_web_intel if isinstance(item, dict))
+        return merged
+    deferred_notice = _deferred_web_intel_notice(existing_web_intel)
+    if deferred_notice:
+        merged.append(deferred_notice)
+    return merged
+
+
+def _build_sector_sweep_prompt(
+    org_name: str,
+    geography: str,
+    report_scope: dict,
+    date_range: dict,
+) -> str:
+    industries = [str(item).strip() for item in (report_scope.get("industries") or []) if str(item).strip()]
+    organisations = [str((item or {}).get("name") or "").strip() for item in (report_scope.get("organisations") or []) if str((item or {}).get("name") or "").strip()]
+    stakeholders = [str((item or {}).get("name") or "").strip() for item in (report_scope.get("stakeholders") or []) if str((item or {}).get("name") or "").strip()]
+    period_start = str(date_range.get("start") or "").strip()
+    period_end = str(date_range.get("end") or "").strip()
+    industry_label = ", ".join(industries) if industries else "the selected market"
+    org_label = ", ".join(organisations[:8]) if organisations else org_name or "the selected organisations"
+    stakeholder_label = ", ".join(stakeholders[:8]) if stakeholders else "the selected stakeholders"
+    return (
+        f"Run one final sector sweep for {org_name or 'the selected organisation scope'} in {geography} "
+        f"covering {period_start} to {period_end}.\n\n"
+        f"Focus industries: {industry_label}\n"
+        f"Priority organisations: {org_label}\n"
+        f"Priority stakeholders: {stakeholder_label}\n\n"
+        "Find material public developments that should influence a weekly intelligence report even if they were not already captured in prior web research. "
+        "Prioritise sector-wide moves, regulatory or policy developments, major partnerships, funding/investment shifts, infrastructure announcements, "
+        "technology strategy signals, customer/service changes, and notable leadership or operating-model developments.\n\n"
+        "Return a concise markdown briefing with short bullets. Each bullet should include: headline, date if known, source/publication, URL if available, "
+        "and one-sentence why-it-matters. Stay tightly scoped to the requested geography and sector."
+    )
+
+
+def _run_anthropic_web_sector_sweep(
+    org_name: str,
+    geography: str,
+    report_scope: dict,
+    date_range: dict,
+) -> list[dict]:
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return []
+    prompt = _build_sector_sweep_prompt(org_name, geography, report_scope, date_range)
+    max_uses = 6 if report_scope.get("industries") else 4
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            json={
+                "model": _ANTHROPIC_WEB_MODEL,
+                "max_tokens": 2400,
+                "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": max_uses}],
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=120,
+        )
+        if resp.status_code != 200:
+            logger.warning("Anthropic sector sweep failed with %d: %s", resp.status_code, resp.text[:500])
+            return []
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("Anthropic sector sweep unavailable: %s", exc)
+        return []
+
+    text_blocks = [
+        str(block.get("text") or "").strip()
+        for block in data.get("content", [])
+        if isinstance(block, dict) and block.get("type") == "text" and str(block.get("text") or "").strip()
+    ]
+    if not text_blocks:
+        return []
+
+    headline_bits = [str(item).strip() for item in (report_scope.get("industries") or []) if str(item).strip()]
+    headline = f"{', '.join(headline_bits[:2])} sector sweep" if headline_bits else f"{geography} sector sweep"
+    summary = "\n\n".join(text_blocks).strip()
+    return [
+        {
+            "headline": headline,
+            "source": "Anthropic web search",
+            "summary": summary[:4000],
+            "type": "sector_sweep",
+            "date": str(date_range.get("end") or "").strip(),
+        }
+    ]
+
+
+def _run_ollama_synthesis(system_prompt: str, user_prompt: str) -> tuple[str, str]:
+    preferred_model = _resolve_ollama_model()
+    response = requests.post(
+        _OLLAMA_URL,
+        json={
+            "model": preferred_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": False,
+        },
+        timeout=_OLLAMA_TIMEOUT,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"Ollama returned {response.status_code} for weekly report synthesis")
+    data = response.json()
+    report_text = str((data.get("message") or {}).get("content") or "").strip()
+    if not report_text:
+        raise RuntimeError("Ollama returned an empty weekly report response")
+    return report_text, preferred_model
+
+
+def _run_anthropic_synthesis(system_prompt: str, user_prompt: str, model: str = "") -> tuple[str, str]:
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("Missing ANTHROPIC_API_KEY for weekly report synthesis")
+    selected_model = str(model or "").strip() or _ANTHROPIC_FALLBACK_MODEL
+    resp = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        json={
+            "model": selected_model,
+            "max_tokens": 8192,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_prompt}],
+        },
+        timeout=180,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"Anthropic returned {resp.status_code} for weekly report synthesis: {resp.text[:500]}")
+    resp_data = resp.json()
+    report_text = ""
+    for block in resp_data.get("content", []):
+        if block.get("type") == "text":
+            report_text = str(block.get("text") or "").strip()
+            if report_text:
+                break
+    if not report_text:
+        raise RuntimeError("Anthropic returned an empty weekly report response")
+    return report_text, selected_model
 
 
 def _submitter_label(item: dict) -> str:
@@ -308,6 +502,8 @@ def handle(
     strategic_context = input_data.get("strategic_context", {})
     source_mode = input_data.get("source_mode", "submitted_only")
     geography = _resolve_report_geography(report_scope, strategic_context)
+    sector_sweep_items: list[dict] = []
+    effective_web_intel: Any = web_intel
     geography_instruction = (
         f"The report's primary geography is {geography}. Prioritise that market heavily. "
         f"Do not treat foreign organisations, regulators, or sector conditions as representative unless they are "
@@ -317,6 +513,12 @@ def handle(
 
     if progress_cb:
         progress_cb(10, "Building synthesis prompt", "prepare")
+
+    if _internet_enriched_mode(source_mode, web_intel):
+        if progress_cb:
+            progress_cb(20, "Running final internet sector sweep", "sector_sweep")
+        sector_sweep_items = _run_anthropic_web_sector_sweep(org_name, geography, report_scope, date_range)
+        effective_web_intel = _merge_web_intel(web_intel, sector_sweep_items)
 
     # Build the data payload for the LLM
     data_sections = []
@@ -380,13 +582,16 @@ def handle(
     data_sections.append(_format_submitted_intel_section(submitted_intel))
 
     # Web research results
-    data_sections.append(_format_web_intel_section(web_intel))
+    data_sections.append(_format_web_intel_section(effective_web_intel))
 
     if is_cancelled_cb and is_cancelled_cb():
         raise RuntimeError("Cancelled before LLM synthesis")
 
     if progress_cb:
-        progress_cb(30, "Calling LLM for synthesis", "synthesise")
+        if _preferred_synthesis_provider(source_mode, effective_web_intel) == "anthropic":
+            progress_cb(30, "Calling Claude for internet-enriched synthesis", "synthesise")
+        else:
+            progress_cb(30, "Calling Ollama for local synthesis", "synthesise")
 
     # Build prompts
     system_prompt = (
@@ -404,76 +609,53 @@ def handle(
 
     user_prompt = f"{synthesis_instructions}\n\n" + "\n\n".join(data_sections)
 
-    # Try Ollama first, fall back to Anthropic
-    report_text = None
-    llm_provider = "ollama"
+    # Choose provider order based on whether the report is internet-enriched.
+    report_text = ""
+    llm_provider = ""
     llm_model = ""
+    synth_provider = _preferred_synthesis_provider(source_mode, effective_web_intel)
+    anthropic_model = os.environ.get("CORTEX_WATCH_ANTHROPIC_MODEL") or (
+        _ANTHROPIC_WEB_MODEL if synth_provider == "anthropic" else _ANTHROPIC_FALLBACK_MODEL
+    )
+    synthesis_attempts = [
+        ("anthropic", anthropic_model),
+        ("ollama", ""),
+    ] if synth_provider == "anthropic" else [
+        ("ollama", ""),
+        ("anthropic", anthropic_model),
+    ]
 
-    # Resolve preferred model
-    preferred_model = _resolve_ollama_model()
+    synthesis_errors: list[str] = []
+    for provider_name, provider_model in synthesis_attempts:
+        try:
+            if provider_name == "anthropic":
+                text, selected_model = _run_anthropic_synthesis(system_prompt, user_prompt, provider_model)
+                report_text = text
+                llm_provider = "anthropic"
+                llm_model = selected_model
+                logger.info("Weekly report synthesised via Anthropic (%s)", selected_model)
+            else:
+                text, selected_model = _run_ollama_synthesis(system_prompt, user_prompt)
+                report_text = text
+                llm_provider = "ollama"
+                llm_model = selected_model
+                logger.info("Weekly report synthesised via Ollama (%s)", selected_model)
+            if report_text:
+                break
+        except Exception as exc:
+            synthesis_errors.append(f"{provider_name}: {exc}")
+            logger.warning("Weekly report %s synthesis failed: %s", provider_name, exc)
+            if progress_cb and provider_name == synthesis_attempts[0][0]:
+                next_provider = synthesis_attempts[1][0] if len(synthesis_attempts) > 1 else ""
+                if next_provider == "anthropic":
+                    progress_cb(50, "Local synthesis timed out or failed, falling back to Claude API", "fallback")
+                elif next_provider == "ollama":
+                    progress_cb(50, "Claude synthesis failed, falling back to Ollama", "fallback")
 
-    try:
-        response = requests.post(
-            _OLLAMA_URL,
-            json={
-                "model": preferred_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "stream": False,
-            },
-            timeout=_OLLAMA_TIMEOUT,
+    if not report_text:
+        raise RuntimeError(
+            "Failed to synthesise weekly report — " + "; ".join(synthesis_errors or ["no synthesis provider succeeded"])
         )
-        if response.status_code == 200:
-            data = response.json()
-            report_text = (data.get("message") or {}).get("content", "")
-            llm_model = preferred_model
-            logger.info("Weekly report synthesised via Ollama (%s)", preferred_model)
-        else:
-            logger.warning("Ollama returned %d for weekly report synthesis", response.status_code)
-    except Exception as e:
-        logger.warning("Ollama unavailable for weekly report: %s", e)
-
-    # Fallback to Anthropic
-    if not report_text:
-        if progress_cb:
-            progress_cb(50, "Ollama unavailable, falling back to Claude API", "fallback")
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        if api_key:
-            try:
-                fallback_model = os.environ.get("CORTEX_WATCH_ANTHROPIC_MODEL") or _ANTHROPIC_FALLBACK_MODEL
-                resp = requests.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={
-                        "Content-Type": "application/json",
-                        "x-api-key": api_key,
-                        "anthropic-version": "2023-06-01",
-                    },
-                    json={
-                        "model": fallback_model,
-                        "max_tokens": 8192,
-                        "system": system_prompt,
-                        "messages": [{"role": "user", "content": user_prompt}],
-                    },
-                    timeout=180,
-                )
-                if resp.status_code == 200:
-                    resp_data = resp.json()
-                    for block in resp_data.get("content", []):
-                        if block.get("type") == "text":
-                            report_text = block["text"]
-                            break
-                    llm_provider = "anthropic"
-                    llm_model = fallback_model
-                    logger.info("Weekly report synthesised via Anthropic fallback (%s)", fallback_model)
-                else:
-                    logger.error("Anthropic fallback failed with %d: %s", resp.status_code, resp.text[:500])
-            except Exception as e:
-                logger.error("Anthropic fallback error: %s", e)
-
-    if not report_text:
-        raise RuntimeError("Failed to synthesise weekly report — both Ollama and Anthropic unavailable")
 
     if progress_cb:
         progress_cb(90, "Writing report output", "output")
@@ -485,7 +667,8 @@ def handle(
     output_path = output_dir / output_filename
     output_path.write_text(report_text, encoding="utf-8")
 
-    signal_count = len(submitted_intel) + (len(web_intel) if isinstance(web_intel, list) else 0)
+    web_intel_count = _count_web_intel_items(effective_web_intel)
+    signal_count = len(submitted_intel) + web_intel_count
     profiles_covered = len(organisations) + len(stakeholders) + len(industry_profiles)
 
     if progress_cb:
@@ -505,7 +688,8 @@ def handle(
             "llm_model": llm_model,
             "source_mode": source_mode,
             "submitted_intel_count": len(submitted_intel),
-            "web_intel_count": len(web_intel) if isinstance(web_intel, list) else 0,
+            "web_intel_count": web_intel_count,
+            "sector_sweep_count": len(sector_sweep_items),
             "submitter_count": len(
                 {
                     _submitter_label(item)

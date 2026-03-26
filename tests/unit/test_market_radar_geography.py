@@ -176,3 +176,39 @@ def test_weekly_report_resolve_ollama_model_uses_installed_local_model(monkeypat
     monkeypatch.setattr(wr.requests, "get", lambda *args, **kwargs: response)
 
     assert wr._resolve_ollama_model() == "mistral-small3.2:latest"
+
+
+def test_weekly_report_prefers_anthropic_for_internet_enriched_mode():
+    assert wr._preferred_synthesis_provider("submitted_and_internet", []) == "anthropic"
+    assert wr._preferred_synthesis_provider("submitted_only", [{"headline": "Web item"}]) == "anthropic"
+    assert wr._preferred_synthesis_provider("submitted_only", []) == "ollama"
+
+
+def test_weekly_report_merges_sector_sweep_with_deferred_web_intel():
+    merged = wr._merge_web_intel(
+        {"deferred": True, "target_count": 7, "targets": ["Barwon Water", "Seqwater"]},
+        [{"headline": "Water sector sweep", "summary": "Regulatory and capital signals.", "type": "sector_sweep"}],
+    )
+
+    assert isinstance(merged, list)
+    assert merged[0]["headline"] == "Water sector sweep"
+    assert merged[1]["headline"] == "Deferred target web research"
+    assert "Deferred target count: 7" in merged[1]["summary"]
+
+
+def test_weekly_report_builds_sector_sweep_prompt_with_industries_and_geography():
+    prompt = wr._build_sector_sweep_prompt(
+        org_name="Escient",
+        geography="Australia",
+        report_scope={
+            "industries": ["Water"],
+            "organisations": [{"name": "Barwon Water"}],
+            "stakeholders": [{"name": "Sarah Cumming"}],
+        },
+        date_range={"start": "2026-03-19", "end": "2026-03-26"},
+    )
+
+    assert "Australia" in prompt
+    assert "Water" in prompt
+    assert "Barwon Water" in prompt
+    assert "Sarah Cumming" in prompt
