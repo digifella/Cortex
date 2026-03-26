@@ -8,10 +8,12 @@ from PIL import Image
 from worker.handlers import intel_extract as handler
 from cortex_engine.intel_extractor import (
     _build_entity_record,
+    _choose_llm_policy,
     _extract_linkedin_feed_structured,
     _merge_structured_results,
     _ocr_image_text,
     _prepare_anthropic_image_bytes,
+    _select_local_extract_model,
     _triage_email_payload,
     _call_haiku_image_extract,
     extract_intel,
@@ -194,7 +196,8 @@ def test_extract_linkedin_feed_structured_keeps_commented_case():
 
 
 def test_extract_intel_uses_linkedin_feed_fallback_when_model_returns_empty(monkeypatch):
-    monkeypatch.setattr("cortex_engine.intel_extractor._call_haiku_extract", lambda payload, combined_text: {})
+    monkeypatch.setattr("cortex_engine.intel_extractor._choose_llm_policy", lambda payload, attachments: {"provider": "ollama", "model": "test-local", "doc_type": "", "local_only": False, "reason": "test"})
+    monkeypatch.setattr("cortex_engine.intel_extractor._call_local_extract", lambda payload, combined_text, model='': ({}, model or "test-local"))
     monkeypatch.setattr("cortex_engine.intel_extractor._maybe_textifier", lambda: None)
     monkeypatch.setattr("cortex_engine.intel_extractor.StakeholderSignalStore", lambda: type("S", (), {"list_profiles": lambda self, org_name="": []})())
 
@@ -235,7 +238,8 @@ def test_extract_intel_does_not_emit_profile_updates_from_heuristic_feed_noise(m
                 }
             ]
 
-    monkeypatch.setattr("cortex_engine.intel_extractor._call_haiku_extract", lambda payload, combined_text: {})
+    monkeypatch.setattr("cortex_engine.intel_extractor._choose_llm_policy", lambda payload, attachments: {"provider": "ollama", "model": "test-local", "doc_type": "", "local_only": False, "reason": "test"})
+    monkeypatch.setattr("cortex_engine.intel_extractor._call_local_extract", lambda payload, combined_text, model='': ({}, model or "test-local"))
     monkeypatch.setattr("cortex_engine.intel_extractor._maybe_textifier", lambda: None)
     monkeypatch.setattr("cortex_engine.intel_extractor.StakeholderSignalStore", lambda: _Store())
 
@@ -357,7 +361,8 @@ def test_extract_intel_uses_org_chart_heuristic_for_attachment_text(monkeypatch,
     attachment_path = tmp_path / "racp_org_chart.pdf"
     attachment_path.write_text("placeholder", encoding="utf-8")
 
-    monkeypatch.setattr("cortex_engine.intel_extractor._call_haiku_extract", lambda payload, combined_text: {})
+    monkeypatch.setattr("cortex_engine.intel_extractor._choose_llm_policy", lambda payload, attachments: {"provider": "ollama", "model": "test-local", "doc_type": "org_chart", "local_only": False, "reason": "test"})
+    monkeypatch.setattr("cortex_engine.intel_extractor._call_local_extract", lambda payload, combined_text, model='': ({}, model or "test-local"))
     monkeypatch.setattr("cortex_engine.intel_extractor._maybe_textifier", lambda: type("T", (), {"textify_file": lambda self, path: """
         Chief Executive Officer
         Mic Cavazzini
@@ -419,7 +424,8 @@ def test_extract_intel_forces_pdf_fallback_when_org_chart_text_is_only_visual_su
     attachment_path = tmp_path / "senior-management-structure-department-of-health-jan-2026.pdf"
     attachment_path.write_text("placeholder", encoding="utf-8")
 
-    monkeypatch.setattr("cortex_engine.intel_extractor._call_haiku_extract", lambda payload, combined_text: {})
+    monkeypatch.setattr("cortex_engine.intel_extractor._choose_llm_policy", lambda payload, attachments: {"provider": "ollama", "model": "test-local", "doc_type": "org_chart", "local_only": False, "reason": "test"})
+    monkeypatch.setattr("cortex_engine.intel_extractor._call_local_extract", lambda payload, combined_text, model='': ({}, model or "test-local"))
     monkeypatch.setattr(
         "cortex_engine.intel_extractor._maybe_textifier",
         lambda: type(
@@ -490,7 +496,8 @@ def test_extract_intel_suppresses_sender_signature_when_large_document_attachmen
             "summary": "RACP strategic direction document.",
         }
 
-    monkeypatch.setattr("cortex_engine.intel_extractor._call_haiku_extract", _fake_extract)
+    monkeypatch.setattr("cortex_engine.intel_extractor._choose_llm_policy", lambda payload, attachments: {"provider": "ollama", "model": "test-local", "doc_type": "strategic_plan", "local_only": False, "reason": "test"})
+    monkeypatch.setattr("cortex_engine.intel_extractor._call_local_extract", lambda payload, combined_text, model='': (_fake_extract(payload, combined_text), model or "test-local"))
     monkeypatch.setattr(
         "cortex_engine.intel_extractor._maybe_textifier",
         lambda: type("T", (), {"textify_file": lambda self, path: ("Royal Australasian College of Physicians\nStrategic Direction 2026 to 2030\n" * 40)})(),
@@ -537,7 +544,8 @@ def test_extract_intel_strips_forwarding_headers_and_keeps_multiple_attachments(
             "summary": "AIDH strategy and appendix.",
         }
 
-    monkeypatch.setattr("cortex_engine.intel_extractor._call_haiku_extract", _fake_extract)
+    monkeypatch.setattr("cortex_engine.intel_extractor._choose_llm_policy", lambda payload, attachments: {"provider": "ollama", "model": "test-local", "doc_type": "strategic_plan", "local_only": False, "reason": "test"})
+    monkeypatch.setattr("cortex_engine.intel_extractor._call_local_extract", lambda payload, combined_text, model='': (_fake_extract(payload, combined_text), model or "test-local"))
     monkeypatch.setattr(
         "cortex_engine.intel_extractor._maybe_textifier",
         lambda: type(
@@ -582,6 +590,85 @@ def test_extract_intel_strips_forwarding_headers_and_keeps_multiple_attachments(
     assert "from: paul cooper" not in captured["combined_text"].lower()
     assert "attachment: aidh_strategy.pdf" in captured["combined_text"].lower()
     assert "attachment: aidh_appendix.pdf" in captured["combined_text"].lower()
+
+
+def test_choose_llm_policy_uses_local_for_plain_intel():
+    policy = _choose_llm_policy({"subject": "Intel: GVW opportunity"}, [])
+
+    assert policy["provider"] == "ollama"
+    assert policy["reason"] == "default_local_intel"
+
+
+def test_choose_llm_policy_defaults_to_local_for_complex_documents_without_open_marker():
+    policy = _choose_llm_policy(
+        {"subject": "entity: Escient > South East Water annual report"},
+        [{"filename": "South_East_Water_Annual_Report_2024-25.pdf", "kind": "document"}],
+    )
+
+    assert policy["provider"] == "ollama"
+    assert policy["doc_type"] == "annual_report"
+    assert policy["reason"] == "default_local_intel"
+
+
+def test_choose_llm_policy_uses_sonnet_only_for_explicit_open_complex_documents():
+    policy = _choose_llm_policy(
+        {"subject": "Open > entity: Escient > South East Water annual report"},
+        [{"filename": "South_East_Water_Annual_Report_2024-25.pdf", "kind": "document"}],
+    )
+
+    assert policy["provider"] == "anthropic"
+    assert policy["doc_type"] == "annual_report"
+    assert policy["reason"] == "subject_marked_open_annual_report"
+
+
+def test_choose_llm_policy_uses_sonnet_for_explicit_public_complex_documents():
+    policy = _choose_llm_policy(
+        {"subject": "Public > entity: Escient > South East Water strategic plan"},
+        [{"filename": "South_East_Water_Strategic_Plan_2028.pdf", "kind": "document"}],
+    )
+
+    assert policy["provider"] == "anthropic"
+    assert policy["doc_type"] == "strategic_plan"
+    assert policy["reason"] == "subject_marked_open_strategic_plan"
+
+
+def test_choose_llm_policy_forces_local_when_subject_is_private():
+    policy = _choose_llm_policy(
+        {"subject": "Private > South East Water annual report"},
+        [{"filename": "South_East_Water_Annual_Report_2024-25.pdf", "kind": "document"}],
+    )
+
+    assert policy["provider"] == "ollama"
+    assert policy["local_only"] is True
+
+
+def test_select_local_extract_model_prefers_explicit_override(monkeypatch):
+    monkeypatch.setenv("CORTEX_INTEL_LOCAL_MODEL", "qwen2.5:72b-instruct-q4_K_M")
+    monkeypatch.setattr(
+        "cortex_engine.intel_extractor._ollama_client",
+        lambda: type(
+            "C",
+            (),
+            {"list": lambda self: {"models": [{"model": "qwen2.5:72b-instruct-q4_K_M"}]}},
+        )(),
+    )
+
+    assert _select_local_extract_model() == "qwen2.5:72b-instruct-q4_K_M"
+
+
+def test_select_local_extract_model_prefers_researched_order_over_generic_synthesis_model(monkeypatch):
+    monkeypatch.delenv("CORTEX_INTEL_LOCAL_MODEL", raising=False)
+    monkeypatch.setenv("LOCAL_LLM_SYNTHESIS_MODEL", "qwen2.5:72b-instruct-q4_K_M")
+    monkeypatch.setattr(
+        "cortex_engine.intel_extractor._ollama_client",
+        lambda timeout=30: type(
+            "C",
+            (),
+            {"list": lambda self: {"models": [{"model": "mistral-small3.2:latest"}, {"model": "qwen2.5:72b-instruct-q4_K_M"}]}},
+        )(),
+    )
+
+    assert _select_local_extract_model() == "mistral-small3.2:latest"
 
 
 def test_email_triage_uses_qwen_json_when_available(monkeypatch):

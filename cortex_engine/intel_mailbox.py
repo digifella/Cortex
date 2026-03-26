@@ -10,6 +10,7 @@ import re
 import smtplib
 import ssl
 import tempfile
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email import policy
@@ -23,6 +24,12 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 import requests
 
 from cortex_engine.config_manager import ConfigManager
+from cortex_engine.document_registry import (
+    STRICT_DOC_TYPES,
+    build_content_fingerprint,
+    build_document_meta,
+    derive_period_label,
+)
 from cortex_engine.email_handlers import (
     CsvProfileImportError,
     CsvProfileImportProcessor,
@@ -41,14 +48,24 @@ logger = logging.getLogger(__name__)
 
 _EMAIL_RE = re.compile(r"[^@<>\s]+@[^@<>\s]+\.[^@<>\s]+")
 _URL_RE = re.compile(r"https?://[^\s<>\"]+")
+_DIRTY_STRATEGY_CLAUSE_SPLIT_RE = re.compile(
+    r"(?<=[a-z0-9’”)])\s+(?=(?:We|Our|With|Committed|Building|Creating|Protecting|Optimising|Optimizing|Delivering|Driving|Minimising|Minimizing|Reducing|Support|Care|Digital|Partnerships)\b)"
+)
 _GENERIC_DOC_NAME_RE = re.compile(
     r"^(?:screenshot|screen shot|img|image|photo|picture|scan|attachment|document|file|outlook)(?:[\s_-]+\d.*)?$",
     re.IGNORECASE,
 )
 _MAIL_SUBJECT_PREFIX_RE = re.compile(r"^\s*((?:re|fw|fwd)\s*:\s*)+", re.IGNORECASE)
 _SUBJECT_ENTITY_OVERRIDE_RE = re.compile(
-    r"(?i)(?:^|[\s\[\]()|;])(?:entity|org|organisation|organization)\s*:\s*([^|\];,\n]+)"
+    r"(?i)(?:^|[\s\[\]()|;>])(?:entity|org|organisation|organization)\s*:\s*([^|\];>,\n]+)"
 )
+_SUBJECT_DEPTH_OVERRIDE_RE = re.compile(
+    r"(?i)(?:^|[\s\[\]()|;>])depth\s*:\s*(brief|default|detailed)\b"
+)
+_SUBJECT_FORCE_OVERRIDE_RE = re.compile(
+    r"(?i)(?:^|[\s\[\]()|;>])(?:force|dedupe)\s*:\s*(?:yes|true|on|off|skip|force)\b"
+)
+_SUBJECT_PRIVACY_MARKER_RE = re.compile(r"(?i)\b(?:private|sensitive|confidential)\b")
 _YEAR_RANGE_RE = re.compile(r"\b(20\d{2})\s*(?:to|[-–])\s*(20\d{2})\b", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(20\d{2})\b")
 _MANAGED_NOTE_SECTIONS = {
@@ -110,13 +127,148 @@ _SUBJECT_ORG_HINT_STOPWORDS = {
     "strategy",
     "update",
 }
+_ORG_ACRONYM_STOPWORDS = {
+    "the",
+    "of",
+    "and",
+    "for",
+    "to",
+    "in",
+    "on",
+    "at",
+    "pty",
+    "ltd",
+    "limited",
+    "group",
+    "company",
+    "corporation",
+    "corp",
+    "inc",
+    "llc",
+}
+_GENERIC_DOMAIN_LABELS = {
+    "www",
+    "mail",
+    "email",
+    "app",
+    "portal",
+    "api",
+    "com",
+    "net",
+    "org",
+    "gov",
+    "edu",
+    "co",
+    "au",
+    "nz",
+    "uk",
+}
 _ANNUAL_REPORT_STAKEHOLDER_STOPWORDS = {
+    "and information",
     "committee",
+    "evaluation panel",
+    "independent auditor",
     "integrated water management",
+    "organisational chart",
+    "organizational chart",
+    "responsible ministers",
     "risk management",
     "governance",
     "performance",
     "review",
+}
+_LOW_SIGNAL_EMPLOYER_MARKERS = (
+    "i am pleased to present",
+    "this report",
+    "annual report",
+    "document appears to relate",
+)
+_LOW_SIGNAL_ROLE_MARKERS = (
+    "board committees",
+    "lead indicators",
+    "board of directors",
+    "appointed a director",
+    "natural resource management",
+    "through leading",
+    "the board is responsible",
+    "consideration of",
+    "independent auditor",
+    "responsible ministers",
+)
+_MAIL_SIGNATURE_ROLE_MARKERS = (
+    "chief",
+    "director",
+    "manager",
+    "officer",
+    "lead",
+    "partner",
+    "consultant",
+    "adviser",
+    "advisor",
+)
+_MAIL_SIGNATURE_CONTACT_MARKERS = (
+    "linkedin",
+    "http",
+    "www.",
+    "@",
+    "ph:",
+    "phone",
+    "mobile",
+)
+_MAIL_DISCLAIMER_MARKERS = (
+    "i acknowledge the aboriginal and torres strait islander peoples",
+    "i acknowledge the traditional owners",
+    "encourages flexible working",
+    "i do not expect you will read",
+    "please consider the environment",
+    "this email and any attachments",
+)
+_FIT_STOPWORDS = {
+    "and",
+    "the",
+    "for",
+    "to",
+    "of",
+    "in",
+    "on",
+    "with",
+    "a",
+    "an",
+    "by",
+    "or",
+    "our",
+    "their",
+    "your",
+}
+_FIT_TOKEN_EQUIVALENTS = {
+    "it": {"it", "technology", "tech", "digital"},
+    "technology": {"technology", "tech", "digital", "it"},
+    "tech": {"technology", "tech", "digital", "it"},
+    "digital": {"digital", "technology", "tech", "it", "data", "ai"},
+    "strategy": {"strategy", "strategic", "roadmap", "planning", "plan"},
+    "strategic": {"strategy", "strategic", "roadmap", "planning", "plan"},
+    "roadmap": {"roadmap", "strategy", "strategic", "planning", "plan"},
+    "planning": {"planning", "plan", "strategy", "strategic", "roadmap"},
+    "plan": {"plan", "planning", "strategy", "strategic", "roadmap"},
+    "enablement": {"enablement", "transformation", "uplift", "capability"},
+    "transformation": {"transformation", "change", "enablement", "uplift"},
+    "change": {"change", "transformation", "enablement"},
+    "leadership": {"leadership", "change", "capability", "performance", "uplift"},
+    "performance": {"performance", "capability", "enablement", "execution", "uplift"},
+    "capability": {"capability", "performance", "enablement", "uplift", "change"},
+    "execution": {"execution", "performance", "delivery", "discipline"},
+    "customer": {"customer", "consumer", "member", "client"},
+    "experience": {"experience", "service", "engagement"},
+    "water": {"water", "utility", "utilities"},
+    "utility": {"utility", "utilities", "water"},
+    "utilities": {"utility", "utilities", "water"},
+    "compliance": {"compliance", "regulatory", "regulation", "governance", "risk"},
+    "regulatory": {"regulatory", "regulation", "compliance", "governance", "risk"},
+    "risk": {"risk", "compliance", "governance", "regulatory"},
+    "governance": {"governance", "risk", "compliance", "regulatory"},
+    "care": {"care", "healthcare", "health"},
+    "health": {"health", "healthcare", "care"},
+    "healthcare": {"healthcare", "health", "care"},
 }
 
 
@@ -232,7 +384,40 @@ def _extract_subject_entity_override(value: str) -> str:
 
 def _strip_subject_entity_override(value: str) -> str:
     text = _SUBJECT_ENTITY_OVERRIDE_RE.sub(" ", str(value or ""))
-    text = re.sub(r"\s*[|;,]\s*", " ", text)
+    text = re.sub(r"\s*[|;>,]\s*", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" -|:;,")
+    return text
+
+
+def _extract_subject_depth_override(value: str) -> str:
+    text = str(value or "")
+    match = _SUBJECT_DEPTH_OVERRIDE_RE.search(text)
+    if not match:
+        return ""
+    return str(match.group(1) or "").strip().lower()
+
+
+def _strip_subject_depth_override(value: str) -> str:
+    text = _SUBJECT_DEPTH_OVERRIDE_RE.sub(" ", str(value or ""))
+    text = re.sub(r"\s*[|;>,]\s*", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" -|:;,")
+    return text
+
+
+def _extract_subject_force_override(value: str) -> bool:
+    return bool(_SUBJECT_FORCE_OVERRIDE_RE.search(str(value or "")))
+
+
+def _strip_subject_force_override(value: str) -> str:
+    text = _SUBJECT_FORCE_OVERRIDE_RE.sub(" ", str(value or ""))
+    text = re.sub(r"\s*[|;>,]\s*", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" -|:;,")
+    return text
+
+
+def _strip_subject_privacy_markers(value: str) -> str:
+    text = _SUBJECT_PRIVACY_MARKER_RE.sub(" ", str(value or ""))
+    text = re.sub(r"\s*[|;>,]\s*", " ", text)
     text = re.sub(r"\s+", " ", text).strip(" -|:;,")
     return text
 
@@ -243,7 +428,161 @@ def _clean_display_label(value: str) -> str:
 
 
 def _clean_display_role(role: str, employer: str = "") -> str:
-    return clean_strategic_role_label(_clean_display_label(role), employer)
+    cleaned = _clean_display_label(role).lstrip("| ").strip()
+    return clean_strategic_role_label(cleaned, employer)
+
+
+def _looks_like_person_label(value: str) -> bool:
+    text = _clean_display_label(value)
+    if not text:
+        return False
+    if any(char.isdigit() for char in text):
+        return False
+    if "@" in text or "http" in normalize_lookup(text):
+        return False
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", text) if word]
+    if len(words) < 2 or len(words) > 5:
+        return False
+    lowered = normalize_lookup(text)
+    if any(marker in lowered for marker in _ORG_CHART_FUNCTION_MARKERS):
+        return False
+    uppercase_words = sum(1 for word in words if word[:1].isupper())
+    return uppercase_words >= 2
+
+
+def _org_initialism(value: str) -> str:
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", _clean_display_label(value)) if word]
+    initials = [
+        normalize_lookup(word[:1])
+        for word in words
+        if normalize_lookup(word) not in _ORG_ACRONYM_STOPWORDS
+    ]
+    return "".join(initials).upper()
+
+
+def _looks_like_org_acronym(value: str) -> bool:
+    cleaned = _clean_display_label(value)
+    return bool(re.fullmatch(r"[A-Z]{2,6}", cleaned))
+
+
+def _org_hint_match_type(subject_org_hint: str, candidate_name: str) -> str:
+    hint = _clean_display_label(subject_org_hint)
+    candidate = _clean_display_label(candidate_name)
+    if not hint or not candidate:
+        return ""
+    if normalize_lookup(hint) == normalize_lookup(candidate):
+        return "exact"
+    if orgs_compatible(candidate, hint):
+        return "compatible"
+    if _looks_like_org_acronym(hint) and _org_initialism(candidate) == hint.upper():
+        return "acronym"
+    hint_tokens = {normalize_lookup(token) for token in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", hint) if token}
+    candidate_tokens = {normalize_lookup(token) for token in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", candidate) if token}
+    if len(hint_tokens) >= 2 and hint_tokens.issubset(candidate_tokens):
+        return "compatible"
+    return ""
+
+
+def _clean_org_chart_function_label(value: str, org_name: str = "") -> str:
+    text = _clean_display_label(value)
+    text = re.sub(r"\s*\((?:person|organisation|organization)\)\s*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" ,.;:")
+    if not text:
+        return ""
+    if org_name and orgs_compatible(text, org_name):
+        return ""
+    return text
+
+
+def _extract_email_domain(value: str) -> str:
+    email_value = str(value or "").strip().lower()
+    if "@" not in email_value:
+        return ""
+    return email_value.rsplit("@", 1)[-1].strip(". ")
+
+
+def _domain_labels(value: str) -> List[str]:
+    domain = str(value or "").strip().lower()
+    if not domain:
+        return []
+    labels = []
+    for part in domain.split("."):
+        clean = re.sub(r"[^a-z0-9-]+", "", part)
+        if not clean or clean in _GENERIC_DOMAIN_LABELS:
+            continue
+        labels.append(clean)
+    return labels
+
+
+def _extract_url_domain(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    return str(parsed.netloc or parsed.path or "").strip().lower()
+
+
+_ORG_CHART_FUNCTION_MARKERS = (
+    "operations",
+    "planning",
+    "delivery",
+    "environment",
+    "people",
+    "corporate",
+    "customer",
+    "customers",
+    "community",
+    "strategy",
+    "infrastructure",
+    "digital",
+    "business",
+    "asset",
+    "assets",
+    "services",
+    "finance",
+    "technology",
+    "governance",
+    "risk",
+    "legal",
+    "procurement",
+    "safety",
+    "culture",
+    "sustainable",
+    "water",
+    "wastewater",
+)
+_ORG_CHART_FUNCTION_ROLE_PREFIXES = (
+    "general manager",
+    "executive manager",
+    "group manager",
+    "chief",
+    "head of",
+    "director",
+    "manager",
+    "office of",
+)
+_ORG_CHART_FUNCTION_STOPWORDS = (
+    "attachment",
+    "subject",
+    "from:",
+    "to:",
+    "sent:",
+    "linkedin",
+    "twitter",
+    "zoom",
+    "ph:",
+    "email",
+    "contact",
+    "org chart",
+    "organisational chart",
+    "organization chart",
+    "leadership team",
+    "no email addresses",
+    "no career transitions",
+    "sender",
+    "director of",
+    "longboardfella",
+)
 
 
 def _extract_document_year_label(*values: str) -> str:
@@ -254,7 +593,24 @@ def _extract_document_year_label(*values: str) -> str:
             return f"{match.group(1)}-{match.group(2)}"
     for value in values:
         text = str(value or "")
+        match = re.search(r"(?<!\d)(20\d{2})\s*[/\-_]\s*(\d{2,4})(?!\d)", text)
+        if not match:
+            continue
+        left = match.group(1)
+        right = match.group(2)
+        if len(right) == 2:
+            return f"{left}-{right}"
+        if right[:2] == left[:2]:
+            return f"{left}-{right[-2:]}"
+        return f"{left}-{right}"
+    for value in values:
+        text = str(value or "")
         match = _YEAR_RE.search(text)
+        if match:
+            return match.group(1)
+    for value in values:
+        text = str(value or "")
+        match = re.search(r"(20\d{2})", text)
         if match:
             return match.group(1)
     return ""
@@ -276,6 +632,7 @@ def _subject_org_hint(value: str) -> str:
     text = _clean_display_label(value)
     if not text or not _looks_like_useful_subject_title(text):
         return ""
+    text = _strip_subject_privacy_markers(text)
     candidate = re.sub(
         r"\b(?:org(?:anisation|anization)?\s+chart|strategic\s+plan|strategic\s+direction|annual\s+report|industry\s+report|sector\s+report|report|plan|strategy|direction|roadmap)\b",
         " ",
@@ -294,6 +651,21 @@ def _subject_org_hint(value: str) -> str:
     if any(word in _SUBJECT_ORG_HINT_STOPWORDS for word in lowered_words):
         return ""
     return candidate
+
+
+def _strip_scope_prefix_from_subject_hint(subject_org_hint: str, scope_org_name: str) -> str:
+    hint = _clean_display_label(subject_org_hint)
+    scope = _clean_display_label(scope_org_name)
+    if not hint or not scope:
+        return hint
+    hint_key = normalize_lookup(hint)
+    scope_key = normalize_lookup(scope)
+    if not hint_key.startswith(scope_key + " "):
+        return hint
+    remainder = hint[len(scope):].strip(" -|:;,")
+    if len(re.findall(r"[A-Za-z][A-Za-z'’.\-]+", remainder)) < 2:
+        return hint
+    return remainder
 
 
 def _document_label(doc_type: str, context_text: str) -> str:
@@ -347,13 +719,21 @@ def _looks_like_named_stakeholder(value: str) -> bool:
 
 def _should_keep_note_stakeholder(item: Dict[str, Any], org_name: str = "") -> bool:
     name = _clean_display_label(str(item.get("name") or "").strip())
-    role = _clean_display_role(str(item.get("current_role") or "").strip(), str(item.get("current_employer") or "").strip())
+    raw_role = str(item.get("current_role") or "").strip()
+    role = _clean_display_role(raw_role, str(item.get("current_employer") or "").strip())
     employer = _clean_display_label(str(item.get("current_employer") or "").strip())
     if not _looks_like_named_stakeholder(name):
         return False
     if role:
         lowered_role = normalize_lookup(role)
+        if "|" in raw_role and normalize_lookup(role) != "deputy chair":
+            return False
         if any(marker in lowered_role for marker in ("declaration", "accounting officer", "finance and accounting officer")):
+            return False
+        if any(marker in lowered_role for marker in _LOW_SIGNAL_ROLE_MARKERS):
+            return False
+        role_words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", role) if word]
+        if len(role_words) > 5:
             return False
     if org_name and orgs_compatible(name, org_name):
         return False
@@ -372,15 +752,36 @@ def _compact_note_evidence(value: str, limit: int = 160) -> str:
     return text
 
 
+def _looks_like_low_signal_org_label(value: str) -> bool:
+    text = _clean_display_label(value)
+    lowered = normalize_lookup(text)
+    if not lowered:
+        return True
+    if _looks_like_generic_document_name(text):
+        return True
+    if any(marker in lowered for marker in ("annual report", "strategic plan", "strategy", "roadmap", "direction")) and re.search(r"20\d{2}", text):
+        return True
+    if re.search(r"\b(?:plan|report|strategy|roadmap|direction)\b", lowered) and _org_initialism(text):
+        return True
+    if any(marker in lowered for marker in _LOW_SIGNAL_EMPLOYER_MARKERS):
+        return True
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", text) if word]
+    return len(words) > 8
+
+
 def _normalize_document_summary_org_label(note_summary: str, subject_org_hint: str, doc_type: str) -> str:
     text = str(note_summary or "").strip()
     subject = _clean_display_label(subject_org_hint)
-    if doc_type != "annual_report" or not text or not subject:
+    if doc_type not in {"annual_report", "strategic_plan"} or not text or not subject:
         return text
-    first_sentence = re.match(r"^\s*Document from [^.]+?\.\s*", text, flags=re.IGNORECASE)
+    first_sentence = re.match(
+        r"^\s*(?:Document from|Strategic planning document from) [^.]+?\.\s*",
+        text,
+        flags=re.IGNORECASE,
+    )
     if first_sentence:
         remainder = text[first_sentence.end():].lstrip()
-        replacement = f"Document from {subject}."
+        replacement = f"{'Strategic planning document' if doc_type == 'strategic_plan' else 'Document'} from {subject}."
         return f"{replacement} {remainder}".strip() if remainder else replacement
     return text
 
@@ -414,6 +815,43 @@ def _compact_mailbox_provenance(message: Dict[str, Any]) -> str:
     return " | ".join(parts).strip()
 
 
+def _looks_like_signature_start(lines: Sequence[str], index: int) -> bool:
+    line = _clean_display_label(lines[index] if index < len(lines) else "")
+    if not line:
+        return False
+    lowered = normalize_lookup(line)
+    if any(marker in lowered for marker in _MAIL_DISCLAIMER_MARKERS):
+        return True
+    if lowered in {"regards", "kind regards", "best regards", "thanks", "thank you"}:
+        return True
+    if re.fullmatch(r"[A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,4}(?:\s+\([^)]+\))?", line):
+        window = " ".join(normalize_lookup(_clean_display_label(item)) for item in lines[index : index + 5] if _clean_display_label(item))
+        if any(marker in window for marker in _MAIL_SIGNATURE_ROLE_MARKERS) and any(marker in window for marker in _MAIL_SIGNATURE_CONTACT_MARKERS):
+            return True
+    return False
+
+
+def _trim_mailbox_body_text(value: str) -> str:
+    raw_lines = [re.sub(r"\s+", " ", line).strip() for line in str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    lines = [line for line in raw_lines]
+    cut_index: Optional[int] = None
+    for idx, line in enumerate(lines):
+        lowered = normalize_lookup(line)
+        if any(marker in lowered for marker in _MAIL_DISCLAIMER_MARKERS):
+            cut_index = idx
+            break
+        if _looks_like_signature_start(lines, idx):
+            cut_index = idx
+            break
+        if line in {"--", "—", "–"}:
+            cut_index = idx
+            break
+    kept = lines[:cut_index] if cut_index is not None else lines
+    text = "\n".join(kept).strip()
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def _dedupe_preserve_order(values: Sequence[str]) -> List[str]:
     seen: set[str] = set()
     output: List[str] = []
@@ -425,6 +863,183 @@ def _dedupe_preserve_order(values: Sequence[str]) -> List[str]:
         seen.add(key)
         output.append(text)
     return output
+
+
+def _fit_phrase_token_set(value: str, *, expand: bool = True) -> set[str]:
+    normalized = normalize_lookup(value)
+    tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", normalized)
+        if token and token not in _FIT_STOPWORDS and len(token) > 1
+    ]
+    expanded: set[str] = set()
+    for token in tokens:
+        expanded.add(token)
+        if expand:
+            expanded.update(_FIT_TOKEN_EQUIVALENTS.get(token, {token}))
+    return expanded
+
+
+def _clean_note_signal_snippet(value: str, *, doc_type: str = "") -> str:
+    text = _clean_display_label(value)
+    if not text:
+        return ""
+    if doc_type == "annual_report":
+        text = re.sub(r"\.{4,}\s*\d+\b", " ", text)
+        text = re.sub(r"(?:\s*[.][. ]*){3,}", " ", text)
+        text = re.sub(r"\bpage\s+\d+\b", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\b(?:table of contents|contents)\b", " ", text, flags=re.IGNORECASE)
+    if doc_type == "strategic_plan":
+        lowered = normalize_lookup(text)
+        if any(
+            marker in lowered
+            for marker in (
+                "our ambitions for",
+                "intent statements and measures",
+                "measured by",
+                "safety maturity model",
+                "output measure",
+                "have your say",
+            )
+        ):
+            return ""
+        if re.search(r"\btrifr\b|hazard identifications|training completion|<\s*\d|>\s*\d|%\s+safety", text, flags=re.IGNORECASE):
+            return ""
+        if len(re.findall(r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,}", text)) >= 3 and "." not in text:
+            return ""
+    text = re.sub(r"\s+", " ", text).strip(" ,.;:-")
+    return text
+
+
+def _looks_like_dirty_strategy_snippet(value: str) -> bool:
+    text = _clean_display_label(value)
+    lowered = normalize_lookup(text)
+    if not text:
+        return True
+    if re.match(r"^[a-z]\s+[a-z]", text):
+        return True
+    if any(
+        marker in lowered
+        for marker in (
+            "safety maturity model",
+            "hazard identifications",
+            "safety training completion",
+            "have your say",
+            "trifr",
+            "output measure",
+            "intent statements and measures",
+        )
+    ):
+        return True
+    if sum(1 for _ in _DIRTY_STRATEGY_CLAUSE_SPLIT_RE.finditer(text)) >= 2:
+        return True
+    if len(re.findall(r"[<>]\s*\d", text)) >= 2:
+        return True
+    return False
+
+
+def _compact_strategy_snippet(
+    value: str,
+    *,
+    local_only: bool = False,
+    limit: int = 220,
+    allow_two_sentences: bool = False,
+) -> str:
+    had_truncation_marker = str(value or "").strip().endswith("...")
+    text = _clean_note_signal_snippet(value, doc_type="strategic_plan")
+    if not text:
+        return ""
+    text = re.sub(r"(?<=[A-Za-z])\.\s+(?=[a-z])", " ", text)
+    if "." in text:
+        sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+        text = " ".join(sentences[:2] if allow_two_sentences else sentences[:1]).strip()
+    elif _looks_like_dirty_strategy_snippet(text):
+        chunks = [chunk.strip(" ,.;:-") for chunk in _DIRTY_STRATEGY_CLAUSE_SPLIT_RE.split(text) if chunk.strip(" ,.;:-")]
+        if chunks:
+            text = " ".join(chunks[:2] if allow_two_sentences else chunks[:1])
+    text = re.sub(r"\s+", " ", text).strip(" ,.;:-")
+    if had_truncation_marker and not text.endswith("..."):
+        text = text.rstrip(" ,.;:-") + "..."
+    if local_only and _looks_like_dirty_strategy_snippet(text):
+        return ""
+    if len(text) > limit:
+        text = text[: limit - 3].rstrip() + "..."
+    return text
+
+
+def _polish_strategy_sentence(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" ,.;:-"))
+    if not text:
+        return ""
+    replacements = (
+        (r"\bI n terms\b", "In terms"),
+        (r"\bselfdetermination\b", "self-determination"),
+        (r"\blongterm\b", "long-term"),
+        (r"\bnoncompliances\b", "non-compliances"),
+        (r"\brealtime\b", "real-time"),
+        (r"\btraditional Owners\b", "Traditional Owners"),
+        (r"\biota\b", "Iota"),
+    )
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    text = re.sub(r"\btrade waste commitment\s*\(2023-?28\)\b", "trade waste standards", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bwater insights gained\b", "water. Insights gained", text)
+    text = re.sub(r"\bcustomers continues to add value\b", "customers. Continues to add value", text)
+    if text[:1].islower():
+        text = text[:1].upper() + text[1:]
+    return text.strip(" ,.;:-")
+
+
+def _looks_like_low_quality_detail_sentence(value: str) -> bool:
+    text = _polish_strategy_sentence(_clean_display_label(value))
+    lowered = normalize_lookup(text)
+    words = [normalize_lookup(word) for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", text)]
+    if len(words) < 5:
+        return True
+    if text[:1].islower():
+        return True
+    if words[0] in {"and", "to", "in", "of", "by", "information", "innovation", "customers", "owners", "water", "commitment", "standards"}:
+        return True
+    if words[-1] in {"and", "the", "for", "of", "our", "to", "with", "by", "having"}:
+        return True
+    if any(marker in lowered for marker in ("i ota", "i n terms", "-e.g", "trade waste commitment")):
+        return True
+    if " having customers have " in f" {lowered} ":
+        return True
+    return False
+
+
+def _render_detail_point_text(point: Dict[str, Any], *, local_only: bool = False) -> str:
+    raw_snippet = str(point.get("snippet") or "").strip()
+    if not raw_snippet:
+        return ""
+    candidate = _compact_strategy_snippet(raw_snippet, local_only=local_only, limit=520, allow_two_sentences=True)
+    candidate = _polish_strategy_sentence(candidate)
+    if candidate and not _looks_like_low_quality_detail_sentence(candidate):
+        return candidate
+    raw_heading = str(point.get("raw_heading") or point.get("heading") or "").strip()
+    if raw_heading:
+        combined = f"{raw_heading} {raw_snippet}".strip()
+        repaired = _compact_strategy_snippet(combined, local_only=local_only, limit=520, allow_two_sentences=True)
+        repaired = _polish_strategy_sentence(repaired)
+        if repaired and not _looks_like_low_quality_detail_sentence(repaired):
+            return repaired
+    return ""
+
+
+def _should_keep_rendered_strategic_signal(headline: str, *, doc_type: str = "") -> bool:
+    text = _clean_display_label(headline)
+    if not text:
+        return False
+    lowered = normalize_lookup(text)
+    if lowered in {"official"}:
+        return False
+    if doc_type == "strategic_plan":
+        if lowered.startswith(("we ", "we re ", "were ", "our people can ", "reflects the diversity")):
+            return False
+        if text.endswith(("That", "With", "And")):
+            return False
+    return True
 
 
 def _strip_managed_note_sections(markdown_text: str) -> str:
@@ -880,6 +1495,135 @@ class IntelMailboxPoller:
         self.signal_store = signal_store or StakeholderSignalStore()
         self.note_processor = IntelNoteProcessor(self.extractor)
 
+    @staticmethod
+    def _looks_truncated_render_line(line: str) -> bool:
+        text = str(line or "").strip()
+        if not text:
+            return False
+        if text.endswith("..."):
+            return True
+        if ": " not in text:
+            return False
+        tail = text.split(": ", 1)[1].strip()
+        if not tail:
+            return False
+        tail_words = [normalize_lookup(word) for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", tail)]
+        if not tail_words:
+            return False
+        if tail_words[-1] in {"and", "the", "for", "of", "our", "to", "with", "by", "support"}:
+            return True
+        if len(text) > 120 and sum(1 for _ in re.finditer(r"(?<=[a-z0-9’”)])\s+(?=[A-Z][a-z])", tail)) >= 1:
+            return True
+        return False
+
+    @classmethod
+    def _heuristic_note_sanity_cleanup(cls, markdown_text: str) -> str:
+        cleaned_lines: List[str] = []
+        for raw_line in str(markdown_text or "").splitlines():
+            line = str(raw_line or "").rstrip()
+            stripped = line.strip()
+            if stripped.startswith("- ") and ": " in stripped:
+                prefix, tail = stripped.split(": ", 1)
+                tail = re.sub(r"\s+", " ", tail).strip()
+                if cls._looks_truncated_render_line(stripped):
+                    tail = _compact_strategy_snippet(tail, local_only=False, limit=220, allow_two_sentences=False) or tail
+                if tail.endswith("..."):
+                    tail = re.sub(r"\s+\S*\.\.\.$", "", tail).rstrip(" ,.;:-")
+                while True:
+                    words = [word for word in tail.split() if word]
+                    if not words or normalize_lookup(words[-1]) not in {"and", "the", "for", "of", "our", "to", "with", "by", "support"}:
+                        break
+                    words = words[:-1]
+                    tail = " ".join(words).rstrip(" ,.;:-")
+                if not tail or _looks_like_dirty_strategy_snippet(tail):
+                    cleaned_lines.append(prefix)
+                    continue
+                cleaned_lines.append(f"{prefix}: {tail}")
+                continue
+            cleaned_lines.append(line)
+        text = "\n".join(cleaned_lines).strip()
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text
+
+    @classmethod
+    def _note_needs_sanity_pass(cls, markdown_text: str) -> bool:
+        text = str(markdown_text or "").strip()
+        if not text:
+            return False
+        if "..." in text:
+            return True
+        return any(cls._looks_truncated_render_line(line) for line in text.splitlines())
+
+    @staticmethod
+    def _extract_chat_text(response: Any) -> str:
+        if isinstance(response, dict):
+            message = response.get("message")
+            if isinstance(message, dict):
+                return str(message.get("content") or "").strip()
+            return str(response.get("response") or "").strip()
+        message = getattr(response, "message", None)
+        if message is not None:
+            return str(getattr(message, "content", "") or "").strip()
+        return str(getattr(response, "response", "") or "").strip()
+
+    def _run_markdown_sanity_llm(self, markdown_text: str, llm_policy: Dict[str, Any]) -> str:
+        model = str(
+            llm_policy.get("actual_model")
+            or llm_policy.get("model")
+            or os.environ.get("LOCAL_LLM_SYNTHESIS_MODEL")
+            or "qwen2.5:14b-instruct-q4_K_M"
+        ).strip()
+        if not model:
+            return ""
+        try:
+            import ollama
+
+            client = ollama.Client(timeout=45)
+            response = client.chat(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are editing a markdown intelligence note for readability only. "
+                            "Preserve structure, do not add facts, and never leave truncated or garbled sentences."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            "Rewrite this markdown note for readability only.\n"
+                            "Rules:\n"
+                            "- Keep the same headings and bullet structure.\n"
+                            "- Do not add facts, claims, or recommendations.\n"
+                            "- Fix broken English, OCR fragments, and incomplete bullet lines.\n"
+                            "- Never leave ellipses, hanging clauses, or bullets ending mid-sentence.\n"
+                            "- If a broken fragment cannot be repaired safely, remove only the broken tail and keep the bullet clean.\n"
+                            "- Prefer a shorter clean bullet over a longer garbled one.\n"
+                            "- Return markdown only.\n\n"
+                            f"{markdown_text[:12000]}"
+                        ),
+                    },
+                ],
+                options={"temperature": 0.1, "num_predict": 2200},
+            )
+            return self._extract_chat_text(response)
+        except Exception as exc:
+            logger.debug("Intel mailbox markdown sanity pass unavailable: %s", exc)
+            return ""
+
+    def _finalize_note_markdown(self, markdown_text: str, llm_policy: Optional[Dict[str, Any]] = None) -> str:
+        original = str(markdown_text or "").strip()
+        policy = dict(llm_policy or {})
+        if not self._note_needs_sanity_pass(original):
+            return self._heuristic_note_sanity_cleanup(original)
+        rewritten = self._run_markdown_sanity_llm(original, policy)
+        if rewritten:
+            rewritten = self._heuristic_note_sanity_cleanup(rewritten)
+            if len(rewritten) >= max(120, len(original) // 2):
+                return rewritten
+        return self._heuristic_note_sanity_cleanup(original)
+
     def _allowed_sender(self, email_address: str) -> bool:
         sender = str(email_address or "").strip().lower()
         if not self.config.allowed_senders:
@@ -927,15 +1671,107 @@ class IntelMailboxPoller:
         if compatible_matches:
             compatible_matches.sort(key=lambda item: (len(normalize_lookup(item)), item))
             return compatible_matches[0]
+        prefix_matches = [
+            candidate
+            for candidate in self._known_org_scopes()
+            if wanted.startswith(normalize_lookup(candidate) + " ")
+        ]
+        if prefix_matches:
+            prefix_matches.sort(key=lambda item: (-len(normalize_lookup(item)), item))
+            return prefix_matches[0]
         return ""
+
+    def _match_sender_domain_scope(self, sender_email: str) -> str:
+        domain = _extract_email_domain(sender_email)
+        labels = _domain_labels(domain)
+        if not labels:
+            return ""
+
+        candidates: List[tuple[int, str]] = []
+        known_scopes = self._known_org_scopes()
+        for scope in known_scopes:
+            scope_label = normalize_lookup(scope)
+            scope_initialism = _org_initialism(scope).lower()
+            for label in labels:
+                score = 0
+                if scope_label == label:
+                    score = 100
+                elif scope_initialism and scope_initialism == label:
+                    score = 90
+                elif scope_label.startswith(label) or label in scope_label:
+                    score = 70
+                if score:
+                    candidates.append((score, scope))
+
+        try:
+            profiles = self.signal_store.list_profiles(org_name="")
+        except Exception:
+            profiles = []
+        for profile in profiles:
+            if str(profile.get("target_type") or "").strip().lower() != "organisation":
+                continue
+            org_name = str(profile.get("canonical_name") or profile.get("org_name") or "").strip()
+            if not org_name:
+                continue
+            profile_labels = {_label for _label in _domain_labels(_extract_url_domain(str(profile.get("website_url") or "")))}
+            for alias in profile.get("aliases") or []:
+                alias_text = str(alias or "").strip()
+                if alias_text:
+                    profile_labels.add(normalize_lookup(alias_text))
+                    alias_initialism = _org_initialism(alias_text).lower()
+                    if alias_initialism:
+                        profile_labels.add(alias_initialism)
+            profile_labels.add(normalize_lookup(org_name))
+            initialism = _org_initialism(org_name).lower()
+            if initialism:
+                profile_labels.add(initialism)
+
+            for label in labels:
+                if label in profile_labels:
+                    matched = self._match_known_org_scope(org_name) or org_name
+                    candidates.append((110, matched))
+
+        if not candidates:
+            return ""
+        candidates.sort(key=lambda item: (-item[0], len(normalize_lookup(item[1])), item[1]))
+        return candidates[0][1]
 
     def _resolve_message_routing(self, message: Dict[str, Any], persisted: Dict[str, Any]) -> Dict[str, Any]:
         raw_subject = str(message.get("subject") or "").strip()
+        sender_email = str(message.get("from_email") or "").strip()
         requested_org_name = _extract_subject_entity_override(raw_subject)
-        subject_without_override = _strip_subject_entity_override(raw_subject)
-        clean_subject = _normalized_mail_subject(subject_without_override or raw_subject)
+        requested_depth = _extract_subject_depth_override(raw_subject) or "default"
+        force_reingest = _extract_subject_force_override(raw_subject)
+        subject_without_override = _strip_subject_force_override(
+            _strip_subject_depth_override(_strip_subject_entity_override(raw_subject))
+        )
+        subject_without_override = _strip_subject_privacy_markers(subject_without_override)
         matched_org_name = self._match_known_org_scope(requested_org_name)
+        if matched_org_name and requested_org_name:
+            override_pattern = re.compile(
+                rf"(?i)(?:^|[\s\[\]()|;>])(?:entity|org|organisation|organization)\s*:\s*{re.escape(matched_org_name)}\b"
+            )
+            refined_subject = override_pattern.sub(" ", raw_subject, count=1)
+            refined_subject = _strip_subject_force_override(_strip_subject_depth_override(refined_subject))
+            refined_subject = _strip_subject_privacy_markers(refined_subject)
+            refined_subject = re.sub(r"\s*[|;>,]\s*", " ", refined_subject)
+            refined_subject = re.sub(r"\s+", " ", refined_subject).strip(" -|:;,")
+            if refined_subject:
+                subject_without_override = refined_subject
+                requested_org_name = matched_org_name
+        clean_subject = _normalized_mail_subject(subject_without_override or raw_subject)
+        sender_domain_org_name = ""
         effective_org_name = matched_org_name or self.config.org_name
+        status = "default"
+        if requested_org_name and matched_org_name:
+            status = "matched_override"
+        elif requested_org_name:
+            status = "unmatched_override"
+        else:
+            sender_domain_org_name = self._match_sender_domain_scope(sender_email)
+            if sender_domain_org_name:
+                effective_org_name = sender_domain_org_name
+                status = "matched_sender_domain"
         attachments = list(persisted.get("attachments") or [])
         has_document_attachment = any(
             str(item.get("kind") or "").strip().lower() == "document"
@@ -950,19 +1786,19 @@ class IntelMailboxPoller:
             for item in attachments
         )
         subject_org_hint = _subject_org_hint(clean_subject) if (has_document_attachment or has_org_chart_image_attachment) else ""
-        status = "default"
-        if requested_org_name and matched_org_name:
-            status = "matched_override"
-        elif requested_org_name:
-            status = "unmatched_override"
+        if subject_org_hint and effective_org_name:
+            subject_org_hint = _strip_scope_prefix_from_subject_hint(subject_org_hint, effective_org_name)
         return {
             "default_org_name": self.config.org_name,
             "requested_org_name": requested_org_name,
             "matched_org_name": matched_org_name,
+            "sender_domain_org_name": sender_domain_org_name,
             "effective_org_name": effective_org_name,
             "status": status,
             "clean_subject": clean_subject,
             "subject_org_hint": subject_org_hint,
+            "extraction_depth": requested_depth,
+            "force_reingest": force_reingest,
             "has_document_attachment": has_document_attachment,
             "has_org_chart_image_attachment": has_org_chart_image_attachment,
         }
@@ -983,11 +1819,13 @@ class IntelMailboxPoller:
         clean_subject = str(routing.get("clean_subject") or _normalized_mail_subject(message.get("subject", ""))).strip()
         subject_org_hint = str(routing.get("subject_org_hint") or "").strip()
         effective_org_name = str(routing.get("effective_org_name") or self.config.org_name).strip()
+        extraction_depth = str(routing.get("extraction_depth") or "default").strip().lower() or "default"
         return {
             "org_name": effective_org_name,
             "source_system": self.config.source_system,
             "trace_id": trace_id,
             "signal_type": "email_intel",
+            "original_subject": message.get("subject", ""),
             "submitted_by": message.get("from_email", ""),
             "message_id": message.get("message_id", ""),
             "received_at": message.get("received_at", ""),
@@ -1001,12 +1839,273 @@ class IntelMailboxPoller:
             "target_type": "",
             "attachments": list(persisted.get("attachments") or []),
             "tags": tags,
+            "extraction_depth": extraction_depth,
             "mailbox_routing": dict(routing),
         }
 
     def _subscriber_strategic_profile(self, scope_org_name: str = "") -> Dict[str, Any]:
         org_name = str(scope_org_name or self.config.org_name).strip()
         return dict(self.signal_store.get_org_context(org_name).get("org_strategic_profile") or {})
+
+    @staticmethod
+    def _choose_entity_primary_from_entities(
+        output_data: Dict[str, Any],
+        scope_org_name: str = "",
+    ) -> Dict[str, str]:
+        scope_key = normalize_lookup(scope_org_name)
+        entities = list(output_data.get("entities") or [])
+        org_candidates: List[tuple[float, Dict[str, str]]] = []
+        person_candidates: List[tuple[float, Dict[str, str]]] = []
+
+        for entity in entities:
+            target_type = str(entity.get("target_type") or "").strip().lower()
+            name = str(entity.get("canonical_name") or entity.get("name") or "").strip()
+            if not name:
+                continue
+            confidence = 0.0
+            try:
+                confidence = float(entity.get("confidence") or 0.0)
+            except Exception:
+                confidence = 0.0
+            candidate = {
+                "target_type": target_type,
+                "name": name,
+                "employer": str(entity.get("current_employer") or entity.get("employer") or "").strip(),
+            }
+            if target_type == "organisation":
+                score = confidence
+                if scope_key and normalize_lookup(name) != scope_key:
+                    score += 1.0
+                org_candidates.append((score, candidate))
+            elif target_type == "person":
+                person_candidates.append((confidence, candidate))
+
+        if org_candidates:
+            return max(org_candidates, key=lambda item: item[0])[1]
+        if person_candidates:
+            return max(person_candidates, key=lambda item: item[0])[1]
+        return {"target_type": "", "name": "", "employer": ""}
+
+    def _assess_subscriber_fit(
+        self,
+        scope_org_name: str,
+        message: Dict[str, Any],
+        output_data: Dict[str, Any],
+        strategic_doc: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        profile = self._subscriber_strategic_profile(scope_org_name)
+        if not profile:
+            return {}
+
+        priority_industries = [str(item).strip() for item in (profile.get("priority_industries") or []) if str(item).strip()]
+        key_themes = [str(item).strip() for item in (profile.get("key_themes") or []) if str(item).strip()]
+        strategic_objectives = [str(item).strip() for item in (profile.get("strategic_objectives") or []) if str(item).strip()]
+        industries = [str(item).strip() for item in (profile.get("industries") or []) if str(item).strip()]
+        description = str(profile.get("description") or "").strip()
+        low_relevance_themes = [str(item).strip() for item in (profile.get("low_relevance_themes") or []) if str(item).strip()]
+
+        if not any([priority_industries, key_themes, strategic_objectives, industries, description, low_relevance_themes]):
+            return {}
+
+        text_parts = [
+            str(message.get("subject") or "").strip(),
+            str(message.get("raw_text") or "").strip(),
+            str(output_data.get("summary") or "").strip(),
+            str((strategic_doc or {}).get("strategic_summary") or "").strip(),
+            " ".join(str(item.get("headline") or "").strip() for item in ((strategic_doc or {}).get("strategic_signals") or []) if str(item.get("headline") or "").strip()),
+            " ".join(str(item.get("snippet") or "").strip() for item in ((strategic_doc or {}).get("strategic_signals") or []) if str(item.get("snippet") or "").strip()),
+        ]
+        haystack = normalize_lookup(" ".join(part for part in text_parts if part))
+        if not haystack:
+            return {}
+        haystack_tokens = _fit_phrase_token_set(haystack)
+        haystack_strict_tokens = _fit_phrase_token_set(haystack, expand=False)
+
+        def _matched(values: Sequence[str], *, strict: bool = False, expand: bool = True) -> List[str]:
+            matches: List[str] = []
+            for value in values:
+                normalized = normalize_lookup(value)
+                if not normalized:
+                    continue
+                if normalized in haystack:
+                    matches.append(value)
+                    continue
+                phrase_tokens = _fit_phrase_token_set(value, expand=expand and not strict)
+                if not phrase_tokens:
+                    continue
+                overlap = phrase_tokens & (haystack_strict_tokens if strict else haystack_tokens)
+                if len(phrase_tokens) == 1:
+                    if overlap:
+                        matches.append(value)
+                    continue
+                if strict:
+                    if len(overlap) >= 3 and len(overlap) / max(len(phrase_tokens), 1) >= 0.75:
+                        matches.append(value)
+                    continue
+                if len(overlap) >= 2 or (overlap and len(overlap) / max(len(phrase_tokens), 1) >= 0.6):
+                    matches.append(value)
+            return matches
+
+        matched_priority_industries = _matched(priority_industries, strict=True, expand=False)
+        matched_industries = _matched(industries, strict=True, expand=False)
+        matched_themes = _matched(key_themes)
+        matched_objectives = _matched(strategic_objectives, strict=True)
+        matched_low_relevance = _matched(low_relevance_themes, strict=True)
+
+        score = (
+            len(matched_priority_industries) * 3
+            + len(matched_themes) * 3
+            + len(matched_objectives) * 2
+            + len(matched_industries) * 2
+            - len(matched_low_relevance) * 2
+        )
+        if description:
+            description_tokens = [
+                normalize_lookup(token)
+                for token in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", description)
+                if len(token) > 4
+            ]
+            score += sum(1 for token in description_tokens[:8] if token and token in haystack)
+
+        if score >= 6:
+            fit_label = "high_fit"
+        elif score >= 3:
+            fit_label = "medium_fit"
+        else:
+            fit_label = "low_fit"
+
+        return {
+            "fit_label": fit_label,
+            "fit_score": score,
+            "matched_priority_industries": matched_priority_industries[:6],
+            "matched_industries": matched_industries[:6],
+            "matched_themes": matched_themes[:8],
+            "matched_objectives": matched_objectives[:8],
+            "matched_low_relevance_themes": matched_low_relevance[:6],
+        }
+
+    def _fit_commentary(
+        self,
+        scope_org_name: str,
+        fit_assessment: Dict[str, Any],
+        primary_name: str = "",
+    ) -> str:
+        fit = dict(fit_assessment or {})
+        fit_label = str(fit.get("fit_label") or "").strip()
+        if not fit_label:
+            return ""
+
+        org_label = str(scope_org_name or self.config.org_name).strip() or "the subscriber"
+        primary_label = str(primary_name or "").strip()
+        subject_label = primary_label or "this intelligence"
+        if fit_label == "high_fit":
+            opening = f"High fit for {org_label}: {subject_label} aligns strongly with current service and market priorities."
+        elif fit_label == "medium_fit":
+            opening = f"Moderate fit for {org_label}: {subject_label} overlaps with some current service and market priorities."
+        else:
+            opening = f"Lower fit for {org_label}: {subject_label} is less directly aligned with current service priorities."
+
+        details: List[str] = []
+        matched_priority = [str(item).strip() for item in (fit.get("matched_priority_industries") or []) if str(item).strip()]
+        matched_themes = [str(item).strip() for item in (fit.get("matched_themes") or []) if str(item).strip()]
+        matched_objectives = [str(item).strip() for item in (fit.get("matched_objectives") or []) if str(item).strip()]
+        matched_low = [str(item).strip() for item in (fit.get("matched_low_relevance_themes") or []) if str(item).strip()]
+
+        if matched_priority:
+            details.append(f"Priority industry match: {', '.join(matched_priority[:3])}.")
+        if matched_themes:
+            details.append(f"Matched themes: {', '.join(matched_themes[:3])}.")
+        if matched_objectives:
+            details.append(f"Matched objectives: {', '.join(matched_objectives[:2])}.")
+        if matched_low:
+            details.append(f"Potentially lower-relevance themes also present: {', '.join(matched_low[:2])}.")
+
+        return " ".join([opening] + details).strip()
+
+    @staticmethod
+    def _subscriber_signal_fit_score(item: Dict[str, Any], fit_assessment: Dict[str, Any]) -> int:
+        fit = dict(fit_assessment or {})
+        text_parts = [
+            str(item.get("headline") or "").strip(),
+            str(item.get("snippet") or "").strip(),
+            str(item.get("evidence") or "").strip(),
+        ]
+        haystack = normalize_lookup(" ".join(part for part in text_parts if part))
+        if not haystack:
+            return 0
+        haystack_tokens = _fit_phrase_token_set(haystack)
+        score = 0
+        category = normalize_lookup(str(item.get("category") or "").strip())
+        for value in fit.get("matched_priority_industries") or []:
+            phrase_tokens = _fit_phrase_token_set(value)
+            overlap = phrase_tokens & haystack_tokens
+            if overlap:
+                score += 4
+        for value in fit.get("matched_themes") or []:
+            phrase_tokens = _fit_phrase_token_set(value)
+            overlap = phrase_tokens & haystack_tokens
+            if len(overlap) >= 2 or (overlap and len(phrase_tokens) <= 2):
+                score += 3
+        for value in fit.get("matched_objectives") or []:
+            phrase_tokens = _fit_phrase_token_set(value, expand=False)
+            overlap = phrase_tokens & haystack_tokens
+            if len(overlap) >= 2 or (overlap and len(phrase_tokens) <= 2):
+                score += 2
+        for value in fit.get("matched_low_relevance_themes") or []:
+            phrase_tokens = _fit_phrase_token_set(value, expand=False)
+            overlap = phrase_tokens & haystack_tokens
+            if overlap:
+                score -= 4
+        if category in {"community_commitment", "cultural_commitment", "social_impact"}:
+            score -= 2
+        if any(token in haystack_tokens for token in {"country", "community", "communities", "cultural", "aboriginal", "indigenous", "first", "nations", "elders"}):
+            score -= 1
+        return score
+
+    @staticmethod
+    def _looks_like_fragmented_strategy_signal(item: Dict[str, Any]) -> bool:
+        headline = normalize_lookup(str(item.get("headline") or "").strip())
+        if not headline:
+            return True
+        if len(headline.split()) >= 5 and any(marker in headline for marker in ("and our", "our customers", "our members", "every day")):
+            return True
+        return False
+
+    @classmethod
+    def _prioritize_strategic_signals_for_subscriber(
+        cls,
+        strategic_doc: Dict[str, Any],
+        fit_assessment: Dict[str, Any],
+    ) -> tuple[List[Dict[str, Any]], List[str]]:
+        signals = [
+            dict(item)
+            for item in strategic_doc.get("strategic_signals") or []
+            if str(item.get("headline") or "").strip()
+            and not cls._looks_like_fragmented_strategy_signal(item)
+        ]
+        if not signals:
+            return [], []
+        scored_signals: List[tuple[int, int, Dict[str, Any]]] = []
+        for index, item in enumerate(signals):
+            score = cls._subscriber_signal_fit_score(item, fit_assessment)
+            scored_signals.append((score, index, item))
+        background: List[str] = []
+        low_signal_keys = {
+            normalize_lookup(str(item.get("headline") or "").strip())
+            for score, _, item in scored_signals
+            if score < 0 and str(item.get("headline") or "").strip()
+        }
+        prioritized = [
+            item
+            for score, _, item in sorted(scored_signals, key=lambda entry: (-entry[0], entry[1]))
+            if normalize_lookup(str(item.get("headline") or "").strip()) not in low_signal_keys
+        ]
+        if low_signal_keys:
+            for theme in strategic_doc.get("themes") or []:
+                label = _clean_display_label(str(theme).strip())
+                if label and normalize_lookup(label) in low_signal_keys:
+                    background.append(label)
+        return prioritized, _dedupe_preserve_order(background)
 
     def _lookup_org_profile(self, org_name: str, scope_org_name: str = "") -> Dict[str, Any]:
         wanted = normalize_lookup(org_name)
@@ -1022,6 +2121,51 @@ class IntelMailboxPoller:
                 if normalize_lookup(alias) == wanted:
                     return profile
         return {}
+
+    def _resolve_known_org_label(
+        self,
+        hint: str,
+        output_data: Dict[str, Any],
+        scope_org_name: str = "",
+    ) -> str:
+        cleaned_hint = _clean_display_label(hint)
+        if not cleaned_hint:
+            return ""
+
+        for item in list(output_data.get("entities") or []) + list(output_data.get("organisations") or []):
+            if str(item.get("target_type") or "").strip().lower() not in {"", "organisation", "organization"}:
+                continue
+            name = _clean_display_label(str(item.get("canonical_name") or item.get("name") or "").strip())
+            match_type = _org_hint_match_type(cleaned_hint, name)
+            if match_type == "exact":
+                return name
+            if match_type == "acronym":
+                return name
+
+        effective_scope = str(scope_org_name or self.config.org_name).strip()
+        try:
+            profiles = self.signal_store.list_profiles(org_name=effective_scope)
+        except Exception:
+            profiles = []
+        for profile in profiles:
+            if str(profile.get("target_type") or "").strip().lower() != "organisation":
+                continue
+            canonical = _clean_display_label(
+                str(profile.get("canonical_name") or profile.get("org_name") or "").strip()
+            )
+            if not canonical:
+                continue
+            labels = [canonical] + [
+                _clean_display_label(str(alias or "").strip())
+                for alias in (profile.get("aliases") or [])
+                if _clean_display_label(str(alias or "").strip())
+            ]
+            for label in labels:
+                match_type = _org_hint_match_type(cleaned_hint, label)
+                if match_type in {"exact", "acronym"}:
+                    return canonical
+
+        return cleaned_hint
 
     def _infer_industry_name(self, message: Dict[str, Any], entity: Dict[str, Any], scope_org_name: str = "") -> str:
         explicit = str(entity.get("industry") or "").strip()
@@ -1099,21 +2243,30 @@ class IntelMailboxPoller:
             name = str(item.get("canonical_name") or item.get("name") or "").strip()
             if name and normalize_lookup(name) == wanted:
                 return {"target_type": "organisation", "name": name, "employer": ""}
-            if name and orgs_compatible(name, subject_org_hint):
+            match_type = _org_hint_match_type(subject_org_hint, name)
+            if match_type == "acronym":
+                return {"target_type": "organisation", "name": name, "employer": ""}
+            if match_type == "compatible":
                 return {"target_type": "organisation", "name": subject_org_hint, "employer": ""}
 
         for item in output_data.get("organisations") or []:
             name = str(item.get("canonical_name") or item.get("name") or "").strip()
             if name and normalize_lookup(name) == wanted:
                 return {"target_type": "organisation", "name": name, "employer": ""}
-            if name and orgs_compatible(name, subject_org_hint):
+            match_type = _org_hint_match_type(subject_org_hint, name)
+            if match_type == "acronym":
+                return {"target_type": "organisation", "name": name, "employer": ""}
+            if match_type == "compatible":
                 return {"target_type": "organisation", "name": subject_org_hint, "employer": ""}
 
         for item in output_data.get("people") or []:
             employer = str(item.get("current_employer") or item.get("employer") or "").strip()
             if employer and normalize_lookup(employer) == wanted:
                 return {"target_type": "organisation", "name": employer, "employer": ""}
-            if employer and orgs_compatible(employer, subject_org_hint):
+            match_type = _org_hint_match_type(subject_org_hint, employer)
+            if match_type == "acronym":
+                return {"target_type": "organisation", "name": employer, "employer": ""}
+            if match_type == "compatible":
                 return {"target_type": "organisation", "name": subject_org_hint, "employer": ""}
 
         return {"target_type": "organisation", "name": subject_org_hint, "employer": ""}
@@ -1139,7 +2292,7 @@ class IntelMailboxPoller:
             if str(entity.get("target_type") or "").strip().lower() != "organisation":
                 continue
             name = str(entity.get("canonical_name") or entity.get("name") or "").strip()
-            if not name or _looks_like_generic_document_name(name):
+            if not name or _looks_like_generic_document_name(name) or _looks_like_low_signal_org_label(name):
                 continue
             name_key = normalize_lookup(name)
             score = 0
@@ -1168,7 +2321,7 @@ class IntelMailboxPoller:
             if best_score > 0:
                 return best
 
-        if strategic_org_name and not _looks_like_generic_document_name(strategic_org_name):
+        if strategic_org_name and not _looks_like_generic_document_name(strategic_org_name) and not _looks_like_low_signal_org_label(strategic_org_name):
             return {
                 "target_type": "organisation",
                 "name": strategic_org_name,
@@ -1264,8 +2417,15 @@ class IntelMailboxPoller:
         markdown_text: str,
         strategic_doc: Dict[str, Any],
         note_summary: str = "",
+        extraction_depth: str = "default",
+        fit_assessment: Optional[Dict[str, Any]] = None,
+        scope_org_name: str = "",
+        local_only: bool = False,
     ) -> str:
         doc_type = str(strategic_doc.get("doc_type") or "").strip().lower()
+        depth = str(extraction_depth or strategic_doc.get("extraction_depth") or "default").strip().lower()
+        if depth not in {"brief", "default", "detailed"}:
+            depth = "default"
         doc_types_with_curated_notes = {"strategic_plan", "annual_report", "industry_report"}
         base = _strip_managed_note_sections(markdown_text)
         strategic_signals = [
@@ -1273,6 +2433,13 @@ class IntelMailboxPoller:
             for item in strategic_doc.get("strategic_signals") or []
             if str(item.get("headline") or "").strip()
         ]
+        background_themes: List[str] = []
+        fit_label = str((fit_assessment or {}).get("fit_label") or "").strip().lower()
+        if strategic_signals and fit_label in {"medium_fit", "high_fit"}:
+            strategic_signals, background_themes = IntelMailboxPoller._prioritize_strategic_signals_for_subscriber(
+                strategic_doc,
+                fit_assessment or {},
+            )
         stakeholders = [
             item
             for item in strategic_doc.get("key_stakeholders") or []
@@ -1290,24 +2457,95 @@ class IntelMailboxPoller:
         ]
         kpi_focuses = [str(item).strip() for item in strategic_doc.get("kpi_focuses") or [] if str(item).strip()]
         kpi_focuses = [] if doc_type == "annual_report" else [item for item in kpi_focuses if _looks_like_high_signal_kpi_focus(item)]
+        signal_limit = 2 if depth == "brief" else 5 if depth == "default" else 8
+        stakeholder_limit = 3 if depth == "brief" else 6 if depth == "default" else 10
+        performance_limit = 3 if depth == "brief" else 6 if depth == "default" else 10
+        project_limit = 3 if depth == "brief" else 6 if depth == "default" else 10
+        kpi_limit = 2 if depth == "brief" else 5 if depth == "default" else 6
 
         sections: List[str] = []
         if doc_type in doc_types_with_curated_notes and note_summary.strip():
             sections.append("## Summary\n\n" + note_summary.strip())
         if strategic_signals:
-            lines = ["## Strategic Insights", ""]
-            for item in strategic_signals[:5]:
+            heading = "## Priority Strategic Themes" if fit_label in {"medium_fit", "high_fit"} and scope_org_name else "## Strategic Insights"
+            lines = [heading, ""]
+            for item in strategic_signals[:signal_limit]:
                 headline = _clean_display_label(str(item.get("headline") or "").strip())
-                snippet = _clean_display_label(str(item.get("snippet") or item.get("evidence") or "").strip())
+                if not _should_keep_rendered_strategic_signal(headline, doc_type=doc_type):
+                    continue
+                raw_snippet = str(item.get("snippet") or item.get("evidence") or "").strip()
+                if doc_type == "strategic_plan":
+                    snippet = _compact_strategy_snippet(
+                        raw_snippet,
+                        local_only=local_only,
+                        limit=220 if depth == "brief" else 320 if depth == "default" else 520,
+                        allow_two_sentences=depth == "detailed",
+                    )
+                    if not snippet or _looks_like_low_quality_detail_sentence(snippet):
+                        for point in (item.get("detail_points") or []):
+                            replacement = _render_detail_point_text(point, local_only=local_only)
+                            if replacement:
+                                snippet = replacement
+                                break
+                else:
+                    snippet = _clean_note_signal_snippet(raw_snippet, doc_type=doc_type)
                 line = f"- {headline}"
                 if snippet:
                     line += f": {snippet}"
                 lines.append(line)
             sections.append("\n".join(lines))
+        if doc_type == "strategic_plan" and depth == "detailed" and strategic_signals:
+            lines = ["## Detailed Theme Notes", ""]
+            detailed_items = 0
+            for item in strategic_signals[: min(signal_limit, 5)]:
+                headline = _clean_display_label(str(item.get("headline") or "").strip())
+                if not _should_keep_rendered_strategic_signal(headline, doc_type=doc_type):
+                    continue
+                detail_points = [
+                    point
+                    for point in (item.get("detail_points") or [])
+                    if str(point.get("heading") or "").strip() and str(point.get("snippet") or "").strip()
+                ]
+                if not detail_points:
+                    raw_snippet = str(item.get("snippet") or item.get("evidence") or "").strip()
+                    fallback_snippet = _compact_strategy_snippet(
+                        raw_snippet,
+                        local_only=local_only,
+                        limit=520,
+                        allow_two_sentences=True,
+                    )
+                    if not fallback_snippet:
+                        continue
+                    lines.extend([f"### {headline}", "", fallback_snippet, ""])
+                    detailed_items += 1
+                    continue
+                lines.extend([f"### {headline}", ""])
+                rendered_points: List[str] = []
+                for point in detail_points[:3]:
+                    point_snippet = _render_detail_point_text(point, local_only=local_only)
+                    if not point_snippet:
+                        continue
+                    if point_snippet in rendered_points:
+                        continue
+                    rendered_points.append(point_snippet)
+                for point_snippet in rendered_points[:3]:
+                    lines.append(point_snippet)
+                    lines.append("")
+                if rendered_points:
+                    detailed_items += 1
+                else:
+                    lines = lines[:-2]
+            if detailed_items:
+                sections.append("\n".join(lines).strip())
+        if background_themes and depth != "brief":
+            lines = ["## Background Themes", ""]
+            for item in background_themes[: (3 if depth == "default" else 5)]:
+                lines.append(f"- {_clean_display_label(item)}")
+            sections.append("\n".join(lines))
         if performance_indicators:
             heading = "## Performance Snapshot" if doc_type == "annual_report" else "## Performance Indicators"
             lines = [heading, ""]
-            for item in performance_indicators[:6]:
+            for item in performance_indicators[:performance_limit]:
                 label = _clean_display_label(str(item.get("label") or "").strip())
                 value = _clean_display_label(str(item.get("value") or "").strip())
                 evidence = _compact_note_evidence(str(item.get("evidence") or "").strip())
@@ -1320,7 +2558,7 @@ class IntelMailboxPoller:
             sections.append("\n".join(lines))
         if major_projects:
             lines = ["## Key Projects", ""]
-            for item in major_projects[:6]:
+            for item in major_projects[:project_limit]:
                 name = _clean_display_label(str(item.get("name") or "").strip())
                 value = _clean_display_label(str(item.get("value") or "").strip())
                 evidence = _compact_note_evidence(str(item.get("evidence") or "").strip())
@@ -1333,9 +2571,11 @@ class IntelMailboxPoller:
             sections.append("\n".join(lines))
         if stakeholders:
             lines = ["## Key Stakeholders", ""]
-            for item in stakeholders[:6]:
+            for item in stakeholders[:stakeholder_limit]:
                 name = _clean_display_label(str(item.get("name") or "").strip())
                 employer = _clean_display_label(str(item.get("current_employer") or "").strip())
+                if _looks_like_low_signal_org_label(employer):
+                    employer = _clean_display_label(str(strategic_doc.get("org_name") or "").strip())
                 role = _clean_display_role(str(item.get("current_role") or "").strip(), employer)
                 parts = [name]
                 if role:
@@ -1346,7 +2586,7 @@ class IntelMailboxPoller:
             sections.append("\n".join(lines))
         if kpi_focuses:
             lines = ["## KPI Focus Areas", ""]
-            for item in kpi_focuses[:5]:
+            for item in kpi_focuses[:kpi_limit]:
                 lines.append(f"- {_clean_display_label(item)}")
             sections.append("\n".join(lines))
 
@@ -1405,23 +2645,63 @@ class IntelMailboxPoller:
     ) -> str:
         actionable_body = str(email_triage.get("actionable_body_text") or "").strip()
         if actionable_body:
-            return actionable_body
+            trimmed_actionable = _trim_mailbox_body_text(actionable_body)
+            if trimmed_actionable:
+                return trimmed_actionable
         raw_text = str(message.get("raw_text") or "").strip()
         if raw_text and not attachments_processed:
-            return raw_text
+            trimmed_raw = _trim_mailbox_body_text(raw_text)
+            if trimmed_raw:
+                return trimmed_raw
         return _compact_mailbox_provenance(message)
+
+    @staticmethod
+    def _build_note_document_meta(
+        *,
+        note_source_type: str,
+        primary_org_name: str,
+        note_title: str,
+        clean_subject: str,
+        attachment_names: Sequence[str],
+        attachment_fingerprints: Sequence[str],
+        note_content: str,
+        source_url: str = "",
+        source_label: str = "Mailbox attachment",
+    ) -> Dict[str, Any]:
+        doc_type = str(note_source_type or "").strip().lower()
+        if doc_type not in {"annual_report", "strategic_plan", "org_chart"}:
+            return {}
+        period_label = derive_period_label(doc_type, note_title, clean_subject, *attachment_names)
+        return build_document_meta(
+            doc_type=doc_type,
+            target_org_name=primary_org_name,
+            title=note_title,
+            period_label=period_label,
+            published_at="",
+            content_fingerprint=build_content_fingerprint(
+                attachment_fingerprints=attachment_fingerprints,
+                text=note_content,
+                source_url=source_url,
+            ),
+            source_url=source_url,
+            source_label=source_label,
+        )
 
     @staticmethod
     def _compose_org_chart_summary(
         primary_org_name: str,
         output_data: Dict[str, Any],
+        markdown_text: str = "",
     ) -> str:
         org_name = _clean_display_label(primary_org_name)
         leaders = IntelMailboxPoller._collect_org_chart_leaders(org_name, output_data)
+        functions = IntelMailboxPoller._collect_org_chart_functions(org_name, output_data, markdown_text)
 
         if not org_name:
             org_name = "the organisation"
         if not leaders:
+            if functions:
+                return f"Org chart for {org_name} outlining functional areas across {', '.join(functions[:4])}."
             return f"Org chart for {org_name}."
 
         role_terms = _dedupe_preserve_order(
@@ -1442,10 +2722,12 @@ class IntelMailboxPoller:
     def _compose_org_chart_note(
         primary_org_name: str,
         output_data: Dict[str, Any],
+        markdown_text: str = "",
     ) -> str:
         org_name = _clean_display_label(primary_org_name)
-        summary = IntelMailboxPoller._compose_org_chart_summary(org_name, output_data)
+        summary = IntelMailboxPoller._compose_org_chart_summary(org_name, output_data, markdown_text)
         people = IntelMailboxPoller._collect_org_chart_leaders(org_name, output_data)
+        functions = IntelMailboxPoller._collect_org_chart_functions(org_name, output_data, markdown_text)
         leaders: List[str] = []
         for item in people:
             name = _clean_display_label(str(item.get("name") or "").strip())
@@ -1461,6 +2743,9 @@ class IntelMailboxPoller:
         if leaders:
             sections.extend(["", "## Leadership Team", ""])
             sections.extend(leaders[:10])
+        elif functions:
+            sections.extend(["", "## Functional Structure", ""])
+            sections.extend(f"- {item}" for item in functions[:10])
         return "\n".join(sections).strip()
 
     @staticmethod
@@ -1484,6 +2769,8 @@ class IntelMailboxPoller:
             evidence = normalize_lookup(str(item.get("evidence") or "").strip())
             if not name:
                 continue
+            if not _looks_like_person_label(name):
+                continue
             if normalize_lookup(name) in seen_people:
                 continue
             if employer and org_key and not orgs_compatible(employer, org_name):
@@ -1493,6 +2780,74 @@ class IntelMailboxPoller:
             seen_people.add(normalize_lookup(name))
             leaders.append({"name": name, "role": role})
         return leaders
+
+    @staticmethod
+    def _collect_org_chart_functions(
+        primary_org_name: str,
+        output_data: Dict[str, Any],
+        markdown_text: str = "",
+    ) -> List[str]:
+        org_name = _clean_display_label(primary_org_name)
+        excluded_org_labels = {
+            normalize_lookup(label)
+            for label in [org_name]
+            if str(label or "").strip()
+        }
+        for item in list(output_data.get("organisations") or []) + list(output_data.get("entities") or []):
+            if str(item.get("target_type") or "").strip().lower() not in {"", "organisation", "organization"}:
+                continue
+            label = _clean_display_label(str(item.get("canonical_name") or item.get("name") or "").strip())
+            if label:
+                excluded_org_labels.add(normalize_lookup(label))
+        lines: List[str] = []
+        for value in (
+            markdown_text,
+            str(output_data.get("summary") or ""),
+            *[
+                str(item.get("excerpt") or "")
+                for item in (output_data.get("attachments") or [])
+                if str(item.get("excerpt") or "").strip()
+            ],
+        ):
+            for raw_line in str(value or "").splitlines():
+                cleaned = _clean_display_label(raw_line)
+                if cleaned:
+                    lines.append(cleaned)
+
+        functions: List[str] = []
+        seen: set[str] = set()
+        org_key = normalize_lookup(org_name)
+        for line in lines:
+            cleaned_line = _clean_org_chart_function_label(line, org_name)
+            lowered = normalize_lookup(cleaned_line)
+            if not lowered:
+                continue
+            if org_key and lowered == org_key:
+                continue
+            if lowered in excluded_org_labels:
+                continue
+            if any(marker in lowered for marker in _ORG_CHART_FUNCTION_STOPWORDS):
+                continue
+            if "http" in lowered or "@" in lowered:
+                continue
+            if len(cleaned_line) > 90:
+                continue
+            if any(char.isdigit() for char in cleaned_line):
+                continue
+            words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", cleaned_line) if word]
+            if len(words) < 2 or len(words) > 10:
+                continue
+            looks_like_function = any(marker in lowered for marker in _ORG_CHART_FUNCTION_MARKERS) or any(
+                lowered.startswith(prefix) for prefix in _ORG_CHART_FUNCTION_ROLE_PREFIXES
+            )
+            if not looks_like_function:
+                continue
+            normalized = lowered.strip()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            functions.append(cleaned_line)
+        return functions
 
     @staticmethod
     def _derive_note_title(
@@ -1509,20 +2864,33 @@ class IntelMailboxPoller:
         if subject_match:
             doc_phrase = normalize_lookup(subject_match.group(1))
             subject_org = _clean_display_label(subject_match.group(2))
+            primary_org = _clean_display_label(primary.get("name") or "")
+            if primary_org and _org_hint_match_type(subject_org, primary_org) == "acronym":
+                subject_org = primary_org
             if "chart" in doc_phrase:
                 return _clean_display_label(f"{subject_org} org chart")
             if "annual report" in doc_phrase:
                 return _clean_display_label(f"{subject_org} Annual Report")
             return _clean_display_label(f"{subject_org} Strategic Plan")
-        if _looks_like_useful_subject_title(clean_subject):
-            return clean_subject
-
         doc_type = str(strategic_doc.get("doc_type") or "").strip().lower()
         org_name = str(strategic_doc.get("org_name") or primary.get("name") or "").strip()
         attachments = list(output_data.get("attachments") or [])
         attachment_names = [str(item.get("filename") or "").strip() for item in attachments if str(item.get("filename") or "").strip()]
         attachment_excerpts = [str(item.get("excerpt") or "").strip() for item in attachments if str(item.get("excerpt") or "").strip()]
         title_context = " ".join([clean_subject, *attachment_names, *attachment_excerpts])
+
+        if doc_type in {"strategic_plan", "annual_report", "industry_report"} and org_name and (
+            _looks_like_org_acronym(clean_subject) or normalize_lookup(clean_subject) == normalize_lookup(org_name)
+        ):
+            label = _document_label(doc_type, title_context)
+            year_label = _extract_document_year_label(clean_subject, *attachment_names, *attachment_excerpts)
+            parts = [org_name, label]
+            if year_label:
+                parts.append(year_label)
+            return _clean_display_label(" ".join(parts))
+
+        if _looks_like_useful_subject_title(clean_subject):
+            return clean_subject
 
         if doc_type in {"strategic_plan", "annual_report", "industry_report"} and org_name:
             label = _document_label(doc_type, title_context)
@@ -1545,8 +2913,9 @@ class IntelMailboxPoller:
         scope_org_name: str = "",
         routing: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        scope_org_name = str(scope_org_name or self.config.org_name).strip()
         routing = dict(routing or {})
+        scope_org_name = str(scope_org_name or routing.get("effective_org_name") or self.config.org_name).strip()
+        extraction_depth = str(routing.get("extraction_depth") or "default").strip().lower() or "default"
         processing_meta = dict(output_data.get("processing_meta") or {})
         email_triage = dict(processing_meta.get("email_triage") or {})
         clean_subject = str(
@@ -1555,42 +2924,55 @@ class IntelMailboxPoller:
             or _normalized_mail_subject(message.get("subject", ""))
         ).strip()
         subject_org_hint = str(routing.get("subject_org_hint") or "").strip()
+        resolved_subject_org_hint = self._resolve_known_org_label(subject_org_hint, output_data, scope_org_name=scope_org_name)
         strategic_doc = dict(processing_meta.get("strategic_doc") or {})
+        doc_type = str(strategic_doc.get("doc_type") or "").strip().lower()
         strategic_org_name = str(strategic_doc.get("org_name") or "").strip()
         if (
-            subject_org_hint
-            and strategic_org_name
+            resolved_subject_org_hint
             and (
-                orgs_compatible(subject_org_hint, strategic_org_name)
-                or normalize_lookup(subject_org_hint) in normalize_lookup(strategic_org_name)
+                not strategic_org_name
+                or _looks_like_low_signal_org_label(strategic_org_name)
+                or (
+                    subject_org_hint
+                    and _looks_like_org_acronym(subject_org_hint)
+                    and normalize_lookup(subject_org_hint) in normalize_lookup(strategic_org_name)
+                )
+                or _org_hint_match_type(resolved_subject_org_hint, strategic_org_name) in {"exact", "compatible", "acronym"}
             )
         ):
-            strategic_doc["org_name"] = subject_org_hint
+            strategic_doc["org_name"] = resolved_subject_org_hint
             for bucket_name in ("key_stakeholders", "leadership_people"):
                 updated_items: List[Dict[str, Any]] = []
                 for item in strategic_doc.get(bucket_name) or []:
                     updated = dict(item)
                     employer = str(updated.get("current_employer") or "").strip()
                     if employer and (
-                        orgs_compatible(employer, strategic_org_name)
-                        or normalize_lookup(subject_org_hint) in normalize_lookup(employer)
+                        _looks_like_low_signal_org_label(employer)
+                        or _org_hint_match_type(resolved_subject_org_hint, employer) in {"exact", "compatible", "acronym"}
                     ):
-                        updated["current_employer"] = subject_org_hint
+                        updated["current_employer"] = resolved_subject_org_hint
                     updated_items.append(updated)
                 if updated_items:
                     strategic_doc[bucket_name] = updated_items
-            strategic_org_name = subject_org_hint
+            strategic_org_name = resolved_subject_org_hint
         primary = self._choose_primary_entity(output_data)
         can_use_document_subject_hint = message_kind in {"document_analysis", "org_chart"} or bool(routing.get("has_org_chart_image_attachment"))
-        subject_primary = self._choose_subject_primary_entity(subject_org_hint, output_data) if can_use_document_subject_hint else {"target_type": "", "name": "", "employer": ""}
+        subject_primary = self._choose_subject_primary_entity(resolved_subject_org_hint, output_data) if can_use_document_subject_hint else {"target_type": "", "name": "", "employer": ""}
         document_primary = self._choose_document_primary_entity(output_data, strategic_doc) if can_use_document_subject_hint else {"target_type": "", "name": "", "employer": ""}
         if subject_primary.get("name") and document_primary.get("name"):
             subject_key = normalize_lookup(subject_primary.get("name") or "")
             document_key = normalize_lookup(document_primary.get("name") or "")
+            match_type = _org_hint_match_type(subject_primary.get("name") or "", document_primary.get("name") or "")
             if (
                 subject_key and document_key
                 and subject_key != document_key
-                and (subject_key in document_key or orgs_compatible(subject_primary.get("name") or "", document_primary.get("name") or ""))
+                and (
+                    subject_key in document_key
+                    or match_type in {"compatible", "acronym"}
+                    or orgs_compatible(subject_primary.get("name") or "", document_primary.get("name") or "")
+                    or (subject_org_hint and not _looks_like_org_acronym(subject_org_hint))
+                )
             ):
                 document_primary = {"target_type": "", "name": "", "employer": ""}
         if message_kind == "org_chart" or bool(routing.get("has_org_chart_image_attachment")):
@@ -1615,6 +2997,28 @@ class IntelMailboxPoller:
                 primary.get("target_type") == "person"
                 and normalize_lookup(primary.get("employer") or "") == normalize_lookup(scope_org_name)
             )
+        ):
+            primary = {
+                "target_type": "organisation",
+                "name": strategic_org_name,
+                "employer": "",
+            }
+        entity_primary = self._choose_entity_primary_from_entities(output_data, scope_org_name=scope_org_name)
+        if entity_primary.get("name") and (
+            not primary.get("name")
+            or (
+                primary.get("target_type") == "organisation"
+                and normalize_lookup(primary.get("name") or "") == normalize_lookup(scope_org_name)
+                and entity_primary.get("target_type") == "organisation"
+                and normalize_lookup(entity_primary.get("name") or "") != normalize_lookup(scope_org_name)
+            )
+        ):
+            primary = entity_primary
+        if (
+            doc_type in {"strategic_plan", "annual_report", "industry_report"}
+            and strategic_org_name
+            and primary.get("target_type") == "organisation"
+            and orgs_compatible(primary.get("name") or "", strategic_org_name)
         ):
             primary = {
                 "target_type": "organisation",
@@ -1709,22 +3113,53 @@ class IntelMailboxPoller:
         note_summary = str(output_data.get("summary") or "").strip()
         strategic_summary = str(strategic_doc.get("strategic_summary") or "").strip()
         strategic_signals = list(strategic_doc.get("strategic_signals") or [])
-        doc_type = str(strategic_doc.get("doc_type") or "").strip().lower()
         note_title = self._derive_note_title(clean_subject, strategic_doc, output_data, primary)
         note_summary = self._compose_note_summary(note_summary, strategic_summary, doc_type)
-        note_summary = _normalize_document_summary_org_label(note_summary, subject_org_hint, doc_type)
+        note_summary = _normalize_document_summary_org_label(note_summary, resolved_subject_org_hint, doc_type)
+        llm_policy = dict(output_data.get("llm_policy") or {})
+        fit_assessment = self._assess_subscriber_fit(
+            scope_org_name,
+            message,
+            output_data,
+            strategic_doc=strategic_doc,
+        )
         attachments_processed = [
             str(item.get("filename") or "").strip()
             for item in output_data.get("attachments") or []
             if str(item.get("status") or "").strip().lower() == "processed"
             and str(item.get("filename") or "").strip()
         ]
+        attachment_fingerprints = self._build_attachment_fingerprints(persisted, output_data)
         if note_source_type == "org_chart":
             org_chart_name = str(primary.get("name") or subject_org_hint or strategic_org_name or "").strip()
-            note_summary = self._compose_org_chart_summary(org_chart_name, output_data)
-            note_content = self._compose_org_chart_note(org_chart_name, output_data)
+            note_summary = self._compose_org_chart_summary(org_chart_name, output_data, markdown_text)
+            note_content = self._compose_org_chart_note(org_chart_name, output_data, markdown_text)
         else:
-            note_content = self._enrich_note_markdown(markdown_text, strategic_doc, note_summary)
+            note_content = self._enrich_note_markdown(
+                markdown_text,
+                strategic_doc,
+                note_summary,
+                extraction_depth=extraction_depth,
+                fit_assessment=fit_assessment,
+                scope_org_name=scope_org_name,
+                local_only=bool(llm_policy.get("local_only")),
+            )
+        fit_commentary = self._fit_commentary(scope_org_name, fit_assessment, primary.get("name") or "")
+        if fit_commentary:
+            fit_section = f"## Subscriber Fit\n\n{fit_commentary}"
+            note_content = f"{str(note_content or '').rstrip()}\n\n{fit_section}".strip()
+        note_content = self._finalize_note_markdown(note_content, llm_policy)
+        document_meta = self._build_note_document_meta(
+            note_source_type=note_source_type,
+            primary_org_name=str(primary.get("name") or resolved_subject_org_hint or strategic_org_name or "").strip(),
+            note_title=note_title,
+            clean_subject=clean_subject,
+            attachment_names=attachments_processed,
+            attachment_fingerprints=attachment_fingerprints,
+            note_content=note_content,
+            source_url="",
+            source_label="Mailbox attachment",
+        )
         signals = [
             {
                 "headline": str(note_title or strategic_org_name or "Mailbox note").strip(),
@@ -1805,9 +3240,12 @@ class IntelMailboxPoller:
                 "default_org_name": str(routing.get("default_org_name") or self.config.org_name).strip(),
                 "requested_org_name": str(routing.get("requested_org_name") or "").strip(),
                 "matched_org_name": str(routing.get("matched_org_name") or "").strip(),
+                "sender_domain_org_name": str(routing.get("sender_domain_org_name") or "").strip(),
                 "effective_org_name": scope_org_name,
                 "status": str(routing.get("status") or "default").strip(),
                 "subject_org_hint": subject_org_hint,
+                "extraction_depth": extraction_depth,
+                "force_reingest": bool(routing.get("force_reingest")),
             },
             "note": {
                 "source_type": note_source_type,
@@ -1817,8 +3255,10 @@ class IntelMailboxPoller:
                 "submitted_by": str(message.get("from_email") or "").strip(),
                 "note_date": note_date,
                 "attachments_processed": attachments_processed,
-                "attachment_fingerprints": self._build_attachment_fingerprints(persisted, output_data),
+                "attachment_fingerprints": attachment_fingerprints,
+                "extraction_depth": extraction_depth,
             },
+            "document_meta": document_meta,
             "primary_entity": {
                 "name": primary.get("name", ""),
                 "target_type": primary.get("target_type", ""),
@@ -1830,6 +3270,7 @@ class IntelMailboxPoller:
             "referenced_entities": referenced_entities,
             "urls": self._extract_note_urls(message, note_content),
             "signals": signals,
+            "fit_assessment": fit_assessment,
             "graph_enrichment": {
                 "existing_connections": sorted(set(matched_names)),
                 "new_profiles_suggested": sorted(set(suggested_names)),
@@ -1893,6 +3334,23 @@ class IntelMailboxPoller:
             },
         }
 
+    def _build_document_duplicate_delivery(
+        self,
+        document_meta: Dict[str, Any],
+        note_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        existing = dict(document_meta.get("existing_record") or {})
+        intel_id = str(existing.get("latest_intel_id") or "").strip()
+        return {
+            "status": "duplicate_document",
+            "document_status": str(document_meta.get("status") or "").strip(),
+            "response": {
+                "status": "duplicate_document",
+                "intel_id": intel_id,
+                "primary_entity": ((note_payload.get("primary_entity") or {}).get("name") or "").strip(),
+            },
+        }
+
     def _ingest_signal(
         self,
         message: Dict[str, Any],
@@ -1903,6 +3361,8 @@ class IntelMailboxPoller:
     ) -> Dict[str, Any]:
         scope_org_name = str(scope_org_name or self.config.org_name).strip()
         primary = self._choose_primary_entity(output_data)
+        if not primary.get("name"):
+            primary = self._choose_entity_primary_from_entities(output_data, scope_org_name=scope_org_name)
         payload = {
             "org_name": scope_org_name,
             "trace_id": trace_id,
@@ -1932,6 +3392,7 @@ class IntelMailboxPoller:
         signal: Dict[str, Any],
         scope_org_name: str = "",
         routing: Optional[Dict[str, Any]] = None,
+        fit_assessment: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         scope_org_name = str(scope_org_name or self.config.org_name).strip()
         routing = dict(routing or {})
@@ -1966,6 +3427,7 @@ class IntelMailboxPoller:
                 )
         output_suggestions = output_data.get("target_update_suggestions") or []
         output_warnings = output_data.get("warnings") or []
+        fit_payload = dict(fit_assessment or {})
         return {
             "result_type": "intel_extract_result",
             "org_name": scope_org_name,
@@ -1978,6 +3440,7 @@ class IntelMailboxPoller:
             "target_update_suggestions": output_suggestions,
             "suggested_targets": [],
             "warnings": output_warnings,
+            "fit_assessment": fit_payload,
             "mailbox_message": {
                 "subject": message.get("subject", ""),
                 "from_email": message.get("from_email", ""),
@@ -1991,13 +3454,17 @@ class IntelMailboxPoller:
                 "matched_profile_keys": signal.get("matched_profile_keys") or [],
                 "needs_review": bool(signal.get("needs_review")),
             },
+            "llm_policy": dict(output_data.get("llm_policy") or {}),
             "mailbox_routing": {
                 "default_org_name": str(routing.get("default_org_name") or self.config.org_name).strip(),
                 "requested_org_name": str(routing.get("requested_org_name") or "").strip(),
                 "matched_org_name": str(routing.get("matched_org_name") or "").strip(),
+                "sender_domain_org_name": str(routing.get("sender_domain_org_name") or "").strip(),
                 "effective_org_name": scope_org_name,
                 "status": str(routing.get("status") or "default").strip(),
                 "subject_org_hint": str(routing.get("subject_org_hint") or "").strip(),
+                "extraction_depth": str(routing.get("extraction_depth") or "default").strip().lower() or "default",
+                "force_reingest": bool(routing.get("force_reingest")),
             },
             "output_data": output_data,
         }
@@ -2018,6 +3485,83 @@ class IntelMailboxPoller:
         except Exception as exc:
             logger.warning("Intel mailbox reply send failed: %s", exc)
             return {"status": "failed", "error": str(exc)}
+
+    @staticmethod
+    def _reply_excerpt(value: str, limit: int = 3000) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        if len(text) > limit:
+            text = text[: limit - 3].rstrip() + "..."
+        return text
+
+    def _build_intel_reply(
+        self,
+        message: Dict[str, Any],
+        delivery_payload: Dict[str, Any],
+        routing: Dict[str, Any],
+    ) -> tuple[str, str]:
+        note = dict(delivery_payload.get("note") or {})
+        primary = dict(delivery_payload.get("primary_entity") or {})
+        fit = dict(delivery_payload.get("fit_assessment") or {})
+        title = str(
+            note.get("title")
+            or delivery_payload.get("raw_summary")
+            or ((delivery_payload.get("output_data") or {}).get("summary") or "")
+            or "Extracted intelligence"
+        ).strip()
+        content = self._reply_excerpt(str(note.get("content") or "").strip())
+        scope_org = str(delivery_payload.get("org_name") or routing.get("effective_org_name") or self.config.org_name).strip()
+        primary_name = str(primary.get("name") or "").strip()
+        if not primary_name:
+            for item in (delivery_payload.get("entities") or []):
+                candidate_name = str(item.get("canonical_name") or item.get("name") or "").strip()
+                if candidate_name:
+                    primary_name = candidate_name
+                    break
+        extraction_depth = str((routing or {}).get("extraction_depth") or note.get("extraction_depth") or "default").strip().lower() or "default"
+        fit_label = str(fit.get("fit_label") or "").strip()
+        reply_limit = 1200 if extraction_depth == "brief" else 3000 if extraction_depth == "default" else 12000
+        content = self._reply_excerpt(str(note.get("content") or "").strip(), limit=reply_limit)
+        if not content:
+            fallback_summary = str(
+                delivery_payload.get("raw_summary")
+                or ((delivery_payload.get("output_data") or {}).get("summary") or "")
+            ).strip()
+            if fallback_summary:
+                content = self._reply_excerpt(fallback_summary, limit=reply_limit)
+            else:
+                entity_names = [
+                    str(item.get("canonical_name") or item.get("name") or "").strip()
+                    for item in (delivery_payload.get("entities") or [])
+                    if str(item.get("canonical_name") or item.get("name") or "").strip()
+                ]
+                if entity_names:
+                    content = f"Entities extracted: {', '.join(entity_names[:8])}"
+
+        subject = f"Re: {str(message.get('subject') or '').strip() or title}"
+        lines = [
+            f"Cortex processed your submission for {scope_org}.",
+            "",
+            f"Depth: {extraction_depth}",
+        ]
+        if primary_name:
+            lines.append(f"Primary entity: {primary_name}")
+        if fit_label:
+            lines.append(f"Subscriber fit: {fit_label}")
+        lines.extend(
+            [
+                "",
+                f"Title: {title}",
+                "",
+            ]
+        )
+        if content:
+            lines.append(content)
+        else:
+            lines.append("No note content was generated.")
+        return subject, "\n".join(lines).strip()
 
     def _build_csv_result_payload(
         self,
@@ -2198,6 +3742,9 @@ class IntelMailboxPoller:
         markdown_text = ""
         if _output_file and Path(_output_file).exists():
             markdown_text = Path(_output_file).read_text(encoding="utf-8", errors="ignore")
+        reply_delivery: Dict[str, Any] = {"status": "skipped"}
+        reply_subject = ""
+        reply_body = ""
         if message_kind == "intel_extract":
             signal = self._ingest_signal(message, output_data, trace_id, scope_org_name=effective_org_name, clean_subject=clean_subject)
             result_payload = self._build_result_payload(
@@ -2210,6 +3757,8 @@ class IntelMailboxPoller:
                 routing=routing,
             )
             delivery = self.result_client.deliver(persisted["message_key"], result_payload)
+            reply_subject, reply_body = self._build_intel_reply(message, result_payload, routing)
+            reply_delivery = self._send_reply(message, reply_subject, reply_body)
         else:
             delivery_payload = self._build_ingest_note_payload(
                 message,
@@ -2221,32 +3770,90 @@ class IntelMailboxPoller:
                 scope_org_name=effective_org_name,
                 routing=routing,
             )
-            signal = self._ingest_signal(message, output_data, trace_id, scope_org_name=effective_org_name, clean_subject=clean_subject)
-            result_payload = self._build_result_payload(
-                message,
-                persisted,
-                trace_id,
-                output_data,
-                signal,
-                scope_org_name=effective_org_name,
-                routing=routing,
+            document_meta = dict(delivery_payload.get("document_meta") or {})
+            if document_meta:
+                document_meta = self.signal_store.classify_document_meta(effective_org_name, document_meta)
+                delivery_payload["document_meta"] = {
+                    key: value for key, value in document_meta.items() if key != "existing_record"
+                }
+            strict_duplicate = bool(
+                document_meta
+                and str(document_meta.get("doc_type") or "").strip().lower() in STRICT_DOC_TYPES
+                and str(document_meta.get("status") or "").strip().lower() == "known_same"
             )
-            result_payload["website_payload"] = {**delivery_payload, "secret": "[redacted]"}
-            delivery = self.result_client.deliver(
-                persisted["message_key"],
-                result_payload,
-                delivery_payload=delivery_payload,
-                callback_url_override=self.config.note_callback_url or self.config.callback_url,
-            )
-            response = dict(delivery.get("response") or {})
-            if response.get("intel_id"):
-                reconciliation = self.signal_store.reconcile_intel_note_delivery(
-                    org_name=effective_org_name,
-                    trace_id=trace_id,
-                    payload=delivery_payload,
-                    response=response,
+            if strict_duplicate and bool(routing.get("force_reingest")):
+                strict_duplicate = False
+                document_meta["status"] = "changed_document"
+                document_meta["ingest_recommendation"] = "ingest"
+                delivery_payload["document_meta"] = {
+                    key: value for key, value in document_meta.items() if key != "existing_record"
+                }
+            if strict_duplicate:
+                signal = {}
+                result_payload = self._build_result_payload(
+                    message,
+                    persisted,
+                    trace_id,
+                    output_data,
+                    signal,
+                    scope_org_name=effective_org_name,
+                    routing=routing,
+                    fit_assessment=delivery_payload.get("fit_assessment") or {},
                 )
-                result_payload["graph_reconciliation"] = reconciliation
+                result_payload["website_payload"] = {**delivery_payload, "secret": "[redacted]"}
+                result_payload["document_meta"] = delivery_payload.get("document_meta") or {}
+                delivery = self._build_document_duplicate_delivery(document_meta, delivery_payload)
+                self.signal_store.register_document_meta(
+                    effective_org_name,
+                    delivery_payload.get("document_meta") or {},
+                    latest_trace_id=trace_id,
+                    latest_intel_id=str(((document_meta.get("existing_record") or {}).get("latest_intel_id") or "")).strip(),
+                )
+            else:
+                signal = self._ingest_signal(message, output_data, trace_id, scope_org_name=effective_org_name, clean_subject=clean_subject)
+                result_payload = self._build_result_payload(
+                    message,
+                    persisted,
+                    trace_id,
+                    output_data,
+                    signal,
+                    scope_org_name=effective_org_name,
+                    routing=routing,
+                    fit_assessment=delivery_payload.get("fit_assessment") or {},
+                )
+                result_payload["website_payload"] = {**delivery_payload, "secret": "[redacted]"}
+                result_payload["document_meta"] = delivery_payload.get("document_meta") or {}
+                delivery = self.result_client.deliver(
+                    persisted["message_key"],
+                    result_payload,
+                    delivery_payload=delivery_payload,
+                    callback_url_override=self.config.note_callback_url or self.config.callback_url,
+                )
+                response = dict(delivery.get("response") or {})
+                if response.get("intel_id"):
+                    reconciliation = self.signal_store.reconcile_intel_note_delivery(
+                        org_name=effective_org_name,
+                        trace_id=trace_id,
+                        payload=delivery_payload,
+                        response=response,
+                    )
+                    result_payload["graph_reconciliation"] = reconciliation
+                if delivery_payload.get("document_meta"):
+                    self.signal_store.register_document_meta(
+                        effective_org_name,
+                        delivery_payload.get("document_meta") or {},
+                        latest_trace_id=trace_id,
+                        latest_intel_id=str(response.get("intel_id") or "").strip(),
+                    )
+            reply_subject, reply_body = self._build_intel_reply(message, delivery_payload, routing)
+            reply_delivery = self._send_reply(message, reply_subject, reply_body)
+        result_payload["reply"] = {
+            "subject": reply_subject,
+            "body": reply_body,
+            "delivery": reply_delivery,
+        }
+        if isinstance(delivery, dict):
+            delivery["reply"] = reply_delivery
         self.store.record_processed(persisted["message_key"], trace_id, result_payload, delivery)
         entity_names = [
             str(item.get("canonical_name") or item.get("name") or "").strip()

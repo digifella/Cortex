@@ -19,6 +19,38 @@ _NOISY_THEME_MARKERS = (
     "our strategic priorities",
     "strategic direction |",
 )
+_STRATEGY_HEADING_STOPWORDS = {
+    "acknowledgement of country",
+    "acknowledgement of traditional custodians",
+    "message from the managing director",
+    "our drivers for change",
+    "strategic and operating context",
+    "our 2030 strategy",
+    "our values",
+    "our purpose",
+    "language statement",
+    "contents",
+    "creating a brighter future",
+    "yarra valley water 2030 strategy",
+}
+_INLINE_STRATEGY_SENTENCE_TOKENS = {
+    "is",
+    "are",
+    "was",
+    "were",
+    "has",
+    "have",
+    "had",
+    "can",
+    "cannot",
+    "could",
+    "will",
+    "would",
+    "should",
+    "since",
+    "depends",
+    "told",
+}
 _GENERIC_DOC_TOKENS = {
     "attachment",
     "compressed",
@@ -43,6 +75,7 @@ _GENERIC_DOC_TOKENS = {
     "strategic",
     "v",
     "version",
+    "website",
 }
 _GENERATED_ATTACHMENT_RE = re.compile(
     r"^(?:screenshot|screen shot|img|image|photo|picture|scan|attachment|document|file|outlook)(?:[\s_-]+\d.*)?$",
@@ -118,8 +151,8 @@ _STRATEGIC_SIGNAL_SPECS = (
         ),
     },
     {
-        "headline": "Indigenous health and cultural safety are core business",
-        "category": "indigenous_health",
+        "headline": "First Nations and cultural commitments",
+        "category": "community_commitment",
         "markers": (
             "core business of the racp",
             "advancing aboriginal, torres strait islander and maori health and education as core business",
@@ -150,6 +183,54 @@ _STRATEGIC_SIGNAL_SPECS = (
             "disciplined execution",
             "evidence driven action",
             "test and learn before scaling",
+        ),
+    },
+    {
+        "headline": "Operational transformation and resilience",
+        "category": "operational_transformation",
+        "markers": (
+            "operational transformation",
+            "operational resilience",
+            "flood operations centre",
+            "dam operations",
+            "water security",
+            "continuity of water supply",
+        ),
+    },
+    {
+        "headline": "Capital delivery and asset transformation",
+        "category": "capital_delivery",
+        "markers": (
+            "capital delivery transformation",
+            "capital program",
+            "asset information and management",
+            "dam improvement",
+            "invested over",
+            "asset maintenance services",
+        ),
+    },
+    {
+        "headline": "Stakeholder, customer and community engagement",
+        "category": "stakeholder_engagement",
+        "markers": (
+            "engaging with stakeholders",
+            "working with customers",
+            "engaging with the community",
+            "shareholder expectations and social licence",
+            "retailer customers",
+            "community recreation facilities",
+        ),
+    },
+    {
+        "headline": "Technology and cyber enablement",
+        "category": "technology_enablement",
+        "markers": (
+            "use of technology as an enabler",
+            "process improvement and use of technology as an enabler",
+            "information systems, record keeping and cyber security",
+            "cyber security",
+            "digital capability",
+            "data and technology",
         ),
     },
 )
@@ -188,6 +269,9 @@ _NON_PERSON_NAME_TOKENS = {
     "message",
     "opceo",
     "policy",
+    "key",
+    "management",
+    "personnel",
     "program",
     "programme",
     "reform",
@@ -380,6 +464,157 @@ _PERFORMANCE_INDICATOR_SPECS = (
         ),
         "value_template": "{0}%",
     },
+    {
+        "label": "Population served",
+        "category": "service_scale",
+        "patterns": (
+            r"(\d+(?:\.\d+)?)m\s+Population served",
+            r"servicing\s+(\d+(?:\.\d+)?)\s*million\s+Victorians",
+            r"more than\s+(\d+(?:\.\d+)?)\s+million(?:\s+[A-Za-z]+)?\s+residents",
+        ),
+        "value_template": "{0}m",
+    },
+    {
+        "label": "Infrastructure asset base",
+        "category": "asset_base",
+        "patterns": (
+            r"\$(\d+(?:\.\d+)?)b\s+Infrastructure asset base",
+            r"\$(\d+(?:\.\d+)?)\s*billion worth of assets",
+        ),
+        "value_template": "${0}b",
+    },
+    {
+        "label": "Business customers",
+        "category": "service_scale",
+        "patterns": (
+            r"(\d+)k\s+Business customers",
+            r"(\d{1,3}(?:,\d{3})+)\s+business customers",
+        ),
+        "value_template": "{0}k",
+    },
+    {
+        "label": "Water delivered",
+        "category": "service_delivery",
+        "patterns": (
+            r"delivered\s+(\d+)\s+billion litres of water",
+        ),
+        "value_template": "{0} billion litres",
+    },
+    {
+        "label": "Bulk water supplied",
+        "category": "service_delivery",
+        "patterns": (
+            r"supplied approximately\s+(\d{1,3}(?:,\d{3})*)\s+megalitres",
+        ),
+        "value_template": "{0} ML",
+    },
+    {
+        "label": "Drinking water compliance",
+        "category": "service_quality",
+        "patterns": (
+            r"all\s+(\d+(?:\.\d+)?)%\s+compliant with Victorian Safe Drinking Water Regulations",
+        ),
+        "value_template": "{0}%",
+    },
+    {
+        "label": "Financial hardship customers",
+        "category": "customer_support",
+        "patterns": (
+            r"managing\s+(\d{1,3}(?:,\d{3})+)\s+customers experiencing financial hardship",
+        ),
+        "value_template": "{0}",
+    },
+    {
+        "label": "Customer satisfaction",
+        "category": "customer_experience",
+        "patterns": (
+            r"(\d+(?:\.\d+)?)%\s+of customers were satisfied with their most recent interaction",
+        ),
+        "value_template": "{0}%",
+    },
+    {
+        "label": "Service restoration within 4 hours",
+        "category": "service_reliability",
+        "patterns": (
+            r"restored services within 4 hours for\s+(\d+(?:\.\d+)?)%\s+of customers",
+        ),
+        "value_template": "{0}%",
+    },
+    {
+        "label": "Service restoration within 12 hours",
+        "category": "service_reliability",
+        "patterns": (
+            r"within 12 hours for\s+(\d+(?:\.\d+)?)%\s+of customers",
+        ),
+        "value_template": "{0}%",
+    },
+    {
+        "label": "Fault handling satisfaction",
+        "category": "customer_experience",
+        "patterns": (
+            r"achieved\s+(\d+(?:\.\d+)?)%\s+customer satisfaction with fault call handling",
+        ),
+        "value_template": "{0}%",
+    },
+    {
+        "label": "Field response satisfaction",
+        "category": "customer_experience",
+        "patterns": (
+            r"and\s+(\d+(?:\.\d+)?)%\s+satisfaction with our field response",
+        ),
+        "value_template": "{0}%",
+    },
+    {
+        "label": "Community rebate recommended",
+        "category": "customer_value",
+        "patterns": (
+            r"return\s+\$(\d+(?:\.\d+)?)\s+million to customers and community",
+        ),
+        "value_template": "${0} million",
+    },
+    {
+        "label": "Renewable electricity usage",
+        "category": "sustainability",
+        "patterns": (
+            r"renewable electricity powered\s+(\d+(?:\.\d+)?)%\s+of our operations",
+            r"will use\s+(\d+(?:\.\d+)?)%\s+renewable electricity",
+        ),
+        "value_template": "{0}%",
+    },
+    {
+        "label": "Infrastructure investment",
+        "category": "capital_investment",
+        "patterns": (
+            r"invested over\s+\$(\d+(?:\.\d+)?)\s+million in infrastructure",
+            r"invested\s+\$(\d+(?:\.\d+)?)\s+million in infrastructure",
+        ),
+        "value_template": "${0} million",
+    },
+    {
+        "label": "Water storage level",
+        "category": "water_security",
+        "patterns": (
+            r"combined storage level of\s+(\d+(?:\.\d+)?)%",
+            r"storage levels remained above\s+(\d+(?:\.\d+)?)%",
+        ),
+        "value_template": "{0}%",
+    },
+    {
+        "label": "Recreational visitors",
+        "category": "community_engagement",
+        "patterns": (
+            r"welcomed\s+(\d+(?:\.\d+)?)\s+million recreational visitors",
+        ),
+        "value_template": "{0} million",
+    },
+    {
+        "label": "Flood event activations",
+        "category": "operational_resilience",
+        "patterns": (
+            r"Flood Operations Centre was activated\s+(\d+)\s+times",
+        ),
+        "value_template": "{0} activations",
+    },
 )
 _PROJECT_AMOUNT_RE = re.compile(
     r"(?:and\s+the\s+|and\s+|the\s+)?([A-Z][A-Za-z0-9&'’()./\- ]{2,90}?)\s*\(\$(\d+(?:\.\d+)?)\s*(million|billion|m|bn)\)",
@@ -414,11 +649,34 @@ def _read_document_text(attachment: Dict[str, Any]) -> str:
 def _compact_lines(text: str) -> List[str]:
     lines: List[str] = []
     for raw_line in str(text or "").splitlines():
-        line = re.sub(r"\s+", " ", str(raw_line or "").strip())
+        line = re.sub(r"[\x00-\x1f]+", " ", str(raw_line or ""))
+        line = (
+            line.replace("Ƽ", "fi")
+            .replace("ƽ", "fl")
+            .replace("ƾ", "ffi")
+            .replace("ﬀ", "ff")
+            .replace("ﬁ", "fi")
+            .replace("ﬂ", "fl")
+            .replace("–", "-")
+        )
+        line = re.sub(r"\s+", " ", line.strip())
         if not line:
             continue
         lines.append(line)
-    return lines
+    repaired: List[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if (
+            index + 1 < len(lines)
+            and re.match(r"^[a-z'’]", line)
+            and re.fullmatch(r"[A-Z]", lines[index + 1])
+        ):
+            line = lines[index + 1] + line
+            index += 1
+        repaired.append(line)
+        index += 1
+    return repaired
 
 
 def _extract_label_value(lines: List[str], label: str) -> str:
@@ -518,9 +776,67 @@ def _clean_org_candidate(value: str) -> str:
     return cleaned.strip(" -")
 
 
+def _looks_like_noisy_org_candidate(value: str) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    lowered = normalize_lookup(text)
+    if not lowered:
+        return True
+    if any(
+        marker in lowered
+        for marker in (
+            "dear ministers",
+            "i am pleased to submit",
+            "presentation to the parliament",
+            "board committees",
+            "responsible ministers",
+            "independent auditor",
+        )
+    ):
+        return True
+    if lowered.startswith(
+        (
+            "official",
+            "delivery of ",
+            "development of ",
+            "replacement of ",
+            "embedding of ",
+            "establishment of ",
+            "engagement with ",
+            "undertaking ",
+            "refreshing of ",
+        )
+    ):
+        return True
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", text) if word]
+    if len(words) > 7:
+        return True
+    if any(keyword in lowered for keyword in ("chairperson", "chief executive officer", "board")) and len(words) > 3:
+        return True
+    return False
+
+
+def _looks_like_generic_org_placeholder(value: str) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    lowered = normalize_lookup(text)
+    if not lowered:
+        return True
+    words = [
+        word
+        for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", text)
+        if normalize_lookup(word) not in _ORG_NAME_STOPWORDS
+    ]
+    if not words:
+        return True
+    generic_tokens = {"our", "corporate", "strategy", "plan", "report", "organisation", "organization", "web", "version", "official", "f"}
+    if all(normalize_lookup(word) in generic_tokens for word in words):
+        return True
+    return lowered in {"our corporate", "our strategy", "our corporate strategy", "web version corporate plan", "official f", "official"}
+
+
 def _extract_org_name(lines: List[str], attachment_names: List[str]) -> str:
     joined = " ".join(lines[:30])
     patterns = (
+        r"([A-Z][A-Za-z&'().,\- ]{3,80}?)\s+(?:20\d{2}\s*(?:[-–to]+\s*20\d{2})?\s+)?(?:strategic plan|strategy|annual report)\b",
         r"([A-Z][A-Za-z&'().,\- ]{3,80}?)\s+(?:strategic plan|strategy|annual report)\b",
         r"([A-Z][A-Za-z&'().,\- ]{3,80}?)\s+(?:strategic direction)\b",
         r"([A-Z][A-Za-z&'().,\- ]{3,80}?)\s+(?:statement of strategic priorities)\b",
@@ -551,6 +867,41 @@ def _extract_org_name(lines: List[str], attachment_names: List[str]) -> str:
     return ""
 
 
+def _should_keep_extracted_stakeholder(item: Dict[str, Any], org_name: str) -> bool:
+    name = re.sub(r"\s+", " ", str(item.get("name") or "").strip()).strip(" ,.;:-")
+    role = normalize_lookup(str(item.get("current_role") or "").strip())
+    lowered_name = normalize_lookup(name)
+    org_key = normalize_lookup(org_name)
+    if not name or not lowered_name:
+        return False
+    if org_key and lowered_name == org_key:
+        return False
+    if any(
+        marker in lowered_name
+        for marker in (
+            "responsible ministers",
+            "independent auditor",
+            "organisational chart",
+            "organizational chart",
+            "evaluation panel",
+            "and information",
+        )
+    ):
+        return False
+    if any(
+        marker in role
+        for marker in (
+            "board committees",
+            "independent auditor",
+            "evaluation panel",
+            "organisational chart",
+            "organizational chart",
+        )
+    ):
+        return False
+    return True
+
+
 def _extract_marked_items(lines: List[str], markers: tuple[str, ...], limit: int = 6) -> List[str]:
     items: List[str] = []
     for index, line in enumerate(lines[:250]):
@@ -571,6 +922,727 @@ def _extract_marked_items(lines: List[str], markers: tuple[str, ...], limit: int
         if len(items) >= limit * 2:
             break
     return _dedupe_keep_order(items)[:limit]
+
+
+def _looks_like_strategy_heading(value: str) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" -"))
+    normalized = normalize_lookup(text)
+    if not text or normalized in _STRATEGY_HEADING_STOPWORDS:
+        return False
+    if len(text) < 8 or len(text) > 80:
+        return False
+    if any(char.isdigit() for char in text):
+        return False
+    if _looks_like_noisy_theme_line(text):
+        return False
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", text) if word]
+    if len(words) < 2 or len(words) > 8:
+        return False
+    if normalize_lookup(words[0]) in {"our", "the", "this", "that", "to", "we"}:
+        return False
+    if normalize_lookup(words[-1]) in {"and", "the", "for", "of", "around", "to"}:
+        return False
+    if not any(word[0].isupper() for word in words if word):
+        return False
+    if not any(word[0].islower() for word in words[1:] if word):
+        return False
+    uppercase_positions = [index for index, word in enumerate(words) if word and word[0].isupper()]
+    if len(uppercase_positions) > 2:
+        return False
+    if any(position > 0 and position != len(words) - 1 for position in uppercase_positions):
+        return False
+    if any(
+        normalize_lookup(word) in {"strategy", "strategic", "plan", "report", "contents", "context", "purpose", "values"}
+        for word in words
+    ):
+        return False
+    return True
+
+
+def _looks_like_section_boundary(value: str) -> bool:
+    lowered = normalize_lookup(value)
+    return lowered in {
+        "strategic outcomes",
+        "focus areas",
+        "performance",
+        "opportunities",
+        "purpose",
+        "vision",
+        "strategic challenges",
+        "contribution to queensland government objectives for the community",
+    }
+
+
+def _looks_like_objective_fragment(value: str) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" -"))
+    lowered = normalize_lookup(text)
+    if not text or len(text) > 45 or len(text) < 8:
+        return False
+    if text.endswith("."):
+        return False
+    if any(char.isdigit() for char in text):
+        return False
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", text) if word]
+    if len(words) < 2 or len(words) > 6:
+        return False
+    if lowered in {"strategic objectives", "focus areas", "strategic outcomes"}:
+        return False
+    if any(normalize_lookup(word) in _INLINE_STRATEGY_SENTENCE_TOKENS for word in words):
+        return False
+    return True
+
+
+def _looks_like_objective_continuation(value: str) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" -"))
+    if not text or text.endswith("."):
+        return False
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", text) if word]
+    if not words or len(words) > 4:
+        return False
+    return all(word[:1].islower() for word in words if word)
+
+
+def _looks_like_focus_area_heading(value: str) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" -"))
+    if not text or len(text) < 8 or len(text) > 80:
+        return False
+    if text.endswith("."):
+        return False
+    lowered = normalize_lookup(text)
+    if lowered in {
+        "our strategic focus areas",
+        "our 5 strategic focus areas",
+        "our focus areas",
+        "example of a focus area",
+        "intent statements and measures",
+        "measured by",
+    }:
+        return False
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", text) if word]
+    if len(words) < 2 or len(words) > 7:
+        return False
+    uppercase_words = [word for word in words if word.isupper()]
+    if len(uppercase_words) >= max(2, len(words) - 1):
+        return True
+    if len(text) > 42:
+        return False
+    if any(normalize_lookup(word) in _INLINE_STRATEGY_SENTENCE_TOKENS for word in words):
+        return False
+    if sum(1 for word in words if word[:1].isupper()) == 0:
+        return False
+    lowered_words = [normalize_lookup(word) for word in words]
+    if lowered_words[0] in {"our", "what", "example", "measured", "intent"}:
+        return False
+    if lowered_words[0] in {"we", "were", "as", "through", "committed", "building", "develop"}:
+        return False
+    return True
+
+
+def _looks_like_incomplete_focus_heading(value: str) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" -"))
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", text) if word]
+    if not words:
+        return False
+    return normalize_lookup(words[-1]) in {"and", "of", "for", "our", "at"}
+
+
+def _looks_like_focus_area_cluster_heading(value: str) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" -"))
+    if not text or len(text) > 36 or text.endswith("."):
+        return False
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", text) if word]
+    if len(words) < 1 or len(words) > 4:
+        return False
+    lowered_words = [normalize_lookup(word) for word in words]
+    if lowered_words[0] in {"our", "what", "example", "intent", "measured", "we", "were", "as", "through", "committed"}:
+        return False
+    if any(normalize_lookup(word) in _INLINE_STRATEGY_SENTENCE_TOKENS for word in words):
+        return False
+    return True
+
+
+def _looks_like_focus_area_heading_continuation(value: str) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" -"))
+    if not text or len(text) > 24 or text.endswith("."):
+        return False
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", text) if word]
+    if len(words) < 1 or len(words) > 3:
+        return False
+    return all(not any(char.isdigit() for char in word) for word in words)
+
+
+def _extract_structured_strategy_sections(lines: List[str], limit: int = 6) -> List[Dict[str, str]]:
+    compact = [re.sub(r"\s+", " ", str(line or "").strip()) for line in lines[:500] if str(line or "").strip()]
+    themes: List[Dict[str, str]] = []
+    seen: set[str] = set()
+
+    focus_area_markers = {"focus areas", "our strategic focus areas", "our 5 strategic focus areas", "our focus areas"}
+    focus_indices = [index for index, line in enumerate(compact) if normalize_lookup(line) in focus_area_markers]
+    start = focus_indices[-1] if focus_indices else -1
+    if start >= 0:
+        cluster_probe = start + 1
+        cluster_headings: List[str] = []
+        while cluster_probe < len(compact) and len(cluster_headings) < limit:
+            current = compact[cluster_probe]
+            if _looks_like_section_boundary(current):
+                break
+            if not _looks_like_focus_area_cluster_heading(current):
+                if cluster_headings:
+                    break
+                cluster_probe += 1
+                continue
+            headline = current
+            consumed = 1
+            if cluster_probe + 1 < len(compact) and (
+                _looks_like_incomplete_focus_heading(current)
+                or len(re.findall(r"[A-Za-z][A-Za-z'’.\-]+", current)) <= 2
+            ) and _looks_like_focus_area_heading_continuation(compact[cluster_probe + 1]):
+                headline = f"{headline} {compact[cluster_probe + 1]}".strip()
+                consumed = 2
+            cluster_headings.append(headline.title())
+            cluster_probe += consumed
+        index = start + 1
+        if len(cluster_headings) >= 4:
+            description_blocks: List[str] = []
+            paragraph_parts: List[str] = []
+            while cluster_probe < len(compact):
+                follow = compact[cluster_probe]
+                if _looks_like_section_boundary(follow):
+                    break
+                if 20 <= len(follow) <= 260:
+                    paragraph_parts.append(follow)
+                    if follow.endswith("."):
+                        description_blocks.append(" ".join(paragraph_parts).strip())
+                        paragraph_parts = []
+                cluster_probe += 1
+                if len(description_blocks) >= len(cluster_headings):
+                    break
+            if paragraph_parts and len(description_blocks) < len(cluster_headings):
+                description_blocks.append(" ".join(paragraph_parts).strip())
+            for idx, headline in enumerate(cluster_headings):
+                key = normalize_lookup(headline)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                snippet = description_blocks[idx] if idx < len(description_blocks) else ""
+                themes.append({"headline": headline, "snippet": snippet[:420].strip()})
+            index = len(compact)
+        while index < len(compact) and len(themes) < limit:
+            line = compact[index]
+            if _looks_like_section_boundary(line):
+                break
+            if not _looks_like_focus_area_heading(line):
+                index += 1
+                continue
+            headings: List[str] = []
+            while index < len(compact):
+                current = compact[index]
+                if _looks_like_section_boundary(current) or not _looks_like_focus_area_heading(current):
+                    break
+                headline = current
+                consumed = 1
+                if (
+                    index + 1 < len(compact)
+                    and _looks_like_incomplete_focus_heading(current)
+                    and _looks_like_focus_area_heading(compact[index + 1])
+                ):
+                    headline = f"{headline} {compact[index + 1]}".strip()
+                    consumed = 2
+                headings.append(headline.title())
+                index += consumed
+
+            description_blocks: List[str] = []
+            paragraph_parts: List[str] = []
+            while index < len(compact):
+                follow = compact[index]
+                if _looks_like_section_boundary(follow) or _looks_like_focus_area_heading(follow):
+                    break
+                if 2 <= len(follow) <= 220:
+                    paragraph_parts.append(follow)
+                    if follow.endswith("."):
+                        description_blocks.append(" ".join(paragraph_parts).strip())
+                        paragraph_parts = []
+                index += 1
+            if paragraph_parts:
+                description_blocks.append(" ".join(paragraph_parts).strip())
+
+            for idx, headline in enumerate(headings):
+                key = normalize_lookup(headline)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                snippet = description_blocks[idx] if idx < len(description_blocks) else ""
+                themes.append({"headline": headline, "snippet": snippet[:420].strip()})
+                if len(themes) >= limit:
+                    break
+
+    try:
+        start = next(index for index, line in enumerate(compact) if normalize_lookup(line) == "strategic objectives")
+    except StopIteration:
+        start = -1
+    if start >= 0 and len(themes) < limit:
+        index = start + 1
+        headings: List[str] = []
+        while index < len(compact) and len(headings) < limit:
+            line = compact[index]
+            if _looks_like_section_boundary(line):
+                break
+            if not _looks_like_objective_fragment(line):
+                if headings and len(line) > 45:
+                    break
+                index += 1
+                continue
+            headline = line
+            consumed = 1
+            if index + 1 < len(compact) and (
+                _looks_like_objective_fragment(compact[index + 1])
+                or _looks_like_objective_continuation(compact[index + 1])
+            ):
+                headline = f"{headline} {compact[index + 1]}".strip()
+                consumed = 2
+            headings.append(headline)
+            index += consumed
+        for headline in headings:
+            key = normalize_lookup(headline)
+            if key and key not in seen:
+                seen.add(key)
+                themes.append({"headline": headline, "snippet": ""})
+                if len(themes) >= limit:
+                    break
+
+    return themes[:limit]
+
+
+def _extract_explicit_strategy_themes(lines: List[str], limit: int = 6) -> List[Dict[str, str]]:
+    structured = _extract_structured_strategy_sections(lines, limit=limit)
+    if len(structured) >= min(limit, 3):
+        return structured
+    themes: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    compact = [re.sub(r"\s+", " ", str(line or "").strip()) for line in lines[:400] if str(line or "").strip()]
+
+    def _looks_truncated(fragment: str) -> bool:
+        words = [normalize_lookup(word) for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", fragment)]
+        if not words:
+            return False
+        return words[-1] in {"and", "the", "for", "of", "around", "our"}
+
+    index = 0
+    while index < len(compact):
+        line = compact[index]
+        candidate = line
+        consumed = 1
+        if index + 1 < len(compact):
+            merged_two = f"{line} {compact[index + 1]}".strip()
+            if _looks_like_strategy_heading(merged_two):
+                candidate = merged_two
+                consumed = 2
+            if index + 2 < len(compact) and _looks_truncated(line):
+                merged_three = f"{line} {compact[index + 1]} {compact[index + 2]}".strip()
+                if _looks_like_strategy_heading(merged_three):
+                    candidate = merged_three
+                    consumed = 3
+        if not _looks_like_strategy_heading(candidate):
+            index += 1
+            continue
+        key = normalize_lookup(candidate)
+        if key in seen:
+            index += consumed
+            continue
+        snippet_parts: List[str] = []
+        for follow in compact[index + consumed : index + consumed + 3]:
+            if _looks_like_strategy_heading(follow):
+                break
+            if 20 <= len(follow) <= 220 and not _looks_like_noisy_theme_line(follow):
+                snippet_parts.append(re.sub(r"\s+", " ", follow).strip())
+        seen.add(key)
+        themes.append(
+            {
+                "headline": candidate,
+                "snippet": " ".join(snippet_parts)[:420].strip(),
+            }
+        )
+        index += consumed
+        if len(themes) >= limit:
+            break
+    if len(themes) >= min(limit, 3):
+        return themes
+
+    blob = re.sub(r"\s+", " ", " ".join(lines)).strip()
+    if not blob:
+        return themes
+    org_hint = _extract_org_name(lines, [])
+
+    def _looks_like_inline_heading(candidate: str) -> bool:
+        if not _looks_like_strategy_heading(candidate):
+            return False
+        candidate_tokens = [normalize_lookup(token) for token in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", candidate)]
+        if any(token in _INLINE_STRATEGY_SENTENCE_TOKENS for token in candidate_tokens):
+            return False
+        return True
+
+    tokens = re.findall(r"[A-Za-z][A-Za-z'’.\-]+", blob)
+    index = 0
+    while index < len(tokens) and len(themes) < limit:
+        token = tokens[index]
+        if not token or not token[0].isupper():
+            index += 1
+            continue
+        best_candidate = ""
+        best_end = index + 1
+        phrase_tokens: List[str] = []
+        max_end = min(len(tokens), index + 8)
+        for end in range(index, max_end):
+            phrase_tokens.append(tokens[end])
+            candidate = " ".join(phrase_tokens)
+            if _looks_like_inline_heading(candidate):
+                next_token = tokens[end + 1] if end + 1 < len(tokens) else ""
+                if not next_token or next_token[0].isupper():
+                    best_candidate = candidate
+                    best_end = end + 1
+        normalized_candidate = normalize_lookup(best_candidate)
+        if (
+            best_candidate
+            and normalized_candidate not in seen
+            and normalized_candidate != normalize_lookup(org_hint)
+            and "strategy" not in normalized_candidate
+            and "plan" not in normalized_candidate
+            and "report" not in normalized_candidate
+        ):
+            seen.add(normalized_candidate)
+            themes.append({"headline": best_candidate, "snippet": ""})
+            index = best_end
+            continue
+        index += 1
+    return themes
+
+
+def _headline_case(value: str) -> str:
+    parts = re.split(r"(\s+)", re.sub(r"\s+", " ", str(value or "").strip()))
+    return "".join(part[:1].upper() + part[1:] if part and not part.isspace() else part for part in parts).strip()
+
+
+def _looks_like_ambition_noise_line(value: str) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" -•*"))
+    lowered = normalize_lookup(text)
+    if not lowered:
+        return True
+    if lowered in {"who we are", "measured by"}:
+        return True
+    if "output measure" in lowered or "five year customer commitment" in lowered:
+        return True
+    if re.fullmatch(r"[*•-]+", text):
+        return True
+    if len(re.findall(r"[A-Za-z]", text)) < 2:
+        return True
+    return False
+
+
+def _looks_like_ambition_subheading(value: str) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" -•*"))
+    lowered = normalize_lookup(text)
+    if not text or _looks_like_ambition_noise_line(text):
+        return False
+    if lowered.startswith(("our ambitions for", "intent statements and measures")):
+        return False
+    if any(char.isdigit() for char in text):
+        return False
+    if text.endswith(".") or len(text) > 42:
+        return False
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’&/\-]*", text) if word]
+    if len(words) < 1 or len(words) > 5:
+        return False
+    if any(normalize_lookup(word) in _INLINE_STRATEGY_SENTENCE_TOKENS for word in words):
+        return False
+    return True
+
+
+def _looks_like_ambition_subheading_continuation(value: str) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" -•*"))
+    if not text or _looks_like_ambition_noise_line(text):
+        return False
+    if any(char.isdigit() for char in text):
+        return False
+    if text.endswith(".") or len(text) > 28:
+        return False
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’&/\-]*", text) if word]
+    if len(words) < 1 or len(words) > 4:
+        return False
+    return not any(normalize_lookup(word) in _INLINE_STRATEGY_SENTENCE_TOKENS for word in words)
+
+
+def _clean_ambition_narrative_line(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" -•*"))
+    lowered = normalize_lookup(text)
+    if not text or _looks_like_ambition_noise_line(text):
+        return ""
+    if lowered.startswith(("our ambitions for", "intent statements and measures")):
+        return ""
+    if text.startswith(("<", ">", "$")) and len(text) < 80:
+        return ""
+    if any(marker in lowered for marker in ("five year customer commitment", "output measure")):
+        return ""
+    return text
+
+
+def _build_ambition_section_snippet(section_lines: List[str]) -> str:
+    narrative_lines: List[str] = []
+    index = 0
+    while index < len(section_lines):
+        line = section_lines[index]
+        if _looks_like_ambition_subheading(line):
+            if index + 1 < len(section_lines) and _looks_like_ambition_subheading_continuation(section_lines[index + 1]):
+                index += 2
+            else:
+                index += 1
+            continue
+        cleaned = _clean_ambition_narrative_line(line)
+        if cleaned:
+            narrative_lines.append(cleaned)
+        index += 1
+
+    text = re.sub(r"\s+", " ", " ".join(narrative_lines)).strip(" ,.;:-")
+    if not text:
+        return ""
+
+    sentences: List[str] = []
+    for fragment in re.split(r"(?<=[.!?])\s+", text):
+        cleaned = re.sub(r"\s+", " ", fragment).strip(" ,.;:-")
+        if not cleaned or len(cleaned) < 40:
+            continue
+        if cleaned[:1] in "<>$" or re.match(r"^\d", cleaned):
+            continue
+        sentences.append(cleaned)
+        if len(sentences) >= 2:
+            break
+    snippet = " ".join(sentences) if sentences else text
+    if len(snippet) > 420:
+        snippet = snippet[:417].rstrip(" ,.;:-") + "..."
+    return snippet
+
+
+def _build_ambition_detail_snippet(narrative_lines: List[str]) -> str:
+    text = re.sub(r"\s+", " ", " ".join(str(item or "").strip() for item in narrative_lines if str(item or "").strip())).strip(" ,.;:-")
+    if not text:
+        return ""
+    sentences: List[str] = []
+    for fragment in re.split(r"(?<=[.!?])\s+", text):
+        cleaned = re.sub(r"\s+", " ", fragment).strip(" ,.;:-")
+        if not cleaned or len(cleaned) < 25:
+            continue
+        if cleaned[:1] in "<>$" or re.match(r"^\d", cleaned):
+            continue
+        sentences.append(cleaned)
+        if len(sentences) >= 2:
+            break
+    snippet = " ".join(sentences) if sentences else text
+    if len(snippet) > 320:
+        snippet = snippet[:317].rstrip(" ,.;:-") + "..."
+    return snippet
+
+
+def _extract_ambition_detail_points(section_lines: List[str], limit: int = 4) -> List[Dict[str, str]]:
+    compact = [re.sub(r"\s+", " ", str(line or "").strip()) for line in section_lines if str(line or "").strip()]
+    points: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    index = 0
+    while index < len(compact) and len(points) < limit:
+        current = compact[index]
+        if not _looks_like_ambition_subheading(current):
+            index += 1
+            continue
+        raw_heading = current
+        heading = current
+        if index + 1 < len(compact) and _looks_like_ambition_subheading_continuation(compact[index + 1]):
+            raw_heading = f"{raw_heading} {compact[index + 1]}".strip()
+            heading = f"{heading} {compact[index + 1]}".strip()
+            index += 2
+        else:
+            index += 1
+        narrative: List[str] = []
+        while index < len(compact) and not _looks_like_ambition_subheading(compact[index]):
+            cleaned = _clean_ambition_narrative_line(compact[index])
+            if cleaned:
+                narrative.append(cleaned)
+            index += 1
+        snippet = _build_ambition_detail_snippet(narrative)
+        heading = _headline_case(heading)
+        key = normalize_lookup(heading)
+        if not heading or not snippet or key in seen:
+            continue
+        seen.add(key)
+        points.append({"heading": heading, "raw_heading": raw_heading, "snippet": snippet})
+    return points
+
+
+def _extract_ambition_focus_area_signals(lines: List[str], limit: int = 8) -> List[Dict[str, str]]:
+    compact = [re.sub(r"\s+", " ", str(line or "").strip()) for line in lines if str(line or "").strip()]
+    signals: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    index = 0
+    while index < len(compact) and len(signals) < limit:
+        if not normalize_lookup(compact[index]).startswith("our ambitions for"):
+            index += 1
+            continue
+        index += 1
+        title_lines: List[str] = []
+        while index < len(compact):
+            current = compact[index]
+            lowered = normalize_lookup(current)
+            if lowered == "intent statements and measures":
+                index += 1
+                break
+            if _looks_like_ambition_noise_line(current):
+                index += 1
+                continue
+            if len(title_lines) >= 4:
+                break
+            title_lines.append(current)
+            index += 1
+        headline = _headline_case(" ".join(title_lines))
+        if not headline:
+            continue
+        section_lines: List[str] = []
+        while index < len(compact) and not normalize_lookup(compact[index]).startswith("our ambitions for"):
+            section_lines.append(compact[index])
+            index += 1
+        key = normalize_lookup(headline)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        snippet = _build_ambition_section_snippet(section_lines)
+        detail_points = _extract_ambition_detail_points(section_lines)
+        signals.append(
+            {
+                "headline": headline,
+                "category": "strategic_theme",
+                "snippet": snippet,
+                "evidence": snippet or headline,
+                "detail_points": detail_points,
+            }
+        )
+    return signals
+
+
+def _looks_like_priority_plan_heading(value: str) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" -•*"))
+    lowered = normalize_lookup(text)
+    if not text or len(text) < 6 or len(text) > 40:
+        return False
+    if text.endswith(".") or any(char.isdigit() for char in text):
+        return False
+    if lowered in {
+        "official",
+        "our strategic priorities",
+        "our strategic priorities framework",
+        "our 2050 vision",
+        "our commercial businesses",
+        "financial projections",
+        "what we do",
+        "strategic context",
+        "our current challenges",
+    }:
+        return False
+    if lowered.startswith(("our ", "this ", "we ", "the ")):
+        return False
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’&/\-]*", text) if word]
+    if len(words) < 1 or len(words) > 4:
+        return False
+    if any(normalize_lookup(word) in _INLINE_STRATEGY_SENTENCE_TOKENS for word in words):
+        return False
+    if normalize_lookup(words[0]) in {"delivery", "development", "establishment", "refreshing", "replacement", "embedding", "engagement", "undertaking"}:
+        return False
+    return True
+
+
+def _clean_priority_plan_line(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    text = re.sub(r"^[•*\-]+\s*", "", text).strip()
+    lowered = normalize_lookup(text)
+    if not text:
+        return ""
+    if lowered.startswith(("our strategic priorities", "our 2024-29 strategic priorities plan outlines priorities including")):
+        return ""
+    if lowered in {"official", "5", "supervisory control and data acquisition"}:
+        return ""
+    if len(re.findall(r"[A-Za-z]", text)) < 3:
+        return ""
+    return text
+
+
+def _build_priority_plan_snippet(section_lines: List[str]) -> str:
+    sentences: List[str] = []
+    for raw_line in section_lines:
+        cleaned = _clean_priority_plan_line(raw_line)
+        if not cleaned:
+            continue
+        if len(cleaned) < 24:
+            continue
+        if not cleaned.endswith((".", "!", "?")):
+            cleaned = cleaned.rstrip(" ,;:") + "."
+        sentences.append(cleaned)
+        if len(sentences) >= 2:
+            break
+    snippet = " ".join(sentences).strip()
+    if len(snippet) > 320:
+        snippet = snippet[:317].rstrip(" ,.;:-") + "..."
+    return snippet
+
+
+def _extract_priority_plan_signals(lines: List[str], limit: int = 8) -> List[Dict[str, str]]:
+    compact = [re.sub(r"\s+", " ", str(line or "").strip()) for line in lines if str(line or "").strip()]
+    signals: List[Dict[str, str]] = []
+    seen: set[str] = set()
+
+    try:
+        start = next(index for index, line in enumerate(compact) if normalize_lookup(line) == "our strategic priorities")
+    except StopIteration:
+        return signals
+
+    index = start + 1
+    while index < len(compact) and len(signals) < limit:
+        current = compact[index]
+        lowered = normalize_lookup(current)
+        if lowered in {"our 2050 vision", "our commercial businesses", "financial projections"}:
+            break
+        if lowered.startswith("our 2024-") and "strategic priorities plan outlines priorities" in lowered:
+            index += 1
+            continue
+        if not _looks_like_priority_plan_heading(current):
+            index += 1
+            continue
+
+        headline = _headline_case(current)
+        key = normalize_lookup(headline)
+        if key in seen:
+            index += 1
+            continue
+        seen.add(key)
+        index += 1
+
+        detail_lines: List[str] = []
+        while index < len(compact):
+            follow = compact[index]
+            lowered_follow = normalize_lookup(follow)
+            if lowered_follow in {"our 2050 vision", "our commercial businesses", "financial projections"}:
+                break
+            if _looks_like_priority_plan_heading(follow):
+                break
+            cleaned = _clean_priority_plan_line(follow)
+            if cleaned:
+                detail_lines.append(cleaned)
+            index += 1
+
+        snippet = _build_priority_plan_snippet(detail_lines)
+        signals.append(
+            {
+                "headline": headline,
+                "category": "strategic_theme",
+                "snippet": snippet,
+                "evidence": snippet or headline,
+            }
+        )
+    return signals
 
 
 def _collect_signal_snippets(lines: List[str], markers: tuple[str, ...], limit: int = 2) -> List[str]:
@@ -699,6 +1771,10 @@ def _looks_like_person_name(value: str) -> bool:
     lowered = normalize_lookup(text)
     if any(char.isdigit() for char in text) or "%" in text:
         return False
+    if "(" in text or ")" in text:
+        return False
+    if lowered in {"key management personnel", "official", "official f"}:
+        return False
     if any(token in lowered for token in ("foreword", "comment", "statement", "vision", "purpose", "values")):
         return False
     if any(token in lowered for token in _ROLE_KEYWORDS):
@@ -720,6 +1796,10 @@ def _looks_like_person_name(value: str) -> bool:
         eval_words = eval_words[1:]
     if len(eval_words) < 2 or len(eval_words) > 4:
         return False
+    if len(eval_words) == 4 and all(re.match(r"^[A-Z][a-z]{2,}$", word) for word in eval_words):
+        return False
+    if sum(1 for word in eval_words if re.match(r"^[A-Z][a-z]{2,}$", word)) < 2:
+        return False
     lowered_words = [normalize_lookup(word) for word in eval_words]
     if any(word in _NON_PERSON_NAME_TOKENS for word in lowered_words):
         return False
@@ -736,6 +1816,8 @@ def _looks_like_role_line(value: str) -> bool:
     if not lowered:
         return False
     if len(str(value or "").split()) > 9:
+        return False
+    if any(marker in lowered for marker in (" has ", " is ", " responsible for ", "experience", "including", "see ")):
         return False
     if any(marker in lowered for marker in _ROLE_LINE_EXCLUSION_MARKERS):
         return False
@@ -769,7 +1851,7 @@ def _extract_leadership_people(lines: List[str], org_name: str) -> List[Dict[str
             evidence_parts.append(org_name)
         if not clean_role:
             continue
-        key = normalize_lookup(clean_name)
+        key = _person_identity_key(clean_name)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -784,6 +1866,16 @@ def _extract_leadership_people(lines: List[str], org_name: str) -> List[Dict[str
             }
         )
     return people
+
+
+def _person_identity_key(value: str) -> str:
+    words = [
+        normalize_lookup(word.strip(".,()"))
+        for word in re.findall(r"[A-Za-z][A-Za-z'’.\-]+", str(value or ""))
+        if normalize_lookup(word.strip(".,()")) not in _PERSON_CREDENTIAL_TOKENS
+        and normalize_lookup(word.strip(".,()")) not in _PERSON_PREFIXES
+    ]
+    return " ".join(words[:4]).strip()
 
 
 def _extract_strategic_signals(lines: List[str], blob: str = "") -> List[Dict[str, str]]:
@@ -816,6 +1908,144 @@ def _org_short_forms(org_name: str) -> List[str]:
     if 2 <= len(acronym) <= 8:
         forms.append(acronym)
     return forms
+
+
+def _annual_report_framework_keywords(heading: str) -> List[str]:
+    lowered = normalize_lookup(heading)
+    keywords = [token for token in re.findall(r"[a-z]+", lowered) if token]
+    if "future" in lowered or "solution" in lowered:
+        keywords.extend(["project", "projects", "capital", "infrastructure", "growth", "capacity"])
+    if "healthy" in lowered or "country" in lowered:
+        keywords.extend(["environment", "waste", "wastewater", "recycle", "renewable", "country", "traditional owners"])
+    if "affordable" in lowered or "bill" in lowered:
+        keywords.extend(["bill", "bills", "price", "prices", "cpi", "value", "customer", "cost"])
+    if "climate" in lowered or "preparedness" in lowered:
+        keywords.extend(["climate", "renewable", "energy", "emissions", "carbon", "resilience"])
+    return _dedupe_keep_order([str(item).strip() for item in keywords if str(item).strip()])
+
+
+def _build_annual_report_framework_snippet(blob: str, heading: str) -> str:
+    text = re.sub(r"\s+", " ", str(blob or "")).strip()
+    if not text:
+        return ""
+    keyword_tokens = {normalize_lookup(item) for item in _annual_report_framework_keywords(heading) if str(item).strip()}
+    heading_key = normalize_lookup(heading)
+    sentences = [re.sub(r"\s+", " ", part).strip(" ,.;:-") for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+    scored: List[tuple[int, str]] = []
+    for sentence in sentences:
+        lowered = normalize_lookup(sentence)
+        if not lowered or "four pillars of our strategic framework" in lowered:
+            continue
+        if len(sentence) < 40 or len(sentence) > 320:
+            continue
+        score = 0
+        if heading_key and heading_key in lowered:
+            score += 4
+        for token in keyword_tokens:
+            if token and token in lowered:
+                score += 1
+        if score <= 0:
+            continue
+        scored.append((score, sentence))
+    scored.sort(key=lambda item: (-item[0], len(item[1])))
+    chosen: List[str] = []
+    seen: set[str] = set()
+    for _, sentence in scored:
+        key = normalize_lookup(sentence)
+        if key in seen:
+            continue
+        seen.add(key)
+        chosen.append(sentence.rstrip(".") + ".")
+        if len(chosen) >= 2:
+            break
+    snippet = " ".join(chosen).strip()
+    if len(snippet) > 320:
+        snippet = snippet[:317].rstrip(" ,.;:-") + "..."
+    return snippet
+
+
+def _extract_annual_report_framework_signals(lines: List[str], blob: str, limit: int = 6) -> List[Dict[str, str]]:
+    compact = [re.sub(r"\s+", " ", str(line or "").strip()) for line in lines if str(line or "").strip()]
+    headings: List[str] = []
+    for index, line in enumerate(compact[:220]):
+        lowered = normalize_lookup(line)
+        if "four pillars of our strategic framework" not in lowered:
+            continue
+        window = " ".join(compact[index : min(index + 3, len(compact))])
+        match = re.search(r"four pillars of our strategic framework,?\s*(.+)", window, flags=re.IGNORECASE)
+        if not match:
+            continue
+        remainder = match.group(1)
+        remainder = re.split(
+            r"\b(?:another notable achievement|we delivered|it is a pleasure to present|board chair|managing director)\b",
+            remainder,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        parts: List[str] = []
+        for chunk in re.split(r",", remainder):
+            parts.extend(re.split(r"\band\b", chunk, flags=re.IGNORECASE))
+        for part in parts:
+            cleaned = re.sub(r"\s+", " ", str(part or "").strip(" ,.;:-"))
+            lowered_clean = normalize_lookup(cleaned)
+            lowered_words = set(re.findall(r"[a-z]+", lowered_clean))
+            if not cleaned or len(cleaned.split()) > 4 or len(cleaned.split()) < 2:
+                continue
+            if lowered_clean.endswith(" and"):
+                continue
+            if lowered_words & _INLINE_STRATEGY_SENTENCE_TOKENS:
+                continue
+            if lowered_clean in {"our strategic framework", "delivering on our expectations"}:
+                continue
+            headings.append(_headline_case(cleaned))
+        for candidate in re.findall(r"[A-Za-z][A-Za-z]+(?:\s+[A-Za-z][A-Za-z]+){1,2}", remainder):
+            cleaned = re.sub(r"\s+", " ", candidate).strip(" ,.;:-")
+            lowered_clean = normalize_lookup(cleaned)
+            lowered_words = set(re.findall(r"[a-z]+", lowered_clean))
+            if not cleaned or len(cleaned.split()) > 3 or len(cleaned.split()) < 2:
+                continue
+            if lowered_clean in {normalize_lookup(item) for item in headings}:
+                continue
+            if lowered_clean.startswith(("another notable", "it is", "we delivered", "board chair", "managing director")):
+                continue
+            if lowered_clean.endswith(" and"):
+                continue
+            if lowered_words & _INLINE_STRATEGY_SENTENCE_TOKENS:
+                continue
+            headings.append(_headline_case(cleaned))
+        for candidate in re.findall(r"\band\s+([A-Za-z][A-Za-z]+(?:\s+[A-Za-z][A-Za-z]+){1,2})", remainder, flags=re.IGNORECASE):
+            cleaned = re.sub(r"\s+", " ", candidate).strip(" ,.;:-")
+            lowered_clean = normalize_lookup(cleaned)
+            lowered_words = set(re.findall(r"[a-z]+", lowered_clean))
+            if not cleaned or len(cleaned.split()) > 3 or len(cleaned.split()) < 2:
+                continue
+            if lowered_clean in {normalize_lookup(item) for item in headings}:
+                continue
+            if lowered_words & _INLINE_STRATEGY_SENTENCE_TOKENS:
+                continue
+            headings.append(_headline_case(cleaned))
+        if headings:
+            break
+
+    signals: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    for heading in headings:
+        key = normalize_lookup(heading)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        snippet = _build_annual_report_framework_snippet(blob, heading)
+        signals.append(
+            {
+                "headline": heading,
+                "category": "strategic_theme",
+                "snippet": snippet,
+                "evidence": snippet or heading,
+            }
+        )
+        if len(signals) >= limit:
+            break
+    return signals
 
 
 def clean_strategic_role_label(role: str, org_name: str = "") -> str:
@@ -915,6 +2145,7 @@ def _sentence_snippet(blob: str, match: re.Match[str]) -> str:
 def _format_indicator_value(template: str, groups: tuple[str, ...]) -> str:
     value = template
     for index, group in enumerate(groups):
+        value = value.replace("${" + str(index) + "}", "$" + str(group or "").strip())
         value = value.replace("{" + str(index) + "}", str(group or "").strip())
     return re.sub(r"\s+", " ", value).strip(" -")
 
@@ -1041,7 +2272,11 @@ def analyse_strategic_documents(
     extracted_summary: str,
     subject: str = "",
     raw_text: str = "",
+    extraction_depth: str = "default",
 ) -> Dict[str, Any]:
+    depth = str(extraction_depth or "default").strip().lower()
+    if depth not in {"brief", "default", "detailed"}:
+        depth = "default"
     processed = [item for item in attachments or [] if str(item.get("status") or "").strip().lower() == "processed"]
     names = [str(item.get("filename") or "").strip() for item in processed]
     text_blocks = [_read_document_text(item) for item in processed]
@@ -1057,6 +2292,44 @@ def analyse_strategic_documents(
     strategic_signals = _extract_strategic_signals(lines, "\n".join(lines))
     priorities = [str(item.get("headline") or "").strip() for item in strategic_signals if str(item.get("headline") or "").strip()]
     org_name = _extract_org_name(document_lines or lines, names)
+    subject_org_name = _extract_org_name(_compact_lines(subject), names)
+    if subject_org_name and (
+        _looks_like_generated_attachment_name(org_name)
+        or _looks_like_generic_org_placeholder(org_name)
+        or _looks_like_noisy_org_candidate(org_name)
+        or len(org_name.split()) < 2
+        or normalize_lookup(org_name) in {"managing", "director"}
+    ):
+        org_name = subject_org_name
+    priority_plan_signals = _extract_priority_plan_signals(document_lines or lines, limit=8) if doc_type == "strategic_plan" else []
+    explicit_themes = _extract_explicit_strategy_themes(document_lines or lines, limit=6) if doc_type == "strategic_plan" else []
+    ambition_signals = _extract_ambition_focus_area_signals(document_lines or lines, limit=8) if doc_type == "strategic_plan" else []
+    annual_report_framework_signals = _extract_annual_report_framework_signals(document_lines or lines, combined_text or extracted_summary, limit=6) if doc_type == "annual_report" else []
+    if priority_plan_signals and len(priority_plan_signals) >= 3:
+        themes = [str(item.get("headline") or "").strip() for item in priority_plan_signals if str(item.get("headline") or "").strip()]
+        strategic_signals = priority_plan_signals
+        priorities = themes[:]
+    elif annual_report_framework_signals and len(annual_report_framework_signals) >= 3:
+        themes = [str(item.get("headline") or "").strip() for item in annual_report_framework_signals if str(item.get("headline") or "").strip()]
+        strategic_signals = annual_report_framework_signals
+        priorities = themes[:]
+    elif ambition_signals and len(ambition_signals) >= 3:
+        themes = [str(item.get("headline") or "").strip() for item in ambition_signals if str(item.get("headline") or "").strip()]
+        strategic_signals = ambition_signals
+        priorities = themes[:]
+    elif explicit_themes and len(explicit_themes) >= 3:
+        themes = [str(item.get("headline") or "").strip() for item in explicit_themes if str(item.get("headline") or "").strip()]
+        strategic_signals = [
+            {
+                "headline": str(item.get("headline") or "").strip(),
+                "category": "strategic_theme",
+                "snippet": str(item.get("snippet") or "").strip(),
+                "evidence": str(item.get("snippet") or item.get("headline") or "").strip(),
+            }
+            for item in explicit_themes
+            if str(item.get("headline") or "").strip()
+        ]
+        priorities = [str(item.get("headline") or "").strip() for item in strategic_signals if str(item.get("headline") or "").strip()]
     leadership_people = _extract_leadership_people(document_lines or lines, org_name)
     performance_indicators = _extract_performance_indicators("\n".join(lines), doc_type)
     major_projects = _extract_major_projects("\n".join(lines), doc_type)
@@ -1069,26 +2342,53 @@ def analyse_strategic_documents(
             "evidence": str(item.get("evidence") or "").strip(),
         }
         for item in leadership_people
-        if str(item.get("name") or "").strip()
-    ][:8]
+        if str(item.get("name") or "").strip() and _should_keep_extracted_stakeholder(item, org_name)
+    ]
+
+    if depth == "brief":
+        themes = themes[:3]
+        initiatives = initiatives[:3]
+        strategic_signals = strategic_signals[:2]
+        priorities = priorities[:2]
+        leadership_people = leadership_people[:4]
+        performance_indicators = performance_indicators[:3]
+        major_projects = major_projects[:3]
+        kpi_focuses = kpi_focuses[:2]
+        key_stakeholders = key_stakeholders[:4]
+    elif depth == "default":
+        strategic_signals = strategic_signals[:7]
+        priorities = priorities[:7]
+        leadership_people = leadership_people[:8]
+        performance_indicators = performance_indicators[:8]
+        major_projects = major_projects[:8]
+        kpi_focuses = kpi_focuses[:4]
+        key_stakeholders = key_stakeholders[:6]
+    else:
+        strategic_signals = strategic_signals[:8]
+        priorities = priorities[:8]
+        leadership_people = leadership_people[:12]
+        performance_indicators = performance_indicators[:10]
+        major_projects = major_projects[:10]
+        kpi_focuses = kpi_focuses[:6]
+        key_stakeholders = key_stakeholders[:10]
 
     summary_parts: List[str] = []
     if org_name:
         summary_parts.append(f"Document appears to relate to {org_name}.")
     if strategic_signals:
         summary_parts.append(
-            f"Key strategic signals: {', '.join(item['headline'] for item in strategic_signals[:4])}."
+            f"Key strategic signals: {', '.join(item['headline'] for item in strategic_signals[:(2 if depth == 'brief' else 4 if depth == 'default' else 6)])}."
         )
     elif themes:
-        summary_parts.append(f"Detected strategy themes: {', '.join(themes[:3])}.")
+        summary_parts.append(f"Detected strategy themes: {', '.join(themes[:(2 if depth == 'brief' else 3 if depth == 'default' else 5)])}.")
     if initiatives:
-        summary_parts.append(f"Possible key initiatives: {', '.join(initiatives[:3])}.")
+        summary_parts.append(f"Possible key initiatives: {', '.join(initiatives[:(2 if depth == 'brief' else 3 if depth == 'default' else 5)])}.")
     if performance_indicators:
         summary_parts.append(
             "Performance snapshot: "
             + ", ".join(
                 f"{item['label']} ({item['value']})"
-                for item in performance_indicators[:4]
+                for item in performance_indicators[:(2 if depth == 'brief' else 4 if depth == 'default' else 6)]
                 if str(item.get("value") or "").strip()
             )
             + "."
@@ -1098,7 +2398,7 @@ def analyse_strategic_documents(
             "Key projects: "
             + ", ".join(
                 f"{item['name']} ({item['value']})"
-                for item in major_projects[:4]
+                for item in major_projects[:(2 if depth == 'brief' else 4 if depth == 'default' else 6)]
                 if str(item.get("name") or "").strip() and str(item.get("value") or "").strip()
             )
             + "."
@@ -1108,7 +2408,7 @@ def analyse_strategic_documents(
             "Key stakeholders: "
             + ", ".join(
                 f"{item['name']} ({item['current_role']})"
-                for item in key_stakeholders[:3]
+                for item in key_stakeholders[:(2 if depth == 'brief' else 3 if depth == 'default' else 5)]
                 if str(item.get("current_role") or "").strip()
             )
             + "."
@@ -1131,6 +2431,7 @@ def analyse_strategic_documents(
         "major_projects": major_projects,
         "kpi_focuses": kpi_focuses,
         "strategic_signals": strategic_signals,
+        "extraction_depth": depth,
         "has_strategy_markers": bool(strategic_signals or themes or initiatives or vision or mission or values or doc_type in {"strategic_plan", "annual_report"}),
         "strategic_summary": " ".join(summary_parts).strip(),
     }

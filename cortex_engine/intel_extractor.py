@@ -34,10 +34,34 @@ _EMAIL_WRAPPER_NOISE_RE = re.compile(
 )
 _MAIL_SUBJECT_PREFIX_RE = re.compile(r"^\s*((?:re|fw|fwd)\s*:\s*)+", re.IGNORECASE)
 _EMAIL_TRIAGE_MODELS = (
+    os.environ.get("CORTEX_INTEL_TRIAGE_MODEL", "").strip(),
+    os.environ.get("LOCAL_LLM_SYNTHESIS_MODEL", "").strip(),
+    "qwen2.5:72b-instruct-q4_K_M",
+    "llama3.3:70b-instruct-q4_K_M",
+    "nemotron:70b-instruct-q4_K_M",
+    "mistral-small3.2:latest",
     "qwen3.5:9b",
     "qwen3.5:9b-q8_0",
     "qwen2.5:14b-instruct-q4_K_M",
     "qwen2.5:14b",
+)
+_PRIVATE_SUBJECT_MARKERS = ("private", "sensitive", "confidential")
+_PRIVATE_SUBJECT_RE = re.compile(r"(?i)\b(?:private|sensitive|confidential)\b")
+_EXTERNAL_SUBJECT_RE = re.compile(r"(?i)^(?:open|public)\b")
+_PUBLIC_COMPLEX_DOC_TYPES = {"annual_report", "strategic_plan", "org_chart"}
+_ANTHROPIC_HAIKU_MODEL = os.environ.get("CORTEX_INTEL_ANTHROPIC_DEFAULT_MODEL", "").strip() or "claude-haiku-4-5-20251001"
+_ANTHROPIC_DOCUMENT_MODEL = os.environ.get("CORTEX_INTEL_ANTHROPIC_DOCUMENT_MODEL", "").strip() or "claude-sonnet-4-6"
+_LOCAL_INTEL_MODEL_CANDIDATES = (
+    "qwen3:30b",
+    "mistral-small3.2:latest",
+    "nemotron-3-nano:latest",
+    "qwen2.5:72b-instruct-q4_K_M",
+    "llama3.3:70b-instruct-q4_K_M",
+    "nemotron:70b-instruct-q4_K_M",
+    "mistral-small:latest",
+    "qwen2.5:14b-instruct-q4_K_M",
+    "llama3.1:8b-instruct-q8_0",
+    "llama3.2:3b-instruct-q8_0",
 )
 
 
@@ -48,6 +72,12 @@ def _anthropic_client():
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set in config.env")
     return anthropic.Anthropic(api_key=api_key)
+
+
+def _ollama_client(timeout: float = 120):
+    import ollama
+
+    return ollama.Client(timeout=timeout)
 
 
 def _strip_html(value: str) -> str:
@@ -215,6 +245,7 @@ def _clean_subject_text(value: str) -> str:
         if updated == text:
             break
         text = updated
+    text = _PRIVATE_SUBJECT_RE.sub(" ", text)
     text = re.sub(r"\s+", " ", text).strip(" -|:")
     return text
 
@@ -533,8 +564,109 @@ def _extract_json_object(text: str) -> Dict[str, Any]:
         return {}
 
 
-def _call_haiku_extract(payload: Dict[str, Any], combined_text: str) -> Dict[str, Any]:
-    client = _anthropic_client()
+def _subject_requests_local_only(subject: str) -> bool:
+    lowered = normalize_lookup(subject)
+    return any(re.search(rf"\b{re.escape(marker)}\b", lowered) for marker in _PRIVATE_SUBJECT_MARKERS)
+
+
+def _subject_requests_external_llm(subject: str) -> bool:
+    text = str(subject or "").strip()
+    if not text:
+        return False
+    while True:
+        updated = _MAIL_SUBJECT_PREFIX_RE.sub("", text).strip()
+        if updated == text:
+            break
+        text = updated
+    return bool(_EXTERNAL_SUBJECT_RE.search(text))
+
+
+def _infer_policy_doc_type(payload: Dict[str, Any], attachments: List[Dict[str, Any]]) -> str:
+    subject = _clean_subject_text(str(payload.get("subject") or ""))
+    subject_lower = normalize_lookup(subject)
+    names = " ".join(str(item.get("filename") or "").strip() for item in attachments)
+    names_lower = normalize_lookup(names)
+    combined = " ".join(part for part in [subject_lower, names_lower] if part).strip()
+    if not combined:
+        return ""
+    if any(token in combined for token in ("org chart", "organisation chart", "organizational chart")):
+        return "org_chart"
+    if "annual report" in combined:
+        return "annual_report"
+    if any(
+        token in combined
+        for token in (
+            "strategic plan",
+            "corporate strategy",
+            "corporate plan",
+            "strategy 20",
+            "strategy202",
+        )
+    ):
+        return "strategic_plan"
+    return ""
+
+
+def _preferred_local_extract_models(requested_model: str = "") -> List[str]:
+    candidates: List[str] = []
+    for candidate in (
+        requested_model,
+        os.environ.get("CORTEX_INTEL_LOCAL_MODEL", ""),
+        os.environ.get("INTEL_LOCAL_MODEL", ""),
+        *_LOCAL_INTEL_MODEL_CANDIDATES,
+        os.environ.get("LOCAL_LLM_SYNTHESIS_MODEL", ""),
+    ):
+        name = str(candidate or "").strip()
+        if name and name not in candidates:
+            candidates.append(name)
+    return candidates
+
+
+def _select_local_extract_model(requested_model: str = "") -> str:
+    candidates = _preferred_local_extract_models(requested_model)
+    try:
+        client = _ollama_client(timeout=30)
+        listing = client.list()
+        models = listing.get("models") if isinstance(listing, dict) else getattr(listing, "models", []) or []
+        installed: set[str] = set()
+        for item in models:
+            if isinstance(item, dict):
+                name = str(item.get("model") or item.get("name") or "").strip()
+            else:
+                name = str(getattr(item, "model", "") or getattr(item, "name", "") or "").strip()
+            if name:
+                installed.add(name)
+        for candidate in candidates:
+            if candidate in installed:
+                return candidate
+    except Exception:
+        pass
+    return candidates[0] if candidates else "qwen2.5:14b-instruct-q4_K_M"
+
+
+def _choose_llm_policy(payload: Dict[str, Any], attachments: List[Dict[str, Any]]) -> Dict[str, Any]:
+    subject = str(payload.get("original_subject") or payload.get("subject") or "").strip()
+    doc_type = _infer_policy_doc_type(payload, attachments)
+    local_only = _subject_requests_local_only(subject)
+    external_ok = _subject_requests_external_llm(subject)
+    if doc_type in _PUBLIC_COMPLEX_DOC_TYPES and external_ok and not local_only:
+        return {
+            "provider": "anthropic",
+            "model": _ANTHROPIC_DOCUMENT_MODEL,
+            "doc_type": doc_type,
+            "local_only": False,
+            "reason": f"subject_marked_open_{doc_type}",
+        }
+    return {
+        "provider": "ollama",
+        "model": _select_local_extract_model(),
+        "doc_type": doc_type,
+        "local_only": local_only,
+        "reason": "subject_marked_private" if local_only else "default_local_intel",
+    }
+
+
+def _build_structured_extract_prompts(payload: Dict[str, Any], combined_text: str) -> Tuple[str, str]:
     system_prompt = (
         "You extract structured market-intelligence entities from emails, screenshots, and attachment OCR. "
         "Return only valid JSON. Be conservative. Do not invent people or organisations."
@@ -557,8 +689,14 @@ def _call_haiku_extract(payload: Dict[str, Any], combined_text: str) -> Dict[str
         f"Primary URL: {payload.get('primary_url', '')}\n\n"
         f"Source text:\n{combined_text[:16000]}"
     )
+    return system_prompt, user_prompt
+
+
+def _call_anthropic_extract(payload: Dict[str, Any], combined_text: str, model: str) -> Tuple[Dict[str, Any], str]:
+    client = _anthropic_client()
+    system_prompt, user_prompt = _build_structured_extract_prompts(payload, combined_text)
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=model,
         max_tokens=1800,
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}],
@@ -568,7 +706,46 @@ def _call_haiku_extract(payload: Dict[str, Any], combined_text: str) -> Dict[str
         text = getattr(block, "text", "")
         if text:
             parts.append(text)
-    return _extract_json_object("\n".join(parts))
+    return _extract_json_object("\n".join(parts)), model
+
+
+def _call_haiku_extract(payload: Dict[str, Any], combined_text: str) -> Dict[str, Any]:
+    parsed, _model = _call_anthropic_extract(payload, combined_text, _ANTHROPIC_HAIKU_MODEL)
+    return parsed
+
+
+def _call_local_extract(payload: Dict[str, Any], combined_text: str, model: str = "") -> Tuple[Dict[str, Any], str]:
+    system_prompt, user_prompt = _build_structured_extract_prompts(payload, combined_text)
+    doc_type = str(_infer_policy_doc_type(payload, list(payload.get("attachments") or [])) or "").strip().lower()
+    timeout_seconds = float(
+        os.environ.get(
+            "CORTEX_INTEL_LOCAL_DOCUMENT_TIMEOUT_SECONDS" if doc_type in _PUBLIC_COMPLEX_DOC_TYPES else "CORTEX_INTEL_LOCAL_TIMEOUT_SECONDS",
+            "240" if doc_type in _PUBLIC_COMPLEX_DOC_TYPES else "120",
+        )
+        or ("240" if doc_type in _PUBLIC_COMPLEX_DOC_TYPES else "120")
+    )
+    last_error: Optional[Exception] = None
+    for candidate in _preferred_local_extract_models(model):
+        try:
+            client = _ollama_client(timeout=timeout_seconds)
+            response = client.chat(
+                model=candidate,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                options={"temperature": 0.1, "num_predict": 2200},
+            )
+            parsed = _extract_json_object(_extract_chat_content(response))
+            if parsed:
+                return parsed, candidate
+        except Exception as exc:
+            last_error = exc
+            logger.warning("intel_extract local model %s failed: %s", candidate, exc)
+            continue
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("No local extraction model available")
 
 
 def _prepare_anthropic_image_bytes(path_obj: Path, mime_type: str) -> Tuple[bytes, str]:
@@ -639,13 +816,13 @@ def _prepare_anthropic_image_bytes(path_obj: Path, mime_type: str) -> Tuple[byte
     return original_bytes, normalized_mime
 
 
-def _call_haiku_image_extract(payload: Dict[str, Any], attachment: Dict[str, Any]) -> Dict[str, Any]:
+def _call_anthropic_image_extract(payload: Dict[str, Any], attachment: Dict[str, Any], model: str) -> Tuple[Dict[str, Any], str]:
     stored_path = _normalize_attachment_path(attachment.get("stored_path") or "")
     if not stored_path:
-        return {}
+        return {}, model
     path_obj = Path(stored_path)
     if not path_obj.exists():
-        return {}
+        return {}, model
 
     mime_type = str(attachment.get("mime_type") or "").strip().lower()
     if not mime_type.startswith("image/"):
@@ -689,7 +866,7 @@ def _call_haiku_image_extract(payload: Dict[str, Any], attachment: Dict[str, Any
         f"Attachment filename: {attachment.get('filename', '')}\n"
     )
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=model,
         max_tokens=1600,
         system=system_prompt,
         messages=[
@@ -714,7 +891,12 @@ def _call_haiku_image_extract(payload: Dict[str, Any], attachment: Dict[str, Any
         text = getattr(block, "text", "")
         if text:
             parts.append(text)
-    return _extract_json_object("\n".join(parts))
+    return _extract_json_object("\n".join(parts)), model
+
+
+def _call_haiku_image_extract(payload: Dict[str, Any], attachment: Dict[str, Any]) -> Dict[str, Any]:
+    parsed, _model = _call_anthropic_image_extract(payload, attachment, _ANTHROPIC_HAIKU_MODEL)
+    return parsed
 
 
 def _normalized_confidence(value: Any, default: float = 0.5) -> float:
@@ -1211,6 +1393,7 @@ def extract_intel(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Pat
         attachments = [item for item in attachments if str(item.get("filename") or "").strip() in selected_names]
     if ignored_names:
         attachments = [item for item in attachments if str(item.get("filename") or "").strip() not in ignored_names]
+    llm_policy = _choose_llm_policy(payload, attachments)
     attachment_texts: List[str] = []
     attachment_summaries: List[Dict[str, Any]] = []
     warnings: List[str] = []
@@ -1225,10 +1408,15 @@ def extract_intel(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Pat
         elif summary.get("warning"):
             warnings.append(f"{summary.get('filename') or 'attachment'}: {summary['warning']}")
         try:
-            if str(summary.get("kind") or "").lower() == "image" and summary.get("stored_path"):
-                structured_image = _call_haiku_image_extract(payload, summary)
+            if (
+                llm_policy.get("provider") == "anthropic"
+                and str(summary.get("kind") or "").lower() == "image"
+                and summary.get("stored_path")
+            ):
+                structured_image, actual_model = _call_anthropic_image_extract(payload, summary, str(llm_policy.get("model") or _ANTHROPIC_DOCUMENT_MODEL))
                 if structured_image:
                     image_structured_items.append(structured_image)
+                llm_policy["actual_model"] = actual_model
         except Exception as exc:
             warnings.append(f"{summary.get('filename') or 'attachment'}: image extraction failed: {exc}")
             logger.warning("intel_extract image extraction failed for %s: %s", summary.get("filename", ""), exc)
@@ -1257,10 +1445,35 @@ def extract_intel(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Pat
     structured: Dict[str, Any] = {}
     if combined_text:
         try:
-            structured = _call_haiku_extract(payload, combined_text)
+            if llm_policy.get("provider") == "anthropic":
+                structured, actual_model = _call_anthropic_extract(
+                    payload,
+                    combined_text,
+                    str(llm_policy.get("model") or _ANTHROPIC_DOCUMENT_MODEL),
+                )
+                llm_policy["actual_model"] = actual_model
+            else:
+                structured, actual_model = _call_local_extract(
+                    payload,
+                    combined_text,
+                    str(llm_policy.get("model") or ""),
+                )
+                llm_policy["actual_model"] = actual_model
         except Exception as exc:
-            warnings.append(f"Haiku extraction failed: {exc}")
-            logger.warning("intel_extract anthropic call failed: %s", exc)
+            if llm_policy.get("provider") == "anthropic":
+                warnings.append(f"Anthropic extraction failed: {exc}")
+                logger.warning("intel_extract anthropic call failed: %s", exc)
+                try:
+                    structured, actual_model = _call_local_extract(payload, combined_text)
+                    llm_policy["fallback_provider"] = "ollama"
+                    llm_policy["fallback_model"] = actual_model
+                    llm_policy["actual_model"] = actual_model
+                except Exception as fallback_exc:
+                    warnings.append(f"Local fallback extraction failed: {fallback_exc}")
+                    logger.warning("intel_extract local fallback failed: %s", fallback_exc)
+            else:
+                warnings.append(f"Local extraction failed: {exc}")
+                logger.warning("intel_extract local ollama call failed: %s", exc)
     heuristic_structured = _extract_linkedin_feed_structured(combined_text)
     org_chart_structured = extract_org_chart_structured(
         attachment_texts=attachment_texts,
@@ -1337,6 +1550,7 @@ def extract_intel(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Pat
         "attachments": attachment_summaries,
         "warnings": warnings,
         "email_triage": triage,
+        "llm_policy": llm_policy,
     }
 
     output_path: Optional[Path] = None

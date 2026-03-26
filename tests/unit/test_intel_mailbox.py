@@ -2,12 +2,16 @@ import json
 from email.message import EmailMessage
 from pathlib import Path
 
+from cortex_engine.document_registry import build_content_fingerprint, build_document_meta, derive_period_label
 from cortex_engine.intel_deduplicator import find_duplicate_note
 from cortex_engine.intel_mailbox import (
     IntelMailboxConfig,
     IntelMailboxPoller,
     IntelMailboxStore,
+    _compact_strategy_snippet,
+    _clean_note_signal_snippet,
     _subject_org_hint,
+    _should_keep_rendered_strategic_signal,
     parse_email_bytes,
 )
 from cortex_engine.intel_note_processor import IntelNoteProcessor
@@ -147,6 +151,9 @@ def test_store_preserves_duplicate_attachment_filenames(tmp_path):
 
 
 class _FakeSignalStore:
+    def __init__(self):
+        self.document_records = {}
+
     def ingest_signal(self, payload):
         return {
             "signal_id": "sig_test_1",
@@ -172,6 +179,30 @@ class _FakeSignalStore:
 
     def get_state(self):
         return {}
+
+    def get_document_record(self, org_name, canonical_doc_key):
+        return dict(self.document_records.get((org_name.lower(), str(canonical_doc_key or "").strip()), {})) or None
+
+    def classify_document_meta(self, org_name, document_meta):
+        meta = dict(document_meta or {})
+        existing = self.get_document_record(org_name, meta.get("canonical_doc_key"))
+        if existing:
+            meta["status"] = "known_same" if str(existing.get("content_fingerprint") or "") == str(meta.get("content_fingerprint") or "") else "changed_document"
+            meta["ingest_recommendation"] = "skip" if meta["status"] == "known_same" and str(meta.get("ingest_policy") or "") == "strict" else "ingest"
+            meta["existing_record"] = existing
+        else:
+            meta["status"] = meta.get("status") or "new_document"
+            meta["ingest_recommendation"] = "ingest"
+            meta["existing_record"] = {}
+        return meta
+
+    def register_document_meta(self, org_name, document_meta, latest_trace_id="", latest_intel_id=""):
+        meta = dict(document_meta or {})
+        meta["org_name"] = org_name
+        meta["latest_trace_id"] = latest_trace_id
+        meta["latest_intel_id"] = latest_intel_id
+        self.document_records[(org_name.lower(), str(meta.get("canonical_doc_key") or "").strip())] = meta
+        return meta
 
 
 class _FakeIMAP:
@@ -503,6 +534,159 @@ def test_mailbox_routing_override_and_subject_org_hint_flow_into_note_payload(tm
     assert delivery_payload["mailbox_routing"]["status"] == "matched_override"
     assert delivery_payload["mailbox_routing"]["requested_org_name"] == "Escient"
     assert delivery_payload["mailbox_routing"]["subject_org_hint"] == "Barwon Water"
+
+
+def test_mailbox_routing_parses_depth_override_and_strips_it_from_subject(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_RoutingSignalStore(),
+    )
+
+    routing = poller._resolve_message_routing(
+        {
+            "subject": "Fw: entity: Escient | depth:detailed | Barwon Water annual report",
+            "from_email": "paul@longboardfella.com.au",
+        },
+        {
+            "attachments": [
+                {
+                    "filename": "barwon-water-annual-report.pdf",
+                    "kind": "document",
+                }
+            ]
+        },
+    )
+
+    assert routing["effective_org_name"] == "Escient"
+    assert routing["status"] == "matched_override"
+    assert routing["clean_subject"] == "Barwon Water annual report"
+    assert routing["subject_org_hint"] == "Barwon Water"
+    assert routing["extraction_depth"] == "detailed"
+
+
+def test_mailbox_routing_parses_force_override_and_strips_it_from_subject(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_RoutingSignalStore(),
+    )
+
+    routing = poller._resolve_message_routing(
+        {
+            "subject": "entity: Escient | depth:detailed | force:yes | Yarra Valley Water strategic plan",
+            "from_email": "paul@longboardfella.com.au",
+        },
+        {"attachments": [{"filename": "strategy.pdf", "kind": "document"}]},
+    )
+
+    assert routing["effective_org_name"] == "Escient"
+    assert routing["clean_subject"] == "Yarra Valley Water strategic plan"
+    assert routing["force_reingest"] is True
+
+
+def test_mailbox_routing_strips_privacy_markers_from_clean_subject_and_hint(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_RoutingSignalStore(),
+    )
+
+    routing = poller._resolve_message_routing(
+        {
+            "subject": "Private > entity: Escient > South East Water strategic plan",
+            "from_email": "paul@longboardfella.com.au",
+        },
+        {"attachments": [{"filename": "strategy.pdf", "kind": "document"}]},
+    )
+
+    assert routing["effective_org_name"] == "Escient"
+    assert routing["clean_subject"] == "South East Water strategic plan"
+    assert routing["subject_org_hint"] == "South East Water"
 
 
 def test_mailbox_routing_strips_literal_subject_prefix_and_matches_org_context(tmp_path):
@@ -868,9 +1052,1353 @@ def test_mailbox_org_chart_note_uses_entities_when_people_bucket_missing(tmp_pat
     assert "Dr. Paul Cooper" not in payload["note"]["content"]
 
 
+def test_mailbox_org_chart_note_falls_back_to_functional_structure_when_no_people_found(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "org chart for Greater Western Water",
+            "from_name": "Paul Cooper",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-24T06:12:00+00:00",
+            "raw_text": "Forwarding functional org chart.",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "people": [],
+            "entities": [
+                {"canonical_name": "Greater Western Water", "name": "Greater Western Water", "target_type": "organisation"},
+            ],
+            "organisations": [{"canonical_name": "Greater Western Water"}],
+            "attachments": [{"filename": "greater-western-water-org-chart.png", "status": "processed", "excerpt": "Functional org chart"}],
+            "summary": "Functional organisational chart.",
+            "target_update_suggestions": [],
+            "processing_meta": {},
+        },
+        signal={},
+        markdown_text="\n".join(
+            [
+                "Greater Western Water organisational chart",
+                "Office of the CEO",
+                "General Manager, Operations",
+                "People and Culture",
+                "Customer and Community",
+                "Digital and Technology",
+                "Corporate Services",
+            ]
+        ),
+        message_kind="org_chart",
+        routing={"subject_org_hint": "Greater Western Water", "clean_subject": "org chart for Greater Western Water", "has_org_chart_image_attachment": True},
+    )
+
+    assert "## Functional Structure" in payload["note"]["content"]
+    assert "## Leadership Team" not in payload["note"]["content"]
+    assert "- Office of the CEO" in payload["note"]["content"]
+    assert "- General Manager, Operations" in payload["note"]["content"]
+    assert "- Digital and Technology" in payload["note"]["content"]
+
+
+def test_mailbox_org_chart_functional_structure_strips_typed_labels_and_org_rows(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "entity:escient org chart for GVW",
+            "from_name": "Paul Cooper",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-24T06:45:00+00:00",
+            "raw_text": "Forwarding functional org chart.",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "people": [],
+            "entities": [
+                {"canonical_name": "Asset Monitoring", "name": "Asset Monitoring", "target_type": "person"},
+                {"canonical_name": "Business Intelligence", "name": "Business Intelligence", "target_type": "person"},
+                {"canonical_name": "Customer Accounts", "name": "Customer Accounts", "target_type": "person"},
+                {"canonical_name": "Goulburn Valley Water", "name": "Goulburn Valley Water", "target_type": "organisation"},
+            ],
+            "organisations": [{"canonical_name": "Goulburn Valley Water"}],
+            "attachments": [{"filename": "gvw-functional-org-chart.png", "status": "processed", "excerpt": "Functional org chart"}],
+            "summary": "Functional organisational chart.",
+            "target_update_suggestions": [],
+            "warnings": [],
+            "processing_meta": {},
+        },
+        signal={},
+        markdown_text="\n".join(
+            [
+                "Asset Monitoring (person)",
+                "Business Intelligence (person)",
+                "Customer Accounts (person)",
+                "Goulburn Valley Water (organisation)",
+                "Technology Programs",
+                "Corporate Services",
+            ]
+        ),
+        message_kind="org_chart",
+        routing={"subject_org_hint": "GVW", "clean_subject": "org chart for GVW", "has_org_chart_image_attachment": True},
+    )
+
+    assert "Asset Monitoring (person)" not in payload["note"]["content"]
+    assert "Goulburn Valley Water (organisation)" not in payload["note"]["content"]
+    assert "- Goulburn Valley Water" not in payload["note"]["content"]
+    assert "- Asset Monitoring" in payload["note"]["content"]
+    assert "- Business Intelligence" in payload["note"]["content"]
+    assert "- Technology Programs" in payload["note"]["content"]
+
+
 def test_subject_org_hint_strips_leading_for_from_document_subjects():
     assert _subject_org_hint("org chart for Barwon Water") == "Barwon Water"
     assert _subject_org_hint("strategy for Barwon Water") == "Barwon Water"
+
+
+def test_mailbox_routing_strips_scope_org_prefix_from_document_subject_hint(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_RoutingSignalStore(),
+    )
+
+    routing = poller._resolve_message_routing(
+        {
+            "subject": "Escient Yarra Valley Water annual report",
+            "from_email": "rebecca.campbell-burns@escient.com.au",
+        },
+        {
+            "attachments": [
+                {
+                    "filename": "Yarra_Valley_Water_Annual_Report_2025.pdf",
+                    "kind": "document",
+                }
+            ]
+        },
+    )
+
+    assert routing["status"] == "matched_sender_domain"
+    assert routing["effective_org_name"] == "Escient"
+    assert routing["subject_org_hint"] == "Yarra Valley Water"
+
+
+def test_mailbox_routing_entity_override_can_appear_inline_before_document_phrase(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    result_client = _RecordingResultClient()
+
+    def _extractor(payload):
+        assert payload["org_name"] == "Escient"
+        assert payload["subject"] == "org chart for GVW"
+        out = tmp_path / "extract.md"
+        out.write_text("# Extract", encoding="utf-8")
+        return (
+            {
+                "status": "extracted",
+                "entity_count": 1,
+                "people": [],
+                "organisations": [{"canonical_name": "Goulburn Valley Water"}],
+                "entities": [
+                    {"canonical_name": "Goulburn Valley Water", "name": "Goulburn Valley Water", "target_type": "organisation", "confidence": 0.95},
+                ],
+                "attachments": [{"filename": "gvw-functional-org-chart.png", "status": "processed", "excerpt": "Functional org chart"}],
+                "summary": "Functional chart.",
+                "target_update_suggestions": [],
+                "warnings": [],
+                "processing_meta": {},
+            },
+            out,
+        )
+
+    class _InlineEntityOverrideIMAP(_FakeIMAP):
+        def fetch(self, _imap_id, _query):
+            msg = EmailMessage()
+            msg["Subject"] = "entity:escient org chart for GVW"
+            msg["From"] = "Paul <paul@longboardfella.com.au>"
+            msg["To"] = "intel.longboardfella@gmail.com"
+            msg["Date"] = "Thu, 24 Mar 2026 17:28:09 +1100"
+            msg["Message-ID"] = "<msg-inline-entity@example.com>"
+            msg.set_content("Please see attached org chart.")
+            msg.add_attachment(b"fake-image", maintype="image", subtype="png", filename="gvw-functional-org-chart.png")
+            return "OK", [(b"1 (RFC822 {123})", msg.as_bytes())]
+
+    poller = IntelMailboxPoller(
+        IntelMailboxConfig(
+            host="imap.gmail.com",
+            port=993,
+            username="intel.longboardfella@gmail.com",
+            password="secret",
+            folder="INBOX",
+            org_name="Longboardfella",
+            poll_limit=5,
+            search_criteria="UNSEEN",
+            allowed_senders=(),
+            source_system="cortex_mailbox",
+            callback_url="https://example.com/admin/queue_worker_api.php?action=import_cortex_extract",
+            note_callback_url="https://example.com/lab/market_radar_api.php?action=ingest_intel_note",
+            callback_secret="secret",
+            callback_timeout=30,
+            profile_import_url="",
+            profile_import_timeout=30,
+            smtp_host="smtp.gmail.com",
+            smtp_port=465,
+            smtp_username="intel.longboardfella@gmail.com",
+            smtp_password="secret",
+            smtp_use_ssl=True,
+            reply_from="intel.longboardfella@gmail.com",
+            mark_seen_on_success=False,
+        ),
+        store=store,
+        extractor=_extractor,
+        imap_factory=_InlineEntityOverrideIMAP,
+        signal_store=_RoutingSignalStore(),
+        result_client=result_client,
+    )
+
+    summary = poller.poll_once()
+
+    assert summary["processed"] == 1
+    delivery_payload = result_client.calls[0]["delivery_payload"]
+    assert delivery_payload["org_name"] == "Escient"
+    assert delivery_payload["mailbox_routing"]["requested_org_name"] == "Escient"
+    assert delivery_payload["mailbox_routing"]["subject_org_hint"] == "GVW"
+
+
+def test_mailbox_routing_can_match_sender_domain_to_known_org_scope(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    result_client = _RecordingResultClient()
+
+    def _extractor(payload):
+        assert payload["org_name"] == "Escient"
+        out = tmp_path / "extract.md"
+        out.write_text("# Extract", encoding="utf-8")
+        return (
+            {
+                "status": "extracted",
+                "entity_count": 2,
+                "people": [],
+                "organisations": [{"canonical_name": "Goulburn Valley Water"}],
+                "entities": [
+                    {"canonical_name": "Rebecca Campbell-Burns", "name": "Rebecca Campbell-Burns", "target_type": "person", "confidence": 0.95},
+                    {"canonical_name": "Goulburn Valley Water", "name": "Goulburn Valley Water", "target_type": "organisation", "confidence": 0.95},
+                ],
+                "attachments": [],
+                "summary": "GVW RFP intelligence.",
+                "target_update_suggestions": [],
+                "warnings": [],
+                "processing_meta": {},
+            },
+            out,
+        )
+
+    class _EscientDomainIMAP(_FakeIMAP):
+        def fetch(self, _imap_id, _query):
+            msg = EmailMessage()
+            msg["Subject"] = "Intel report"
+            msg["From"] = "Rebecca Campbell-Burns <rebecca.campbell-burns@escient.com.au>"
+            msg["To"] = "intel.longboardfella@gmail.com"
+            msg["Date"] = "Thu, 24 Mar 2026 21:13:00 +1100"
+            msg["Message-ID"] = "<msg-escient-domain@example.com>"
+            msg.set_content("GVW is preparing an RFP for IT strategy services.")
+            return "OK", [(b"1 (RFC822 {123})", msg.as_bytes())]
+
+    poller = IntelMailboxPoller(
+        IntelMailboxConfig(
+            host="imap.gmail.com",
+            port=993,
+            username="intel.longboardfella@gmail.com",
+            password="secret",
+            folder="INBOX",
+            org_name="Longboardfella",
+            poll_limit=5,
+            search_criteria="UNSEEN",
+            allowed_senders=(),
+            source_system="cortex_mailbox",
+            callback_url="https://example.com/admin/queue_worker_api.php?action=import_cortex_extract",
+            note_callback_url="https://example.com/lab/market_radar_api.php?action=ingest_intel_note",
+            callback_secret="secret",
+            callback_timeout=30,
+            profile_import_url="",
+            profile_import_timeout=30,
+            smtp_host="smtp.gmail.com",
+            smtp_port=465,
+            smtp_username="intel.longboardfella@gmail.com",
+            smtp_password="secret",
+            smtp_use_ssl=True,
+            reply_from="intel.longboardfella@gmail.com",
+            mark_seen_on_success=False,
+        ),
+        store=store,
+        extractor=_extractor,
+        imap_factory=_EscientDomainIMAP,
+        signal_store=_RoutingSignalStore(),
+        result_client=result_client,
+    )
+
+    summary = poller.poll_once()
+
+    assert summary["processed"] == 1
+    delivery_payload = result_client.calls[0]["delivery_payload"]
+    assert delivery_payload["org_name"] == "Escient"
+    assert delivery_payload["mailbox_routing"]["status"] == "matched_sender_domain"
+    assert delivery_payload["mailbox_routing"]["sender_domain_org_name"] == "Escient"
+
+
+def test_mailbox_org_chart_subject_acronym_prefers_full_organisation_name(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "entity:escient org chart for GVW",
+            "from_name": "Paul Cooper",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-24T07:05:00+00:00",
+            "raw_text": "Forwarding functional org chart.",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "people": [],
+            "entities": [
+                {"canonical_name": "Goulburn Valley Water", "name": "Goulburn Valley Water", "target_type": "organisation", "confidence": 0.95},
+                {"canonical_name": "Asset Monitoring", "name": "Asset Monitoring", "target_type": "person"},
+            ],
+            "organisations": [{"canonical_name": "Goulburn Valley Water"}],
+            "attachments": [{"filename": "gvw-functional-org-chart.png", "status": "processed", "excerpt": "Functional org chart"}],
+            "summary": "Functional organisational chart.",
+            "target_update_suggestions": [],
+            "warnings": [],
+            "processing_meta": {},
+        },
+        signal={},
+        markdown_text="Asset Monitoring\nBusiness Intelligence",
+        message_kind="org_chart",
+        routing={"subject_org_hint": "GVW", "clean_subject": "org chart for GVW", "has_org_chart_image_attachment": True},
+    )
+
+    assert payload["primary_entity"]["name"] == "Goulburn Valley Water"
+    assert payload["note"]["title"] == "Goulburn Valley Water org chart"
+
+
+def test_mailbox_strategy_acronym_hint_uses_known_org_label_for_title_and_primary(tmp_path):
+    class _KnownGVWSignalStore(_FakeSignalStore):
+        def list_profiles(self, org_name=""):
+            del org_name
+            return [
+                {
+                    "org_name": "Escient",
+                    "target_type": "organisation",
+                    "canonical_name": "Goulburn Valley Water",
+                    "aliases": ["GVW"],
+                }
+            ]
+
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_KnownGVWSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "GVW",
+            "from_name": "Paul Cooper",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-24T18:26:53+00:00",
+            "raw_text": "",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [],
+            "organisations": [],
+            "attachments": [{"filename": "GVW_Strategy2035.pdf", "status": "processed", "excerpt": "GVW strategy"}],
+            "summary": "",
+            "target_update_suggestions": [],
+            "processing_meta": {
+                "strategic_doc": {
+                    "doc_type": "strategic_plan",
+                    "org_name": "GVW Strategy2035",
+                    "strategic_summary": "Document appears to relate to GVW Strategy2035.",
+                    "strategic_signals": [],
+                    "key_stakeholders": [],
+                    "performance_indicators": [],
+                }
+            },
+        },
+        signal={},
+        markdown_text="# Extract",
+        message_kind="document_analysis",
+        routing={"effective_org_name": "Escient", "subject_org_hint": "GVW", "clean_subject": "GVW"},
+    )
+
+    assert payload["primary_entity"]["name"] == "Goulburn Valley Water"
+    assert payload["note"]["title"] == "Goulburn Valley Water Strategic Plan 2035"
+    assert payload["document_meta"]["target_org_name"] == "Goulburn Valley Water"
+
+
+def test_mailbox_strategy_subject_full_name_overrides_documentish_org_label(tmp_path):
+    class _KnownGVWSignalStore(_FakeSignalStore):
+        def list_profiles(self, org_name=""):
+            del org_name
+            return [
+                {
+                    "org_name": "Escient",
+                    "target_type": "organisation",
+                    "canonical_name": "Goulburn Valley Water",
+                    "aliases": ["GVW"],
+                }
+            ]
+
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_KnownGVWSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "entity: Escient | Goulburn Valley Water strategic plan",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-25T06:10:55+00:00",
+            "raw_text": "",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [],
+            "organisations": [],
+            "attachments": [{"filename": "GVW_Strategy2035.pdf", "status": "processed", "excerpt": "Strategy 2035"}],
+            "summary": "",
+            "target_update_suggestions": [],
+            "processing_meta": {
+                "strategic_doc": {
+                    "doc_type": "strategic_plan",
+                    "org_name": "GVW Strategy2035",
+                    "strategic_summary": "Strategic planning document from GVW Strategy2035 outlining the current direction and operating priorities.",
+                    "strategic_signals": [],
+                    "key_stakeholders": [],
+                    "performance_indicators": [],
+                }
+            },
+        },
+        signal={},
+        markdown_text="# Extract",
+        message_kind="document_analysis",
+        routing={"effective_org_name": "Escient", "subject_org_hint": "Goulburn Valley Water", "clean_subject": "Goulburn Valley Water strategic plan"},
+    )
+
+    assert payload["primary_entity"]["name"] == "Goulburn Valley Water"
+    assert payload["note"]["title"] == "Goulburn Valley Water strategic plan"
+    assert "GVW Strategy2035" not in payload["note"]["content"]
+    assert payload["document_meta"]["target_org_name"] == "Goulburn Valley Water"
+    assert payload["document_meta"]["period_label"] == "2035"
+
+
+def test_mailbox_plain_intel_prefers_non_scope_org_entity_as_primary(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "Opportunity intel",
+            "from_email": "rebecca.campbell-burns@escient.com.au",
+            "received_at": "2026-03-25T07:12:29+00:00",
+            "raw_text": "GVW is preparing an RFP for IT strategy and roadmap development services.",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [
+                {"name": "Escient", "target_type": "organisation", "confidence": 0.7},
+                {"name": "Goulburn Valley Water", "target_type": "organisation", "confidence": 0.9},
+            ],
+            "summary": "Intelligence note indicating Goulburn Valley Water is planning to issue an RFP for IT strategy and roadmap development services.",
+            "attachments": [],
+            "target_update_suggestions": [],
+            "processing_meta": {},
+        },
+        signal={},
+        markdown_text="# Intel Extraction Result\n\n## Summary\n\nGVW is preparing an RFP for IT strategy and roadmap development services.",
+        message_kind="general_intelligence",
+        routing={"effective_org_name": "Escient", "status": "matched_sender_domain"},
+    )
+
+    assert payload["primary_entity"]["name"] == "Goulburn Valley Water"
+    assert payload["primary_entity"]["target_type"] == "organisation"
+
+
+def test_mailbox_fit_assessment_uses_subscriber_strategic_profile(tmp_path):
+    class _EscientSignalStore(_FakeSignalStore):
+        def get_org_context(self, org_name):
+            return {
+                "org_name": org_name,
+                "org_alumni": [],
+                "org_strategic_profile": {
+                    "description": "Consulting focused on digital transformation, operating model and customer strategy.",
+                    "industries": ["Consulting"],
+                    "priority_industries": ["Water Utilities"],
+                    "key_themes": ["IT strategy", "roadmap", "digital transformation"],
+                    "strategic_objectives": ["win technology strategy work"],
+                },
+            }
+
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_EscientSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "GVW opportunity",
+            "from_email": "rebecca.campbell-burns@escient.com.au",
+            "received_at": "2026-03-25T07:12:29+00:00",
+            "raw_text": "Goulburn Valley Water is planning an RFP for IT strategy and roadmap work to build on a billing system replacement.",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [{"name": "Goulburn Valley Water", "target_type": "organisation", "confidence": 0.9}],
+            "summary": "Goulburn Valley Water is planning an RFP for IT strategy and roadmap development services.",
+            "attachments": [],
+            "target_update_suggestions": [],
+            "processing_meta": {},
+        },
+        signal={},
+        markdown_text="# Intel Extraction Result\n\n## Summary\n\nGVW is preparing an RFP for IT strategy and roadmap development services.",
+        message_kind="general_intelligence",
+        routing={"effective_org_name": "Escient", "status": "matched_sender_domain"},
+    )
+
+    assert payload["fit_assessment"]["fit_label"] == "high_fit"
+    assert "IT strategy" in payload["fit_assessment"]["matched_themes"]
+    assert "roadmap" in payload["fit_assessment"]["matched_themes"]
+    assert "## Subscriber Fit" in payload["note"]["content"]
+    assert "High fit for Escient" in payload["note"]["content"]
+
+
+def test_mailbox_fit_assessment_matches_related_strategy_language(tmp_path):
+    class _EscientSignalStore(_FakeSignalStore):
+        def get_org_context(self, org_name):
+            return {
+                "org_name": org_name,
+                "org_alumni": [],
+                "org_strategic_profile": {
+                    "description": "Consulting focused on digital transformation and operating model change.",
+                    "industries": ["Consulting"],
+                    "priority_industries": ["Water"],
+                    "key_themes": ["Technology Strategy & Enablement", "Strategy & Planning"],
+                    "strategic_objectives": ["Transform customer experiences and operational efficiency"],
+                },
+            }
+
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_EscientSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "GVW opportunity",
+            "from_email": "rebecca.campbell-burns@escient.com.au",
+            "received_at": "2026-03-25T07:12:29+00:00",
+            "raw_text": "Goulburn Valley Water is planning an RFP for IT strategy and roadmap work to build on a billing system replacement.",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [{"name": "Goulburn Valley Water", "target_type": "organisation", "confidence": 0.9}],
+            "summary": "Goulburn Valley Water is planning an RFP for IT strategy and roadmap development services.",
+            "attachments": [],
+            "target_update_suggestions": [],
+            "processing_meta": {},
+        },
+        signal={},
+        markdown_text="# Intel Extraction Result\n\n## Summary\n\nGVW is preparing an RFP for IT strategy and roadmap development services.",
+        message_kind="general_intelligence",
+        routing={"effective_org_name": "Escient", "status": "matched_sender_domain"},
+    )
+
+    assert payload["fit_assessment"]["fit_label"] in {"medium_fit", "high_fit"}
+    assert "Water" in payload["fit_assessment"]["matched_priority_industries"]
+    assert "Technology Strategy & Enablement" in payload["fit_assessment"]["matched_themes"]
+    assert payload["fit_assessment"]["matched_objectives"] == []
+
+
+def test_result_payload_copies_fit_assessment_to_top_level(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    poller = IntelMailboxPoller(
+        IntelMailboxConfig(
+            host="imap.gmail.com",
+            port=993,
+            username="intel@example.com",
+            password="pw",
+            folder="INBOX",
+            org_name="Longboardfella",
+            poll_limit=5,
+            search_criteria="UNSEEN",
+            allowed_senders=(),
+            source_system="cortex_mailbox",
+            callback_url="",
+            note_callback_url="",
+            callback_secret="",
+            callback_timeout=30,
+            profile_import_url="",
+            profile_import_timeout=30,
+            smtp_host="smtp.gmail.com",
+            smtp_port=465,
+            smtp_username="intel@example.com",
+            smtp_password="pw",
+            smtp_use_ssl=True,
+            reply_from="intel@example.com",
+            mark_seen_on_success=False,
+        ),
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    result = poller._build_result_payload(
+        message={"subject": "GVW opportunity", "from_email": "paul@example.com", "received_at": "2026-03-26T13:08:05+11:00"},
+        persisted={"message_key": "msg1", "raw_path": "/tmp/message.eml", "attachments": []},
+        trace_id="trace-test",
+        output_data={"summary": "Summary", "entities": [], "target_update_suggestions": [], "warnings": []},
+        signal={"signal_id": "sig1", "matched_profile_keys": [], "needs_review": False},
+        scope_org_name="Escient",
+        routing={"effective_org_name": "Escient"},
+        fit_assessment={
+            "fit_label": "high_fit",
+            "matched_priority_industries": ["Water"],
+            "matched_themes": ["Technology Strategy & Enablement"],
+        },
+    )
+
+    assert result["fit_assessment"]["fit_label"] == "high_fit"
+    assert result["fit_assessment"]["matched_priority_industries"] == ["Water"]
+    assert result["fit_assessment"]["matched_themes"] == ["Technology Strategy & Enablement"]
+
+
+def test_mailbox_prioritizes_high_fit_strategy_themes_before_background(tmp_path):
+    class _EscientSignalStore(_FakeSignalStore):
+        def get_org_context(self, org_name):
+            return {
+                "org_name": org_name,
+                "org_alumni": [],
+                "org_strategic_profile": {
+                    "description": "Consulting focused on digital transformation, customer strategy and operating model change.",
+                    "industries": ["Consulting"],
+                    "priority_industries": ["Water"],
+                    "key_themes": ["digital transformation", "customer transformation", "strategy and planning"],
+                    "strategic_objectives": ["win technology strategy work"],
+                    "low_relevance_themes": ["Helping communities thrive"],
+                },
+            }
+
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    poller = IntelMailboxPoller(
+        IntelMailboxConfig(
+            host="imap.gmail.com",
+            port=993,
+            username="intel.longboardfella@gmail.com",
+            password="secret",
+            folder="INBOX",
+            org_name="Longboardfella",
+            poll_limit=5,
+            search_criteria="UNSEEN",
+            allowed_senders=(),
+            source_system="cortex_mailbox",
+            callback_url="",
+            note_callback_url="",
+            callback_secret="",
+            callback_timeout=30,
+            profile_import_url="",
+            profile_import_timeout=30,
+            smtp_host="smtp.gmail.com",
+            smtp_port=465,
+            smtp_username="intel.longboardfella@gmail.com",
+            smtp_password="secret",
+            smtp_use_ssl=True,
+            reply_from="intel.longboardfella@gmail.com",
+            mark_seen_on_success=False,
+        ),
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_EscientSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "entity: Escient | Yarra Valley Water strategic plan",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-25T07:12:29+00:00",
+            "raw_text": "Yarra Valley Water 2030 strategy includes digital transformation and customer planning themes.",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [{"name": "Yarra Valley Water", "target_type": "organisation", "confidence": 0.9}],
+            "summary": "Yarra Valley Water strategy focused on customer transformation and environmental leadership.",
+            "attachments": [],
+            "target_update_suggestions": [],
+            "processing_meta": {
+                "strategic_doc": {
+                    "doc_type": "strategic_plan",
+                    "org_name": "Yarra Valley Water",
+                    "themes": [
+                        "Transforming around the customer",
+                        "Enabling high performance",
+                        "Helping communities thrive",
+                    ],
+                        "strategic_signals": [
+                            {"headline": "Helping communities thrive", "snippet": "Community wellbeing and local partnerships."},
+                            {"headline": "Transforming around the customer", "snippet": "Digital transformation and service redesign."},
+                            {"headline": "Enabling high performance", "snippet": "Capability uplift, planning and execution discipline."},
+                            {"headline": "Victorians every day and our customers", "snippet": "consistently rank us highly for trust, satisfaction, value for money and reputation."},
+                        ],
+                    "strategic_summary": "Yarra Valley Water strategy with customer transformation, capability uplift and community themes.",
+                    "key_stakeholders": [],
+                    "performance_indicators": [],
+                    "major_projects": [],
+                    "kpi_focuses": [],
+                }
+            },
+        },
+        signal={},
+        markdown_text="# Intel Extraction Result\n\n## Summary\n\nStrategy document.",
+        message_kind="document_analysis",
+        routing={"effective_org_name": "Escient", "status": "matched_override"},
+    )
+
+    note_content = payload["note"]["content"]
+    assert "## Priority Strategic Themes" in note_content
+    assert "## Background Themes" in note_content
+    assert note_content.index("Transforming around the customer") < note_content.index("Helping communities thrive")
+    assert note_content.index("Enabling high performance") < note_content.index("Helping communities thrive")
+    priority_section = note_content.split("## Priority Strategic Themes", 1)[1].split("## Background Themes", 1)[0]
+    background_section = note_content.split("## Background Themes", 1)[1]
+    assert "Helping communities thrive" not in priority_section
+    assert "- Helping communities thrive" in background_section
+    assert "Victorians every day and our customers" not in note_content
+    assert payload["fit_assessment"]["matched_low_relevance_themes"] == ["Helping communities thrive"]
+
+
+def test_mailbox_handoff_runs_final_sanity_pass_on_note_content(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    poller = IntelMailboxPoller(
+        config=IntelMailboxConfig(
+            host="imap.gmail.com",
+            port=993,
+            username="intel@example.com",
+            password="pw",
+            folder="INBOX",
+            org_name="Longboardfella",
+            poll_limit=5,
+            search_criteria="UNSEEN",
+            allowed_senders=(),
+            source_system="cortex_mailbox",
+            callback_url="",
+            note_callback_url="",
+            callback_secret="",
+            callback_timeout=30,
+            profile_import_url="",
+            profile_import_timeout=30,
+            smtp_host="smtp.gmail.com",
+            smtp_port=465,
+            smtp_username="intel@example.com",
+            smtp_password="pw",
+            smtp_use_ssl=True,
+            reply_from="intel@example.com",
+            mark_seen_on_success=False,
+        ),
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+    poller._run_markdown_sanity_llm = lambda markdown_text, llm_policy: markdown_text.replace(
+        "innovation stretc...", "innovation stretches through partnerships and commercialisation."
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "entity: Escient | South East Water strategic plan",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-26T09:07:02+00:00",
+            "raw_text": "",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [{"name": "South East Water", "target_type": "organisation", "confidence": 0.9}],
+            "summary": "South East Water strategy focused on customers, operations and innovation.",
+            "attachments": [],
+            "target_update_suggestions": [],
+            "llm_policy": {"local_only": True, "model": "qwen3:30b"},
+            "processing_meta": {
+                "strategic_doc": {
+                    "doc_type": "strategic_plan",
+                    "org_name": "South East Water",
+                    "themes": ["Deliver For Our Customers"],
+                    "strategic_signals": [
+                        {
+                            "headline": "Deliver For Our Customers",
+                            "snippet": "We provide safe and reliable water services while our innovation stretc...",
+                        }
+                    ],
+                    "strategic_summary": "South East Water strategy emphasising service reliability and customer experience.",
+                    "key_stakeholders": [],
+                    "performance_indicators": [],
+                    "major_projects": [],
+                    "kpi_focuses": [],
+                }
+            },
+        },
+        signal={},
+        markdown_text="# Intel Extraction Result\n\n## Summary\n\nStrategy document.",
+        message_kind="document_analysis",
+        routing={"effective_org_name": "Escient", "status": "matched_override", "extraction_depth": "detailed"},
+    )
+
+    note_content = payload["note"]["content"]
+    assert "innovation stretches through partnerships and commercialisation." in note_content
+    assert "innovation stretc..." not in note_content
+
+
+def test_mailbox_detailed_mode_includes_theme_detail_notes(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    poller = IntelMailboxPoller(
+        config=IntelMailboxConfig(
+            host="imap.gmail.com",
+            port=993,
+            username="intel@example.com",
+            password="pw",
+            folder="INBOX",
+            org_name="Longboardfella",
+            poll_limit=5,
+            search_criteria="UNSEEN",
+            allowed_senders=(),
+            source_system="cortex_mailbox",
+            callback_url="",
+            note_callback_url="",
+            callback_secret="",
+            callback_timeout=30,
+            profile_import_url="",
+            profile_import_timeout=30,
+            smtp_host="smtp.gmail.com",
+            smtp_port=465,
+            smtp_username="intel@example.com",
+            smtp_password="pw",
+            smtp_use_ssl=True,
+            reply_from="intel@example.com",
+            mark_seen_on_success=False,
+        ),
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "entity: Escient | South East Water strategic plan",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-26T09:07:02+00:00",
+            "raw_text": "",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [{"name": "South East Water", "target_type": "organisation", "confidence": 0.9}],
+            "summary": "South East Water strategy focused on customers, operations and innovation.",
+            "attachments": [],
+            "target_update_suggestions": [],
+            "llm_policy": {"local_only": True, "model": "qwen3:30b"},
+            "processing_meta": {
+                "strategic_doc": {
+                    "doc_type": "strategic_plan",
+                    "org_name": "South East Water",
+                    "themes": ["Deliver For Our Customers", "Protect Our Environment"],
+                    "strategic_signals": [
+                        {
+                            "headline": "Deliver For Our Customers",
+                            "snippet": "We provide safe and reliable water and waste services while improving customer experience.",
+                            "detail_points": [
+                                {
+                                    "heading": "Get The Basics Right, Always",
+                                    "snippet": "We provide safe and reliable water and waste services, minimising interruptions and continually delighting our customers.",
+                                },
+                                {
+                                    "heading": "Make Our Customers Experience Better",
+                                    "snippet": "We’ve increased self-service options to meet the needs of our customers by streamlining our systems and processes.",
+                                },
+                            ],
+                        },
+                        {
+                            "headline": "Protect Our Environment",
+                            "snippet": "We work with Traditional Owners and continue reducing emissions.",
+                            "detail_points": [
+                                {
+                                    "heading": "Care For Country",
+                                    "snippet": "We walk with Traditional Owners to support self-determination and deliver water justice.",
+                                }
+                            ],
+                        },
+                    ],
+                    "strategic_summary": "South East Water strategy emphasising service reliability, customer experience and sustainability.",
+                    "key_stakeholders": [],
+                    "performance_indicators": [],
+                    "major_projects": [],
+                    "kpi_focuses": [],
+                }
+            },
+        },
+        signal={},
+        markdown_text="# Intel Extraction Result\n\n## Summary\n\nStrategy document.",
+        message_kind="document_analysis",
+        routing={"effective_org_name": "Escient", "status": "matched_override", "extraction_depth": "detailed"},
+    )
+
+    note_content = payload["note"]["content"]
+    assert "## Detailed Theme Notes" in note_content
+    assert "### Deliver For Our Customers" in note_content
+    assert "We provide safe and reliable water and waste services, minimising interruptions and continually delighting our customers" in note_content
+    assert "We’ve increased self-service options to meet the needs of our customers by streamlining our systems and processes" in note_content
+    assert "### Protect Our Environment" in note_content
+    assert "We walk with Traditional Owners to support self-determination and deliver water justice" in note_content
+
+
+def test_mailbox_poller_sends_reply_for_note_ingest_and_includes_depth(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    result_client = _RecordingResultClient()
+
+    def _extractor(payload):
+        out = tmp_path / "extract.md"
+        out.write_text("# Extract", encoding="utf-8")
+        assert payload["extraction_depth"] == "detailed"
+        return (
+            {
+                "status": "extracted",
+                "entity_count": 1,
+                "people": [],
+                "organisations": [{"canonical_name": "Barwon Water"}],
+                "entities": [
+                    {
+                        "canonical_name": "Barwon Water",
+                        "name": "Barwon Water",
+                        "target_type": "organisation",
+                        "confidence": 0.95,
+                    }
+                ],
+                "summary": "Detailed annual report extraction for Barwon Water.",
+                "attachments": [{"filename": "barwon-water-org-chart.pdf", "status": "processed"}],
+                "target_update_suggestions": [],
+                "warnings": [],
+                "processing_meta": {},
+            },
+            out,
+        )
+
+    class _FakeDetailedRoutedDocumentIMAP(_FakeIMAP):
+        def fetch(self, _imap_id, _query):
+            msg = EmailMessage()
+            msg["Subject"] = "entity: Escient | depth:detailed | Barwon Water annual report"
+            msg["From"] = "Paul <paul@example.com>"
+            msg["To"] = "intel.longboardfella@gmail.com"
+            msg["Date"] = "Thu, 12 Mar 2026 11:28:09 +1100"
+            msg["Message-ID"] = "<msg-detailed-routed-doc@example.com>"
+            msg.set_content("Uploading Barwon Water annual report.")
+            msg.add_attachment(
+                b"%PDF-1.4 fake pdf bytes",
+                maintype="application",
+                subtype="pdf",
+                filename="barwon-water-annual-report.pdf",
+            )
+            return "OK", [(b"1 (RFC822 {123})", msg.as_bytes())]
+
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="https://example.com/admin/queue_worker_api.php?action=import_cortex_extract",
+        note_callback_url="https://example.com/lab/market_radar_api.php?action=ingest_intel_note",
+        callback_secret="secret",
+        callback_timeout=30,
+        profile_import_url="https://example.com/lab/market_radar_api.php?action=bulk_import_profiles",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=_extractor,
+        imap_factory=_FakeDetailedRoutedDocumentIMAP,
+        signal_store=_RoutingSignalStore(),
+        result_client=result_client,
+        reply_client=_FakeReplyClient(),
+    )
+
+    summary = poller.poll_once()
+
+    assert summary["processed"] == 1
+    messages = store.list_messages()
+    payload = json.loads(Path(messages[0]["result_path"]).read_text(encoding="utf-8"))
+    assert payload["reply"]["delivery"]["status"] == "sent"
+    assert payload["reply"]["subject"] == "Re: entity: Escient | depth:detailed | Barwon Water annual report"
+    assert "Depth: detailed" in payload["reply"]["body"]
+    assert "Title: Barwon Water annual report" in payload["reply"]["body"]
+    assert "Primary entity: Barwon Water" in payload["reply"]["body"]
+    assert payload["mailbox_routing"]["extraction_depth"] == "detailed"
+
+
+def test_mailbox_poller_sends_reply_for_legacy_intel_extract(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+
+    def _extractor(_payload):
+        return (
+            {
+                "status": "extracted",
+                "entity_count": 2,
+                "people": [],
+                "organisations": [{"canonical_name": "Goulburn Valley Water"}],
+                "entities": [
+                    {
+                        "canonical_name": "Goulburn Valley Water",
+                        "name": "Goulburn Valley Water",
+                        "target_type": "organisation",
+                        "confidence": 0.95,
+                    },
+                    {
+                        "canonical_name": "Escient",
+                        "name": "Escient",
+                        "target_type": "organisation",
+                        "confidence": 0.8,
+                    },
+                ],
+                "summary": "Goulburn Valley Water is preparing an RFP for IT strategy and roadmap work.",
+                "target_update_suggestions": [],
+                "warnings": [],
+            },
+            None,
+        )
+
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="https://example.com/lab/market_radar_api.php?action=bulk_import_profiles",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=_extractor,
+        imap_factory=_FakeIntelIMAP,
+        signal_store=_FakeSignalStore(),
+        reply_client=_FakeReplyClient(),
+    )
+
+    summary = poller.poll_once()
+
+    assert summary["processed"] == 1
+    messages = store.list_messages()
+    payload = json.loads(Path(messages[0]["result_path"]).read_text(encoding="utf-8"))
+    assert payload["reply"]["delivery"]["status"] == "sent"
+    assert payload["reply"]["subject"] == "Re: INTEL: Carolyn Bell update"
+    assert "Cortex processed your submission for Longboardfella." in payload["reply"]["body"]
+    assert "Primary entity: Goulburn Valley Water" in payload["reply"]["body"]
+    assert "Goulburn Valley Water is preparing an RFP for IT strategy and roadmap work." in payload["reply"]["body"]
 
 
 def test_find_duplicate_note_uses_attachment_fingerprint_for_document_resends(tmp_path):
@@ -911,6 +2439,260 @@ def test_find_duplicate_note_uses_attachment_fingerprint_for_document_resends(tm
     assert duplicate is not None
     assert duplicate["existing_intel_id"] == "intel_123"
     assert duplicate["trace_id"] == "trace-first"
+
+
+def test_mailbox_poller_skips_reingesting_same_annual_report_document(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    result_client = _RecordingResultClient()
+    signal_store = _RoutingSignalStore()
+    existing_fingerprint = build_content_fingerprint(
+        attachment_fingerprints=["barwon-water-annual-report-2025.pdf:report123"]
+    )
+    existing_meta = build_document_meta(
+        doc_type="annual_report",
+        target_org_name="Barwon Water",
+        title="Barwon Water annual report",
+        period_label="2025",
+        content_fingerprint=existing_fingerprint,
+        source_label="Mailbox attachment",
+    )
+    signal_store.register_document_meta(
+        "Escient",
+        existing_meta,
+        latest_trace_id="trace-old",
+        latest_intel_id="intel_existing_1",
+    )
+
+    def _extractor(_payload):
+        out = tmp_path / "extract.md"
+        out.write_text("# Extract", encoding="utf-8")
+        return (
+            {
+                "status": "extracted",
+                "entity_count": 1,
+                "entities": [
+                    {
+                        "canonical_name": "Barwon Water",
+                        "name": "Barwon Water",
+                        "target_type": "organisation",
+                        "confidence": 0.95,
+                    }
+                ],
+                "organisations": [{"canonical_name": "Barwon Water"}],
+                "attachments": [
+                        {
+                            "filename": "barwon-water-annual-report-2025.pdf",
+                            "status": "processed",
+                            "excerpt": "Barwon Water annual report 2025",
+                        }
+                ],
+                "summary": "Barwon Water annual report.",
+                "target_update_suggestions": [],
+                "warnings": [],
+                "processing_meta": {
+                    "strategic_doc": {
+                        "doc_type": "annual_report",
+                        "org_name": "Barwon Water",
+                        "strategic_summary": "Annual report for Barwon Water.",
+                        "strategic_signals": [],
+                        "key_stakeholders": [],
+                        "performance_indicators": [],
+                    }
+                },
+            },
+            out,
+        )
+
+    class _AnnualReportIMAP(_FakeIMAP):
+        def fetch(self, _imap_id, _query):
+            msg = EmailMessage()
+            msg["Subject"] = "entity: Escient | Barwon Water annual report 2025"
+            msg["From"] = "Paul <paul@longboardfella.com.au>"
+            msg["To"] = "intel.longboardfella@gmail.com"
+            msg["Date"] = "Thu, 24 Mar 2026 11:28:09 +1100"
+            msg["Message-ID"] = "<msg-annual-dedupe@example.com>"
+            msg.set_content("Please see attached annual report.")
+            msg.add_attachment(
+                b"%PDF-1.4 fake annual report bytes",
+                maintype="application",
+                subtype="pdf",
+                filename="barwon-water-annual-report-2025.pdf",
+            )
+            return "OK", [(b"1 (RFC822 {123})", msg.as_bytes())]
+
+    poller = IntelMailboxPoller(
+        IntelMailboxConfig(
+            host="imap.gmail.com",
+            port=993,
+            username="intel.longboardfella@gmail.com",
+            password="secret",
+            folder="INBOX",
+            org_name="Longboardfella",
+            poll_limit=5,
+            search_criteria="UNSEEN",
+            allowed_senders=(),
+            source_system="cortex_mailbox",
+            callback_url="https://example.com/admin/queue_worker_api.php?action=import_cortex_extract",
+            note_callback_url="https://example.com/lab/market_radar_api.php?action=ingest_intel_note",
+            callback_secret="secret",
+            callback_timeout=30,
+            profile_import_url="",
+            profile_import_timeout=30,
+            smtp_host="smtp.gmail.com",
+            smtp_port=465,
+            smtp_username="intel.longboardfella@gmail.com",
+            smtp_password="secret",
+            smtp_use_ssl=True,
+            reply_from="intel.longboardfella@gmail.com",
+            mark_seen_on_success=False,
+        ),
+        store=store,
+        extractor=_extractor,
+        imap_factory=_AnnualReportIMAP,
+        signal_store=signal_store,
+        result_client=result_client,
+    )
+
+    original_build_attachment_fingerprints = poller._build_attachment_fingerprints
+    poller._build_attachment_fingerprints = lambda persisted, output_data: ["barwon-water-annual-report-2025.pdf:report123"]  # type: ignore[method-assign]
+    try:
+        summary = poller.poll_once()
+    finally:
+        poller._build_attachment_fingerprints = original_build_attachment_fingerprints  # type: ignore[method-assign]
+
+    assert summary["processed"] == 1
+    assert result_client.calls == []
+    messages = store.list_messages()
+    payload = json.loads(Path(messages[0]["result_path"]).read_text(encoding="utf-8"))
+    assert messages[0]["delivery"]["status"] == "duplicate_document"
+    assert payload["document_meta"]["status"] == "known_same"
+
+
+def test_mailbox_poller_force_override_reingests_same_annual_report_document(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    result_client = _RecordingResultClient()
+    signal_store = _RoutingSignalStore()
+    existing_fingerprint = build_content_fingerprint(
+        attachment_fingerprints=["barwon-water-annual-report-2025.pdf:report123"]
+    )
+    existing_meta = build_document_meta(
+        doc_type="annual_report",
+        target_org_name="Barwon Water",
+        title="Barwon Water annual report",
+        period_label="2025",
+        content_fingerprint=existing_fingerprint,
+        source_label="Mailbox attachment",
+    )
+    signal_store.register_document_meta(
+        "Escient",
+        existing_meta,
+        latest_trace_id="trace-old",
+        latest_intel_id="intel_existing_1",
+    )
+
+    def _extractor(_payload):
+        out = tmp_path / "extract.md"
+        out.write_text("# Extract", encoding="utf-8")
+        return (
+            {
+                "status": "extracted",
+                "entity_count": 1,
+                "entities": [
+                    {
+                        "canonical_name": "Barwon Water",
+                        "name": "Barwon Water",
+                        "target_type": "organisation",
+                        "confidence": 0.95,
+                    }
+                ],
+                "organisations": [{"canonical_name": "Barwon Water"}],
+                "attachments": [
+                    {
+                        "filename": "barwon-water-annual-report-2025.pdf",
+                        "status": "processed",
+                        "excerpt": "Barwon Water annual report 2025",
+                    }
+                ],
+                "summary": "Barwon Water annual report.",
+                "target_update_suggestions": [],
+                "warnings": [],
+                "processing_meta": {
+                    "strategic_doc": {
+                        "doc_type": "annual_report",
+                        "org_name": "Barwon Water",
+                        "strategic_summary": "Annual report for Barwon Water.",
+                        "strategic_signals": [],
+                        "key_stakeholders": [],
+                        "performance_indicators": [],
+                    }
+                },
+            },
+            out,
+        )
+
+    class _ForceAnnualReportIMAP(_FakeIMAP):
+        def fetch(self, _imap_id, _query):
+            msg = EmailMessage()
+            msg["Subject"] = "entity: Escient | force:yes | Barwon Water annual report 2025"
+            msg["From"] = "Paul <paul@longboardfella.com.au>"
+            msg["To"] = "intel.longboardfella@gmail.com"
+            msg["Date"] = "Thu, 24 Mar 2026 11:28:09 +1100"
+            msg["Message-ID"] = "<msg-force-annual-dedupe@example.com>"
+            msg.set_content("Please see attached annual report.")
+            msg.add_attachment(
+                b"%PDF-1.4 fake annual report bytes",
+                maintype="application",
+                subtype="pdf",
+                filename="barwon-water-annual-report-2025.pdf",
+            )
+            return "OK", [(b"1 (RFC822 {123})", msg.as_bytes())]
+
+    poller = IntelMailboxPoller(
+        IntelMailboxConfig(
+            host="imap.gmail.com",
+            port=993,
+            username="intel.longboardfella@gmail.com",
+            password="secret",
+            folder="INBOX",
+            org_name="Longboardfella",
+            poll_limit=5,
+            search_criteria="UNSEEN",
+            allowed_senders=(),
+            source_system="cortex_mailbox",
+            callback_url="https://example.com/admin/queue_worker_api.php?action=import_cortex_extract",
+            note_callback_url="https://example.com/lab/market_radar_api.php?action=ingest_intel_note",
+            callback_secret="secret",
+            callback_timeout=30,
+            profile_import_url="",
+            profile_import_timeout=30,
+            smtp_host="smtp.gmail.com",
+            smtp_port=465,
+            smtp_username="intel.longboardfella@gmail.com",
+            smtp_password="secret",
+            smtp_use_ssl=True,
+            reply_from="intel.longboardfella@gmail.com",
+            mark_seen_on_success=False,
+        ),
+        store=store,
+        extractor=_extractor,
+        imap_factory=_ForceAnnualReportIMAP,
+        signal_store=signal_store,
+        result_client=result_client,
+        reply_client=_FakeReplyClient(),
+    )
+
+    original_build_attachment_fingerprints = poller._build_attachment_fingerprints
+    poller._build_attachment_fingerprints = lambda persisted, output_data: ["barwon-water-annual-report-2025.pdf:report123"]  # type: ignore[method-assign]
+    try:
+        summary = poller.poll_once()
+    finally:
+        poller._build_attachment_fingerprints = original_build_attachment_fingerprints  # type: ignore[method-assign]
+
+    assert summary["processed"] == 1
+    assert result_client.calls
+    payload = json.loads(Path(store.list_messages()[0]["result_path"]).read_text(encoding="utf-8"))
+    assert payload["mailbox_routing"]["force_reingest"] is True
+    assert payload["document_meta"]["status"] == "changed_document"
 
 
 def test_analyse_strategic_documents_extracts_org_name_and_themes():
@@ -967,8 +2749,388 @@ def test_analyse_strategic_documents_extracts_richer_pressures_and_priorities():
     assert "Digital-first service transformation" in headlines
     assert "Revenue diversification and financial sustainability" in headlines
     assert "Workforce sustainability and workplace pressure" in headlines
-    assert "Indigenous health and cultural safety are core business" in headlines
+    assert "First Nations and cultural commitments" in headlines
     assert "Key strategic signals:" in analysis["strategic_summary"]
+
+
+def test_analyse_strategic_documents_prefers_explicit_strategy_pillars_for_yarra_plan():
+    analysis = analyse_strategic_documents(
+        [
+            {
+                "filename": "2030_Strategy-website_0.pdf",
+                "status": "processed",
+                "excerpt": (
+                    "Yarra Valley Water 2030 Strategy "
+                    "Our purpose is to support the health and wellbeing of customers and create a brighter future for communities and the natural environment. "
+                    "Honouring and healing Country "
+                    "Transforming around the customer "
+                    "Helping communities thrive "
+                    "Leading for our environmental future "
+                    "Enabling high performance "
+                    "Ongoing digital transformation will allow us to better respond to our customers."
+                ),
+            }
+        ],
+        extracted_summary="Yarra Valley Water strategy focused on customer transformation and environmental leadership.",
+        subject="Yarra Valley Water strategic plan",
+        raw_text="",
+    )
+
+    assert analysis["org_name"] == "Yarra Valley Water"
+    assert "Honouring and healing Country" in analysis["themes"]
+    assert "Transforming around the customer" in analysis["themes"]
+    assert "Helping communities thrive" in analysis["themes"]
+    assert "Leading for our environmental future" in analysis["themes"]
+    assert "Enabling high performance" in analysis["themes"]
+    assert analysis["strategic_signals"][0]["headline"] == "Honouring and healing Country"
+
+
+def test_analyse_strategic_documents_prefers_seqwater_focus_areas_and_objectives():
+    analysis = analyse_strategic_documents(
+        [
+            {
+                "filename": "Seqwater-Strategic-Plan-2024-28.pdf",
+                "status": "processed",
+                "excerpt": (
+                    "Seqwater Strategic Plan 2024-28\n"
+                    "Strategic objectives\n"
+                    "Improve safety and\n"
+                    "organisational culture\n"
+                    "Improve processes,\n"
+                    "systems and planning\n"
+                    "Strengthen financial\n"
+                    "sustainability\n"
+                    "Increase water supply\n"
+                    "certainty\n"
+                    "Increase stakeholder, customer and\n"
+                    "community satisfaction and support\n"
+                    "Strategic outcomes\n"
+                    "Focus areas\n"
+                    "CAPITAL DELIVERY TRANSFORMATION\n"
+                    "A continuation of the program of work to uplift capital delivery capability to meet the portfolio requirements to 2035.\n"
+                    "OPERATIONAL TRANSFORMATION\n"
+                    "Develop a multi-year program improving systems, processes and assets to reduce risk, improve productivity amidst long-term operational challenges.\n"
+                    "SHAREHOLDER EXPECTATIONS AND\n"
+                    "SOCIAL LICENCE\n"
+                    "Building Seqwater’s social licence to operate as a key enabler for operational activities and delivery of capital projects.\n"
+                    "TALENT, CULTURE AND PERFORMANCE\n"
+                    "Harness and leverage technology, empowering our people and creating a culture of high-performance.\n"
+                ),
+            }
+        ],
+        extracted_summary="Seqwater strategic plan covering focus areas and strategic objectives.",
+        subject="Seqwater strategic plan 2024-28",
+        raw_text="",
+        extraction_depth="default",
+    )
+
+    headlines = [item["headline"] for item in analysis["strategic_signals"]]
+
+    assert analysis["doc_type"] == "strategic_plan"
+    assert analysis["org_name"] == "Seqwater"
+    assert "Capital Delivery Transformation" in headlines
+    assert "Operational Transformation" in headlines
+    assert "Shareholder Expectations And Social Licence" in headlines
+    assert "Talent, Culture And Performance" in headlines
+    assert "Improve safety and organisational culture" in headlines
+    assert "social licence. Performance" not in headlines
+
+
+def test_analyse_strategic_documents_prefers_later_focus_area_matrix_over_preamble():
+    analysis = analyse_strategic_documents(
+        [
+            {
+                "filename": "Our_Corporate_Strategy_2028.pdf",
+                "status": "processed",
+                "excerpt": (
+                    "Our Corporate Strategy 2028\n"
+                    "Acknowledgement\n"
+                    "We acknowledge their songlines, cultural lore and continuing connection to the land and water.\n"
+                    "The risks and opportunities we're facing\n"
+                    "Digital transformation\n"
+                    "Water security\n"
+                    "Cyber security\n"
+                    "Growing population\n"
+                    "Our strategic focus areas\n"
+                    "Empower our people\n"
+                    "Deliver for our customers\n"
+                    "Protect our environment\n"
+                    "Optimise our operations\n"
+                    "Drive innovation at scale\n"
+                    "We’re one team that reflects the diversity of our customers and builds a safe space where people find inspiring opportunities in water.\n"
+                    "We know how important it is to get the basics right and make our customers’ experience better every time.\n"
+                    "We’re driving long-term water security, net zero emissions and repurposing waste to protect our environment.\n"
+                    "Committed to refining our processes, products, assets and service, we strive for continuous improvement.\n"
+                    "Our innovation stretches beyond prototypes and through partnerships and commercialisation we share data, expertise and technology.\n"
+                ),
+            }
+        ],
+        extracted_summary="South East Water corporate strategy focused on customer, operations and innovation.",
+        subject="South East Water strategic plan",
+        raw_text="",
+        extraction_depth="default",
+    )
+
+    headlines = [item["headline"] for item in analysis["strategic_signals"]]
+
+    assert analysis["doc_type"] == "strategic_plan"
+    assert str(analysis["org_name"]).startswith("South East Water")
+    assert "Empower Our People" in headlines
+    assert "Deliver For Our Customers" in headlines
+    assert "Protect Our Environment" in headlines
+    assert "Optimise Our Operations" in headlines
+    assert "Drive Innovation At Scale" in headlines
+    assert "Elders past, present and future" not in headlines
+    assert "we're facing Digital" not in headlines
+
+
+def test_analyse_strategic_documents_prefers_ambition_sections_for_south_east_water_strategy():
+    analysis = analyse_strategic_documents(
+        [
+            {
+                "filename": "Our_Corporate_Strategy_2028.pdf",
+                "status": "processed",
+                "excerpt": (
+                    "Our Corporate Strategy 2028\n"
+                    "Our strategic focus areas\n"
+                    "Empower our people\n"
+                    "Deliver for our customers\n"
+                    "Protect our environment\n"
+                    "Optimise our operations\n"
+                    "Drive innovation at scale\n"
+                    "We’re one team that reflects the diversity of our customers.\n"
+                    "Our ambitions for 2028\n"
+                    "Deliver\n"
+                    "for our\n"
+                    "customers\n"
+                    "Intent statements and measures\n"
+                    "Get the basics\n"
+                    "right, always\n"
+                    "We provide safe and reliable water and waste services, minimising interruptions and continually delighting our customers.\n"
+                    "We’ve increased self-service options to meet the needs of our customers by streamlining our systems and processes.\n"
+                    "Support\n"
+                    "our community\n"
+                    "We have deeper understanding of and relationships with our community, so we can better meet their needs.\n"
+                    "Our ambitions for 2028\n"
+                    "Protect our\n"
+                    "environment\n"
+                    "Intent statements and measures\n"
+                    "Care for country\n"
+                    "We walk with Traditional Owners to support self-determination and deliver water justice.\n"
+                    "We’ve achieved net zero scope 1 and 2 emissions and continued to reduce scope 3 emissions.\n"
+                    "Our ambitions for 2028\n"
+                    "Optimise our\n"
+                    "operations\n"
+                    "Intent statements and measures\n"
+                    "Digital customer &\n"
+                    "employee experience\n"
+                    "With most of our customers having digital meters installed, more customers have a better experience and can use the tools and information to save money and water.\n"
+                    "We’re reducing water losses by using insights gained from our digital meters and sensors to identify leaks early.\n"
+                    "Our ambitions for 2028\n"
+                    "Drive\n"
+                    "innovation\n"
+                    "at scale\n"
+                    "Intent statements and measures\n"
+                    "Commercialisation\n"
+                    "& partnership impact\n"
+                    "We regularly draw on established partnerships to broaden the reach and scale of our innovation, providing better solutions to customers and the sector.\n"
+                ),
+            }
+        ],
+        extracted_summary="South East Water corporate strategy focused on customer, operations and innovation.",
+        subject="South East Water strategic plan",
+        raw_text="",
+        extraction_depth="detailed",
+    )
+
+    strategic_signals = {item["headline"]: item for item in analysis["strategic_signals"]}
+
+    assert analysis["doc_type"] == "strategic_plan"
+    assert analysis["org_name"] == "South East Water"
+    assert "Deliver For Our Customers" in strategic_signals
+    assert strategic_signals["Deliver For Our Customers"]["snippet"].startswith(
+        "We provide safe and reliable water and waste services"
+    )
+    assert "Protect Our Environment" in strategic_signals
+    assert "water justice" in strategic_signals["Protect Our Environment"]["snippet"]
+    assert "Optimise Our Operations" in strategic_signals
+    assert "digital meters" in strategic_signals["Optimise Our Operations"]["snippet"]
+    assert "Drive Innovation At Scale" in strategic_signals
+    assert "broaden the reach and scale of our innovation" in strategic_signals["Drive Innovation At Scale"]["snippet"]
+    assert "We’Re One Team That" not in strategic_signals
+
+
+def test_analyse_strategic_documents_prefers_explicit_priority_plan_section_for_gippsland_water():
+    analysis = analyse_strategic_documents(
+        [
+            {
+                "filename": "Web_version_2024_Corporate_Plan.pdf",
+                "status": "processed",
+                "excerpt": (
+                    "Corporate Plan 2024 - 29\n"
+                    "Table of contents\n"
+                    "Aboriginal acknowledgement\n"
+                    "Our values\n"
+                    "‘Go home safe’\n"
+                    "The safety and wellbeing of our employees and community is our priority.\n"
+                    "‘Customer first’\n"
+                    "Customers are at the heart of everything we do.\n"
+                    "Our strategic priorities\n"
+                    "Our strategic priorities represent the highest order initiatives we will focus on in the coming five-year period.\n"
+                    "Our 2024-29 Strategic Priorities Plan outlines priorities including:\n"
+                    "Healthy country\n"
+                    "• Embedding of the requirements of the new EPA General Environmental Duty throughout our business.\n"
+                    "• Delivery of education and awareness campaigns that focus on water conservation and sustainability.\n"
+                    "Climate preparedness\n"
+                    "• Delivery of our Energy Management Strategy which will outline how we reduce our carbon footprint and achieve 100% renewable energy by 2025.\n"
+                    "• Delivery of our Climate Change Strategy which outlines how we will minimise our emissions and offset our residual Scope 1 to achieve net-zero emissions by 2030.\n"
+                    "Affordable bills\n"
+                    "• Delivery of an App for Gippsland Water customers to have greater control over their bill and water usage.\n"
+                    "• Replacement of our finance system to support efficiencies in the business and affordable bills for customers.\n"
+                    "Future solutions\n"
+                    "• Undertaking phases one and two of the Gippsland Regional Organics expansion plan to deliver increased processing capacity.\n"
+                    "• Digitise our works management practice to transform how we schedule and engage with infrastructure work orders.\n"
+                    "Our 2050 Vision\n"
+                ),
+            }
+        ],
+        extracted_summary="Gippsland Water corporate plan outlining strategic priorities.",
+        subject="Gippsland Water strategic plan",
+        raw_text="",
+        extraction_depth="detailed",
+    )
+
+    strategic_signals = {item["headline"]: item for item in analysis["strategic_signals"]}
+
+    assert analysis["doc_type"] == "strategic_plan"
+    assert analysis["org_name"] == "Gippsland Water"
+    assert "Healthy Country" in strategic_signals
+    assert "water conservation and sustainability" in strategic_signals["Healthy Country"]["snippet"]
+    assert "Climate Preparedness" in strategic_signals
+    assert "100% renewable energy by 2025" in strategic_signals["Climate Preparedness"]["snippet"]
+    assert "Affordable Bills" in strategic_signals
+    assert "greater control over their bill and water usage" in strategic_signals["Affordable Bills"]["snippet"]
+    assert "Future Solutions" in strategic_signals
+    assert "Regional Organics expansion plan" in strategic_signals["Future Solutions"]["snippet"]
+    assert "OFFICIAL" not in strategic_signals
+    assert "Aboriginal Acknowledgement" not in strategic_signals
+    assert "‘Customer First’" not in strategic_signals
+
+
+def test_analyse_annual_report_filters_official_markers_and_credential_only_stakeholders():
+    analysis = analyse_strategic_documents(
+        [
+            {
+                "filename": "Annual_Report_2024-25.pdf",
+                "status": "processed",
+                "excerpt": (
+                    "OFFICIAL\n"
+                    "F\n"
+                    "Annual report 2024-25\n"
+                    "Board Chair Tom Mollenkopf AO, Minister for Water Gayle Tierney and Managing Director Sarah Cumming\n"
+                    "It is a pleasure to present the 2024-25 Gippsland Water Annual Report.\n"
+                    "This year we made strong progress against the four pillars of our strategic framework, future solutions, Healthy Country, affordable bills and climate preparedness.\n"
+                    "Tom Mollenkopf AO\n"
+                    "Board Chair\n"
+                    "Sarah Cumming\n"
+                    "Managing Director\n"
+                    "Our Board\n"
+                    "Tom Mollenkopf, AO (Chair)\n"
+                    "Sarah Cumming (Managing Director)\n"
+                    "BA(Hons), AMusA\n"
+                    "Penny has extensive board and committee experience, including\n"
+                    "Cert. Lab. Tech.\n"
+                    "Simon is responsible for leading the commercial and operational\n"
+                    "Key Management Personnel\n"
+                    "Remuneration of Executives\n"
+                    "Central Gippsland Region Water Corporation, or Gippsland Water, is a statutory body.\n"
+                ),
+            }
+        ],
+        extracted_summary="Gippsland Water annual report covering strategic framework and annual performance.",
+        subject="Gippsland Water annual report",
+        raw_text="",
+        extraction_depth="detailed",
+    )
+
+    stakeholders = [item["name"] for item in analysis["key_stakeholders"]]
+
+    assert analysis["doc_type"] == "annual_report"
+    assert analysis["org_name"] == "Gippsland Water"
+    assert "Tom Mollenkopf AO" in stakeholders
+    assert "Sarah Cumming" in stakeholders
+    assert "BA(Hons), AMusA" not in stakeholders
+    assert "Cert. Lab. Tech" not in stakeholders
+    assert "Key Management Personnel" not in stakeholders
+
+
+def test_analyse_annual_report_prefers_framework_pillars_over_generic_cross_doc_themes():
+    analysis = analyse_strategic_documents(
+        [
+            {
+                "filename": "Annual_Report_2024-25.pdf",
+                "status": "processed",
+                "excerpt": (
+                    "Annual report 2024-25\n"
+                    "It is a pleasure to present the 2024-25 Gippsland Water Annual Report.\n"
+                    "This year we made strong progress against the four pillars of our strategic framework,\n"
+                    "future solutions, Healthy Country, affordable bills and climate preparedness.\n"
+                    "We delivered major projects that enabled regional growth and strengthened resilience.\n"
+                    "We invested $65.9 million in capital expenditure to proactively plan and build for the future.\n"
+                    "Demonstrating our steadfast commitment to environmental stewardship, we’ve worked to be successfully positioned to operating on 100% renewable energy from 1 July 2025.\n"
+                    "To support customers impacted by the cost of living we’ve absorbed some of the inflationary pressures to maintain price increases below CPI.\n"
+                    "Our educational campaigns promoted Healthy Country and sustainability across the community.\n"
+                    "Tom Mollenkopf AO\n"
+                    "Board Chair\n"
+                    "Sarah Cumming\n"
+                    "Managing Director\n"
+                    "Tom Mollenkopf\n"
+                    "Board Chair\n"
+                ),
+            }
+        ],
+        extracted_summary="Gippsland Water annual report covering strategic framework and annual performance.",
+        subject="Gippsland Water annual report",
+        raw_text="",
+        extraction_depth="detailed",
+    )
+
+    headlines = [item["headline"] for item in analysis["strategic_signals"]]
+    stakeholders = [item["name"] for item in analysis["key_stakeholders"]]
+
+    assert analysis["doc_type"] == "annual_report"
+    assert "Future Solutions" in headlines
+    assert "Healthy Country" in headlines
+    assert "Affordable Bills" in headlines
+    assert "Climate Preparedness" in headlines
+    assert "Member trust and value-for-money pressure" not in headlines
+    assert stakeholders.count("Tom Mollenkopf AO") == 1
+    assert "Tom Mollenkopf" not in stakeholders
+
+
+def test_compact_strategy_snippet_repairs_mid_sentence_ocr_periods():
+    snippet = _compact_strategy_snippet(
+        "Engagement with customers to shape our Urban Water Strategy for the delivery of. sustainable and affordable water supplies to meet current and future demand.",
+        local_only=True,
+        limit=520,
+        allow_two_sentences=True,
+    )
+    assert snippet == (
+        "Engagement with customers to shape our Urban Water Strategy for the delivery of sustainable and affordable water supplies to meet current and future demand"
+    )
+
+
+def test_clean_note_signal_snippet_drops_noisy_strategy_plan_fragments():
+    snippet = _clean_note_signal_snippet(
+        "Our ambitions for 2028 Intent statements and measures Safety Maturity Model >95% safety training completion by all employees",
+        doc_type="strategic_plan",
+    )
+    assert snippet == ""
+
+
+def test_should_keep_rendered_strategic_signal_filters_pronoun_led_fragments():
+    assert not _should_keep_rendered_strategic_signal("We’Re One Team That", doc_type="strategic_plan")
+    assert _should_keep_rendered_strategic_signal("Drive Innovation At Scale", doc_type="strategic_plan")
 
 
 def test_analyse_strategic_documents_extracts_leadership_signatories():
@@ -1086,7 +3248,7 @@ def test_analyse_strategic_documents_extracts_annual_report_performance_and_stak
     assert indicators["Workforce pressure on members"]["evidence"].startswith("50% members say in survey")
     assert indicators["Stakeholder engagement"]["evidence"].startswith("15 meetings with MPs and other key stakeholders")
     assert indicators["Operating result"]["evidence"].startswith("The deficit of $0.1m")
-    assert "strong foundation for the College's future" in strategic_signals["Indigenous health and cultural safety are core business"]["snippet"].replace("\u2019", "'")
+    assert "strong foundation for the College's future" in strategic_signals["First Nations and cultural commitments"]["snippet"].replace("\u2019", "'")
 
 
 def test_analyse_strategic_documents_extracts_barwon_financial_highlights_and_major_projects():
@@ -1132,6 +3294,54 @@ def test_analyse_strategic_documents_extracts_barwon_financial_highlights_and_ma
     assert "Melbourne to Geelong Pipeline extension to Pettavel" in project_names
     assert "Northern Growth Area Advanced Works" in project_names
     assert "Ocean Grove Rising Main No. 2" in project_names
+
+
+def test_analyse_strategic_documents_extracts_seqwater_operational_annual_report_signals():
+    analysis = analyse_strategic_documents(
+        [
+            {
+                "filename": "Seqwater-Annual-Report-2024-25.pdf",
+                "status": "processed",
+                "excerpt": (
+                    "Seqwater Annual Report 2024-25 "
+                    "Operational transformation Operational resilience Asset information and management "
+                    "Capital delivery transformation Engaging with stakeholders Working with customers "
+                    "Process improvement and use of technology as an enabler Information systems, record keeping and cyber security "
+                    "Seqwater is proud to deliver safe affordable, reliable and sustainable water to more than 3.7 million SEQ residents. "
+                    "In 2024–25, Seqwater supplied approximately 326,060 megalitres (ML) of safe, reliable drinking water. "
+                    "Additionally, we welcomed 2.5 million recreational visitors to our lakes and parks. "
+                    "The SEQ Water Grid recorded a combined storage level of 85.9% on 30 June 2025. "
+                    "Our Flood Operations Centre was activated nine times in response to weather events. "
+                    "In 2024–25, Seqwater invested over $389 million in infrastructure including its dam improvement and water security programs. "
+                    "John McEvoy\nChairperson, Seqwater Board\nSeqwater\n"
+                    "Emma Thomas\nChief Executive Officer\nSeqwater\n"
+                    "Responsible Ministers\nBoard Committees\nSeqwater\n"
+                ),
+            }
+        ],
+        extracted_summary="Seqwater annual report covering asset programs, resilience and customer delivery.",
+        subject="Seqwater Annual Report 2024-25",
+        raw_text="",
+        extraction_depth="detailed",
+    )
+
+    indicators = {item["label"]: item for item in analysis["performance_indicators"]}
+    signal_headlines = [item["headline"] for item in analysis["strategic_signals"]]
+    stakeholder_names = [item["name"] for item in analysis["key_stakeholders"]]
+
+    assert analysis["doc_type"] == "annual_report"
+    assert analysis["org_name"] == "Seqwater"
+    assert indicators["Population served"]["value"] == "3.7m"
+    assert indicators["Bulk water supplied"]["value"] == "326,060 ML"
+    assert indicators["Recreational visitors"]["value"] == "2.5 million"
+    assert indicators["Water storage level"]["value"] == "85.9%"
+    assert indicators["Infrastructure investment"]["value"] == "$389 million"
+    assert "Operational transformation and resilience" in signal_headlines
+    assert "Capital delivery and asset transformation" in signal_headlines
+    assert "Stakeholder, customer and community engagement" in signal_headlines
+    assert "Technology and cyber enablement" in signal_headlines
+    assert "Emma Thomas" in stakeholder_names
+    assert "Responsible Ministers" not in stakeholder_names
 
 
 def test_strategic_doc_cleanup_helpers_normalise_roles_and_trim_ocr_tails():
@@ -1711,6 +3921,11 @@ def test_mailbox_handoff_normalizes_annual_report_summary_org_label_and_filters_
                             "current_role": "Directors’ and Chief Finance and Accounting Officer’s declaration",
                             "current_employer": "Barwon Water",
                         },
+                        {
+                            "name": "LINDA NIEUWENHUIZEN",
+                            "current_role": "| DEPUTY CHAIR",
+                            "current_employer": "I am pleased to present the Barwon Region Water Corporation",
+                        },
                     ],
                     "performance_indicators": [],
                 }
@@ -1727,6 +3942,97 @@ def test_mailbox_handoff_normalizes_annual_report_summary_org_label_and_filters_
     assert "Barwon Water Group accessible" not in note_content
     assert "- Des Powell | Barwon Asset Solutions Board | Barwon Water" in note_content
     assert "Barwon Region Water Corporation | Directors’ and Chief Finance and Accounting Officer’s declaration" not in note_content
+    assert "- LINDA NIEUWENHUIZEN | DEPUTY CHAIR | Barwon Water" in note_content
+    assert "I am pleased to present" not in note_content
+    assert "LEAD INDICATORS" not in note_content
+
+
+def test_mailbox_handoff_filters_seqwater_governance_artifacts_from_annual_report_note(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "entity: Escient | Seqwater annual report",
+            "from_email": "paul@longboardfella.com.au",
+            "received_at": "2026-03-25T09:00:00+00:00",
+            "raw_text": "",
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [{"name": "Seqwater", "target_type": "organisation", "confidence": 0.95}],
+            "attachments": [{"filename": "seqwater-annual-report.pdf", "status": "processed"}],
+            "summary": "Document from Seqwater. Leadership identified: John McEvoy (Chairperson), Emma Thomas (Chief Executive Officer).",
+            "target_update_suggestions": [],
+            "processing_meta": {
+                "strategic_doc": {
+                    "doc_type": "annual_report",
+                    "org_name": "Seqwater",
+                    "strategic_summary": "Annual report for Seqwater.",
+                    "strategic_signals": [],
+                    "key_stakeholders": [
+                        {"name": "John McEvoy", "current_role": "Chairperson, Seqwater Board", "current_employer": "Seqwater"},
+                        {"name": "Emma Thomas", "current_role": "Chief Executive Officer", "current_employer": "Seqwater"},
+                        {"name": "Responsible Ministers", "current_role": "Board Committees", "current_employer": "Seqwater"},
+                        {"name": "AND INFORMATION", "current_role": "Executive General Manager", "current_employer": "Seqwater"},
+                        {"name": "Independent Auditor’s Report", "current_role": "External scrutiny", "current_employer": "Seqwater"},
+                    ],
+                    "performance_indicators": [],
+                }
+            },
+        },
+        signal={},
+        markdown_text="# Extract",
+        message_kind="document_analysis",
+        routing={"subject_org_hint": "Seqwater", "clean_subject": "Seqwater annual report"},
+    )
+
+    note_content = payload["note"]["content"]
+    assert "- John McEvoy | Chairperson, Seqwater Board | Seqwater" in note_content
+    assert "- Emma Thomas | Chief Executive Officer | Seqwater" in note_content
+    assert "Responsible Ministers" not in note_content
+    assert "AND INFORMATION" not in note_content
+    assert "Independent Auditor’s Report" not in note_content
+
+
+def test_derive_period_label_falls_back_to_embedded_year_in_filename():
+    assert derive_period_label("strategic_plan", "GVW_Strategy2035.pdf") == "2035"
+
+
+def test_derive_period_label_preserves_annual_report_year_range():
+    assert derive_period_label("annual_report", "Seqwater Annual Report 2024-25") == "2024-25"
+    assert derive_period_label("annual_report", "Annual Report 2024-2025") == "2024-25"
 
 
 def test_mailbox_handoff_omits_low_signal_kpi_focus_lines_from_annual_report_notes(tmp_path):
@@ -1869,6 +4175,96 @@ def test_mailbox_handoff_uses_compact_provenance_for_attachment_led_signature_on
 
     assert payload["note"]["original_text"] == "Paul Cooper <paul@longboardfella.com.au> | 2026-03-24T08:47:21+00:00"
     assert "LinkedIn" not in payload["note"]["original_text"]
+
+
+def test_mailbox_handoff_trims_signature_and_disclaimer_from_plain_intelligence_email(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    raw_email = "\n".join(
+        [
+            "Heard that Goulburn Valley water are about to come out to market (via the panel we are on) to help develop an IT strategy and roadmap.",
+            "",
+            "Should be out via RFP in the next fortnight.",
+            "",
+            "Will need to build on the plans for the billing system replacement.",
+            "",
+            "Rebecca Campbell-Burns (she/her)",
+            "Chief Executive Officer",
+            "0404 108 481",
+            "escient.com.au",
+            "LinkedIn",
+            "—",
+            "",
+            "I acknowledge the Aboriginal and Torres Strait Islander peoples as the first inhabitants of Australia and the Traditional Owners and Custodians of Country where I live, learn and work.",
+            "",
+            "Escient encourages flexible working and as I access and support these arrangements, I am sending this message now because it suits me.",
+        ]
+    )
+
+    payload = poller._build_ingest_note_payload(
+        message={
+            "subject": "Intel report",
+            "from_name": "Rebecca Campbell-Burns",
+            "from_email": "rebecca.campbell-burns@escient.com.au",
+            "received_at": "2026-03-24T21:13:00+00:00",
+            "raw_text": raw_email,
+        },
+        persisted={"attachments": []},
+        output_data={
+            "entities": [
+                {"canonical_name": "Rebecca Campbell-Burns", "name": "Rebecca Campbell-Burns", "target_type": "person", "confidence": 0.95},
+                {"canonical_name": "Escient", "name": "Escient", "target_type": "organisation", "confidence": 0.95},
+                {"canonical_name": "Goulburn Valley Water", "name": "Goulburn Valley Water", "target_type": "organisation", "confidence": 0.95},
+            ],
+            "organisations": [{"canonical_name": "Escient"}, {"canonical_name": "Goulburn Valley Water"}],
+            "attachments": [],
+            "summary": "GVW is preparing an RFP for IT strategy services.",
+            "target_update_suggestions": [],
+            "processing_meta": {},
+        },
+        signal={},
+        markdown_text="# Intel Extraction Result\n\n## Summary\n\nGVW is preparing an RFP for IT strategy services.",
+        message_kind="document_analysis",
+        routing={"effective_org_name": "Escient", "status": "matched_sender_domain", "sender_domain_org_name": "Escient"},
+    )
+
+    assert "Rebecca Campbell-Burns (she/her)" not in payload["note"]["original_text"]
+    assert "I acknowledge the Aboriginal and Torres Strait Islander peoples" not in payload["note"]["original_text"]
+    assert "Escient encourages flexible working" not in payload["note"]["original_text"]
+    assert "Heard that Goulburn Valley water are about to come out to market" in payload["note"]["original_text"]
+    assert "Will need to build on the plans for the billing system replacement." in payload["note"]["original_text"]
 
 
 def test_intel_note_processor_filters_weak_and_credit_entities_for_strategic_docs(tmp_path):
