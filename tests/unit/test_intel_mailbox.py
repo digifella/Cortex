@@ -1939,6 +1939,87 @@ def test_result_payload_copies_fit_assessment_to_top_level(tmp_path):
     assert result["fit_assessment"]["matched_themes"] == ["Technology Strategy & Enablement"]
 
 
+def test_result_payload_copies_processing_meta_to_top_level_and_website_payload(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    poller = IntelMailboxPoller(
+        IntelMailboxConfig(
+            host="imap.gmail.com",
+            port=993,
+            username="intel@example.com",
+            password="pw",
+            folder="INBOX",
+            org_name="Longboardfella",
+            poll_limit=5,
+            search_criteria="UNSEEN",
+            allowed_senders=(),
+            source_system="cortex_mailbox",
+            callback_url="",
+            note_callback_url="",
+            callback_secret="super-secret",
+            callback_timeout=30,
+            profile_import_url="",
+            profile_import_timeout=30,
+            smtp_host="smtp.gmail.com",
+            smtp_port=465,
+            smtp_username="intel@example.com",
+            smtp_password="pw",
+            smtp_use_ssl=True,
+            reply_from="intel@example.com",
+            mark_seen_on_success=False,
+        ),
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+    )
+
+    processing_meta = {
+        "strategic_doc": {
+            "doc_type": "annual_report",
+            "org_name": "Gippsland Water",
+            "themes": ["Future Solutions", "Healthy Country"],
+            "strategic_signals": [
+                {"headline": "Future Solutions", "snippet": "Infrastructure planning and growth."},
+                {"headline": "Healthy Country", "snippet": "Sustainability and stewardship."},
+            ],
+        }
+    }
+    output_data = {
+        "summary": "Summary",
+        "entities": [],
+        "target_update_suggestions": [],
+        "warnings": [],
+        "processing_meta": processing_meta,
+    }
+
+    result = poller._build_result_payload(
+        message={"subject": "Gippsland Water annual report", "from_email": "paul@example.com", "received_at": "2026-03-26T13:56:27+11:00"},
+        persisted={"message_key": "msg1", "raw_path": "/tmp/message.eml", "attachments": []},
+        trace_id="trace-test",
+        output_data=output_data,
+        signal={"signal_id": "sig1", "matched_profile_keys": [], "needs_review": False},
+        scope_org_name="Escient",
+        routing={"effective_org_name": "Escient"},
+        fit_assessment={},
+    )
+    website_payload = poller._build_website_payload(
+        {
+            "action": "ingest_intel_note",
+            "secret": "super-secret",
+            "org_name": "Escient",
+            "note": {"title": "Gippsland Water Annual Report", "content": "## Summary\n\nDocument from Gippsland Water."},
+            "fit_assessment": {},
+        },
+        output_data,
+    )
+
+    assert result["processing_meta"]["strategic_doc"]["doc_type"] == "annual_report"
+    assert result["processing_meta"]["strategic_doc"]["org_name"] == "Gippsland Water"
+    assert website_payload["processing_meta"]["strategic_doc"]["doc_type"] == "annual_report"
+    assert website_payload["processing_meta"]["strategic_doc"]["themes"] == ["Future Solutions", "Healthy Country"]
+    assert website_payload["secret"] == "[redacted]"
+
+
 def test_mailbox_prioritizes_high_fit_strategy_themes_before_background(tmp_path):
     class _EscientSignalStore(_FakeSignalStore):
         def get_org_context(self, org_name):

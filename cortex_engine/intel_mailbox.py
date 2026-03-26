@@ -3428,6 +3428,7 @@ class IntelMailboxPoller:
         output_suggestions = output_data.get("target_update_suggestions") or []
         output_warnings = output_data.get("warnings") or []
         fit_payload = dict(fit_assessment or {})
+        processing_meta = dict(output_data.get("processing_meta") or {})
         return {
             "result_type": "intel_extract_result",
             "org_name": scope_org_name,
@@ -3441,6 +3442,7 @@ class IntelMailboxPoller:
             "suggested_targets": [],
             "warnings": output_warnings,
             "fit_assessment": fit_payload,
+            "processing_meta": processing_meta,
             "mailbox_message": {
                 "subject": message.get("subject", ""),
                 "from_email": message.get("from_email", ""),
@@ -3468,6 +3470,13 @@ class IntelMailboxPoller:
             },
             "output_data": output_data,
         }
+
+    @staticmethod
+    def _build_website_payload(delivery_payload: Dict[str, Any], output_data: Dict[str, Any]) -> Dict[str, Any]:
+        website_payload = dict(delivery_payload or {})
+        website_payload["secret"] = "[redacted]"
+        website_payload["processing_meta"] = dict(output_data.get("processing_meta") or {})
+        return website_payload
 
     def _send_reply(
         self,
@@ -3800,7 +3809,7 @@ class IntelMailboxPoller:
                     routing=routing,
                     fit_assessment=delivery_payload.get("fit_assessment") or {},
                 )
-                result_payload["website_payload"] = {**delivery_payload, "secret": "[redacted]"}
+                result_payload["website_payload"] = self._build_website_payload(delivery_payload, output_data)
                 result_payload["document_meta"] = delivery_payload.get("document_meta") or {}
                 delivery = self._build_document_duplicate_delivery(document_meta, delivery_payload)
                 self.signal_store.register_document_meta(
@@ -3821,7 +3830,7 @@ class IntelMailboxPoller:
                     routing=routing,
                     fit_assessment=delivery_payload.get("fit_assessment") or {},
                 )
-                result_payload["website_payload"] = {**delivery_payload, "secret": "[redacted]"}
+                result_payload["website_payload"] = self._build_website_payload(delivery_payload, output_data)
                 result_payload["document_meta"] = delivery_payload.get("document_meta") or {}
                 delivery = self.result_client.deliver(
                     persisted["message_key"],
