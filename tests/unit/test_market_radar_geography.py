@@ -144,11 +144,74 @@ def test_weekly_report_formats_web_intel_with_source_reference():
     assert "**Barwon Water updates drought response**" in section
 
 
+def test_weekly_report_formats_sector_sweep_as_separate_subsection():
+    section = wr._format_web_intel_section(
+        [
+            {
+                "headline": "Barwon Water updates drought response",
+                "date": "2026-03-22",
+                "source": "barwonwater.vic.gov.au",
+                "url": "https://barwonwater.vic.gov.au/news/drought-response",
+                "snippet": "The utility expanded regional water-saving measures.",
+            },
+            {
+                "headline": "Water sector sweep",
+                "type": "sector_sweep",
+                "source": "Anthropic web search",
+                "summary": "Regulatory and capital signals across Australian water utilities.",
+            },
+        ]
+    )
+
+    assert "### Targeted Web Research" in section
+    assert "### Final Sector Sweep" in section
+    assert "**Water sector sweep**" in section
+
+
 def test_weekly_report_source_separation_instruction_mentions_both_streams():
     instruction = wr._source_separation_instruction()
 
     assert "Submitted Intelligence" in instruction
     assert "Internet-Sourced Intelligence" in instruction
+
+
+def test_weekly_report_evidence_priority_instruction_prefers_submitted_intel():
+    instruction = wr._evidence_priority_instruction(
+        [{"title": "GVW RFP intel"}],
+        [{"headline": "Water sector sweep", "type": "sector_sweep"}],
+    )
+
+    assert "Submitted intelligence is the primary evidence stream" in instruction
+    assert "secondary enrichment" in instruction
+
+
+def test_weekly_report_required_output_template_enforces_explicit_sections():
+    template = wr._required_output_template()
+
+    assert "SUBMITTED INTELLIGENCE" in template
+    assert "INTERNET-SOURCED INTELLIGENCE" in template
+    assert "STAKEHOLDER HIGHLIGHTS" in template
+
+
+def test_weekly_report_organisation_coverage_instruction_lists_submitted_entities():
+    instruction = wr._organisation_coverage_instruction(
+        {"organisations": [{"name": "Goulburn Valley Water"}, {"name": "Barwon Water"}]},
+        [
+            {"primary_entity_name": "Goulburn Valley Water", "title": "IT strategy RFP"},
+            {"primary_entity_name": "Barwon Water", "title": "Annual report"},
+        ],
+    )
+
+    assert "Goulburn Valley Water" in instruction
+    assert "Barwon Water" in instruction
+    assert "Do not collapse" in instruction
+
+
+def test_weekly_report_stakeholder_guidance_mentions_submitter_account_signals():
+    instruction = wr._stakeholder_guidance_instruction([{"submitted_by": "paul@example.com"}])
+
+    assert "relationship or account signals" in instruction
+    assert "submitters as provenance" in instruction
 
 
 def test_weekly_report_selects_installed_ollama_model():

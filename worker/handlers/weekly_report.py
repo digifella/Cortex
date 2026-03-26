@@ -435,10 +435,9 @@ def _format_web_intel_section(web_intel: Any) -> str:
     if not isinstance(web_intel, list) or not web_intel:
         return "## Internet-Sourced Intelligence\nNo internet-sourced research was provided for the selected scope and date range."
 
-    web_lines = []
-    for index, item in enumerate(web_intel):
+    def _render_web_item(item: dict, index: int) -> str:
         if not isinstance(item, dict):
-            continue
+            return ""
         headline = _first_non_empty(
             item.get("headline"),
             item.get("title"),
@@ -463,12 +462,29 @@ def _format_web_intel_section(web_intel: Any) -> str:
             line += "\n  " + " | ".join(details)
         if summary:
             line += f"\n  Summary: {summary[:1500]}"
-        web_lines.append(line)
+        return line
 
-    if not web_lines:
+    targeted_lines = []
+    sector_sweep_lines = []
+    for index, item in enumerate(web_intel):
+        line = _render_web_item(item, index)
+        if not line:
+            continue
+        bucket = sector_sweep_lines if str((item or {}).get("type") or "").strip().lower() == "sector_sweep" else targeted_lines
+        bucket.append(line)
+
+    if not targeted_lines and not sector_sweep_lines:
         return "## Internet-Sourced Intelligence\nNo internet-sourced research was provided for the selected scope and date range."
 
-    return f"## Internet-Sourced Intelligence ({len(web_lines)} items)\n" + "\n".join(web_lines)
+    blocks = [f"## Internet-Sourced Intelligence ({len(targeted_lines) + len(sector_sweep_lines)} items)"]
+    if targeted_lines:
+        if sector_sweep_lines:
+            blocks.append("### Targeted Web Research")
+        blocks.append("\n".join(targeted_lines))
+    if sector_sweep_lines:
+        blocks.append("### Final Sector Sweep")
+        blocks.append("\n".join(sector_sweep_lines))
+    return "\n".join(block for block in blocks if block).strip()
 
 
 def _source_separation_instruction() -> str:
@@ -481,6 +497,111 @@ def _source_separation_instruction() -> str:
         "If the submitted item is a document such as an org chart or strategic plan, focus on the document subject/entity and use the submitter only as a brief provenance note. "
         "For internet-sourced intelligence, cite the source/publication and URL whenever provided. "
         "Do not present submitted intelligence as independently verified public reporting unless the same claim also appears in the provided web research."
+    )
+
+
+def _evidence_priority_instruction(submitted_intel: list[dict], web_intel: Any) -> str:
+    if not submitted_intel:
+        return (
+            "Internet-sourced intelligence is the primary evidence stream for this run. "
+            "Still keep sector sweep context separate from targeted web findings and avoid irrelevant public-sector filler."
+        )
+    instruction = (
+        "Submitted intelligence is the primary evidence stream for this report. "
+        "Build the Organisation Analysis and Stakeholder Highlights from submitted intelligence first, then use internet-sourced intelligence only to corroborate, update, or add missing sector context. "
+        "Do not replace specific submitted signals with generic public web commentary. "
+        "Do not say strategic directions are unclear when submitted strategic plans, annual reports, org charts, or explicit opportunity intel provide concrete organisation-level signals. "
+        "Ignore broad public-sector or regulatory news unless it is directly relevant to the selected industries, named organisations, or Escient implications."
+    )
+    if isinstance(web_intel, list) and any(str((item or {}).get("type") or "").strip().lower() == "sector_sweep" for item in web_intel if isinstance(item, dict)):
+        instruction += " Treat the final sector sweep as secondary enrichment, not the dominant narrative."
+    return instruction
+
+
+def _report_structure_instruction() -> str:
+    return (
+        "Always preserve these report sections in order: "
+        "'SECTOR/INDUSTRY OVERVIEW', 'ORGANISATION ANALYSIS', 'STAKEHOLDER HIGHLIGHTS', "
+        "'SUBMITTED INTELLIGENCE', 'INTERNET-SOURCED INTELLIGENCE', 'CROSS-CUTTING THEMES', and 'RECOMMENDED ACTIONS'. "
+        "If submitted intelligence includes multiple organisations, give each organisation its own subsection before broader sector commentary."
+    )
+
+
+def _required_output_template() -> str:
+    return (
+        "Return Markdown using this exact structure and exact heading text:\n"
+        "Weekly Intelligence Report - <scope>\n"
+        "Period: <start-end>\n"
+        "---\n"
+        "SECTOR/INDUSTRY OVERVIEW\n"
+        "<analysis>\n"
+        "---\n"
+        "ORGANISATION ANALYSIS\n"
+        "<one subsection per organisation when submitted intelligence exists>\n"
+        "---\n"
+        "STAKEHOLDER HIGHLIGHTS\n"
+        "<stakeholder, provenance, and relationship signals>\n"
+        "---\n"
+        "SUBMITTED INTELLIGENCE\n"
+        "<submitted items, provenance, why it matters>\n"
+        "---\n"
+        "INTERNET-SOURCED INTELLIGENCE\n"
+        "<targeted web research first, final sector sweep second>\n"
+        "---\n"
+        "CROSS-CUTTING THEMES\n"
+        "<patterns>\n"
+        "---\n"
+        "RECOMMENDED ACTIONS\n"
+        "<actions>\n"
+    )
+
+
+def _report_scope_names(report_scope: dict) -> list[str]:
+    names: list[str] = []
+    for bucket in ("organisations", "stakeholders", "industry_profiles"):
+        for item in report_scope.get(bucket, []) or []:
+            if not isinstance(item, dict):
+                continue
+            name = _first_non_empty(item.get("name"), item.get("canonical_name"))
+            if name and name not in names:
+                names.append(name)
+    return names
+
+
+def _submitted_entity_names(submitted_intel: list[dict]) -> list[str]:
+    names: list[str] = []
+    for item in submitted_intel or []:
+        if not isinstance(item, dict):
+            continue
+        name = _prefer_subject_entity(item)
+        if name and name != "Unspecified entity" and name not in names:
+            names.append(name)
+    return names
+
+
+def _organisation_coverage_instruction(report_scope: dict, submitted_intel: list[dict]) -> str:
+    submitted_names = _submitted_entity_names(submitted_intel)
+    scope_names = _report_scope_names(report_scope)
+    names = [name for name in submitted_names if name in scope_names] or submitted_names or scope_names
+    if not names:
+        return ""
+    return (
+        "In 'ORGANISATION ANALYSIS', include a separate subsection for each of these names where evidence exists: "
+        + ", ".join(names[:12])
+        + ". Do not collapse them into one generic sector paragraph."
+    )
+
+
+def _stakeholder_guidance_instruction(submitted_intel: list[dict]) -> str:
+    if not submitted_intel:
+        return (
+            "In 'STAKEHOLDER HIGHLIGHTS', keep the section brief if genuine stakeholder intelligence is thin, "
+            "but do not invent people or relationship claims."
+        )
+    return (
+        "In 'STAKEHOLDER HIGHLIGHTS', include real submitter-originated relationship or account signals when they are analytically useful, "
+        "such as repeated intelligence gathering by named Escient or partner contributors, imminent opportunity intelligence, or evidence of coordinated account-mapping. "
+        "Treat submitters as provenance and internal account-signal sources, not as external news subjects, unless the submitted material is actually about them."
     )
 
 
@@ -604,10 +725,24 @@ def handle(
         "Do not fabricate facts. Use only the provided data.\n"
         "Do not include confidence scores or metadata labels in the output.\n"
         f"{source_separation_instruction}\n"
+        f"{_report_structure_instruction()}\n"
+        f"{_evidence_priority_instruction(submitted_intel, effective_web_intel)}\n"
+        f"{_organisation_coverage_instruction(report_scope, submitted_intel)}\n"
+        f"{_stakeholder_guidance_instruction(submitted_intel)}\n"
         f"{geography_instruction}"
     )
 
-    user_prompt = f"{synthesis_instructions}\n\n" + "\n\n".join(data_sections)
+    user_prompt = (
+        f"{synthesis_instructions}\n\n"
+        f"{_required_output_template()}\n\n"
+        "Important output rules:\n"
+        "- Do not omit any required section.\n"
+        "- Keep 'SUBMITTED INTELLIGENCE' and 'INTERNET-SOURCED INTELLIGENCE' as explicit standalone sections.\n"
+        "- Put targeted web research ahead of the final sector sweep inside the internet-sourced section.\n"
+        "- If submitted intelligence is materially richer than web research, let submitted intelligence dominate the organisation and action sections.\n"
+        "- Use provenance and account-intel signals in stakeholder highlights when supported by submitted intelligence.\n\n"
+        + "\n\n".join(data_sections)
+    )
 
     # Choose provider order based on whether the report is internet-enriched.
     report_text = ""
