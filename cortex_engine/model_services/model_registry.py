@@ -90,6 +90,23 @@ class ModelRegistry:
                 size_estimate_gb=7.2,
                 use_cases=["proposal_generation", "complex_analysis", "professional_writing"]
             ),
+            ModelRegistryEntry(
+                name="gemma4:26b",
+                aliases=["gemma4", "gemma4:latest", "gemma4:31b", "gemma4:e4b", "gemma4:e2b"],
+                capabilities={
+                    ModelCapability.TEXT_GENERATION,
+                    ModelCapability.IMAGE_ANALYSIS,
+                    ModelCapability.CODE_GENERATION,
+                    ModelCapability.CHAT,
+                    ModelCapability.INSTRUCT,
+                },
+                preferred_backend="ollama",
+                ollama_name="gemma4:26b",
+                description="Gemma 4 multimodal reasoning model with long context and strong coding/agentic performance",
+                performance_tier="premium",
+                size_estimate_gb=18.0,
+                use_cases=["research", "synthesis", "proposal_generation", "coding", "multimodal_analysis"]
+            ),
             # LLaVA Model Family - Advanced Vision Language Models
             ModelRegistryEntry(
                 name="llava:7b",

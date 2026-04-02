@@ -17,6 +17,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - URL ingestor Streamlit UI is now shared through `cortex_engine/url_ingestor_ui.py` so the in-page tab and legacy standalone page stay aligned.
 - Legacy `pages/14_URL_Ingestor.py` now acts as a thin compatibility wrapper that points users to the integrated Document Extract workflow.
 - Journal ranking enrichment now accepts the SCImago JSON dataset expected by the website resolver design, while retaining XLSX fallback.
+- Research Resolver open-access detection now falls back to publisher-page and publisher-policy signals for cases like MDPI-hosted articles that are free to access but underreported by Unpaywall.
+- Gemma 4 local Ollama models are now first-class options for Cortex synthesis/research workflows, with long-context metadata and recommendation support across model selection surfaces.
 
 ### 🧠 Cortex Intelligence Intake + Review Loop
 

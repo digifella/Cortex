@@ -66,7 +66,8 @@ class SystemStatusChecker:
     
     REQUIRED_MODELS = [
         ("mistral:7b-instruct-v0.3-q4_K_M", 4.4),
-        ("mistral-small3.2", 15.0)
+        ("mistral-small3.2", 15.0),
+        ("gemma4:26b", 18.0),
     ]
     
     def __init__(self, model_distribution_strategy: str = "hybrid_ollama_preferred"):

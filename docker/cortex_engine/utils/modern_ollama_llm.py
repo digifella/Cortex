@@ -25,6 +25,31 @@ from .logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+_KNOWN_CONTEXT_WINDOWS = {
+    "gemma4": 128000,
+    "gemma4:e2b": 128000,
+    "gemma4:e4b": 128000,
+    "gemma4:latest": 128000,
+    "gemma4:26b": 256000,
+    "gemma4:31b": 256000,
+    "mistral-small3.2": 32768,
+    "qwen2.5:7b": 32768,
+    "qwen2.5:14b": 32768,
+    "llava:7b": 4096,
+    "llava:13b": 4096,
+}
+
+
+def _resolve_context_window(model_name: str) -> int:
+    model = str(model_name or "").strip().lower()
+    if model in _KNOWN_CONTEXT_WINDOWS:
+        return _KNOWN_CONTEXT_WINDOWS[model]
+    base = model.split(":", 1)[0]
+    if base in _KNOWN_CONTEXT_WINDOWS:
+        return _KNOWN_CONTEXT_WINDOWS[base]
+    return 4096
+
+
 class ModernOllamaLLM(LLM):
     """Modern Ollama LLM implementation using /api/chat endpoint."""
     
@@ -57,7 +82,7 @@ class ModernOllamaLLM(LLM):
     def metadata(self) -> LLMMetadata:
         """Get LLM metadata."""
         return LLMMetadata(
-            context_window=4096,  # Default, should be model-specific
+            context_window=_resolve_context_window(self.model),
             num_output=1024,      # Default, should be model-specific
             model_name=self.model,
         )

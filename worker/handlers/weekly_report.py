@@ -24,6 +24,11 @@ _OLLAMA_TIMEOUT = 600  # 10 minutes for large reports
 _ANTHROPIC_FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 _ANTHROPIC_WEB_MODEL = os.environ.get("CORTEX_WEEKLY_ANTHROPIC_WEB_MODEL", "").strip() or "claude-sonnet-4-20250514"
 _OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
+_DEFAULT_SUPPRESSED_SUBMITTER_ALIASES = (
+    "paul cooper",
+    "longboardfella",
+    "longboardfella consulting",
+)
 
 
 def _first_non_empty(*values) -> str:
@@ -68,6 +73,40 @@ def _normalize_model_name(value: Any) -> str:
     return text if ":" in text else f"{text}:latest"
 
 
+def _suppressed_submitter_aliases() -> tuple[str, ...]:
+    configured = str(os.environ.get("CORTEX_WEEKLY_SUPPRESSED_SUBMITTERS") or "").strip()
+    aliases = list(_DEFAULT_SUPPRESSED_SUBMITTER_ALIASES)
+    if configured:
+        aliases.extend(part.strip().lower() for part in configured.split(",") if part.strip())
+    deduped: list[str] = []
+    for alias in aliases:
+        cleaned = _normalize_reference_text(alias)
+        if cleaned and cleaned not in deduped:
+            deduped.append(cleaned)
+    return tuple(deduped)
+
+
+def _is_suppressed_submitter_identity(*values: Any) -> bool:
+    aliases = _suppressed_submitter_aliases()
+    for value in values:
+        normalized = _normalize_reference_text(value)
+        if not normalized:
+            continue
+        for alias in aliases:
+            if alias and (alias in normalized or normalized in alias):
+                return True
+    return False
+
+
+def _generic_submitter_label(display_name: str, email: str) -> str:
+    combined = f"{display_name} {email}".lower()
+    if "escient" in combined:
+        return "Escient contributor"
+    if "longboardfella" in combined:
+        return "External contributor"
+    return "Known contributor"
+
+
 def _select_installed_ollama_model(candidates: list[str], installed_models: list[str]) -> str:
     installed_normalized = {_normalize_model_name(name) for name in installed_models if _normalize_model_name(name)}
     for candidate in candidates:
@@ -83,6 +122,7 @@ def _resolve_ollama_model() -> str:
         str(os.environ.get("CORTEX_WATCH_OLLAMA_MODEL") or "").strip(),
         str(os.environ.get("LOCAL_LLM_SYNTHESIS_MODEL") or "").strip(),
         _OLLAMA_MODEL,
+        "gemma4:26b",
         "mistral-small3.2:latest",
         "mistral:latest",
     ]
@@ -296,6 +336,8 @@ def _run_anthropic_synthesis(system_prompt: str, user_prompt: str, model: str = 
 def _submitter_label(item: dict) -> str:
     display_name = _first_non_empty(item.get("submitted_by_name"), item.get("from_name"))
     email = _first_non_empty(item.get("submitted_by"), item.get("from_email"))
+    if _is_suppressed_submitter_identity(display_name, email):
+        return _generic_submitter_label(display_name, email)
     if display_name and email and display_name.lower() != email.lower():
         return f"{display_name} <{email}>"
     return display_name or email or "Unknown submitter"
@@ -600,8 +642,9 @@ def _stakeholder_guidance_instruction(submitted_intel: list[dict]) -> str:
         )
     return (
         "In 'STAKEHOLDER HIGHLIGHTS', include real submitter-originated relationship or account signals when they are analytically useful, "
-        "such as repeated intelligence gathering by named Escient or partner contributors, imminent opportunity intelligence, or evidence of coordinated account-mapping. "
-        "Treat submitters as provenance and internal account-signal sources, not as external news subjects, unless the submitted material is actually about them."
+        "such as repeated intelligence gathering by Escient or partner contributors, imminent opportunity intelligence, or evidence of coordinated account-mapping. "
+        "Treat submitters as provenance and internal account-signal sources, not as external news subjects, unless the submitted material is actually about them. "
+        "Do not surface suppressed submitter identities by name in stakeholder highlights; keep them generic."
     )
 
 

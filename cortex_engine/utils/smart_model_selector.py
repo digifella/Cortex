@@ -109,6 +109,10 @@ MODEL_VRAM_REQUIREMENTS = {
     # Large language models
     "llama3.3:70b": 40.0,
     "qwen2.5:72b": 42.0,
+    "gemma4:31b": 20.0,
+    "gemma4:26b": 18.0,
+    "gemma4:e4b": 9.6,
+    "gemma4:e2b": 7.2,
     "mistral-small3.2": 20.0,
     "llama3.2:11b": 8.0,
     "mistral:latest": 4.0,
@@ -147,10 +151,10 @@ MODEL_TIERS = {
         "description": "Efficient models suitable for systems with 16-32GB RAM"
     },
     "powerful": {
-        "text_model": "mistral-small3.2",
+        "text_model": "gemma4:26b",
         "vision_model": "llava:7b",
         "memory_requirement": 20.0,  # Total for both models
-        "description": "High-performance models requiring 32GB+ RAM and preferably dedicated GPU"
+        "description": "High-performance local reasoning models requiring 32GB+ RAM and preferably dedicated GPU"
     }
 }
 
@@ -302,7 +306,27 @@ def get_recommended_text_model() -> str:
     """
     selector = get_smart_selector()
     tier = selector.select_model_tier()
-    return MODEL_TIERS.get(tier, MODEL_TIERS["efficient"])["text_model"]
+    preferred = MODEL_TIERS.get(tier, MODEL_TIERS["efficient"])["text_model"]
+    if selector.can_run_model(preferred):
+        return preferred
+    # Fall back to legacy powerful model if Gemma 4 is not feasible on this machine.
+    if tier == "powerful" and selector.can_run_model("mistral-small3.2"):
+        return "mistral-small3.2"
+    return MODEL_TIERS["efficient"]["text_model"]
+
+
+def get_recommended_research_model() -> str:
+    """
+    Get recommended local research/synthesis model.
+
+    Prefer Gemma 4 for capable local reasoning when resources allow,
+    otherwise fall back conservatively.
+    """
+    selector = get_smart_selector()
+    for candidate in ("gemma4:26b", "mistral-small3.2", "mistral:latest"):
+        if selector.can_run_model(candidate):
+            return candidate
+    return "mistral:latest"
 
 
 def get_recommended_vision_model() -> str:

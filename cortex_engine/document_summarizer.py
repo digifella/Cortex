@@ -28,6 +28,22 @@ SUMMARIZER_MODELS = {
         "tier": "efficient",
         "context_window": 8192
     },
+    "gemma4:e4b": {
+        "vram_gb": 9.6,
+        "description": "Gemma 4 edge multimodal model with 128K context, strong reasoning and coding",
+        "tier": "balanced",
+        "context_window": 128000,
+        "multimodal": True,
+        "preferred_for_text": True
+    },
+    "gemma4:26b": {
+        "vram_gb": 18.0,
+        "description": "Gemma 4 26B MoE with 256K context, excellent local reasoning and synthesis",
+        "tier": "powerful",
+        "context_window": 256000,
+        "multimodal": True,
+        "preferred_for_text": True
+    },
     "llama3.2:3b": {
         "vram_gb": 2.0,
         "description": "Compact 3B model, fast but basic",
@@ -215,7 +231,7 @@ class DocumentSummarizer:
         for tier in tier_priority:
             for model_name, config in available.items():
                 if config["status"] == "ready" and config.get("tier") == tier:
-                    if not config.get("multimodal"):  # Prefer text models for summarization
+                    if not config.get("multimodal") or config.get("preferred_for_text"):
                         return model_name
 
         # Fallback to any ready model

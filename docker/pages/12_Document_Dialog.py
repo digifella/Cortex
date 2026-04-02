@@ -140,7 +140,7 @@ def render_sidebar():
             model_labels[model_name] = f"{model_name}{vision} ({vram}GB)"
 
             # Track best recommended model
-            if not config.get("multimodal") and (
+            if (not config.get("multimodal") or config.get("preferred_for_text")) and (
                 recommended_model is None or
                 config.get("vram_gb", 0) > SUMMARIZER_MODELS.get(recommended_model, {}).get("vram_gb", 0)
             ):

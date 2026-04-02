@@ -17,6 +17,43 @@ class _FakeResolver(ResearchResolver):
         return self.responses.get(key)
 
 
+class _FakeHtmlResponse:
+    def __init__(self, *, url, status_code=200, headers=None, text=""):
+        self.url = url
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.text = text
+
+    def close(self):
+        return None
+
+
+class _FakePdfResponse(_FakeHtmlResponse):
+    pass
+
+
+class _FakeSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.headers = {}
+        self.calls = []
+
+    def get(self, url, params=None, timeout=None, allow_redirects=True, stream=False, headers=None):
+        self.calls.append(
+            {
+                "url": url,
+                "params": params,
+                "timeout": timeout,
+                "allow_redirects": allow_redirects,
+                "stream": stream,
+                "headers": headers or {},
+            }
+        )
+        assert self.responses, f"Unexpected GET for {url}"
+        response = self.responses.pop(0)
+        return response
+
+
 def test_research_resolve_doi_direct_builds_enriched_output(monkeypatch):
     monkeypatch.setattr(
         "cortex_engine.research_resolve.classify_journal_authority",
@@ -239,3 +276,290 @@ def test_build_research_preferred_url_list_prefers_pdf_urls():
     )
 
     assert urls == ["https://example.org/one.pdf", "https://doi.org/10.1000/two"]
+
+
+def test_open_access_falls_back_to_publisher_pdf_when_unpaywall_is_closed():
+    doi = "10.3390/curroncol32050265"
+    resolver = _FakeResolver(
+        responses={
+            (
+                f"https://api.unpaywall.org/v2/{doi.replace('/', '%2F')}",
+                (("email", "paul@example.com"),),
+                "unpaywall",
+            ): {
+                "is_oa": False,
+                "oa_status": "closed",
+                "best_oa_location": None,
+            }
+        },
+        options={"check_open_access": True, "unpaywall_email": "paul@example.com"},
+    )
+    resolver._publisher_page_open_access = lambda resolved_url: {  # type: ignore[method-assign]
+        "is_oa": True,
+        "oa_status": "publisher_free_pdf",
+        "pdf_url": "https://www.mdpi.com/1718-7729/32/5/265/pdf?version=1746086728",
+        "oa_source": "publisher_page",
+    }
+
+    oa = resolver._open_access_info(
+        doi,
+        "https://www.mdpi.com/1718-7729/32/5/265",
+        {"publisher": "MDPI AG", "ISSN": ["1718-7729"], "volume": "32", "issue": "5", "page": "265"},
+        {"volume": "32", "issue": "5", "pages": ""},
+    )
+
+    assert oa["is_oa"] is True
+    assert oa["pdf_url"] == "https://www.mdpi.com/1718-7729/32/5/265/pdf?version=1746086728"
+    assert oa["oa_status"] == "publisher_free_pdf"
+    assert oa["oa_source"] == "unpaywall+publisher_page"
+
+
+def test_publisher_page_probe_extracts_pdf_from_citation_meta():
+    session = _FakeSession(
+        [
+            _FakeHtmlResponse(
+                url="https://www.mdpi.com/1718-7729/32/5/265",
+                headers={"Content-Type": "text/html; charset=utf-8"},
+                text="<html></html>",
+            ),
+            _FakeHtmlResponse(
+                url="https://www.mdpi.com/1718-7729/32/5/265",
+                headers={"Content-Type": "text/html; charset=utf-8"},
+                text="""
+                <html><head>
+                <meta name="citation_pdf_url" content="/1718-7729/32/5/265/pdf?version=1746086728">
+                </head><body></body></html>
+                """,
+            ),
+            _FakePdfResponse(
+                url="https://www.mdpi.com/1718-7729/32/5/265/pdf?version=1746086728",
+                headers={"Content-Type": "application/pdf"},
+            ),
+        ]
+    )
+    resolver = ResearchResolver(
+        options={"check_open_access": True},
+        session=session,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    oa = resolver._publisher_page_open_access("https://www.mdpi.com/1718-7729/32/5/265")
+
+    assert oa["is_oa"] is True
+    assert oa["oa_status"] == "publisher_free_pdf"
+    assert oa["pdf_url"] == "https://www.mdpi.com/1718-7729/32/5/265/pdf?version=1746086728"
+    assert oa["oa_source"] == "publisher_page"
+    assert "text/html" in session.calls[1]["headers"].get("Accept", "")
+    assert "application/pdf" in session.calls[2]["headers"].get("Accept", "")
+
+
+def test_publisher_page_probe_accepts_explicit_oa_page_when_pdf_verification_fails():
+    session = _FakeSession(
+        [
+            _FakeHtmlResponse(
+                url="https://www.mdpi.com/1718-7729/32/5/265",
+                headers={"Content-Type": "text/html; charset=utf-8"},
+                text="<html></html>",
+            ),
+            _FakeHtmlResponse(
+                url="https://www.mdpi.com/1718-7729/32/5/265",
+                headers={"Content-Type": "text/html; charset=utf-8"},
+                text="""
+                <html><body>
+                <a href="/1718-7729/32/5/265/pdf?version=1746086728">Download PDF</a>
+                <div>This article is an open access article distributed under the terms and conditions of the Creative Commons Attribution (CC BY) license.</div>
+                </body></html>
+                """,
+            ),
+            _FakeHtmlResponse(
+                url="https://www.mdpi.com/1718-7729/32/5/265/pdf?version=1746086728",
+                status_code=429,
+                headers={"Content-Type": "text/html; charset=utf-8"},
+                text="rate limited",
+            ),
+        ]
+    )
+    resolver = ResearchResolver(
+        options={"check_open_access": True},
+        session=session,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    oa = resolver._publisher_page_open_access("https://www.mdpi.com/1718-7729/32/5/265")
+
+    assert oa["is_oa"] is True
+    assert oa["oa_status"] == "publisher_page_open_access"
+    assert oa["pdf_url"] == "https://www.mdpi.com/1718-7729/32/5/265/pdf?version=1746086728"
+    assert oa["oa_source"] == "publisher_page"
+
+
+def test_open_access_uses_mdpi_synthesized_landing_page_when_doi_url_is_unhelpful():
+    doi = "10.3390/curroncol32050265"
+    resolver = _FakeResolver(
+        responses={
+            (
+                f"https://api.unpaywall.org/v2/{doi.replace('/', '%2F')}",
+                (("email", "paul@example.com"),),
+                "unpaywall",
+            ): {
+                "is_oa": None,
+                "oa_status": "unknown",
+                "best_oa_location": None,
+            }
+        },
+        options={"check_open_access": True, "unpaywall_email": "paul@example.com"},
+    )
+    seen = []
+
+    def fake_publisher_page(url):
+        seen.append(url)
+        if url == "https://www.mdpi.com/1718-7729/32/5/265":
+            return {
+                "is_oa": True,
+                "oa_status": "publisher_page_open_access",
+                "pdf_url": "https://www.mdpi.com/1718-7729/32/5/265/pdf?version=1746086728",
+                "oa_source": "publisher_page",
+            }
+        return {
+            "is_oa": None,
+            "oa_status": "unknown",
+            "pdf_url": "",
+            "oa_source": "",
+        }
+
+    resolver._publisher_page_open_access = fake_publisher_page  # type: ignore[method-assign]
+
+    oa = resolver._open_access_info(
+        doi,
+        "https://doi.org/10.3390/curroncol32050265",
+        {
+            "publisher": "MDPI AG",
+            "ISSN": ["1718-7729"],
+            "volume": "32",
+            "issue": "5",
+            "page": "265",
+        },
+        {"volume": "32", "issue": "5", "pages": ""},
+    )
+
+    assert "https://doi.org/10.3390/curroncol32050265" in seen
+    assert "https://www.mdpi.com/1718-7729/32/5/265" in seen
+    assert oa["is_oa"] is True
+    assert oa["oa_status"] == "publisher_page_open_access"
+    assert oa["pdf_url"] == "https://www.mdpi.com/1718-7729/32/5/265/pdf?version=1746086728"
+
+
+def test_open_access_uses_mdpi_publisher_policy_as_last_fallback():
+    doi = "10.3390/curroncol32050265"
+    resolver = _FakeResolver(
+        responses={
+            (
+                f"https://api.unpaywall.org/v2/{doi.replace('/', '%2F')}",
+                (("email", "paul@example.com"),),
+                "unpaywall",
+            ): {
+                "is_oa": None,
+                "oa_status": "unknown",
+                "best_oa_location": None,
+            }
+        },
+        options={"check_open_access": True, "unpaywall_email": "paul@example.com"},
+    )
+    resolver._publisher_page_open_access = lambda url: {  # type: ignore[method-assign]
+        "is_oa": None,
+        "oa_status": "unknown",
+        "pdf_url": "",
+        "oa_source": "",
+    }
+
+    oa = resolver._open_access_info(
+        doi,
+        "https://doi.org/10.3390/curroncol32050265",
+        {
+            "publisher": "MDPI AG",
+            "ISSN": ["1718-7729"],
+        },
+        {"volume": "", "issue": "", "pages": ""},
+    )
+
+    assert oa["is_oa"] is True
+    assert oa["oa_status"] == "publisher_policy_open_access"
+    assert oa["pdf_url"] == "https://www.mdpi.com/1718-7729/32/5/265/pdf"
+    assert oa["oa_source"] == "unpaywall+publisher_policy"
+
+
+def test_open_access_uses_mdpi_policy_when_crossref_omits_issn_but_journal_name_exists(monkeypatch):
+    doi = "10.3390/curroncol32050265"
+    monkeypatch.setattr(
+        "cortex_engine.research_resolve.classify_journal_authority",
+        lambda title, text: {
+            "journal_title": "Current Oncology",
+            "journal_issn": "1718-7729",
+            "journal_quartile": "",
+            "journal_sjr": 0.0,
+            "journal_rank_global": 0,
+        },
+    )
+    resolver = _FakeResolver(
+        responses={
+            (
+                f"https://api.unpaywall.org/v2/{doi.replace('/', '%2F')}",
+                (("email", "paul@example.com"),),
+                "unpaywall",
+            ): {
+                "is_oa": None,
+                "oa_status": "unknown",
+                "best_oa_location": None,
+            }
+        },
+        options={"check_open_access": True, "unpaywall_email": "paul@example.com"},
+    )
+    resolver._publisher_page_open_access = lambda url: {  # type: ignore[method-assign]
+        "is_oa": None,
+        "oa_status": "unknown",
+        "pdf_url": "",
+        "oa_source": "",
+    }
+
+    oa = resolver._open_access_info(
+        doi,
+        "https://doi.org/10.3390/curroncol32050265",
+        {
+            "publisher": "MDPI AG",
+            "container-title": ["Current Oncology"],
+        },
+        {"journal": "Current Oncology", "volume": "", "issue": "", "pages": ""},
+    )
+
+    assert oa["is_oa"] is True
+    assert oa["oa_status"] == "publisher_policy_open_access"
+    assert oa["pdf_url"] == "https://www.mdpi.com/1718-7729/32/5/265/pdf"
+
+
+def test_open_access_uses_mdpi_policy_without_unpaywall_email():
+    doi = "10.3390/curroncol32050265"
+    resolver = _FakeResolver(
+        responses={},
+        options={"check_open_access": True, "unpaywall_email": ""},
+    )
+    resolver._publisher_page_open_access = lambda url: {  # type: ignore[method-assign]
+        "is_oa": None,
+        "oa_status": "unknown",
+        "pdf_url": "",
+        "oa_source": "",
+    }
+
+    oa = resolver._open_access_info(
+        doi,
+        "https://doi.org/10.3390/curroncol32050265",
+        {
+            "publisher": "MDPI AG",
+            "ISSN": ["1718-7729"],
+            "container-title": ["Current Oncology"],
+        },
+        {"journal": "Current Oncology", "volume": "", "issue": "", "pages": ""},
+    )
+
+    assert oa["is_oa"] is True
+    assert oa["oa_status"] == "publisher_policy_open_access"
+    assert oa["pdf_url"] == "https://www.mdpi.com/1718-7729/32/5/265/pdf"

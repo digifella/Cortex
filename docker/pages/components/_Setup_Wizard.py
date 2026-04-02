@@ -307,6 +307,7 @@ def display_step_model_installation(step_result):
     - **Mistral Small 3.2** (7.2GB) - Enhanced proposal generation and complex analysis
     
     ### Optional Models:
+    - **Gemma 4 26B** (18GB) - Best local reasoning, synthesis, coding, and long-context work
     - **LLaVA** (4.5GB) - Image analysis and document processing
     - **Code Llama** (3.8GB) - Code generation and programming assistance
     """)

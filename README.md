@@ -13,7 +13,12 @@ This document reflects recent major enhancements to the **Project Cortex Suite**
 *   **[NEW] Document Extract Workflow: Research Resolver + URL PDF Ingestor**
     *   **Status:** Complete. `Document or Photo Processing` now includes dedicated `Research Resolver` and `URL PDF Ingestor` tabs alongside Textifier and privacy/photo tools.
     *   **Capabilities:** Parse citation spreadsheets (TSV/CSV/XLSX), resolve DOI/OA/SJR metadata, review matches, and hand preferred URLs directly into the in-page URL ingest flow.
-    *   **Technical:** Shared URL ingestor UI keeps the integrated tab and legacy standalone page aligned, while the queue worker also supports `research_resolve` for website-triggered jobs.
+    *   **Technical:** Shared URL ingestor UI keeps the integrated tab and legacy standalone page aligned, while the queue worker also supports `research_resolve` for website-triggered jobs. OA detection now includes publisher-page/publisher-policy fallback for free-to-access publisher-hosted articles.
+
+*   **[ENHANCED] Local Ollama Model Support: Gemma 4**
+    *   **Status:** Complete. Gemma 4 is now recognized as a premium local reasoning/synthesis option in Cortex when installed via Ollama.
+    *   **Capabilities:** Long-context local summarization, document dialog, weekly report synthesis preference, and stronger coding/agentic local workflows.
+    *   **Technical:** Model registry, smart model selection, summarizer/dialog recommendation logic, and Ollama metadata now understand Gemma 4 context sizes and capability tiering.
 
 *   **[NEW] ARM64 Compatibility & Multi-Architecture Support (v4.1.2)**
     *   **Status:** Complete. Universal compatibility across x86_64, ARM64, Apple Silicon, and Windows Snapdragon processors.

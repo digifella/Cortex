@@ -9,9 +9,10 @@ import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 
 import requests
+from bs4 import BeautifulSoup
 
 from cortex_engine.journal_authority import classify_journal_authority
 from cortex_engine.preface_classification import classify_credibility_tier_with_reason
@@ -322,6 +323,23 @@ def _pick_primary_url(message: Dict[str, Any], doi: str) -> str:
     return ""
 
 
+def _empty_open_access() -> Dict[str, Any]:
+    return {"is_oa": None, "oa_status": "unknown", "pdf_url": "", "oa_source": ""}
+
+
+def _page_signals_open_access(page_text: str) -> bool:
+    text = str(page_text or "").lower()
+    markers = (
+        "open access article",
+        "this article is an open access article",
+        "creative commons attribution",
+        "distributed under the terms and conditions of the creative commons",
+        "cc by license",
+        "open access",
+    )
+    return any(marker in text for marker in markers)
+
+
 def _extract_issn(message: Dict[str, Any]) -> str:
     for key in ("ISSN", "issn-type"):
         value = message.get(key)
@@ -350,6 +368,51 @@ def _extract_crossref_year(message: Dict[str, Any]) -> str:
             if _YEAR_RE.fullmatch(value):
                 return value
     return ""
+
+
+def _extract_message_volume_issue(message: Dict[str, Any], citation: Dict[str, Any]) -> tuple[str, str]:
+    volume = str(message.get("volume") or citation.get("volume") or "").strip()
+    issue = str(message.get("issue") or citation.get("issue") or "").strip()
+    return volume, issue
+
+
+def _extract_article_number(message: Dict[str, Any], citation: Dict[str, Any], doi: str) -> str:
+    for key in ("article-number", "page"):
+        value = str(message.get(key) or citation.get("pages") or "").strip()
+        if value:
+            first = re.split(r"[-,;\s]", value, maxsplit=1)[0].strip()
+            if first:
+                return first
+
+    suffix = str(doi or "").split("/")[-1].strip().lower()
+    match = re.search(r"(\d{2})(\d{2})(\d{3,5})$", suffix)
+    if match:
+        return str(int(match.group(3)))
+    return ""
+
+
+def _normalize_issue_part(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if text.isdigit():
+        return str(int(text))
+    return text
+
+
+def _mdpi_pdf_url(article_url: str) -> str:
+    base = str(article_url or "").rstrip("/")
+    if not base:
+        return ""
+    return f"{base}/pdf"
+
+
+def _extract_mdpi_path_parts(doi: str) -> tuple[str, str, str]:
+    suffix = str(doi or "").split("/")[-1].strip().lower()
+    match = re.search(r"[a-z]+(\d{2})(\d{2})(\d{3,5})$", suffix)
+    if not match:
+        return "", "", ""
+    return str(int(match.group(1))), str(int(match.group(2))), str(int(match.group(3)))
 
 
 def _retraction_info(message: Dict[str, Any]) -> Dict[str, Any]:
@@ -398,6 +461,18 @@ class ResearchResolver:
             }
         )
         self._last_crossref_at = 0.0
+
+    @staticmethod
+    def _web_headers() -> Dict[str, str]:
+        return {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+
+    @staticmethod
+    def _pdf_probe_headers() -> Dict[str, str]:
+        return {
+            "Accept": "application/pdf,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
 
     def resolve_all(self, citations: List[Dict[str, Any]]) -> Dict[str, Any]:
         total = len(citations)
@@ -695,29 +770,245 @@ class ResearchResolver:
             return str(title[0] or "").strip() if title else ""
         return str(title or "").strip()
 
-    def _open_access_info(self, doi: str) -> Dict[str, Any]:
+    def _merge_open_access(self, primary: Dict[str, Any], fallback: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(primary or _empty_open_access())
+        extra = dict(fallback or _empty_open_access())
+        if extra.get("is_oa") is True and merged.get("is_oa") is not True:
+            merged["is_oa"] = True
+            merged["oa_status"] = str(extra.get("oa_status") or "publisher_free_pdf").strip() or "publisher_free_pdf"
+        elif merged.get("is_oa") is None and extra.get("is_oa") is False:
+            merged["is_oa"] = False
+            merged["oa_status"] = str(extra.get("oa_status") or "closed").strip() or "closed"
+
+        if not str(merged.get("pdf_url") or "").strip() and str(extra.get("pdf_url") or "").strip():
+            merged["pdf_url"] = str(extra.get("pdf_url") or "").strip()
+
+        primary_source = str(merged.get("oa_source") or "").strip()
+        fallback_source = str(extra.get("oa_source") or "").strip()
+        if fallback_source:
+            if primary_source:
+                parts = [part for part in primary_source.split("+") if part]
+                if fallback_source not in parts:
+                    parts.append(fallback_source)
+                merged["oa_source"] = "+".join(parts)
+            else:
+                merged["oa_source"] = fallback_source
+        return merged
+
+    def _probe_pdf_url(self, url: str) -> str:
+        candidate = str(url or "").strip()
+        if not candidate:
+            return ""
+        try:
+            response = self.session.get(
+                candidate,
+                timeout=20,
+                allow_redirects=True,
+                stream=True,
+                headers=self._pdf_probe_headers(),
+            )
+        except requests.RequestException:
+            return ""
+        try:
+            if response.status_code >= 400:
+                return ""
+            content_type = str(response.headers.get("Content-Type") or "").lower()
+            if "application/pdf" in content_type or response.url.lower().endswith(".pdf"):
+                return str(response.url or candidate).strip()
+            return ""
+        finally:
+            response.close()
+
+    def _extract_pdf_candidates(self, html: str, base_url: str) -> List[str]:
+        soup = BeautifulSoup(html or "", "html.parser")
+        candidates: List[str] = []
+
+        meta_pdf = soup.find("meta", attrs={"name": "citation_pdf_url"})
+        if meta_pdf and meta_pdf.get("content"):
+            candidates.append(urljoin(base_url, str(meta_pdf.get("content") or "").strip()))
+
+        for link in soup.find_all("link"):
+            href = str(link.get("href") or "").strip()
+            link_type = str(link.get("type") or "").lower()
+            if not href:
+                continue
+            if "pdf" in link_type or href.lower().endswith(".pdf"):
+                candidates.append(urljoin(base_url, href))
+
+        for anchor in soup.find_all("a"):
+            href = str(anchor.get("href") or "").strip()
+            if not href:
+                continue
+            href_low = href.lower()
+            text_low = str(anchor.get_text(" ", strip=True) or "").lower()
+            if href_low.endswith(".pdf") or "/pdf" in href_low or ("download" in text_low and "pdf" in text_low):
+                candidates.append(urljoin(base_url, href))
+
+        return list(dict.fromkeys(candidates))
+
+    def _publisher_page_open_access(self, resolved_url: str) -> Dict[str, Any]:
+        if not str(resolved_url or "").strip():
+            return _empty_open_access()
+
+        direct_pdf = self._probe_pdf_url(resolved_url)
+        if direct_pdf:
+            return {
+                "is_oa": True,
+                "oa_status": "publisher_free_pdf",
+                "pdf_url": direct_pdf,
+                "oa_source": "publisher_page",
+            }
+
+        try:
+            response = self.session.get(
+                str(resolved_url).strip(),
+                timeout=20,
+                allow_redirects=True,
+                headers=self._web_headers(),
+            )
+        except requests.RequestException:
+            return _empty_open_access()
+
+        if response.status_code >= 400:
+            return _empty_open_access()
+
+        content_type = str(response.headers.get("Content-Type") or "").lower()
+        final_url = str(response.url or resolved_url).strip()
+        if "application/pdf" in content_type:
+            return {
+                "is_oa": True,
+                "oa_status": "publisher_free_pdf",
+                "pdf_url": final_url,
+                "oa_source": "publisher_page",
+            }
+        if "html" not in content_type and "<html" not in response.text[:500].lower():
+            return _empty_open_access()
+
+        candidate_urls = self._extract_pdf_candidates(response.text, final_url)
+        for candidate in candidate_urls:
+            verified = self._probe_pdf_url(candidate)
+            if verified:
+                return {
+                    "is_oa": True,
+                    "oa_status": "publisher_free_pdf",
+                    "pdf_url": verified,
+                    "oa_source": "publisher_page",
+                }
+        if candidate_urls and _page_signals_open_access(response.text):
+            return {
+                "is_oa": True,
+                "oa_status": "publisher_page_open_access",
+                "pdf_url": candidate_urls[0],
+                "oa_source": "publisher_page",
+            }
+        return _empty_open_access()
+
+    def _publisher_landing_candidates(self, *, message: Dict[str, Any], citation: Dict[str, Any], doi: str, resolved_url: str) -> List[str]:
+        candidates: List[str] = []
+        if str(resolved_url or "").strip():
+            candidates.append(str(resolved_url).strip())
+
+        publisher = str(message.get("publisher") or "").strip().lower()
+        issn = _extract_issn(message)
+        journal_name = ""
+        container = message.get("container-title")
+        if isinstance(container, list) and container:
+            journal_name = str(container[0] or "").strip()
+        if not journal_name:
+            journal_name = str(citation.get("journal") or "").strip()
+        if "mdpi" in publisher and not issn and journal_name:
+            ranking = classify_journal_authority(journal_name, journal_name)
+            issn = str(ranking.get("journal_issn") or "").strip()
+        volume, issue = _extract_message_volume_issue(message, citation)
+        article_number = _extract_article_number(message, citation, doi)
+        mdpi_volume, mdpi_issue, mdpi_article = _extract_mdpi_path_parts(doi)
+
+        if "mdpi" in publisher and issn:
+            if not volume:
+                volume = mdpi_volume
+            if not issue:
+                issue = mdpi_issue
+            if not article_number:
+                article_number = mdpi_article
+        if "mdpi" in publisher and issn and volume and issue and article_number:
+            candidates.append(
+                f"https://www.mdpi.com/{issn}/{volume}/{_normalize_issue_part(issue)}/{article_number}"
+            )
+
+        return list(dict.fromkeys(candidate for candidate in candidates if candidate))
+
+    def _publisher_policy_open_access(self, *, message: Dict[str, Any], citation: Dict[str, Any], doi: str, landing_candidates: List[str]) -> Dict[str, Any]:
+        publisher = str(message.get("publisher") or "").strip().lower()
+        if "mdpi" in publisher and str(doi or "").lower().startswith("10.3390/"):
+            mdpi_candidate = next((item for item in landing_candidates if "mdpi.com/" in item), "")
+            if mdpi_candidate:
+                return {
+                    "is_oa": True,
+                    "oa_status": "publisher_policy_open_access",
+                    "pdf_url": _mdpi_pdf_url(mdpi_candidate),
+                    "oa_source": "publisher_policy",
+                }
+        return _empty_open_access()
+
+    def _open_access_info(self, doi: str, resolved_url: str, message: Dict[str, Any], citation: Dict[str, Any]) -> Dict[str, Any]:
         if not self.options.get("check_open_access", True):
-            return {"is_oa": None, "oa_status": "unknown", "pdf_url": "", "oa_source": ""}
+            return _empty_open_access()
         email = str(self.options.get("unpaywall_email") or "").strip()
+        result = _empty_open_access()
+        landing_candidates = self._publisher_landing_candidates(
+            message=message,
+            citation=citation,
+            doi=doi,
+            resolved_url=resolved_url,
+        )
         if not doi or not email:
-            return {"is_oa": None, "oa_status": "unknown", "pdf_url": "", "oa_source": ""}
+            for candidate in landing_candidates:
+                result = self._merge_open_access(result, self._publisher_page_open_access(candidate))
+                if result.get("is_oa") is True:
+                    return result
+            final_result = self._merge_open_access(
+                result,
+                self._publisher_policy_open_access(
+                    message=message,
+                    citation=citation,
+                    doi=doi,
+                    landing_candidates=landing_candidates,
+                ),
+            )
+            return final_result
+
         payload = self._request_json(
             f"https://api.unpaywall.org/v2/{quote(doi, safe='')}",
             params={"email": email},
             source="unpaywall",
         )
-        if not isinstance(payload, dict):
-            return {"is_oa": None, "oa_status": "unknown", "pdf_url": "", "oa_source": ""}
-        location = payload.get("best_oa_location") or {}
-        pdf_url = ""
-        if isinstance(location, dict):
-            pdf_url = str(location.get("url_for_pdf") or location.get("url") or "").strip()
-        return {
-            "is_oa": payload.get("is_oa") if isinstance(payload.get("is_oa"), bool) else None,
-            "oa_status": str(payload.get("oa_status") or "unknown").strip().lower() or "unknown",
-            "pdf_url": pdf_url,
-            "oa_source": "unpaywall",
-        }
+        if isinstance(payload, dict):
+            location = payload.get("best_oa_location") or {}
+            pdf_url = ""
+            if isinstance(location, dict):
+                pdf_url = str(location.get("url_for_pdf") or location.get("url") or "").strip()
+            result = {
+                "is_oa": payload.get("is_oa") if isinstance(payload.get("is_oa"), bool) else None,
+                "oa_status": str(payload.get("oa_status") or "unknown").strip().lower() or "unknown",
+                "pdf_url": pdf_url,
+                "oa_source": "unpaywall",
+            }
+        if result.get("is_oa") is True and str(result.get("pdf_url") or "").strip():
+            return result
+        for candidate in landing_candidates:
+            result = self._merge_open_access(result, self._publisher_page_open_access(candidate))
+            if result.get("is_oa") is True:
+                return result
+        final_result = self._merge_open_access(
+            result,
+            self._publisher_policy_open_access(
+                message=message,
+                citation=citation,
+                doi=doi,
+                landing_candidates=landing_candidates,
+            ),
+        )
+        return final_result
 
     def _journal_info(self, citation: Dict[str, Any], message: Dict[str, Any]) -> Dict[str, Any]:
         journal_name = ""
@@ -783,7 +1074,7 @@ class ResearchResolver:
     ) -> Dict[str, Any]:
         doi = _normalize_doi(str(message.get("DOI") or citation.get("doi") or ""))
         resolved_url = _pick_primary_url(message, doi)
-        open_access = self._open_access_info(doi)
+        open_access = self._open_access_info(doi, resolved_url, message, citation)
         journal = self._journal_info(citation, message)
         retraction = _retraction_info(message)
 
