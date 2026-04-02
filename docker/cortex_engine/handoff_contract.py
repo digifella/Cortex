@@ -9,7 +9,7 @@ HANDOFF_CONTRACT_VERSION = "2026-02-15.v1"
 DEFAULT_TENANT_ID = "default"
 DEFAULT_PROJECT_ID = "default"
 
-SUPPORTED_JOB_TYPES = ["pdf_anonymise", "pdf_textify", "url_ingest", "cortex_sync"]
+SUPPORTED_JOB_TYPES = ["pdf_anonymise", "pdf_textify", "url_ingest", "research_resolve", "cortex_sync"]
 
 SUPPORTED_ANONYMIZER_OPTIONS = [
     "redact_people",
@@ -200,6 +200,72 @@ def validate_url_ingest_input(input_data: Optional[Dict[str, Any]] = None) -> Di
 
     top_level_textify = {k: payload[k] for k in SUPPORTED_TEXTIFY_OPTION_KEYS if k in payload}
     payload["textify_options"] = normalize_textify_options(top_level_textify)
+    return payload
+
+
+def validate_research_resolve_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(input_data or {})
+
+    citations = payload.get("citations")
+    if not isinstance(citations, list) or not citations:
+        raise ValueError("research_resolve requires input_data.citations (non-empty array)")
+
+    normalized_citations = []
+    for idx, item in enumerate(citations):
+        if not isinstance(item, dict):
+            raise ValueError(f"research_resolve citations[{idx}] must be an object")
+
+        title = str(item.get("title") or "").strip()
+        if not title:
+            raise ValueError(f"research_resolve citations[{idx}].title is required")
+
+        extra_fields = item.get("extra_fields")
+        if extra_fields is None:
+            extra_fields = {}
+        if not isinstance(extra_fields, dict):
+            raise ValueError(f"research_resolve citations[{idx}].extra_fields must be an object")
+
+        raw_row_id = item.get("row_id")
+        row_id: Any
+        if raw_row_id is None or raw_row_id == "":
+            row_id = idx + 1
+        else:
+            try:
+                row_id = int(raw_row_id)
+            except Exception:
+                row_id = str(raw_row_id).strip() or (idx + 1)
+
+        normalized_citations.append(
+            {
+                "row_id": row_id,
+                "title": title,
+                "authors": str(item.get("authors") or "").strip(),
+                "year": str(item.get("year") or "").strip(),
+                "doi": str(item.get("doi") or "").strip(),
+                "journal": str(item.get("journal") or "").strip(),
+                "abstract": str(item.get("abstract") or "").strip(),
+                "volume": str(item.get("volume") or "").strip(),
+                "issue": str(item.get("issue") or "").strip(),
+                "pages": str(item.get("pages") or "").strip(),
+                "accession": str(item.get("accession") or "").strip(),
+                "aim": str(item.get("aim") or "").strip(),
+                "notes": str(item.get("notes") or "").strip(),
+                "extra_fields": dict(extra_fields),
+            }
+        )
+
+    options = payload.get("options")
+    if options is None:
+        options = {}
+    if not isinstance(options, dict):
+        raise ValueError("research_resolve input_data.options must be an object")
+
+    payload["citations"] = normalized_citations
+    payload["options"] = {
+        "check_open_access": _coerce_bool(options.get("check_open_access"), True),
+        "enrich_sjr": _coerce_bool(options.get("enrich_sjr"), True),
+        "unpaywall_email": str(options.get("unpaywall_email") or "").strip(),
+    }
     return payload
 
 

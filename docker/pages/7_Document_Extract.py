@@ -16,11 +16,13 @@ import zipfile
 import io
 import unicodedata
 import subprocess
+import hashlib
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
+from PIL import Image, ImageOps
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -28,12 +30,21 @@ sys.path.insert(0, str(project_root))
 
 # Import core modules
 from cortex_engine.anonymizer import DocumentAnonymizer, AnonymizationMapping, AnonymizationOptions
-from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
+from cortex_engine.utils import get_logger, convert_windows_to_wsl_path, resolve_db_root_path
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.version_config import VERSION_STRING
 from cortex_engine.journal_authority import classify_journal_authority
 from cortex_engine.preface_classification import classify_credibility_tier
 from cortex_engine.document_preface import add_document_preface
+from cortex_engine.handoff_contract import validate_research_resolve_input
+from cortex_engine.research_resolve import (
+    build_research_preferred_url_list,
+    build_research_preview_rows,
+    parse_research_spreadsheet_text,
+    parse_research_spreadsheet_upload,
+    run_research_resolve,
+)
+from cortex_engine.url_ingestor_ui import render_url_ingestor_ui
 
 # Set up logging
 logger = get_logger(__name__)
@@ -61,6 +72,91 @@ class _SessionUpload:
 
     def getvalue(self) -> bytes:
         return self._data
+
+
+def _resolve_db_root() -> Path:
+    config = ConfigManager().get_config()
+    raw_db = (config.get("ai_database_path") or "").strip()
+    if not raw_db:
+        raise ValueError("No ai_database_path configured. Set the database path first in Knowledge Ingest or Maintenance.")
+    resolved = resolve_db_root_path(raw_db)
+    if resolved:
+        return Path(str(resolved))
+    normalized = raw_db if os.path.exists("/.dockerenv") else convert_windows_to_wsl_path(raw_db)
+    return Path(normalized)
+
+
+def _editor_records(value: Any) -> List[Dict[str, Any]]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    if hasattr(value, "to_dict"):
+        try:
+            records = value.to_dict("records")
+            return [dict(item) for item in records if isinstance(item, dict)]
+        except Exception:
+            return []
+    return []
+
+
+def _merge_research_editor_rows(editor_rows: List[Dict[str, Any]], citations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    by_row_id = {str(item.get("row_id")): dict(item) for item in citations or []}
+    merged: List[Dict[str, Any]] = []
+    for row in editor_rows or []:
+        if not bool(row.get("keep", True)):
+            continue
+        row_id = str(row.get("row_id"))
+        base = dict(by_row_id.get(row_id) or {})
+        if not base:
+            continue
+        for key in ("title", "authors", "year", "doi", "journal", "accession"):
+            base[key] = str(row.get(key) or "").strip()
+        merged.append(base)
+    return merged
+
+
+def _research_resolved_rows(resolved: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = []
+    for item in resolved or []:
+        oa = item.get("open_access") or {}
+        journal = item.get("journal") or {}
+        retraction = item.get("retraction") or {}
+        rows.append(
+            {
+                "row_id": item.get("row_id"),
+                "input_title": item.get("input_title", ""),
+                "resolved_url": item.get("resolved_url", ""),
+                "resolved_doi": item.get("resolved_doi", ""),
+                "confidence": item.get("confidence", ""),
+                "open_access": oa.get("oa_status") if oa.get("is_oa") is not None else "unknown",
+                "pdf_url": oa.get("pdf_url", ""),
+                "journal": journal.get("name", ""),
+                "sjr_quartile": journal.get("sjr_quartile", ""),
+                "publisher": item.get("publisher", ""),
+                "credibility_tier": item.get("credibility_tier", ""),
+                "retracted": "yes" if retraction.get("is_retracted") else "",
+            }
+        )
+    return rows
+
+
+def _research_unresolved_rows(unresolved: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = []
+    for item in unresolved or []:
+        best = ""
+        if item.get("best_candidates"):
+            first = item["best_candidates"][0]
+            best = f"{first.get('title', '')} ({first.get('similarity', 0)})"
+        rows.append(
+            {
+                "row_id": item.get("row_id"),
+                "input_title": item.get("input_title", ""),
+                "reason": item.get("reason", ""),
+                "best_candidate": best,
+            }
+        )
+    return rows
 
 def _get_knowledge_base_files(extensions: List[str]) -> List[Path]:
     """Return files from knowledge base directories matching given extensions."""
@@ -311,6 +407,150 @@ def _write_photo_metadata_quick_edit(
         return {"success": False, "message": result.stderr.strip() or "metadata write failed"}
     except Exception as e:
         return {"success": False, "message": str(e)}
+
+
+def _halftone_strength_label(strength: float) -> str:
+    value = float(strength or 0.0)
+    if value < 34:
+        return "Light"
+    if value < 67:
+        return "Medium"
+    return "Strong"
+
+
+def _zoom_crop_image(image_path: str, zoom: float, focus_x: int, focus_y: int) -> Optional[Image.Image]:
+    try:
+        with Image.open(image_path) as img:
+            img = ImageOps.exif_transpose(img)
+            if img.mode not in {"RGB", "RGBA", "L"}:
+                img = img.convert("RGB")
+            if float(zoom) <= 1.05:
+                return img.copy()
+
+            width, height = img.size
+            crop_width = max(1, int(round(width / float(zoom))))
+            crop_height = max(1, int(round(height / float(zoom))))
+
+            center_x = int(round((max(0, min(100, int(focus_x))) / 100.0) * width))
+            center_y = int(round((max(0, min(100, int(focus_y))) / 100.0) * height))
+
+            left = max(0, min(width - crop_width, center_x - crop_width // 2))
+            top = max(0, min(height - crop_height, center_y - crop_height // 2))
+            box = (left, top, left + crop_width, top + crop_height)
+            return img.crop(box).copy()
+    except Exception:
+        return None
+
+
+def _resize_preview_image(image: Image.Image, target_width: int = 1400) -> Image.Image:
+    if image.width <= 0 or image.height <= 0:
+        return image
+    if image.width >= target_width:
+        return image
+    scale = float(target_width) / float(image.width)
+    target_height = max(1, int(round(image.height * scale)))
+    return image.resize((target_width, target_height), Image.Resampling.LANCZOS)
+
+
+def _build_ab_window_image(
+    original_image: Image.Image,
+    repaired_image: Image.Image,
+    split_pct: int,
+    target_width: int = 1400,
+) -> Optional[Image.Image]:
+    try:
+        left = original_image.convert("RGB")
+        right = repaired_image.convert("RGB")
+        if left.size != right.size:
+            right = right.resize(left.size, Image.Resampling.LANCZOS)
+
+        if left.width < target_width:
+            left = _resize_preview_image(left, target_width=target_width)
+            right = right.resize(left.size, Image.Resampling.LANCZOS)
+
+        split_x = int(round((max(0, min(100, int(split_pct))) / 100.0) * left.width))
+        merged = Image.new("RGB", left.size)
+        if split_x > 0:
+            merged.paste(left.crop((0, 0, split_x, left.height)), (0, 0))
+        if split_x < left.width:
+            merged.paste(right.crop((split_x, 0, right.width, right.height)), (split_x, 0))
+
+        band_half = 2
+        for offset in range(-band_half, band_half + 1):
+            x = split_x + offset
+            if 0 <= x < merged.width:
+                color = (255, 255, 255) if offset == 0 else (0, 0, 0)
+                for y in range(merged.height):
+                    merged.putpixel((x, y), color)
+        return merged
+    except Exception:
+        return None
+
+
+def _render_halftone_ab_compare(
+    original_path: str,
+    repaired_path: str,
+    strength: float,
+    widget_prefix: str,
+    heading: str = "A/B Window",
+) -> None:
+    if not original_path or not repaired_path:
+        return
+    if not Path(original_path).exists() or not Path(repaired_path).exists():
+        return
+
+    zoom = st.slider(
+        f"{heading} zoom",
+        min_value=1.0,
+        max_value=12.0,
+        value=3.0,
+        step=0.25,
+        key=f"{widget_prefix}_zoom",
+    )
+    focus_cols = st.columns(3)
+    with focus_cols[0]:
+        focus_x = st.slider("Focus X (%)", 0, 100, 50, 1, key=f"{widget_prefix}_focus_x")
+    with focus_cols[1]:
+        focus_y = st.slider("Focus Y (%)", 0, 100, 50, 1, key=f"{widget_prefix}_focus_y")
+    with focus_cols[2]:
+        split_position = st.slider("A/B split (%)", 0, 100, 50, 1, key=f"{widget_prefix}_split")
+
+    original_zoom = _zoom_crop_image(original_path, zoom, focus_x, focus_y)
+    repaired_zoom = _zoom_crop_image(repaired_path, zoom, focus_x, focus_y)
+
+    if original_zoom and repaired_zoom:
+        ab_window = _build_ab_window_image(
+            original_zoom,
+            repaired_zoom,
+            split_pct=split_position,
+            target_width=1600,
+        )
+        if ab_window:
+            st.markdown(
+                f"**{heading}**  \nZoom: {zoom:.2f}x · Strength: {int(round(float(strength)))} · {_halftone_strength_label(strength)}"
+            )
+            st.image(ab_window, use_column_width=True)
+            st.caption("Left of the divider is original. Right is repaired.")
+
+    detail_tabs = st.tabs(["Zoomed Original", "Zoomed Repair", "Full Image A/B"])
+    with detail_tabs[0]:
+        if original_zoom:
+            st.image(_resize_preview_image(original_zoom, target_width=1400), use_column_width=True)
+    with detail_tabs[1]:
+        if repaired_zoom:
+            st.image(_resize_preview_image(repaired_zoom, target_width=1400), use_column_width=True)
+    with detail_tabs[2]:
+        full_original = _zoom_crop_image(original_path, 1.0, 50, 50)
+        full_repaired = _zoom_crop_image(repaired_path, 1.0, 50, 50)
+        if full_original and full_repaired:
+            full_ab = _build_ab_window_image(
+                full_original,
+                full_repaired,
+                split_pct=split_position,
+                target_width=1400,
+            )
+            if full_ab:
+                st.image(full_ab, use_column_width=True)
 
 
 def _ascii_fold(text: str) -> str:
@@ -2162,6 +2402,22 @@ def _render_photo_keywords_tab():
             disabled=(not convert_to_jpg) or no_resize_selected,
             help="Only applies when JPG conversion is enabled.",
         )
+        halftone_strength = st.slider(
+            "Halftone repair strength",
+            min_value=0,
+            max_value=100,
+            value=42,
+            step=1,
+            key="photokw_halftone_strength",
+            help="Lower values are gentler. Higher values remove more screen pattern but can soften detail.",
+        )
+        st.caption(f"Current repair profile: {_halftone_strength_label(halftone_strength)}")
+        halftone_preserve_color = st.checkbox(
+            "Preserve colour during halftone repair",
+            value=True,
+            key="photokw_halftone_preserve_color",
+            help="When enabled, Cortex repairs the luminance channel and keeps colour information where possible.",
+        )
 
         anonymize_keywords = st.checkbox(
             "Anonymize sensitive keywords",
@@ -2252,7 +2508,6 @@ def _render_photo_keywords_tab():
 
                 # Keep a stable working copy path for this uploaded file across reruns,
                 # so quick metadata edits are not lost.
-                import hashlib
                 preview_sig = f"{preview_photo.name}:{len(preview_bytes)}:{hashlib.md5(preview_bytes).hexdigest()}"
                 existing_sig = st.session_state.get("photokw_single_upload_sig")
                 existing_path = st.session_state.get("photokw_single_working_path")
@@ -2356,6 +2611,84 @@ def _render_photo_keywords_tab():
                     else:
                         st.info(f"Metadata preview unavailable: {preview_meta.get('reason', 'Unknown reason')}")
 
+                halftone_preview_state = st.session_state.get("photokw_halftone_preview") or {}
+                halftone_preview_matches = (
+                    halftone_preview_state.get("source_sig") == preview_sig
+                    and float(halftone_preview_state.get("strength", -1)) == float(halftone_strength)
+                    and bool(halftone_preview_state.get("preserve_color")) == bool(halftone_preserve_color)
+                    and Path(str(halftone_preview_state.get("output_path") or "")).exists()
+                )
+
+                with st.expander("Halftone Repair Preview", expanded=True):
+                    st.caption(
+                        "Generate a repaired preview for the current strength, then inspect the full image and a zoomed crop before batch processing."
+                    )
+                    preview_button_cols = st.columns(2)
+                    generate_halftone_preview = preview_button_cols[0].button(
+                        "Generate Halftone Preview",
+                        key="photokw_generate_halftone_preview",
+                        use_container_width=True,
+                    )
+                    clear_halftone_preview = preview_button_cols[1].button(
+                        "Clear Preview",
+                        key="photokw_clear_halftone_preview",
+                        use_container_width=True,
+                    )
+
+                    if clear_halftone_preview:
+                        existing_preview = Path(str(halftone_preview_state.get("output_path") or ""))
+                        if existing_preview.exists():
+                            try:
+                                existing_preview.unlink()
+                            except Exception:
+                                pass
+                        st.session_state.pop("photokw_halftone_preview", None)
+                        halftone_preview_state = {}
+                        halftone_preview_matches = False
+
+                    if generate_halftone_preview:
+                        from cortex_engine.textifier import DocumentTextifier
+
+                        preview_output_path = preview_temp_dir / (
+                            f"{preview_path.stem}_halftone_preview_{int(halftone_strength)}"
+                            f"{'_color' if halftone_preserve_color else '_mono'}{preview_path.suffix}"
+                        )
+                        shutil.copy2(preview_path, preview_output_path)
+                        os.chmod(str(preview_output_path), 0o644)
+
+                        with st.spinner("Generating halftone preview..."):
+                            preview_result = DocumentTextifier(use_vision=False).repair_halftone_image(
+                                str(preview_output_path),
+                                strength=halftone_strength,
+                                preserve_color=halftone_preserve_color,
+                                convert_to_jpg=False,
+                            )
+                        preview_info = preview_result.get("halftone_repair_info", {})
+                        if preview_info.get("repaired"):
+                            st.session_state["photokw_halftone_preview"] = {
+                                "source_sig": preview_sig,
+                                "strength": float(halftone_strength),
+                                "preserve_color": bool(halftone_preserve_color),
+                                "output_path": str(preview_result.get("output_path") or preview_output_path),
+                            }
+                            halftone_preview_state = st.session_state["photokw_halftone_preview"]
+                            halftone_preview_matches = True
+                        else:
+                            st.error(f"Preview generation failed: {preview_info.get('error', 'Unknown error')}")
+
+                    if halftone_preview_state and not halftone_preview_matches:
+                        st.info("Preview settings changed. Generate a new preview to match the current strength and colour options.")
+
+                    if halftone_preview_matches:
+                        preview_output_path = str(halftone_preview_state["output_path"])
+                        _render_halftone_ab_compare(
+                            str(preview_path),
+                            preview_output_path,
+                            strength=float(halftone_strength),
+                            widget_prefix="photokw_halftone_preview_compare",
+                            heading="Preview A/B Window",
+                        )
+
             resolution_map = {
                 "Keep original dimensions": (None, None),
                 "Low (1920 x 1080)": (1920, 1080),
@@ -2363,11 +2696,12 @@ def _render_photo_keywords_tab():
             }
             max_width, max_height = resolution_map.get(resize_profile, (None, None))
 
-            action_cols = st.columns(2)
+            action_cols = st.columns(3)
             do_resize_only = action_cols[0].button("Resize Photos Only", use_container_width=True)
-            do_keywords = action_cols[1].button("Process Selected Metadata", type="primary", use_container_width=True)
+            do_halftone_repair = action_cols[1].button("Repair Halftone Artefacts", use_container_width=True)
+            do_keywords = action_cols[2].button("Process Selected Metadata", type="primary", use_container_width=True)
 
-            if do_resize_only or do_keywords:
+            if do_resize_only or do_halftone_repair or do_keywords:
                 if do_keywords and not any([generate_description, populate_location, apply_ownership]):
                     st.warning("Select at least one metadata action before processing.")
                     return
@@ -2402,8 +2736,16 @@ def _render_photo_keywords_tab():
 
                 textifier = DocumentTextifier(use_vision=True)
                 results = []
-                mode = "resize_only" if do_resize_only else "keyword_metadata"
-                progress = st.progress(0.0, "Starting resize..." if do_resize_only else "Starting metadata processing...")
+                if do_resize_only:
+                    mode = "resize_only"
+                    progress_message = "Starting resize..."
+                elif do_halftone_repair:
+                    mode = "halftone_repair"
+                    progress_message = "Starting halftone repair..."
+                else:
+                    mode = "keyword_metadata"
+                    progress_message = "Starting metadata processing..."
+                progress = st.progress(0.0, progress_message)
                 blocked_keywords = [k.strip().lower() for k in blocked_keywords_text.split(",") if k.strip()]
 
                 for idx, fpath in enumerate(file_paths):
@@ -2440,6 +2782,20 @@ def _render_photo_keywords_tab():
                                 result["keyword_anonymize_result"] = textifier.anonymize_existing_photo_keywords(
                                     output_path, blocked_keywords=blocked_keywords
                                 )
+                            if apply_ownership and ownership_notice.strip():
+                                result["ownership_result"] = textifier.write_ownership_metadata(
+                                    output_path, ownership_notice.strip()
+                                )
+                        elif do_halftone_repair:
+                            result = textifier.repair_halftone_image(
+                                fpath,
+                                strength=halftone_strength,
+                                preserve_color=halftone_preserve_color,
+                                convert_to_jpg=convert_to_jpg,
+                                jpg_quality=jpg_quality,
+                            )
+                            output_path = str(result.get("output_path", fpath))
+                            file_paths[idx] = output_path
                             if apply_ownership and ownership_notice.strip():
                                 result["ownership_result"] = textifier.write_ownership_metadata(
                                     output_path, ownership_notice.strip()
@@ -2500,6 +2856,22 @@ def _render_photo_keywords_tab():
                     st.metric("Resized", f"{resized_count}/{len(results)}")
                 with mc3:
                     st.metric("Sensitive Tags Removed", total_removed)
+                with mc4:
+                    st.metric("Ownership Written", f"{ownership_ok}/{len(results)}")
+            elif photokw_mode == "halftone_repair":
+                repaired_count = sum(1 for r in results if r.get("halftone_repair_info", {}).get("repaired"))
+                converted_count = sum(1 for r in results if r.get("halftone_repair_info", {}).get("converted_to_jpg"))
+                ownership_ok = sum(
+                    1 for r in results
+                    if not r.get("ownership_result") or r.get("ownership_result", {}).get("success")
+                )
+                mc1, mc2, mc3, mc4 = st.columns(4)
+                with mc1:
+                    st.metric("Photos Processed", len(results))
+                with mc2:
+                    st.metric("Repaired", f"{repaired_count}/{len(results)}")
+                with mc3:
+                    st.metric("Converted To JPG", converted_count)
                 with mc4:
                     st.metric("Ownership Written", f"{ownership_ok}/{len(results)}")
             else:
@@ -2568,6 +2940,7 @@ def _render_photo_keywords_tab():
                 # Single photo — show inline preview (like Textifier)
                 r = results[0]
                 resize_info = r.get("resize_info", {})
+                repair_info = r.get("halftone_repair_info", {})
                 ownership_result = r.get("ownership_result")
                 if photokw_mode == "resize_only":
                     if resize_info.get("skipped_resize"):
@@ -2582,6 +2955,19 @@ def _render_photo_keywords_tab():
                         st.success(f"Converted to JPG: {r['file_name']}")
                     else:
                         st.info(f"No resize needed for {r['file_name']}")
+                    if ownership_result:
+                        if ownership_result.get("success"):
+                            st.success("Ownership metadata written")
+                        else:
+                            st.warning(f"Ownership metadata write failed: {ownership_result.get('message', '')}")
+                elif photokw_mode == "halftone_repair":
+                    if repair_info.get("repaired"):
+                        st.success(
+                            f"Applied halftone repair strength {int(round(float(repair_info.get('strength', 0))))} "
+                            f"to {r['file_name']}"
+                        )
+                    else:
+                        st.error(f"Halftone repair failed: {repair_info.get('error', 'Unknown error')}")
                     if ownership_result:
                         if ownership_result.get("success"):
                             st.success("Ownership metadata written")
@@ -2640,6 +3026,25 @@ def _render_photo_keywords_tab():
                         )
                         if resize_info.get("skipped_resize"):
                             st.caption("Dimensions were left unchanged by request.")
+                    elif photokw_mode == "halftone_repair":
+                        strength_value = float(repair_info.get("strength", 0))
+                        st.markdown(
+                            f"**Repair strength:** {int(round(strength_value))} ({_halftone_strength_label(strength_value)})  \n"
+                            f"**Preserve colour:** {'Yes' if repair_info.get('preserve_color') else 'No'}  \n"
+                            f"**Metadata preserved after repair:** {'Yes' if repair_info.get('metadata_preserved') else 'Partial/Unknown'}"
+                        )
+                        if repair_info.get("converted_to_jpg"):
+                            st.caption("Converted repaired output to JPG.")
+                        original_compare_path = st.session_state.get("photokw_single_working_path")
+                        if original_compare_path and Path(str(original_compare_path)).exists() and file_paths:
+                            st.divider()
+                            _render_halftone_ab_compare(
+                                str(original_compare_path),
+                                str(file_paths[0]),
+                                strength=strength_value,
+                                widget_prefix="photokw_halftone_result_compare",
+                                heading="Result A/B Window",
+                            )
                     else:
                         desc = r["description"] or "(no description generated)"
                         st.markdown(f"**Description:**\n\n{desc}")
@@ -2721,6 +3126,19 @@ def _render_photo_keywords_tab():
                                     st.warning(
                                         f"Keyword anonymization failed: {anon_result.get('message', 'Unknown error')}"
                                     )
+                        elif photokw_mode == "halftone_repair":
+                            repair_info = r.get("halftone_repair_info", {})
+                            if repair_info.get("repaired"):
+                                strength_value = float(repair_info.get("strength", 0))
+                                st.caption(
+                                    f"Repair strength: {int(round(strength_value))} ({_halftone_strength_label(strength_value)}) | "
+                                    f"Preserve colour: {'Yes' if repair_info.get('preserve_color') else 'No'} | "
+                                    f"Metadata preserved: {'Yes' if repair_info.get('metadata_preserved') else 'Partial/Unknown'}"
+                                )
+                                if repair_info.get("converted_to_jpg"):
+                                    st.caption("Converted repaired output to JPG")
+                            else:
+                                st.error(f"Repair failed: {repair_info.get('error', 'Unknown error')}")
                         else:
                             desc = r.get('description') or '(no description)'
                             st.markdown(f"**Description:** {desc}")
@@ -2753,9 +3171,266 @@ def _render_photo_keywords_tab():
                                 st.error(f"EXIF write failed: {exif['message']}")
 
         elif uploaded:
-            st.info("Choose an action: **Resize Photos Only** or **Process Selected Metadata**")
+            st.info("Choose an action: **Resize Photos Only**, **Repair Halftone Artefacts**, or **Process Selected Metadata**")
         else:
             st.info("Upload photos from the left panel to get started")
+
+
+# ======================================================================
+# Research Resolver tab
+# ======================================================================
+
+def _render_research_resolver_tab():
+    st.markdown(
+        "Resolve academic citation spreadsheets from pasted TSV/CSV text or uploaded CSV/TSV/XLSX files. "
+        "This local Streamlit harness is aimed at the same `research_resolve` contract used by the website queue worker."
+    )
+
+    try:
+        db_root = _resolve_db_root()
+        st.caption(f"Resolver outputs are written under: {db_root / 'research_resolve'}")
+    except Exception as e:
+        db_root = None
+        st.warning(str(e))
+
+    col1, col2 = st.columns([1, 2])
+
+    with col1:
+        st.header("Input")
+        input_mode = st.radio(
+            "Choose input method:",
+            ["Paste TSV/CSV", "Upload spreadsheet"],
+            key="research_input_mode",
+        )
+
+        pasted_text = ""
+        uploaded_sheet = None
+        if input_mode == "Paste TSV/CSV":
+            pasted_text = st.text_area(
+                "Paste tab-separated or comma-separated citations with headers",
+                height=260,
+                placeholder="Title\tAuthors\tYear\tDOI\tJournal\nPatient-Reported Outcomes...\tBarot, S. V.; Patel, B. J.\t2020\t10.1007/s11899-020-00562-9\tCurr Hematol Malig Rep",
+                key="research_pasted_text",
+            )
+        else:
+            uploaded_sheet = st.file_uploader(
+                "Upload CSV, TSV, TXT, or XLSX",
+                type=["csv", "tsv", "txt", "xlsx"],
+                key="research_upload",
+            )
+            if uploaded_sheet is not None:
+                st.caption(f"Loaded `{uploaded_sheet.name}` ({int(getattr(uploaded_sheet, 'size', 0) or 0):,} bytes)")
+
+        st.divider()
+        st.subheader("Resolver Options")
+        check_open_access = st.checkbox("Check Open Access via Unpaywall", value=True, key="research_check_oa")
+        enrich_sjr = st.checkbox("Enrich journal rankings via SJR", value=True, key="research_enrich_sjr")
+        unpaywall_email = st.text_input(
+            "Unpaywall contact email",
+            value=st.session_state.get("research_unpaywall_email", ""),
+            key="research_unpaywall_email",
+            help="Required for live Unpaywall OA lookups. Leave blank to skip OA enrichment.",
+        )
+        if check_open_access and not unpaywall_email.strip():
+            st.info("Open-access enrichment will be skipped until an Unpaywall email is provided.")
+
+        if st.button("Parse Spreadsheet", type="primary", use_container_width=True, key="research_parse_btn"):
+            try:
+                if input_mode == "Paste TSV/CSV":
+                    if not pasted_text.strip():
+                        st.warning("Paste citation text first.")
+                    else:
+                        parsed = parse_research_spreadsheet_text(pasted_text, source_name="Pasted text")
+                        st.session_state["research_parse_result"] = parsed
+                        st.session_state["research_editor_rows"] = build_research_preview_rows(parsed.get("citations") or [])
+                        st.session_state.pop("research_resolve_output", None)
+                else:
+                    if uploaded_sheet is None:
+                        st.warning("Upload a spreadsheet first.")
+                    else:
+                        parsed = parse_research_spreadsheet_upload(uploaded_sheet.name, uploaded_sheet.getvalue())
+                        st.session_state["research_parse_result"] = parsed
+                        st.session_state["research_editor_rows"] = build_research_preview_rows(parsed.get("citations") or [])
+                        st.session_state.pop("research_resolve_output", None)
+            except Exception as e:
+                st.error(f"Spreadsheet parse failed: {e}")
+
+    with col2:
+        st.header("Preview & Results")
+        parse_result = st.session_state.get("research_parse_result") or {}
+        citations = list(parse_result.get("citations") or [])
+
+        if citations:
+            warnings = list(parse_result.get("warnings") or [])
+            detected_fields = list(parse_result.get("detected_fields") or [])
+            if detected_fields:
+                st.caption(f"Detected fields: {', '.join(detected_fields)}")
+            for warning in warnings:
+                st.warning(warning)
+
+            total = len(citations)
+            doi_count = sum(1 for item in citations if str(item.get("doi") or "").strip())
+            amber_count = sum(1 for item in citations if item.get("preview_confidence") == "amber")
+            red_count = sum(1 for item in citations if item.get("preview_confidence") == "red")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Parsed citations", total)
+            m2.metric("Has DOI", doi_count)
+            m3.metric("Title+author+year", amber_count)
+            m4.metric("Title only", red_count)
+
+            editor_source = st.session_state.get("research_editor_rows") or build_research_preview_rows(citations)
+            edited = st.data_editor(
+                editor_source,
+                use_container_width=True,
+                hide_index=True,
+                key="research_editor",
+                column_config={
+                    "keep": st.column_config.CheckboxColumn("Keep", default=True),
+                    "row_id": st.column_config.NumberColumn("Row", format="%d"),
+                    "title": st.column_config.TextColumn("Title", width="large"),
+                    "authors": st.column_config.TextColumn("Authors", width="medium"),
+                    "year": st.column_config.TextColumn("Year", width="small"),
+                    "doi": st.column_config.TextColumn("DOI", width="medium"),
+                    "journal": st.column_config.TextColumn("Journal", width="medium"),
+                    "accession": st.column_config.TextColumn("Accession", width="small"),
+                    "confidence": st.column_config.TextColumn("Preview", width="small"),
+                },
+                disabled=["row_id", "confidence"],
+            )
+            editor_rows = _editor_records(edited)
+            if editor_rows:
+                st.session_state["research_editor_rows"] = editor_rows
+
+            selected_count = sum(1 for item in editor_rows if bool(item.get("keep", True)))
+            st.caption(f"{selected_count} citation(s) selected for resolution.")
+
+            if st.button(
+                "Resolve Citations",
+                type="primary",
+                use_container_width=True,
+                key="research_resolve_btn",
+                disabled=(selected_count == 0 or db_root is None),
+            ):
+                try:
+                    selected_citations = _merge_research_editor_rows(editor_rows, citations)
+                    payload = validate_research_resolve_input(
+                        {
+                            "citations": selected_citations,
+                            "options": {
+                                "check_open_access": check_open_access,
+                                "enrich_sjr": enrich_sjr,
+                                "unpaywall_email": unpaywall_email,
+                            },
+                        }
+                    )
+                    run_dir = db_root / "research_resolve" / time.strftime("%Y%m%d_%H%M%S")
+                    run_dir.mkdir(parents=True, exist_ok=True)
+
+                    progress = st.progress(0.0, text="Starting citation resolution...")
+                    log_box = st.empty()
+                    log_lines: List[str] = []
+
+                    def _progress_cb(progress_pct: float, message: str, stage: Optional[str] = None) -> None:
+                        frac = max(0.0, min(1.0, float(progress_pct or 0.0) / 100.0))
+                        progress.progress(frac, text=message)
+                        stamp = time.strftime("%H:%M:%S")
+                        stage_label = f"[{stage}] " if stage else ""
+                        log_lines.append(f"{stamp} {stage_label}{message}")
+                        if len(log_lines) > 300:
+                            del log_lines[:-300]
+                        log_box.text_area("Resolver log", value="\n".join(log_lines), height=180, disabled=True)
+
+                    output = run_research_resolve(
+                        payload=payload,
+                        run_dir=run_dir,
+                        progress_cb=_progress_cb,
+                    )
+                    progress.progress(1.0, text="Citation resolution complete")
+                    st.session_state["research_resolve_output"] = output
+                    st.session_state["research_resolve_run_dir"] = str(run_dir)
+                    st.session_state["research_resolve_log_lines"] = list(log_lines)
+                except Exception as e:
+                    st.error(f"Research resolve failed: {e}")
+
+        elif parse_result:
+            for warning in parse_result.get("warnings") or []:
+                st.warning(warning)
+            st.info("No valid citations were parsed from the supplied spreadsheet.")
+        else:
+            st.info("Parse a citation spreadsheet from the left panel to preview and resolve rows here.")
+
+        output = st.session_state.get("research_resolve_output") or {}
+        if output:
+            st.divider()
+            st.subheader("Resolved Results")
+            stats = output.get("stats") or {}
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Total", int(stats.get("total") or 0))
+            r2.metric("High confidence", int(stats.get("resolved_high") or 0))
+            r3.metric("Low confidence", int(stats.get("resolved_low") or 0))
+            r4.metric("Unresolved", int(stats.get("unresolved") or 0))
+
+            oa1, oa2 = st.columns(2)
+            oa1.metric("Open access", int(stats.get("open_access") or 0))
+            oa2.metric("Closed access", int(stats.get("closed_access") or 0))
+
+            resolved_rows = _research_resolved_rows(output.get("resolved") or [])
+            unresolved_rows = _research_unresolved_rows(output.get("unresolved") or [])
+
+            if resolved_rows:
+                st.dataframe(
+                    resolved_rows,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "resolved_url": st.column_config.LinkColumn("Resolved URL", display_text="open"),
+                        "pdf_url": st.column_config.LinkColumn("PDF URL", display_text="pdf"),
+                    },
+                )
+            if unresolved_rows:
+                with st.expander("Unresolved rows", expanded=True):
+                    st.dataframe(unresolved_rows, use_container_width=True, hide_index=True)
+
+            preferred_urls = build_research_preferred_url_list(output.get("resolved") or [])
+            if preferred_urls:
+                st.caption("Preferred ingest URLs use OA PDF links when available, otherwise DOI URLs.")
+                st.text_area(
+                    "Preferred URL list",
+                    value="\n".join(preferred_urls),
+                    height=180,
+                    key="research_preferred_urls",
+                )
+                c1, c2 = st.columns(2)
+                c1.download_button(
+                    "Download URL List",
+                    data="\n".join(preferred_urls),
+                    file_name="research_resolve_urls.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
+                if c2.button("Send URLs to URL Ingestor Tab", use_container_width=True, key="research_send_to_url_ingestor"):
+                    st.session_state["url_ingestor_input"] = "\n".join(preferred_urls)
+                    st.success("Preferred URLs copied into the URL Ingestor tab input.")
+
+            result_json = json.dumps(output, ensure_ascii=False, indent=2)
+            st.download_button(
+                "Download Full Result JSON",
+                data=result_json,
+                file_name="research_resolve_result.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+            run_dir = st.session_state.get("research_resolve_run_dir")
+            if run_dir:
+                st.caption(f"Saved run output: {run_dir}")
+
+
+# ======================================================================
+# URL Ingestor tab
+# ======================================================================
+
+def _render_url_ingestor_tab():
+    render_url_ingestor_ui(standalone=False)
 
 
 # ======================================================================
@@ -2764,14 +3439,20 @@ def _render_photo_keywords_tab():
 
 def main():
     st.title("Document or Photo Processing")
-    st.caption(f"Version: {PAGE_VERSION} • Document conversion and privacy tools")
+    st.caption(f"Version: {PAGE_VERSION} • Document conversion, citation resolution, and privacy tools")
 
-    tab_textifier, tab_pdfimg, tab_photo, tab_anonymizer = st.tabs(
-        ["Textifier", "PDF Image Extractor", "Photo Processor", "Anonymizer"]
+    tab_textifier, tab_research, tab_url_ingest, tab_pdfimg, tab_photo, tab_anonymizer = st.tabs(
+        ["Textifier", "Research Resolver", "URL PDF Ingestor", "PDF Image Extractor", "Photo Processor", "Anonymizer"]
     )
 
     with tab_textifier:
         _render_textifier_tab()
+
+    with tab_research:
+        _render_research_resolver_tab()
+
+    with tab_url_ingest:
+        _render_url_ingestor_tab()
 
     with tab_pdfimg:
         _render_pdf_image_extract_tab()

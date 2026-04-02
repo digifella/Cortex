@@ -13,6 +13,7 @@ SUPPORTED_JOB_TYPES = [
     "pdf_anonymise",
     "pdf_textify",
     "url_ingest",
+    "research_resolve",
     "org_profile_refresh",
     "cortex_sync",
     "intel_extract",
@@ -20,6 +21,7 @@ SUPPORTED_JOB_TYPES = [
     "signal_ingest",
     "signal_digest",
     "stakeholder_graph_view",
+    "org_context_sync",
 ]
 
 SUPPORTED_ANONYMIZER_OPTIONS = [
@@ -298,6 +300,7 @@ def _normalize_org_strategic_profile(value: Any, field_name: str) -> Dict[str, A
         "priority_industries": _normalize_string_array(value.get("priority_industries"), f"{field_name}.priority_industries"),
         "key_themes": _normalize_string_array(value.get("key_themes"), f"{field_name}.key_themes"),
         "strategic_objectives": _normalize_string_array(value.get("strategic_objectives"), f"{field_name}.strategic_objectives"),
+        "low_relevance_themes": _normalize_string_array(value.get("low_relevance_themes"), f"{field_name}.low_relevance_themes"),
         "updated_at": str(value.get("updated_at") or "").strip(),
     }
 
@@ -418,6 +421,72 @@ def validate_url_ingest_input(input_data: Optional[Dict[str, Any]] = None) -> Di
     return payload
 
 
+def validate_research_resolve_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(input_data or {})
+
+    citations = payload.get("citations")
+    if not isinstance(citations, list) or not citations:
+        raise ValueError("research_resolve requires input_data.citations (non-empty array)")
+
+    normalized_citations = []
+    for idx, item in enumerate(citations):
+        if not isinstance(item, dict):
+            raise ValueError(f"research_resolve citations[{idx}] must be an object")
+
+        title = str(item.get("title") or "").strip()
+        if not title:
+            raise ValueError(f"research_resolve citations[{idx}].title is required")
+
+        extra_fields = item.get("extra_fields")
+        if extra_fields is None:
+            extra_fields = {}
+        if not isinstance(extra_fields, dict):
+            raise ValueError(f"research_resolve citations[{idx}].extra_fields must be an object")
+
+        raw_row_id = item.get("row_id")
+        row_id: Any
+        if raw_row_id is None or raw_row_id == "":
+            row_id = idx + 1
+        else:
+            try:
+                row_id = int(raw_row_id)
+            except Exception:
+                row_id = str(raw_row_id).strip() or (idx + 1)
+
+        normalized_citations.append(
+            {
+                "row_id": row_id,
+                "title": title,
+                "authors": str(item.get("authors") or "").strip(),
+                "year": str(item.get("year") or "").strip(),
+                "doi": str(item.get("doi") or "").strip(),
+                "journal": str(item.get("journal") or "").strip(),
+                "abstract": str(item.get("abstract") or "").strip(),
+                "volume": str(item.get("volume") or "").strip(),
+                "issue": str(item.get("issue") or "").strip(),
+                "pages": str(item.get("pages") or "").strip(),
+                "accession": str(item.get("accession") or "").strip(),
+                "aim": str(item.get("aim") or "").strip(),
+                "notes": str(item.get("notes") or "").strip(),
+                "extra_fields": dict(extra_fields),
+            }
+        )
+
+    options = payload.get("options")
+    if options is None:
+        options = {}
+    if not isinstance(options, dict):
+        raise ValueError("research_resolve input_data.options must be an object")
+
+    payload["citations"] = normalized_citations
+    payload["options"] = {
+        "check_open_access": _coerce_bool(options.get("check_open_access"), True),
+        "enrich_sjr": _coerce_bool(options.get("enrich_sjr"), True),
+        "unpaywall_email": str(options.get("unpaywall_email") or "").strip(),
+    }
+    return payload
+
+
 def validate_org_profile_refresh_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     payload = dict(input_data or {})
     payload["profile_id"] = str(payload.get("profile_id") or "").strip()
@@ -504,8 +573,10 @@ def validate_stakeholder_profile_sync_input(input_data: Optional[Dict[str, Any]]
         raise ValueError("stakeholder_profile_sync requires org_name")
 
     profiles = payload.get("profiles")
-    if not isinstance(profiles, list) or not profiles:
-        raise ValueError("stakeholder_profile_sync requires a non-empty profiles array")
+    if profiles is None:
+        profiles = []
+    if not isinstance(profiles, list):
+        raise ValueError("stakeholder_profile_sync profiles must be an array when provided")
 
     normalized_profiles = []
     payload["org_alumni"] = _normalize_string_array(payload.get("org_alumni"), "stakeholder_profile_sync org_alumni")
@@ -513,6 +584,8 @@ def validate_stakeholder_profile_sync_input(input_data: Optional[Dict[str, Any]]
         payload.get("org_strategic_profile"),
         "stakeholder_profile_sync org_strategic_profile",
     )
+    if not profiles and not payload["org_alumni"] and not payload["org_strategic_profile"]:
+        raise ValueError("stakeholder_profile_sync requires a non-empty profiles array or organisation context fields")
     for idx, profile in enumerate(profiles):
         if not isinstance(profile, dict):
             raise ValueError(f"stakeholder_profile_sync profiles[{idx}] must be an object")

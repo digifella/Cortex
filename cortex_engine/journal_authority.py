@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import csv
 import difflib
+import json
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from cortex_engine.utils.logging_utils import get_logger
 
@@ -34,20 +35,36 @@ def _normalize_issn(raw: str) -> List[str]:
     return sorted(candidates)
 
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _find_sjr_json() -> Optional[Path]:
+    root = _project_root()
+    patterns = (
+        "journal_quality_rankings_scimagojr_*.json",
+        "scimagojr*.json",
+    )
+    for pattern in patterns:
+        candidates = sorted(root.glob(pattern))
+        if candidates:
+            return candidates[0]
+    return None
+
+
 def _find_sjr_workbook() -> Optional[Path]:
-    root = Path(__file__).resolve().parent.parent
-    candidates = sorted(root.glob("scimagojr*.xlsx"))
+    candidates = sorted(_project_root().glob("scimagojr*.xlsx"))
     return candidates[0] if candidates else None
 
 
-def _safe_int(raw: str, default: int = 10**9) -> int:
+def _safe_int(raw: object, default: int = 10**9) -> int:
     try:
         return int(str(raw or "").strip())
     except Exception:
         return default
 
 
-def _safe_float(raw: str, default: float = 0.0) -> float:
+def _safe_float(raw: object, default: float = 0.0) -> float:
     try:
         cleaned = str(raw or "").strip().replace(",", ".")
         return float(cleaned)
@@ -55,7 +72,44 @@ def _safe_float(raw: str, default: float = 0.0) -> float:
         return default
 
 
-def _parse_sjr_row(cells: List[str]) -> Optional[Dict[str, str]]:
+def _join_optional(value: object) -> str:
+    if isinstance(value, list):
+        return "; ".join(str(item).strip() for item in value if str(item).strip())
+    return str(value or "").strip()
+
+
+def _canonical_record(
+    *,
+    rank: object,
+    sourceid: object,
+    title: object,
+    issn: object,
+    publisher: object = "",
+    sjr: object = "",
+    quartile: object = "",
+    h_index: object = "",
+    categories: object = "",
+    areas: object = "",
+) -> Optional[Dict[str, object]]:
+    title_text = str(title or "").strip()
+    if not title_text:
+        return None
+    return {
+        "rank": str(rank or "").strip(),
+        "sourceid": str(sourceid or "").strip(),
+        "title": title_text,
+        "type": "",
+        "issn": str(issn or "").strip(),
+        "publisher": str(publisher or "").strip(),
+        "sjr": str(sjr or "").strip(),
+        "quartile": str(quartile or "").strip(),
+        "h_index": str(h_index or "").strip(),
+        "categories": _join_optional(categories),
+        "areas": _join_optional(areas),
+    }
+
+
+def _parse_sjr_row(cells: List[str]) -> Optional[Dict[str, object]]:
     if not cells:
         return None
     line = ";".join(cells)
@@ -66,8 +120,6 @@ def _parse_sjr_row(cells: List[str]) -> Optional[Dict[str, str]]:
     if len(fields) < 10:
         return None
 
-    # Some exports split SJR decimal values (e.g. "18,419") into two tokens.
-    # Detect this by looking for quartile one position later and repair offsets.
     quartile_re = re.compile(r"^Q[1-4]$", re.IGNORECASE)
     sjr_value = fields[8].strip() if len(fields) > 8 else ""
     quartile_idx = 9
@@ -77,33 +129,84 @@ def _parse_sjr_row(cells: List[str]) -> Optional[Dict[str, str]]:
         quartile_idx = 10
         hindex_idx = 11
 
-    return {
-        "rank": fields[0].strip(),
-        "sourceid": fields[1].strip(),
-        "title": fields[2].strip(),
-        "type": fields[3].strip(),
-        "issn": fields[4].strip(),
-        "publisher": fields[5].strip() if len(fields) > 5 else "",
-        "sjr": sjr_value,
-        "quartile": fields[quartile_idx].strip() if len(fields) > quartile_idx else "",
-        "h_index": fields[hindex_idx].strip() if len(fields) > hindex_idx else "",
-        # Tail columns are inconsistent in this export variant; keep optional.
-        "categories": "",
-        "areas": "",
-    }
+    return _canonical_record(
+        rank=fields[0].strip(),
+        sourceid=fields[1].strip(),
+        title=fields[2].strip(),
+        issn=fields[4].strip(),
+        publisher=fields[5].strip() if len(fields) > 5 else "",
+        sjr=sjr_value,
+        quartile=fields[quartile_idx].strip() if len(fields) > quartile_idx else "",
+        h_index=fields[hindex_idx].strip() if len(fields) > hindex_idx else "",
+    )
 
 
-def _build_index() -> Dict[str, Dict]:
-    workbook = _find_sjr_workbook()
-    if not workbook:
-        logger.warning("SCImago workbook not found (expected scimagojr*.xlsx in project root)")
+def _ingest_index_record(record: Dict[str, object], by_issn: Dict[str, Dict], by_title: Dict[str, Dict]) -> None:
+    title_norm = _normalize_title(str(record.get("title", "") or ""))
+    if not title_norm:
+        return
+
+    rank_value = _safe_int(record.get("rank", ""))
+    record["rank_value"] = rank_value
+    record["sjr_value"] = _safe_float(record.get("sjr", ""))
+
+    current_by_title = by_title.get(title_norm)
+    if current_by_title is None or rank_value < int(current_by_title.get("rank_value", 10**9)):
+        by_title[title_norm] = record
+
+    for issn in _normalize_issn(str(record.get("issn", "") or "")):
+        current_by_issn = by_issn.get(issn)
+        if current_by_issn is None or rank_value < int(current_by_issn.get("rank_value", 10**9)):
+            by_issn[issn] = record
+
+
+def _build_index_from_json(dataset_path: Path) -> Dict[str, Dict]:
+    try:
+        raw = json.loads(dataset_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Could not load SCImago JSON %s: %s", dataset_path.name, exc)
         return {"by_issn": {}, "by_title": {}}
 
+    if not isinstance(raw, list):
+        logger.warning("SCImago JSON %s did not contain a list payload", dataset_path.name)
+        return {"by_issn": {}, "by_title": {}}
+
+    by_issn: Dict[str, Dict] = {}
+    by_title: Dict[str, Dict] = {}
+
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        record = _canonical_record(
+            rank=entry.get("rank_global", entry.get("rank", "")),
+            sourceid=entry.get("sourceid", ""),
+            title=entry.get("title", ""),
+            issn=entry.get("issn", entry.get("issn_combined", "")),
+            publisher=entry.get("publisher", ""),
+            sjr=entry.get("sjr", ""),
+            quartile=entry.get(
+                "best_quartile",
+                entry.get("sjr_quartile", entry.get("quartile", entry.get("q", ""))),
+            ),
+            h_index=entry.get("h_index", entry.get("hindex", "")),
+            categories=entry.get("categories", ""),
+            areas=entry.get("areas", ""),
+        )
+        if not record:
+            continue
+        _ingest_index_record(record, by_issn, by_title)
+
+    logger.info("Loaded SCImago JSON index: %s titles, %s ISSNs", len(by_title), len(by_issn))
+    return {"by_issn": by_issn, "by_title": by_title}
+
+
+def _build_index_from_workbook(workbook: Path) -> Dict[str, Dict]:
     try:
         import pandas as pd
+
         df = pd.read_excel(workbook, dtype=str)
-    except Exception as e:
-        logger.warning(f"Could not load SCImago workbook {workbook.name}: {e}")
+    except Exception as exc:
+        logger.warning("Could not load SCImago workbook %s: %s", workbook.name, exc)
         return {"by_issn": {}, "by_title": {}}
 
     by_issn: Dict[str, Dict] = {}
@@ -120,25 +223,25 @@ def _build_index() -> Dict[str, Dict]:
         parsed = _parse_sjr_row(cells)
         if not parsed:
             continue
-        title_norm = _normalize_title(parsed.get("title", ""))
-        if not title_norm:
-            continue
+        _ingest_index_record(parsed, by_issn, by_title)
 
-        rank_value = _safe_int(parsed.get("rank", ""))
-        parsed["rank_value"] = rank_value
-        parsed["sjr_value"] = _safe_float(parsed.get("sjr", ""))
-
-        current_by_title = by_title.get(title_norm)
-        if current_by_title is None or rank_value < int(current_by_title.get("rank_value", 10**9)):
-            by_title[title_norm] = parsed
-
-        for issn in _normalize_issn(parsed.get("issn", "")):
-            current_by_issn = by_issn.get(issn)
-            if current_by_issn is None or rank_value < int(current_by_issn.get("rank_value", 10**9)):
-                by_issn[issn] = parsed
-
-    logger.info(f"Loaded SCImago index: {len(by_title)} titles, {len(by_issn)} ISSNs")
+    logger.info("Loaded SCImago workbook index: %s titles, %s ISSNs", len(by_title), len(by_issn))
     return {"by_issn": by_issn, "by_title": by_title}
+
+
+def _build_index() -> Dict[str, Dict]:
+    json_path = _find_sjr_json()
+    if json_path:
+        return _build_index_from_json(json_path)
+
+    workbook = _find_sjr_workbook()
+    if workbook:
+        return _build_index_from_workbook(workbook)
+
+    logger.warning(
+        "SCImago dataset not found (expected journal_quality_rankings_scimagojr_*.json, scimagojr*.json, or scimagojr*.xlsx in project root)"
+    )
+    return {"by_issn": {}, "by_title": {}}
 
 
 def _get_index() -> Dict[str, Dict]:
@@ -195,17 +298,14 @@ def classify_journal_authority(title: str, text: str) -> Dict[str, object]:
 
     combined_text = f"{title}\n{text or ''}"
 
-    # 1) ISSN exact matching (strongest).
     for issn in _extract_issn_candidates(combined_text):
         if issn in by_issn:
             return _to_output(by_issn[issn], method="issn_exact", confidence=1.0)
 
-    # 2) Exact normalized title.
     norm_title = _normalize_title(title or "")
     if norm_title and norm_title in by_title:
         return _to_output(by_title[norm_title], method="title_exact", confidence=0.98)
 
-    # 3) Fuzzy title match (conservative threshold).
     if norm_title:
         candidates = difflib.get_close_matches(norm_title, by_title.keys(), n=1, cutoff=0.93)
         if candidates:

@@ -8,6 +8,7 @@ from cortex_engine.handoff_contract import (
     validate_intel_extract_input,
     validate_org_profile_refresh_input,
     validate_pdf_textify_input,
+    validate_research_resolve_input,
     validate_stakeholder_graph_view_input,
     validate_signal_ingest_input,
     validate_signal_digest_input,
@@ -95,6 +96,43 @@ def test_url_ingest_coerces_booleans_timeout_and_textify():
     assert payload["timeout_seconds"] == 35
     assert payload["textify_options"]["pdf_strategy"] == "hybrid"
     assert payload["textify_options"]["docling_timeout_seconds"] == 240.0
+
+
+def test_research_resolve_requires_citations():
+    with pytest.raises(ValueError, match="requires input_data.citations"):
+        validate_research_resolve_input({})
+
+
+def test_research_resolve_normalizes_rows_and_options():
+    payload = validate_research_resolve_input(
+        {
+            "citations": [
+                {
+                    "row_id": "7",
+                    "title": " Example title ",
+                    "authors": "A. Author",
+                    "doi": " https://doi.org/10.1000/example ",
+                    "extra_fields": {"study": "Barot 2020"},
+                },
+                {
+                    "title": "Second title",
+                    "extra_fields": {},
+                },
+            ],
+            "options": {
+                "check_open_access": "0",
+                "enrich_sjr": "yes",
+                "unpaywall_email": " paul@example.com ",
+            },
+        }
+    )
+    assert payload["citations"][0]["row_id"] == 7
+    assert payload["citations"][0]["title"] == "Example title"
+    assert payload["citations"][0]["doi"] == "https://doi.org/10.1000/example"
+    assert payload["citations"][1]["row_id"] == 2
+    assert payload["options"]["check_open_access"] is False
+    assert payload["options"]["enrich_sjr"] is True
+    assert payload["options"]["unpaywall_email"] == "paul@example.com"
 
 
 def test_org_profile_refresh_requires_org_and_target():
@@ -308,6 +346,29 @@ def test_stakeholder_profile_sync_accepts_org_strategic_profile():
     assert strategic["industries"] == ["Healthcare", "Digital Health"]
     assert strategic["priority_industries"] == ["Healthcare"]
     assert strategic["key_themes"] == ["transformation", "digital"]
+
+
+def test_stakeholder_profile_sync_accepts_org_only_context_sync():
+    payload = validate_stakeholder_profile_sync_input(
+        {
+            "org_name": "Escient",
+            "profiles": [],
+            "org_strategic_profile": {
+                "description": "Digital transformation consultancy",
+                "priority_industries": ["Water Utilities"],
+                "key_themes": ["IT strategy", "roadmap"],
+                "low_relevance_themes": ["community sponsorships", "routine maintenance", "community sponsorships"],
+            },
+        }
+    )
+
+    assert payload["profiles"] == []
+    assert payload["org_strategic_profile"]["description"] == "Digital transformation consultancy"
+    assert payload["org_strategic_profile"]["priority_industries"] == ["Water Utilities"]
+    assert payload["org_strategic_profile"]["low_relevance_themes"] == [
+        "community sponsorships",
+        "routine maintenance",
+    ]
 
 
 def test_signal_digest_validation_accepts_depth_and_tier():

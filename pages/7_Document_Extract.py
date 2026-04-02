@@ -18,7 +18,7 @@ import unicodedata
 import subprocess
 import hashlib
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
@@ -30,12 +30,21 @@ sys.path.insert(0, str(project_root))
 
 # Import core modules
 from cortex_engine.anonymizer import DocumentAnonymizer, AnonymizationMapping, AnonymizationOptions
-from cortex_engine.utils import get_logger, convert_windows_to_wsl_path
+from cortex_engine.utils import get_logger, convert_windows_to_wsl_path, resolve_db_root_path
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.version_config import VERSION_STRING
 from cortex_engine.journal_authority import classify_journal_authority
 from cortex_engine.preface_classification import classify_credibility_tier
 from cortex_engine.document_preface import add_document_preface
+from cortex_engine.handoff_contract import validate_research_resolve_input
+from cortex_engine.research_resolve import (
+    build_research_preferred_url_list,
+    build_research_preview_rows,
+    parse_research_spreadsheet_text,
+    parse_research_spreadsheet_upload,
+    run_research_resolve,
+)
+from cortex_engine.url_ingestor_ui import render_url_ingestor_ui
 
 # Set up logging
 logger = get_logger(__name__)
@@ -63,6 +72,91 @@ class _SessionUpload:
 
     def getvalue(self) -> bytes:
         return self._data
+
+
+def _resolve_db_root() -> Path:
+    config = ConfigManager().get_config()
+    raw_db = (config.get("ai_database_path") or "").strip()
+    if not raw_db:
+        raise ValueError("No ai_database_path configured. Set the database path first in Knowledge Ingest or Maintenance.")
+    resolved = resolve_db_root_path(raw_db)
+    if resolved:
+        return Path(str(resolved))
+    normalized = raw_db if os.path.exists("/.dockerenv") else convert_windows_to_wsl_path(raw_db)
+    return Path(normalized)
+
+
+def _editor_records(value: Any) -> List[Dict[str, Any]]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    if hasattr(value, "to_dict"):
+        try:
+            records = value.to_dict("records")
+            return [dict(item) for item in records if isinstance(item, dict)]
+        except Exception:
+            return []
+    return []
+
+
+def _merge_research_editor_rows(editor_rows: List[Dict[str, Any]], citations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    by_row_id = {str(item.get("row_id")): dict(item) for item in citations or []}
+    merged: List[Dict[str, Any]] = []
+    for row in editor_rows or []:
+        if not bool(row.get("keep", True)):
+            continue
+        row_id = str(row.get("row_id"))
+        base = dict(by_row_id.get(row_id) or {})
+        if not base:
+            continue
+        for key in ("title", "authors", "year", "doi", "journal", "accession"):
+            base[key] = str(row.get(key) or "").strip()
+        merged.append(base)
+    return merged
+
+
+def _research_resolved_rows(resolved: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = []
+    for item in resolved or []:
+        oa = item.get("open_access") or {}
+        journal = item.get("journal") or {}
+        retraction = item.get("retraction") or {}
+        rows.append(
+            {
+                "row_id": item.get("row_id"),
+                "input_title": item.get("input_title", ""),
+                "resolved_url": item.get("resolved_url", ""),
+                "resolved_doi": item.get("resolved_doi", ""),
+                "confidence": item.get("confidence", ""),
+                "open_access": oa.get("oa_status") if oa.get("is_oa") is not None else "unknown",
+                "pdf_url": oa.get("pdf_url", ""),
+                "journal": journal.get("name", ""),
+                "sjr_quartile": journal.get("sjr_quartile", ""),
+                "publisher": item.get("publisher", ""),
+                "credibility_tier": item.get("credibility_tier", ""),
+                "retracted": "yes" if retraction.get("is_retracted") else "",
+            }
+        )
+    return rows
+
+
+def _research_unresolved_rows(unresolved: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = []
+    for item in unresolved or []:
+        best = ""
+        if item.get("best_candidates"):
+            first = item["best_candidates"][0]
+            best = f"{first.get('title', '')} ({first.get('similarity', 0)})"
+        rows.append(
+            {
+                "row_id": item.get("row_id"),
+                "input_title": item.get("input_title", ""),
+                "reason": item.get("reason", ""),
+                "best_candidate": best,
+            }
+        )
+    return rows
 
 def _get_knowledge_base_files(extensions: List[str]) -> List[Path]:
     """Return files from knowledge base directories matching given extensions."""
@@ -3083,19 +3177,282 @@ def _render_photo_keywords_tab():
 
 
 # ======================================================================
+# Research Resolver tab
+# ======================================================================
+
+def _render_research_resolver_tab():
+    st.markdown(
+        "Resolve academic citation spreadsheets from pasted TSV/CSV text or uploaded CSV/TSV/XLSX files. "
+        "This local Streamlit harness is aimed at the same `research_resolve` contract used by the website queue worker."
+    )
+
+    try:
+        db_root = _resolve_db_root()
+        st.caption(f"Resolver outputs are written under: {db_root / 'research_resolve'}")
+    except Exception as e:
+        db_root = None
+        st.warning(str(e))
+
+    col1, col2 = st.columns([1, 2])
+
+    with col1:
+        st.header("Input")
+        input_mode = st.radio(
+            "Choose input method:",
+            ["Paste TSV/CSV", "Upload spreadsheet"],
+            key="research_input_mode",
+        )
+
+        pasted_text = ""
+        uploaded_sheet = None
+        if input_mode == "Paste TSV/CSV":
+            pasted_text = st.text_area(
+                "Paste tab-separated or comma-separated citations with headers",
+                height=260,
+                placeholder="Title\tAuthors\tYear\tDOI\tJournal\nPatient-Reported Outcomes...\tBarot, S. V.; Patel, B. J.\t2020\t10.1007/s11899-020-00562-9\tCurr Hematol Malig Rep",
+                key="research_pasted_text",
+            )
+        else:
+            uploaded_sheet = st.file_uploader(
+                "Upload CSV, TSV, TXT, or XLSX",
+                type=["csv", "tsv", "txt", "xlsx"],
+                key="research_upload",
+            )
+            if uploaded_sheet is not None:
+                st.caption(f"Loaded `{uploaded_sheet.name}` ({int(getattr(uploaded_sheet, 'size', 0) or 0):,} bytes)")
+
+        st.divider()
+        st.subheader("Resolver Options")
+        check_open_access = st.checkbox("Check Open Access via Unpaywall", value=True, key="research_check_oa")
+        enrich_sjr = st.checkbox("Enrich journal rankings via SJR", value=True, key="research_enrich_sjr")
+        unpaywall_email = st.text_input(
+            "Unpaywall contact email",
+            value=st.session_state.get("research_unpaywall_email", ""),
+            key="research_unpaywall_email",
+            help="Required for live Unpaywall OA lookups. Leave blank to skip OA enrichment.",
+        )
+        if check_open_access and not unpaywall_email.strip():
+            st.info("Open-access enrichment will be skipped until an Unpaywall email is provided.")
+
+        if st.button("Parse Spreadsheet", type="primary", use_container_width=True, key="research_parse_btn"):
+            try:
+                if input_mode == "Paste TSV/CSV":
+                    if not pasted_text.strip():
+                        st.warning("Paste citation text first.")
+                    else:
+                        parsed = parse_research_spreadsheet_text(pasted_text, source_name="Pasted text")
+                        st.session_state["research_parse_result"] = parsed
+                        st.session_state["research_editor_rows"] = build_research_preview_rows(parsed.get("citations") or [])
+                        st.session_state.pop("research_resolve_output", None)
+                else:
+                    if uploaded_sheet is None:
+                        st.warning("Upload a spreadsheet first.")
+                    else:
+                        parsed = parse_research_spreadsheet_upload(uploaded_sheet.name, uploaded_sheet.getvalue())
+                        st.session_state["research_parse_result"] = parsed
+                        st.session_state["research_editor_rows"] = build_research_preview_rows(parsed.get("citations") or [])
+                        st.session_state.pop("research_resolve_output", None)
+            except Exception as e:
+                st.error(f"Spreadsheet parse failed: {e}")
+
+    with col2:
+        st.header("Preview & Results")
+        parse_result = st.session_state.get("research_parse_result") or {}
+        citations = list(parse_result.get("citations") or [])
+
+        if citations:
+            warnings = list(parse_result.get("warnings") or [])
+            detected_fields = list(parse_result.get("detected_fields") or [])
+            if detected_fields:
+                st.caption(f"Detected fields: {', '.join(detected_fields)}")
+            for warning in warnings:
+                st.warning(warning)
+
+            total = len(citations)
+            doi_count = sum(1 for item in citations if str(item.get("doi") or "").strip())
+            amber_count = sum(1 for item in citations if item.get("preview_confidence") == "amber")
+            red_count = sum(1 for item in citations if item.get("preview_confidence") == "red")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Parsed citations", total)
+            m2.metric("Has DOI", doi_count)
+            m3.metric("Title+author+year", amber_count)
+            m4.metric("Title only", red_count)
+
+            editor_source = st.session_state.get("research_editor_rows") or build_research_preview_rows(citations)
+            edited = st.data_editor(
+                editor_source,
+                use_container_width=True,
+                hide_index=True,
+                key="research_editor",
+                column_config={
+                    "keep": st.column_config.CheckboxColumn("Keep", default=True),
+                    "row_id": st.column_config.NumberColumn("Row", format="%d"),
+                    "title": st.column_config.TextColumn("Title", width="large"),
+                    "authors": st.column_config.TextColumn("Authors", width="medium"),
+                    "year": st.column_config.TextColumn("Year", width="small"),
+                    "doi": st.column_config.TextColumn("DOI", width="medium"),
+                    "journal": st.column_config.TextColumn("Journal", width="medium"),
+                    "accession": st.column_config.TextColumn("Accession", width="small"),
+                    "confidence": st.column_config.TextColumn("Preview", width="small"),
+                },
+                disabled=["row_id", "confidence"],
+            )
+            editor_rows = _editor_records(edited)
+            if editor_rows:
+                st.session_state["research_editor_rows"] = editor_rows
+
+            selected_count = sum(1 for item in editor_rows if bool(item.get("keep", True)))
+            st.caption(f"{selected_count} citation(s) selected for resolution.")
+
+            if st.button(
+                "Resolve Citations",
+                type="primary",
+                use_container_width=True,
+                key="research_resolve_btn",
+                disabled=(selected_count == 0 or db_root is None),
+            ):
+                try:
+                    selected_citations = _merge_research_editor_rows(editor_rows, citations)
+                    payload = validate_research_resolve_input(
+                        {
+                            "citations": selected_citations,
+                            "options": {
+                                "check_open_access": check_open_access,
+                                "enrich_sjr": enrich_sjr,
+                                "unpaywall_email": unpaywall_email,
+                            },
+                        }
+                    )
+                    run_dir = db_root / "research_resolve" / time.strftime("%Y%m%d_%H%M%S")
+                    run_dir.mkdir(parents=True, exist_ok=True)
+
+                    progress = st.progress(0.0, text="Starting citation resolution...")
+                    log_box = st.empty()
+                    log_lines: List[str] = []
+
+                    def _progress_cb(progress_pct: float, message: str, stage: Optional[str] = None) -> None:
+                        frac = max(0.0, min(1.0, float(progress_pct or 0.0) / 100.0))
+                        progress.progress(frac, text=message)
+                        stamp = time.strftime("%H:%M:%S")
+                        stage_label = f"[{stage}] " if stage else ""
+                        log_lines.append(f"{stamp} {stage_label}{message}")
+                        if len(log_lines) > 300:
+                            del log_lines[:-300]
+                        log_box.text_area("Resolver log", value="\n".join(log_lines), height=180, disabled=True)
+
+                    output = run_research_resolve(
+                        payload=payload,
+                        run_dir=run_dir,
+                        progress_cb=_progress_cb,
+                    )
+                    progress.progress(1.0, text="Citation resolution complete")
+                    st.session_state["research_resolve_output"] = output
+                    st.session_state["research_resolve_run_dir"] = str(run_dir)
+                    st.session_state["research_resolve_log_lines"] = list(log_lines)
+                except Exception as e:
+                    st.error(f"Research resolve failed: {e}")
+
+        elif parse_result:
+            for warning in parse_result.get("warnings") or []:
+                st.warning(warning)
+            st.info("No valid citations were parsed from the supplied spreadsheet.")
+        else:
+            st.info("Parse a citation spreadsheet from the left panel to preview and resolve rows here.")
+
+        output = st.session_state.get("research_resolve_output") or {}
+        if output:
+            st.divider()
+            st.subheader("Resolved Results")
+            stats = output.get("stats") or {}
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Total", int(stats.get("total") or 0))
+            r2.metric("High confidence", int(stats.get("resolved_high") or 0))
+            r3.metric("Low confidence", int(stats.get("resolved_low") or 0))
+            r4.metric("Unresolved", int(stats.get("unresolved") or 0))
+
+            oa1, oa2 = st.columns(2)
+            oa1.metric("Open access", int(stats.get("open_access") or 0))
+            oa2.metric("Closed access", int(stats.get("closed_access") or 0))
+
+            resolved_rows = _research_resolved_rows(output.get("resolved") or [])
+            unresolved_rows = _research_unresolved_rows(output.get("unresolved") or [])
+
+            if resolved_rows:
+                st.dataframe(
+                    resolved_rows,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "resolved_url": st.column_config.LinkColumn("Resolved URL", display_text="open"),
+                        "pdf_url": st.column_config.LinkColumn("PDF URL", display_text="pdf"),
+                    },
+                )
+            if unresolved_rows:
+                with st.expander("Unresolved rows", expanded=True):
+                    st.dataframe(unresolved_rows, use_container_width=True, hide_index=True)
+
+            preferred_urls = build_research_preferred_url_list(output.get("resolved") or [])
+            if preferred_urls:
+                st.caption("Preferred ingest URLs use OA PDF links when available, otherwise DOI URLs.")
+                st.text_area(
+                    "Preferred URL list",
+                    value="\n".join(preferred_urls),
+                    height=180,
+                    key="research_preferred_urls",
+                )
+                c1, c2 = st.columns(2)
+                c1.download_button(
+                    "Download URL List",
+                    data="\n".join(preferred_urls),
+                    file_name="research_resolve_urls.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
+                if c2.button("Send URLs to URL Ingestor Tab", use_container_width=True, key="research_send_to_url_ingestor"):
+                    st.session_state["url_ingestor_input"] = "\n".join(preferred_urls)
+                    st.success("Preferred URLs copied into the URL Ingestor tab input.")
+
+            result_json = json.dumps(output, ensure_ascii=False, indent=2)
+            st.download_button(
+                "Download Full Result JSON",
+                data=result_json,
+                file_name="research_resolve_result.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+            run_dir = st.session_state.get("research_resolve_run_dir")
+            if run_dir:
+                st.caption(f"Saved run output: {run_dir}")
+
+
+# ======================================================================
+# URL Ingestor tab
+# ======================================================================
+
+def _render_url_ingestor_tab():
+    render_url_ingestor_ui(standalone=False)
+
+
+# ======================================================================
 # Main
 # ======================================================================
 
 def main():
     st.title("Document or Photo Processing")
-    st.caption(f"Version: {PAGE_VERSION} • Document conversion and privacy tools")
+    st.caption(f"Version: {PAGE_VERSION} • Document conversion, citation resolution, and privacy tools")
 
-    tab_textifier, tab_pdfimg, tab_photo, tab_anonymizer = st.tabs(
-        ["Textifier", "PDF Image Extractor", "Photo Processor", "Anonymizer"]
+    tab_textifier, tab_research, tab_url_ingest, tab_pdfimg, tab_photo, tab_anonymizer = st.tabs(
+        ["Textifier", "Research Resolver", "URL PDF Ingestor", "PDF Image Extractor", "Photo Processor", "Anonymizer"]
     )
 
     with tab_textifier:
         _render_textifier_tab()
+
+    with tab_research:
+        _render_research_resolver_tab()
+
+    with tab_url_ingest:
+        _render_url_ingestor_tab()
 
     with tab_pdfimg:
         _render_pdf_image_extract_tab()

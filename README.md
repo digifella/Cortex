@@ -10,6 +10,11 @@ Please be aware that the system operates in a WSL2 environment, so all paths sho
 
 This document reflects recent major enhancements to the **Project Cortex Suite**, now featuring a consolidated Maintenance page for all administrative functions, improved UI organization, and enhanced user experience.
 
+*   **[NEW] Document Extract Workflow: Research Resolver + URL PDF Ingestor**
+    *   **Status:** Complete. `Document or Photo Processing` now includes dedicated `Research Resolver` and `URL PDF Ingestor` tabs alongside Textifier and privacy/photo tools.
+    *   **Capabilities:** Parse citation spreadsheets (TSV/CSV/XLSX), resolve DOI/OA/SJR metadata, review matches, and hand preferred URLs directly into the in-page URL ingest flow.
+    *   **Technical:** Shared URL ingestor UI keeps the integrated tab and legacy standalone page aligned, while the queue worker also supports `research_resolve` for website-triggered jobs.
+
 *   **[NEW] ARM64 Compatibility & Multi-Architecture Support (v4.1.2)**
     *   **Status:** Complete. Universal compatibility across x86_64, ARM64, Apple Silicon, and Windows Snapdragon processors.
     *   **Capabilities:** CPU-first installation strategy with optional GPU acceleration upgrades. Zero architecture detection required.
