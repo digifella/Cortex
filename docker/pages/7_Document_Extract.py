@@ -44,6 +44,14 @@ from cortex_engine.research_resolve import (
     parse_research_spreadsheet_upload,
     run_research_resolve,
 )
+from cortex_engine.review_study_miner import (
+    ReviewMiningOptions,
+    assess_review_documents,
+    extract_review_reference_section,
+    extract_review_table_blocks,
+    mine_review_documents,
+)
+from cortex_engine.review_table_rescue import anthropic_key_source, claude_table_rescue_available, run_claude_table_rescue
 from cortex_engine.url_ingestor_ui import render_url_ingestor_ui
 
 # Set up logging
@@ -157,6 +165,425 @@ def _research_unresolved_rows(unresolved: List[Dict[str, Any]]) -> List[Dict[str
             }
         )
     return rows
+
+
+def _study_miner_candidate_rows(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = []
+    for item in candidates or []:
+        reference_number = str(item.get("reference_number") or "").strip()
+        reference_match_method = str(item.get("reference_match_method") or "").strip()
+        needs_review = bool(item.get("needs_review"))
+        review_warning = str(item.get("review_warning") or "").strip()
+        rows.append(
+            {
+                "keep": bool(item.get("meets_criteria")) and not needs_review,
+                "row_id": item.get("row_id"),
+                "source_review_title": item.get("source_review_title") or item.get("source_name", ""),
+                "title": item.get("title", ""),
+                "authors": item.get("authors", ""),
+                "year": item.get("year", ""),
+                "doi": item.get("doi", ""),
+                "journal": item.get("journal", ""),
+                "source_section": item.get("source_section", ""),
+                "matches": "yes" if item.get("meets_criteria") else "",
+                "score": int(item.get("relevance_score") or 0),
+                "reference_link": f"ref {reference_number} ({reference_match_method})" if reference_number and reference_match_method else "",
+                "needs_review": "yes" if needs_review else "",
+                "review_warning": review_warning,
+                "design_matches": ", ".join(item.get("design_matches") or []),
+                "outcome_matches": ", ".join(item.get("outcome_matches") or []),
+            }
+        )
+    return rows
+
+
+def _study_miner_document_rows(documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = []
+    for item in documents or []:
+        review_assessment = dict(item.get("review_assessment") or {})
+        rows.append(
+            {
+                "confirm_review": bool(item.get("confirm_review")),
+                "doc_id": int(item.get("doc_id") or 0),
+                "source_name": item.get("source_name", ""),
+                "review_title": item.get("review_title", ""),
+                "systematic_review_likely": bool(item.get("systematic_review_likely")),
+                "confidence": str(review_assessment.get("confidence") or ""),
+                "score": int(review_assessment.get("score") or 0),
+                "matched_signals": ", ".join(review_assessment.get("matched_signals") or []),
+            }
+        )
+    return rows
+
+
+def _merge_study_miner_document_rows(editor_rows: List[Dict[str, Any]], documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    by_doc_id = {str(item.get("doc_id")): dict(item) for item in documents or []}
+    merged: List[Dict[str, Any]] = []
+    for row in editor_rows or []:
+        base = dict(by_doc_id.get(str(row.get("doc_id"))) or {})
+        if not base:
+            continue
+        base["confirm_review"] = bool(row.get("confirm_review"))
+        base["review_title"] = str(row.get("review_title") or base.get("review_title") or "").strip()
+        merged.append(base)
+    return merged
+
+
+def _merge_study_miner_editor_rows(editor_rows: List[Dict[str, Any]], candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    by_row_id = {str(item.get("row_id")): dict(item) for item in candidates or []}
+    selected: List[Dict[str, Any]] = []
+    for row in editor_rows or []:
+        if not bool(row.get("keep", True)):
+            continue
+        base = dict(by_row_id.get(str(row.get("row_id"))) or {})
+        if not base:
+            continue
+        for key in ("title", "authors", "year", "doi", "journal"):
+            base[key] = str(row.get(key) or "").strip()
+        selected.append(base)
+    return selected
+
+
+def _study_miner_stats_rows(stats: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [
+        {"metric": "Tables detected", "value": int(stats.get("tables_detected") or 0)},
+        {"metric": "Reference entries detected", "value": int(stats.get("reference_entries_detected") or 0)},
+        {"metric": "Candidates total", "value": int(stats.get("candidates_total") or 0)},
+        {"metric": "Candidates matching criteria", "value": int(stats.get("candidates_matching") or 0)},
+        {"metric": "Table rows linked to bibliography", "value": int(stats.get("table_reference_links") or 0)},
+        {"metric": "Candidates needing review", "value": int(stats.get("needs_review") or 0)},
+        {"metric": "Reference mismatches", "value": int(stats.get("reference_mismatches") or 0)},
+        {"metric": "Cloud rescue candidates", "value": int(stats.get("cloud_rescue_candidates") or 0)},
+    ]
+
+
+def _study_miner_review_rows(per_review: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = []
+    for item in per_review or []:
+        review_assessment = dict(item.get("review_assessment") or {})
+        rows.append(
+            {
+                "doc_id": int(item.get("doc_id") or 0),
+                "review_title": item.get("review_title", ""),
+                "source_name": item.get("source_name", ""),
+                "confidence": str(review_assessment.get("confidence") or ""),
+                "score": int(review_assessment.get("score") or 0),
+                "candidate_count": int(item.get("candidate_count") or 0),
+                "matching_count": int(item.get("matching_count") or 0),
+            }
+        )
+    return rows
+
+
+def _render_study_miner_parse_evidence(documents: List[Dict[str, Any]], candidates: List[Dict[str, Any]]) -> None:
+    if not documents:
+        return
+
+    with st.expander("Parse Evidence", expanded=False):
+        st.caption("Use this to compare what Cortex saw in the review tables against the candidate studies it parsed.")
+        for document in documents:
+            review_title = str(document.get("review_title") or document.get("source_name") or "Review").strip()
+            source_name = str(document.get("source_name") or review_title).strip()
+            review_candidates = [item for item in candidates if str(item.get("source_review") or item.get("source_name") or "").strip() == source_name]
+            table_blocks = list(document.get("table_blocks") or [])
+            table_snapshots = list(document.get("table_snapshots") or [])
+            label = f"{review_title} ({len(review_candidates)} parsed candidate(s))"
+            with st.container(border=True):
+                st.markdown(f"**{label}**")
+                left, right = st.columns([1, 1])
+
+                with left:
+                    st.caption("Detected table snapshots")
+                    if table_snapshots:
+                        for shot in table_snapshots:
+                            caption = f"Page {int(shot.get('page_number') or 0)}"
+                            if str(shot.get("text_sample") or "").strip():
+                                caption += f" • {str(shot.get('text_sample') or '').strip()}"
+                            st.image(shot.get("image_bytes"), caption=caption, use_container_width=True)
+                    else:
+                        st.info("No PDF table snapshot available for this review.")
+
+                with right:
+                    st.caption("Extracted markdown tables")
+                    if table_blocks:
+                        for block in table_blocks[:4]:
+                            st.markdown(f"Table {int(block.get('table_index') or 0)} • {int(block.get('row_count') or 0)} row(s)")
+                            st.code(str(block.get("markdown") or ""), language="markdown")
+                    else:
+                        st.info("No markdown table block detected in extracted review text.")
+
+                st.caption("Parsed candidate rows from this review")
+                if review_candidates:
+                    st.dataframe(
+                        _study_miner_candidate_rows(review_candidates),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                else:
+                    st.info("No candidate rows parsed from this review.")
+
+
+def _study_miner_candidate_key(item: Dict[str, Any]) -> str:
+    return " | ".join(
+        [
+            str(item.get("source_review") or item.get("source_name") or "").strip().lower(),
+            str(item.get("doi") or "").strip().lower(),
+            re.sub(r"\s+", " ", str(item.get("title") or "").strip().lower()),
+            re.sub(r"\s+", " ", str(item.get("authors") or "").strip().lower()),
+            str(item.get("year") or "").strip(),
+            str(item.get("reference_number") or "").strip(),
+        ]
+    )
+
+
+def _merge_study_miner_candidates(
+    base_candidates: List[Dict[str, Any]],
+    rescue_candidates: List[Dict[str, Any]],
+    *,
+    source_name: str,
+    review_title: str,
+    source_doc_id: str,
+) -> List[Dict[str, Any]]:
+    merged = [dict(item) for item in base_candidates or []]
+    seen = {_study_miner_candidate_key(item) for item in merged}
+    next_row_id = max([int(item.get("row_id") or 0) for item in merged] + [0]) + 1
+
+    for item in rescue_candidates or []:
+        normalized = dict(item)
+        normalized["row_id"] = next_row_id
+        normalized["source_name"] = source_name
+        normalized["source_review"] = source_name
+        normalized["source_review_title"] = review_title
+        extras = dict(normalized.get("extra_fields") or {})
+        extras["source_review"] = source_name
+        extras["source_review_title"] = review_title
+        extras["source_doc_id"] = source_doc_id
+        normalized["extra_fields"] = extras
+        key = _study_miner_candidate_key(normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(normalized)
+        next_row_id += 1
+    return merged
+
+
+def _refresh_study_miner_stats(candidates: List[Dict[str, Any]], base_stats: Dict[str, Any], rescue_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    stats = dict(base_stats or {})
+    stats["candidates_total"] = len(candidates)
+    stats["candidates_matching"] = sum(1 for item in candidates if item.get("meets_criteria"))
+    stats["table_candidates"] = sum(1 for item in candidates if item.get("source_section") == "table")
+    stats["reference_candidates"] = sum(1 for item in candidates if item.get("source_section") == "references")
+    stats["table_reference_links"] = sum(
+        1 for item in candidates if item.get("source_section") == "table" and str(item.get("reference_match_method") or "").strip()
+    )
+    stats["needs_review"] = sum(1 for item in candidates if item.get("needs_review"))
+    stats["reference_mismatches"] = sum(1 for item in candidates if str(item.get("reference_validation") or "") == "mismatch")
+    stats["cloud_rescue_candidates"] = sum(len(item.get("candidates") or []) for item in rescue_runs or [])
+    return stats
+
+
+def _study_miner_should_use_vision(selected: Any, vision_mode: str) -> bool:
+    mode = str(vision_mode or "").strip().lower()
+    if mode.startswith("on"):
+        return True
+    if mode.startswith("off"):
+        return False
+    file_paths = selected if isinstance(selected, list) else [selected]
+    suffixes = {Path(str(item)).suffix.lower() for item in file_paths if str(item or "").strip()}
+    return ".pdf" in suffixes
+
+
+def _study_miner_cloud_rescue_recommended(result: Dict[str, Any], documents: List[Dict[str, Any]]) -> bool:
+    stats = dict(result.get("stats") or {})
+    candidates_total = int(stats.get("candidates_total") or 0)
+    matching = int(stats.get("candidates_matching") or 0)
+    links = int(stats.get("table_reference_links") or 0)
+    table_blocks = sum(len(item.get("table_blocks") or []) for item in documents or [] if bool(item.get("confirm_review")))
+    snapshots = sum(len(item.get("table_snapshots") or []) for item in documents or [] if bool(item.get("confirm_review")))
+    if candidates_total >= 8 and matching == 0:
+        return True
+    if table_blocks >= 2 and snapshots == 0:
+        return True
+    if candidates_total >= 12 and links == 0:
+        return True
+    return False
+
+
+def _run_study_miner_cloud_rescue(
+    result: Dict[str, Any],
+    documents: List[Dict[str, Any]],
+    *,
+    design_query: str,
+    outcome_query: str,
+) -> Dict[str, Any]:
+    rescue_runs: List[Dict[str, Any]] = []
+    merged_candidates = list(result.get("candidates") or [])
+    for document in documents:
+        if not bool(document.get("confirm_review")):
+            continue
+        rescue_result = run_claude_table_rescue(
+            review_title=str(document.get("review_title") or document.get("source_name") or "").strip(),
+            design_query=design_query,
+            outcome_query=outcome_query,
+            table_snapshots=list(document.get("table_snapshots") or []),
+            table_blocks=list(document.get("table_blocks") or []),
+            references_text=extract_review_reference_section(str(document.get("text") or "")),
+        )
+        rescue_runs.append(
+            {
+                "source_name": str(document.get("source_name") or "").strip(),
+                "review_title": str(document.get("review_title") or "").strip(),
+                **rescue_result,
+            }
+        )
+        merged_candidates = _merge_study_miner_candidates(
+            merged_candidates,
+            list(rescue_result.get("candidates") or []),
+            source_name=str(document.get("source_name") or "").strip(),
+            review_title=str(document.get("review_title") or "").strip(),
+            source_doc_id=str(document.get("doc_id") or ""),
+        )
+    updated_result = dict(result)
+    updated_result["candidates"] = merged_candidates
+    updated_result["cloud_rescue_runs"] = rescue_runs
+    updated_result["cloud_rescue_attempted"] = True
+    updated_result["stats"] = _refresh_study_miner_stats(merged_candidates, dict(result.get("stats") or {}), rescue_runs)
+    return updated_result
+
+
+def _extract_study_miner_documents(
+    selected: Any,
+    *,
+    use_vision: bool,
+    pdf_mode_label: str,
+    docling_timeout_seconds: float,
+    image_timeout_seconds: float,
+    image_budget_seconds: float,
+) -> List[Dict[str, Any]]:
+    file_paths = selected if isinstance(selected, list) else [selected]
+    file_paths = [str(item) for item in file_paths if str(item or "").strip()]
+    if not file_paths:
+        return []
+
+    mode_map = {
+        "Hybrid (Recommended): Docling first, Qwen enhancement, fallback on timeout": "hybrid",
+        "Docling only (best layout/tables)": "docling",
+        "Qwen 30B cleanup (LLM-first, no Docling)": "qwen30b",
+    }
+    textifier_options = {
+        "use_vision": use_vision,
+        "pdf_strategy": mode_map.get(pdf_mode_label, "hybrid"),
+        "cleanup_provider": "lmstudio",
+        "cleanup_model": "qwen2.5:32b",
+        "docling_timeout_seconds": float(docling_timeout_seconds),
+        "image_description_timeout_seconds": float(image_timeout_seconds),
+        "image_enrich_max_seconds": float(image_budget_seconds),
+    }
+
+    progress = st.progress(0.0, text="Preparing review documents...")
+    documents: List[Dict[str, Any]] = []
+    total_files = max(1, len(file_paths))
+
+    for idx, file_path in enumerate(file_paths):
+        visible_name = _user_visible_filename(file_path)
+        base_frac = idx / float(total_files)
+        span = 1.0 / float(total_files)
+        suffix = Path(file_path).suffix.lower()
+
+        if suffix in {".md", ".txt"}:
+            progress.progress(base_frac, text=f"Reading {visible_name}...")
+            review_text = Path(file_path).read_text(encoding="utf-8", errors="ignore")
+            progress.progress(min(1.0, base_frac + span), text=f"Loaded {visible_name}")
+        else:
+            from cortex_engine.textifier import DocumentTextifier
+
+            def _on_progress(frac, msg, _base=base_frac, _span=span, _name=visible_name):
+                clamped = max(0.0, min(1.0, float(frac or 0.0)))
+                progress.progress(min(1.0, _base + (_span * clamped)), text=f"{_name}: {msg}")
+
+            review_text = DocumentTextifier.from_options(textifier_options, on_progress=_on_progress).textify_file(file_path)
+            progress.progress(min(1.0, base_frac + span), text=f"Extracted {visible_name}")
+
+        documents.append(
+            {
+                "source_name": visible_name,
+                "review_title": _user_visible_stem(file_path),
+                "file_path": file_path,
+                "text": review_text,
+                "table_blocks": extract_review_table_blocks(review_text),
+                "table_snapshots": _extract_study_miner_table_snapshots(file_path, suffix),
+            }
+        )
+
+    progress.progress(1.0, text=f"Prepared {len(documents)} review document(s)")
+    return documents
+
+
+def _extract_study_miner_table_snapshots(file_path: str, suffix: str) -> List[Dict[str, Any]]:
+    if suffix != ".pdf":
+        return []
+    try:
+        from cortex_engine.docling_reader import DoclingDocumentReader
+
+        reader = DoclingDocumentReader(skip_vlm_processing=True)
+        if not getattr(reader, "is_available", False) or not reader.can_process_file(file_path):
+            return []
+        docs = reader.load_data(file_path)
+        if not docs:
+            return []
+        metadata = docs[0].metadata or {}
+        provenance = metadata.get("docling_provenance") or {}
+        elements = list(provenance.get("elements") or [])
+        table_elements = [item for item in elements if str(item.get("type") or "").strip().lower() == "table"]
+        if not table_elements:
+            return []
+
+        import fitz
+
+        snapshots: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        with fitz.open(file_path) as doc:
+            for idx, item in enumerate(table_elements, start=1):
+                if len(snapshots) >= 6:
+                    break
+                bbox = item.get("bbox")
+                page_raw = item.get("page")
+                try:
+                    page_idx = int(page_raw)
+                    if page_idx >= 1:
+                        page_idx -= 1
+                except Exception:
+                    continue
+                if page_idx < 0 or page_idx >= len(doc):
+                    continue
+                page = doc[page_idx]
+                clip = None
+                if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                    try:
+                        rect = fitz.Rect(float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+                        rect = rect & page.rect
+                        if not rect.is_empty and rect.width >= 8 and rect.height >= 8:
+                            clip = rect
+                    except Exception:
+                        clip = None
+                key = f"{page_idx}:{tuple(round(float(v), 1) for v in bbox)}" if isinstance(bbox, (list, tuple)) and len(bbox) == 4 else f"{page_idx}:page"
+                if key in seen:
+                    continue
+                seen.add(key)
+                pix = page.get_pixmap(clip=clip, matrix=fitz.Matrix(2.0, 2.0), alpha=False)
+                snapshots.append(
+                    {
+                        "table_index": idx,
+                        "page_number": page_idx + 1,
+                        "bbox": list(bbox) if isinstance(bbox, (list, tuple)) else [],
+                        "text_sample": str(item.get("text_sample") or "").strip(),
+                        "image_bytes": pix.tobytes("png"),
+                    }
+                )
+        return snapshots
+    except Exception:
+        return []
 
 def _get_knowledge_base_files(extensions: List[str]) -> List[Path]:
     """Return files from knowledge base directories matching given extensions."""
@@ -3177,6 +3604,344 @@ def _render_photo_keywords_tab():
 
 
 # ======================================================================
+# Study Miner tab
+# ======================================================================
+
+def _render_study_miner_tab():
+    st.markdown(
+        "Screen one or more review documents for likely systematic reviews, confirm them, then mine included-study citations that can be handed into Research Resolver."
+    )
+
+    col1, col2 = st.columns([1, 2])
+
+    with col1:
+        st.header("Review Input")
+        st.session_state["study_miner_batch"] = True
+        selected = _file_input_widget("study_miner", ["pdf", "docx", "pptx", "md", "txt"], label="Choose review document(s):")
+        st.caption("Upload File mode accepts multiple reviews so you can screen a batch before mining.")
+
+        vision_mode = st.selectbox(
+            "Vision assist",
+            options=["Auto (Recommended)", "On", "Off"],
+            index=0,
+            key="study_miner_vision_mode",
+            help="Auto turns vision on for PDF reviews so the system can recover more context from difficult layouts.",
+        )
+        pdf_mode_label = st.selectbox(
+            "Extraction mode",
+            options=[
+                "Hybrid (Recommended): Docling first, Qwen enhancement, fallback on timeout",
+                "Docling only (best layout/tables)",
+                "Qwen 30B cleanup (LLM-first, no Docling)",
+            ],
+            index=0,
+            key="study_miner_pdf_mode",
+        )
+        docling_timeout_seconds = st.number_input(
+            "Docling timeout (seconds)",
+            min_value=30,
+            max_value=1200,
+            value=240,
+            step=10,
+            key="study_miner_docling_timeout_s",
+        )
+        image_timeout_seconds = st.number_input(
+            "Per-image timeout (seconds)",
+            min_value=3,
+            max_value=180,
+            value=20,
+            step=1,
+            key="study_miner_image_timeout_s",
+        )
+        image_budget_seconds = st.number_input(
+            "Total image budget (seconds)",
+            min_value=10,
+            max_value=1800,
+            value=90,
+            step=10,
+            key="study_miner_image_budget_s",
+        )
+
+        st.divider()
+        st.subheader("Criteria")
+        design_query = st.text_input(
+            "Study design criteria",
+            value="RCT, clinical trial, randomised, randomized",
+            key="study_miner_design_query",
+        )
+        outcome_query = st.text_input(
+            "Outcome criteria",
+            value="health-related quality of life, HRQoL, quality of life, patient-reported outcome",
+            key="study_miner_outcome_query",
+        )
+        require_all = st.checkbox(
+            "Require both design and outcome criteria",
+            value=True,
+            key="study_miner_require_all",
+        )
+        include_references = st.checkbox(
+            "Also scan reference list for title-level matches",
+            value=True,
+            key="study_miner_include_references",
+        )
+
+    with col2:
+        st.header("Review Screening")
+
+        if selected and st.button("Scan Reviews", type="primary", use_container_width=True, key="study_miner_scan_btn"):
+            try:
+                use_vision = _study_miner_should_use_vision(selected, vision_mode)
+                source_documents = _extract_study_miner_documents(
+                    selected,
+                    use_vision=use_vision,
+                    pdf_mode_label=pdf_mode_label,
+                    docling_timeout_seconds=float(docling_timeout_seconds),
+                    image_timeout_seconds=float(image_timeout_seconds),
+                    image_budget_seconds=float(image_budget_seconds),
+                )
+                assessed = assess_review_documents(source_documents)
+                st.session_state["study_miner_documents"] = list(assessed.get("documents") or [])
+                st.session_state["study_miner_document_rows"] = _study_miner_document_rows(list(assessed.get("documents") or []))
+                st.session_state["study_miner_effective_use_vision"] = use_vision
+                st.session_state.pop("study_miner_result", None)
+                st.session_state.pop("study_miner_editor_rows", None)
+            except Exception as e:
+                st.error(f"Review screening failed: {e}")
+
+        source_documents = list(st.session_state.get("study_miner_documents") or [])
+        document_rows = st.session_state.get("study_miner_document_rows") or _study_miner_document_rows(source_documents)
+        if document_rows:
+            if "study_miner_effective_use_vision" in st.session_state:
+                effective_label = "enabled" if bool(st.session_state.get("study_miner_effective_use_vision")) else "disabled"
+                st.caption(f"Effective vision assist for the last scan: {effective_label}.")
+            likely_count = sum(1 for item in source_documents if bool(item.get("systematic_review_likely")))
+            confirmed_default = sum(1 for item in source_documents if bool(item.get("confirm_review")))
+            d1, d2, d3 = st.columns(3)
+            d1.metric("Documents", len(source_documents))
+            d2.metric("Likely systematic reviews", likely_count)
+            d3.metric("Initially confirmed", confirmed_default)
+
+            edited_documents = st.data_editor(
+                document_rows,
+                use_container_width=True,
+                hide_index=True,
+                key="study_miner_documents_editor",
+                column_config={
+                    "confirm_review": st.column_config.CheckboxColumn("Mine", default=False),
+                    "doc_id": st.column_config.NumberColumn("Doc", format="%d"),
+                    "source_name": st.column_config.TextColumn("File", width="medium"),
+                    "review_title": st.column_config.TextColumn("Review title", width="medium"),
+                    "systematic_review_likely": st.column_config.CheckboxColumn("Likely SR"),
+                    "confidence": st.column_config.TextColumn("Confidence", width="small"),
+                    "score": st.column_config.NumberColumn("Score", format="%d"),
+                    "matched_signals": st.column_config.TextColumn("Signals", width="large"),
+                },
+                disabled=["doc_id", "source_name", "systematic_review_likely", "confidence", "score", "matched_signals"],
+            )
+            document_editor_rows = _editor_records(edited_documents)
+            if document_editor_rows:
+                st.session_state["study_miner_document_rows"] = document_editor_rows
+
+            confirmed_count = sum(1 for item in document_editor_rows if bool(item.get("confirm_review")))
+            st.caption(f"{confirmed_count} review document(s) marked for study mining.")
+
+            if st.button("Mine Confirmed Reviews", use_container_width=True, key="study_miner_run_btn"):
+                merged_documents = _merge_study_miner_document_rows(document_editor_rows, source_documents)
+                confirmed_doc_ids = [int(item.get("doc_id") or 0) for item in merged_documents if bool(item.get("confirm_review"))]
+                if not confirmed_doc_ids:
+                    st.warning("Select at least one likely systematic review before mining included studies.")
+                else:
+                    try:
+                        result = mine_review_documents(
+                            merged_documents,
+                            options=ReviewMiningOptions(
+                                design_query=design_query,
+                                outcome_query=outcome_query,
+                                require_all_criteria=require_all,
+                                include_reference_list_scan=include_references,
+                            ),
+                            confirmed_doc_ids=confirmed_doc_ids,
+                        )
+                        st.session_state["study_miner_documents"] = list(result.get("documents") or merged_documents)
+                        st.session_state["study_miner_document_rows"] = _study_miner_document_rows(
+                            list(result.get("documents") or merged_documents)
+                        )
+                        st.session_state["study_miner_result"] = result
+                        st.session_state["study_miner_editor_rows"] = _study_miner_candidate_rows(result.get("candidates") or [])
+                    except Exception as e:
+                        st.error(f"Study mining failed: {e}")
+        elif selected:
+            st.info("Click Scan Reviews to classify the uploaded review documents before mining.")
+        else:
+            st.info("Upload or choose one or more reviews, then scan them for systematic-review signals.")
+
+        result = st.session_state.get("study_miner_result") or {}
+        candidates = list(result.get("candidates") or [])
+        evidence_documents = list(result.get("documents") or st.session_state.get("study_miner_documents") or [])
+        cloud_recommended = bool(result) and _study_miner_cloud_rescue_recommended(result, evidence_documents)
+        auto_cloud_rescue = st.session_state.get("study_miner_auto_cloud_rescue", True)
+        if (
+            result
+            and cloud_recommended
+            and auto_cloud_rescue
+            and claude_table_rescue_available()
+            and not bool(result.get("cloud_rescue_attempted"))
+        ):
+            with st.spinner("Local parse looks confused. Running Claude Sonnet table rescue..."):
+                updated_result = _run_study_miner_cloud_rescue(
+                    result,
+                    evidence_documents,
+                    design_query=design_query,
+                    outcome_query=outcome_query,
+                )
+            st.session_state["study_miner_result"] = updated_result
+            st.session_state["study_miner_editor_rows"] = _study_miner_candidate_rows(updated_result.get("candidates") or [])
+            result = updated_result
+            candidates = list(updated_result.get("candidates") or [])
+        if candidates:
+            st.divider()
+            st.subheader("Mined Study Candidates")
+            stats = result.get("stats") or {}
+            s1, s2, s3, s4 = st.columns(4)
+            s1.metric("Confirmed reviews mined", int(stats.get("reviews_mined") or 0))
+            s2.metric("Candidates", int(stats.get("candidates_total") or 0))
+            s3.metric("Matching criteria", int(stats.get("candidates_matching") or 0))
+            s4.metric("Table refs linked", int(stats.get("table_reference_links") or 0))
+
+            per_review = list(result.get("per_review") or [])
+            if per_review:
+                with st.expander("Per-review mining summary", expanded=False):
+                    st.dataframe(_study_miner_review_rows(per_review), use_container_width=True, hide_index=True)
+            _render_study_miner_parse_evidence(evidence_documents, candidates)
+
+            with st.expander("Cloud Table Rescue", expanded=False):
+                st.caption("Paid Claude Sonnet fallback for rotated or multi-page review tables. Use this only when the local parser is visibly confused.")
+                st.checkbox(
+                    "Auto-run Claude rescue when the local parse looks confused",
+                    value=True,
+                    key="study_miner_auto_cloud_rescue",
+                )
+                rescue_enabled = st.checkbox(
+                    "Enable Claude Sonnet rescue for complex tables",
+                    value=False,
+                    key="study_miner_cloud_rescue_enabled",
+                )
+                key_source = anthropic_key_source()
+                if key_source:
+                    st.caption(f"Anthropic key source: `{key_source}`")
+                if cloud_recommended:
+                    st.warning("This review looks like a complex table case. Claude rescue is recommended.")
+                if not claude_table_rescue_available():
+                    st.info("ANTHROPIC_API_KEY is not available to Streamlit. Put it in `.env`, export it before launch, or keep it in `worker/config.env`.")
+                elif rescue_enabled and st.button("Run Claude Table Rescue", use_container_width=True, key="study_miner_cloud_rescue_btn"):
+                    with st.spinner("Running Claude Sonnet table rescue..."):
+                        updated_result = _run_study_miner_cloud_rescue(
+                            result,
+                            evidence_documents,
+                            design_query=design_query,
+                            outcome_query=outcome_query,
+                        )
+                    st.session_state["study_miner_result"] = updated_result
+                    st.session_state["study_miner_editor_rows"] = _study_miner_candidate_rows(updated_result.get("candidates") or [])
+                    result = updated_result
+                    candidates = list(updated_result.get("candidates") or [])
+                    stats = updated_result["stats"]
+                    st.success("Claude table rescue candidates added to Study Miner.")
+
+                cloud_runs = list((st.session_state.get("study_miner_result") or {}).get("cloud_rescue_runs") or [])
+                if cloud_runs:
+                    for run in cloud_runs:
+                        warnings = list(run.get("warnings") or [])
+                        model_name = str(run.get("model") or "").strip()
+                        review_name = str(run.get("review_title") or run.get("source_name") or "Review").strip()
+                        st.markdown(f"**{review_name}** via `{model_name}`")
+                        if warnings:
+                            for warning in warnings:
+                                st.warning(warning)
+                        st.caption(f"{len(run.get('candidates') or [])} cloud candidate(s) returned.")
+
+            editor_source = st.session_state.get("study_miner_editor_rows") or _study_miner_candidate_rows(candidates)
+            edited = st.data_editor(
+                editor_source,
+                use_container_width=True,
+                hide_index=True,
+                key="study_miner_editor",
+                column_config={
+                    "keep": st.column_config.CheckboxColumn("Keep", default=True),
+                    "row_id": st.column_config.NumberColumn("Row", format="%d"),
+                    "source_review_title": st.column_config.TextColumn("Review", width="medium"),
+                    "title": st.column_config.TextColumn("Title / Citation", width="large"),
+                    "authors": st.column_config.TextColumn("Authors", width="medium"),
+                    "year": st.column_config.TextColumn("Year", width="small"),
+                    "doi": st.column_config.TextColumn("DOI", width="medium"),
+                    "journal": st.column_config.TextColumn("Journal", width="medium"),
+                    "source_section": st.column_config.TextColumn("Source", width="small"),
+                    "matches": st.column_config.TextColumn("Matches", width="small"),
+                    "score": st.column_config.NumberColumn("Score", format="%d"),
+                    "reference_link": st.column_config.TextColumn("Reference link", width="medium"),
+                    "needs_review": st.column_config.TextColumn("Needs review", width="small"),
+                    "review_warning": st.column_config.TextColumn("Review warning", width="large"),
+                    "design_matches": st.column_config.TextColumn("Design hits", width="medium"),
+                    "outcome_matches": st.column_config.TextColumn("Outcome hits", width="medium"),
+                },
+                disabled=["row_id", "source_review_title", "source_section", "matches", "score", "reference_link", "needs_review", "review_warning", "design_matches", "outcome_matches"],
+            )
+            editor_rows = _editor_records(edited)
+            if editor_rows:
+                st.session_state["study_miner_editor_rows"] = editor_rows
+
+            selected_count = sum(1 for item in editor_rows if bool(item.get("keep", True)))
+            st.caption(f"{selected_count} candidate citation(s) selected.")
+            if int(stats.get("needs_review") or 0) > 0:
+                st.warning("Some table rows were linked with inconsistencies or low confidence. Review those rows before sending them onward.")
+
+            if st.button("Send Selected to Research Resolver", use_container_width=True, key="study_miner_send_to_resolver"):
+                selected_candidates = _merge_study_miner_editor_rows(editor_rows, candidates)
+                st.session_state["research_parse_result"] = {
+                    "source_name": "Study Miner",
+                    "citations": selected_candidates,
+                    "detected_fields": ["title", "authors", "year", "doi", "journal", "notes"],
+                    "warnings": [],
+                }
+                st.session_state["research_editor_rows"] = build_research_preview_rows(selected_candidates)
+                st.success("Selected candidates copied into Research Resolver.")
+
+            with st.expander("Mining stats", expanded=False):
+                st.dataframe(_study_miner_stats_rows(stats), use_container_width=True, hide_index=True)
+        elif result and cloud_recommended:
+            st.warning("The local parser looks confused on this review. Claude rescue is recommended.")
+            with st.expander("Cloud Table Rescue", expanded=True):
+                st.checkbox(
+                    "Auto-run Claude rescue when the local parse looks confused",
+                    value=True,
+                    key="study_miner_auto_cloud_rescue",
+                )
+                rescue_enabled = st.checkbox(
+                    "Enable Claude Sonnet rescue for complex tables",
+                    value=False,
+                    key="study_miner_cloud_rescue_enabled_empty",
+                )
+                key_source = anthropic_key_source()
+                if key_source:
+                    st.caption(f"Anthropic key source: `{key_source}`")
+                if not claude_table_rescue_available():
+                    st.info("ANTHROPIC_API_KEY is not available to Streamlit. Put it in `.env`, export it before launch, or keep it in `worker/config.env`.")
+                elif rescue_enabled and st.button("Run Claude Table Rescue", use_container_width=True, key="study_miner_cloud_rescue_btn_empty"):
+                    with st.spinner("Running Claude Sonnet table rescue..."):
+                        updated_result = _run_study_miner_cloud_rescue(
+                            result,
+                            evidence_documents,
+                            design_query=design_query,
+                            outcome_query=outcome_query,
+                        )
+                    st.session_state["study_miner_result"] = updated_result
+                    st.session_state["study_miner_editor_rows"] = _study_miner_candidate_rows(updated_result.get("candidates") or [])
+                    st.success("Claude table rescue candidates added to Study Miner.")
+        elif result:
+            st.info("No candidate studies matched the confirmed review documents and current criteria.")
+
+
+# ======================================================================
 # Research Resolver tab
 # ======================================================================
 
@@ -3439,14 +4204,17 @@ def _render_url_ingestor_tab():
 
 def main():
     st.title("Document or Photo Processing")
-    st.caption(f"Version: {PAGE_VERSION} • Document conversion, citation resolution, and privacy tools")
+    st.caption(f"Version: {PAGE_VERSION} • Document conversion, review mining, citation resolution, and privacy tools")
 
-    tab_textifier, tab_research, tab_url_ingest, tab_pdfimg, tab_photo, tab_anonymizer = st.tabs(
-        ["Textifier", "Research Resolver", "URL PDF Ingestor", "PDF Image Extractor", "Photo Processor", "Anonymizer"]
+    tab_textifier, tab_study_miner, tab_research, tab_url_ingest, tab_pdfimg, tab_photo, tab_anonymizer = st.tabs(
+        ["Textifier", "Study Miner", "Research Resolver", "URL PDF Ingestor", "PDF Image Extractor", "Photo Processor", "Anonymizer"]
     )
 
     with tab_textifier:
         _render_textifier_tab()
+
+    with tab_study_miner:
+        _render_study_miner_tab()
 
     with tab_research:
         _render_research_resolver_tab()

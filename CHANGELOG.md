@@ -19,6 +19,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Journal ranking enrichment now accepts the SCImago JSON dataset expected by the website resolver design, while retaining XLSX fallback.
 - Research Resolver open-access detection now falls back to publisher-page and publisher-policy signals for cases like MDPI-hosted articles that are free to access but underreported by Unpaywall.
 - Gemma 4 local Ollama models are now first-class options for Cortex synthesis/research workflows, with long-context metadata and recommendation support across model selection surfaces.
+- Study Miner now supports batch systematic-review screening, bibliography-linked candidate extraction, parse-evidence inspection, and an opt-in Claude Sonnet rescue path for complex review tables.
+
+### ⚠️ Known Limitation
+- Rotated multi-page systematic-review tables are still not reconstructed reliably. The current Claude rescue path receives detected table snapshots, extracted markdown table blocks, and the reference section, not the full PDF, so it can inherit upstream table-reconstruction errors.
 
 ### 🧠 Cortex Intelligence Intake + Review Loop
 

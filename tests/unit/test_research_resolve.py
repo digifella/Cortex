@@ -241,6 +241,48 @@ def test_research_resolve_returns_unresolved_with_candidates(monkeypatch):
     assert payload["best_candidates"][0]["similarity"] == 0.65
 
 
+def test_research_resolve_preserves_source_review_metadata():
+    responses = {
+        (
+            "https://api.crossref.org/works/10.1000%2Fexample",
+            (),
+            "crossref",
+        ): {
+            "message": {
+                "DOI": "10.1000/example",
+                "URL": "https://doi.org/10.1000/example",
+                "title": ["Example Trial"],
+                "publisher": "Example Publisher",
+                "type": "journal-article",
+                "container-title": ["Journal of Testing"],
+                "ISSN": ["1234-5678"],
+            }
+        }
+    }
+    resolver = _FakeResolver(responses=responses, options={"check_open_access": False, "enrich_sjr": False})
+
+    result = resolver.resolve_one(
+        {
+            "row_id": 9,
+            "title": "Example Trial",
+            "doi": "10.1000/example",
+            "source_review": "review_a.md",
+            "source_review_title": "Review A",
+            "extra_fields": {
+                "source_review": "review_a.md",
+                "source_review_title": "Review A",
+                "source_doc_id": "1",
+            },
+        }
+    )
+
+    payload = result["payload"]
+    assert payload["source_review"] == "review_a.md"
+    assert payload["source_review_title"] == "Review A"
+    assert payload["source_doc_id"] == "1"
+    assert payload["extra_fields"]["source_review"] == "review_a.md"
+
+
 def test_parse_research_spreadsheet_text_detects_columns_and_dedupes_doi():
     parsed = parse_research_spreadsheet_text(
         "\n".join(

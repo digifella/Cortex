@@ -327,6 +327,24 @@ def _empty_open_access() -> Dict[str, Any]:
     return {"is_oa": None, "oa_status": "unknown", "pdf_url": "", "oa_source": ""}
 
 
+def _citation_source_metadata(citation: Dict[str, Any]) -> Dict[str, Any]:
+    extra_fields = dict(citation.get("extra_fields") or {})
+    source_review = str(extra_fields.get("source_review") or citation.get("source_review") or "").strip()
+    source_review_title = str(extra_fields.get("source_review_title") or citation.get("source_review_title") or "").strip()
+    source_doc_id = str(extra_fields.get("source_doc_id") or citation.get("source_doc_id") or "").strip()
+
+    metadata: Dict[str, Any] = {}
+    if extra_fields:
+        metadata["extra_fields"] = extra_fields
+    if source_review:
+        metadata["source_review"] = source_review
+    if source_review_title:
+        metadata["source_review_title"] = source_review_title
+    if source_doc_id:
+        metadata["source_doc_id"] = source_doc_id
+    return metadata
+
+
 def _page_signals_open_access(page_text: str) -> bool:
     text = str(page_text or "").lower()
     markers = (
@@ -536,6 +554,7 @@ class ResearchResolver:
             "reason": "No CrossRef match found",
             "best_candidates": self._best_candidates_for_unresolved(citation),
         }
+        unresolved.update(_citation_source_metadata(citation))
         return {"status": "unresolved", "payload": unresolved}
 
     def _check_cancel(self) -> None:
@@ -1078,7 +1097,7 @@ class ResearchResolver:
         journal = self._journal_info(citation, message)
         retraction = _retraction_info(message)
 
-        return {
+        payload = {
             "row_id": citation.get("row_id"),
             "input_title": str(citation.get("title") or "").strip(),
             "resolved_doi": doi,
@@ -1095,6 +1114,8 @@ class ResearchResolver:
             "title_similarity": round(similarity, 3),
             "retraction": retraction,
         }
+        payload.update(_citation_source_metadata(citation))
+        return payload
 
 
 def run_research_resolve(

@@ -15,6 +15,12 @@ This document reflects recent major enhancements to the **Project Cortex Suite**
     *   **Capabilities:** Parse citation spreadsheets (TSV/CSV/XLSX), resolve DOI/OA/SJR metadata, review matches, and hand preferred URLs directly into the in-page URL ingest flow.
     *   **Technical:** Shared URL ingestor UI keeps the integrated tab and legacy standalone page aligned, while the queue worker also supports `research_resolve` for website-triggered jobs. OA detection now includes publisher-page/publisher-policy fallback for free-to-access publisher-hosted articles.
 
+*   **[IN PROGRESS] Study Miner for Systematic Reviews**
+    *   **Status:** Usable for table-first review mining, but still limited on rotated multi-page review tables.
+    *   **Capabilities:** Screen likely systematic reviews, mine candidate included studies, link table rows to bibliography entries, surface mismatch warnings, and inspect parse evidence in the UI.
+    *   **Cloud Fallback:** Optional Claude Sonnet rescue is available for complex tables, but the current rescue path operates on detected table snapshots and extracted table text rather than the entire PDF.
+    *   **Current Limitation:** Very large rotated tables spanning multiple manuscript pages still need better reconstruction before extraction becomes reliable.
+
 *   **[ENHANCED] Local Ollama Model Support: Gemma 4**
     *   **Status:** Complete. Gemma 4 is now recognized as a premium local reasoning/synthesis option in Cortex when installed via Ollama.
     *   **Capabilities:** Long-context local summarization, document dialog, weekly report synthesis preference, and stronger coding/agentic local workflows.
