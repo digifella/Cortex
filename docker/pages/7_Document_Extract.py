@@ -38,10 +38,11 @@ from cortex_engine.preface_classification import classify_credibility_tier
 from cortex_engine.document_preface import add_document_preface
 from cortex_engine.handoff_contract import validate_research_resolve_input
 from cortex_engine.included_study_extractor import (
+    IncludedStudyExtractorQuotaError,
     anthropic_key_source as included_study_anthropic_key_source,
     gemini_key_source,
     included_study_extractor_available,
-    run_included_study_extractor,
+    run_included_study_extractor_with_fallback,
 )
 from cortex_engine.research_resolve import (
     build_research_preferred_url_list,
@@ -5101,6 +5102,24 @@ def _render_included_study_extractor_tab():
             value=st.session_state.get("included_study_model", default_model) or default_model,
             key="included_study_model",
         )
+        fallback_to_anthropic = False
+        fallback_model = "claude-sonnet-4-6"
+        if provider == "gemini":
+            fallback_to_anthropic = st.checkbox(
+                "Fallback to Claude if Gemini quota/rate limit is hit",
+                value=bool(st.session_state.get("included_study_auto_fallback_to_claude", True)),
+                key="included_study_auto_fallback_to_claude",
+                disabled=not included_study_extractor_available("anthropic"),
+            )
+            if included_study_extractor_available("anthropic"):
+                fallback_model = st.text_input(
+                    "Fallback Claude model",
+                    value=st.session_state.get("included_study_fallback_model", "claude-sonnet-4-6") or "claude-sonnet-4-6",
+                    key="included_study_fallback_model",
+                    disabled=not fallback_to_anthropic,
+                )
+            else:
+                st.caption("Anthropic fallback unavailable: `ANTHROPIC_API_KEY` not currently configured.")
         key_source = gemini_key_source() if provider == "gemini" else included_study_anthropic_key_source()
         if key_source:
             st.caption(f"API key source: `{key_source}`")
@@ -5118,15 +5137,22 @@ def _render_included_study_extractor_tab():
             try:
                 review_title = _user_visible_stem(selected)
                 with st.spinner("Calling the large-model table extractor..."):
-                    result = run_included_study_extractor(
+                    result = run_included_study_extractor_with_fallback(
                         pdf_path=str(selected),
                         provider=provider,
                         model=model,
                         review_title=review_title,
+                        fallback_provider="anthropic" if (provider == "gemini" and fallback_to_anthropic) else "",
+                        fallback_model=fallback_model if (provider == "gemini" and fallback_to_anthropic) else "",
                     )
                 st.session_state["included_study_result"] = result
                 st.session_state["included_study_editor_rows"] = _included_study_editor_rows(result.get("tables") or [])
                 st.success("Included-study extraction complete.")
+            except IncludedStudyExtractorQuotaError as e:
+                st.error(
+                    f"Included-study extraction failed: {e}. "
+                    "Gemini quota was exhausted for this PDF. Enable Claude fallback or switch provider."
+                )
             except Exception as e:
                 st.error(f"Included-study extraction failed: {e}")
 
@@ -5137,7 +5163,15 @@ def _render_included_study_extractor_tab():
         if tables:
             provider_label = str(result.get("provider") or "").strip()
             model_label = str(result.get("model") or "").strip()
-            st.caption(f"Provider: `{provider_label}` • Model: `{model_label}`")
+            requested_provider = str(result.get("requested_provider") or "").strip()
+            requested_model = str(result.get("requested_model") or "").strip()
+            if requested_provider and requested_provider != provider_label:
+                st.caption(
+                    f"Requested: `{requested_provider}` / `{requested_model or '?'}`\n"
+                    f"Used: `{provider_label}` / `{model_label}`"
+                )
+            else:
+                st.caption(f"Provider: `{provider_label}` • Model: `{model_label}`")
             for warning in list(result.get("warnings") or []):
                 st.warning(warning)
 

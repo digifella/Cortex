@@ -24,6 +24,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Study Miner now normalizes bibliography-linked citation display from matched references and harmonizes obviously weak/truncated study labels against stronger overlapping trial labels, reducing OCR noise like broken surnames and clipped trial names in exports.
 - Study Miner now includes a direct paper-retrieval loop that resolves the selected bibliography rows through Research Resolver and then runs URL Ingestor on the preferred OA/DOI URLs, with results synced back into the existing resolver and URL-ingest tabs.
 - Added a separate `Included Study Extractor` tab that sends the full review PDF to Gemini or Claude, extracts grouped included-study tables at the trial/instrument level, resolves bibliography entries when possible, and lets operators select papers for resolver/retrieval without going through the row-heavy Study Miner path.
+- Included Study Extractor now surfaces Gemini quota/rate-limit failures more clearly and can fall back automatically to Anthropic when Gemini free-tier PDF extraction quota is exhausted.
 
 ### 🌐 URL Ingestor UX + Source Capture Improvements
 

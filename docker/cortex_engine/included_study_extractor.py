@@ -20,6 +20,18 @@ _DEFAULT_ANTHROPIC_MODEL = os.environ.get("CORTEX_INCLUDED_STUDY_ANTHROPIC_MODEL
 _MAX_INLINE_PDF_BYTES = 22 * 1024 * 1024
 
 
+class IncludedStudyExtractorAPIError(RuntimeError):
+    def __init__(self, provider: str, status_code: int, message: str, *, body: str = ""):
+        super().__init__(message)
+        self.provider = str(provider or "").strip().lower()
+        self.status_code = int(status_code or 0)
+        self.body = str(body or "")
+
+
+class IncludedStudyExtractorQuotaError(IncludedStudyExtractorAPIError):
+    pass
+
+
 def _worker_env_value(name: str) -> str:
     env_path = _ROOT / "worker" / "config.env"
     if not env_path.exists():
@@ -132,6 +144,39 @@ def _gemini_generate_content(model: str, payload: Dict[str, Any], api_key: str) 
     with urlopen(req, timeout=240) as response:
         raw = response.read().decode("utf-8", errors="replace")
     return json.loads(raw) if raw.strip() else {}
+
+
+def _parse_http_error_payload(body: str) -> Dict[str, Any]:
+    try:
+        parsed = json.loads(str(body or "").strip())
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _gemini_http_error_message(status_code: int, body: str) -> str:
+    parsed = _parse_http_error_payload(body)
+    error_block = parsed.get("error") if isinstance(parsed.get("error"), dict) else {}
+    detail = str(error_block.get("message") or "").strip()
+    detail = re.sub(r"\s+", " ", detail)
+    if status_code == 429:
+        text = f"{detail} {body}".lower()
+        if "quota exceeded" in text or "free_tier" in text or "rate limit" in text or "input_token_count" in text:
+            return f"Gemini quota/rate limit exceeded: {detail or 'quota or rate limit reached for this PDF.'}"
+    if detail:
+        return f"Gemini API HTTP {status_code}: {detail}"
+    snippet = re.sub(r"\s+", " ", str(body or "").strip())[:400]
+    return f"Gemini API HTTP {status_code}: {snippet or 'request failed'}"
+
+
+def _raise_gemini_http_error(status_code: int, body: str) -> None:
+    message = _gemini_http_error_message(status_code, body)
+    text = f"{message} {body}".lower()
+    if int(status_code or 0) == 429 and (
+        "quota exceeded" in text or "free_tier" in text or "rate limit" in text or "input_token_count" in text
+    ):
+        raise IncludedStudyExtractorQuotaError("gemini", status_code, message, body=body)
+    raise IncludedStudyExtractorAPIError("gemini", status_code, message, body=body)
 
 
 def _extract_gemini_text(response_json: Dict[str, Any]) -> str:
@@ -368,7 +413,7 @@ def run_included_study_extractor(
         response_json = _gemini_generate_content(model_name, payload, api_key)
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Gemini API HTTP {exc.code}: {body[:400]}") from exc
+        _raise_gemini_http_error(int(exc.code or 0), body)
     except URLError as exc:
         raise RuntimeError(f"Gemini API connection failed: {exc}") from exc
     raw_response = _extract_gemini_text(response_json)
@@ -380,3 +425,47 @@ def run_included_study_extractor(
         "warnings": [str(item).strip() for item in list(parsed.get("warnings") or []) if str(item).strip()],
         "raw_response": raw_response,
     }
+
+
+def run_included_study_extractor_with_fallback(
+    *,
+    pdf_path: str,
+    provider: str = "gemini",
+    model: str = "",
+    review_title: str = "",
+    fallback_provider: str = "",
+    fallback_model: str = "",
+) -> Dict[str, Any]:
+    primary_provider = str(provider or "gemini").strip().lower() or "gemini"
+    primary_model = str(model or "").strip()
+    try:
+        result = run_included_study_extractor(
+            pdf_path=pdf_path,
+            provider=primary_provider,
+            model=primary_model,
+            review_title=review_title,
+        )
+        result["requested_provider"] = primary_provider
+        result["requested_model"] = primary_model or result.get("model") or ""
+        return result
+    except IncludedStudyExtractorQuotaError as exc:
+        fallback_name = str(fallback_provider or "").strip().lower()
+        if primary_provider != "gemini" or fallback_name != "anthropic" or not included_study_extractor_available("anthropic"):
+            raise
+        fallback_result = run_included_study_extractor(
+            pdf_path=pdf_path,
+            provider="anthropic",
+            model=fallback_model,
+            review_title=review_title,
+        )
+        warnings = [str(item).strip() for item in list(fallback_result.get("warnings") or []) if str(item).strip()]
+        fallback_model_name = str(fallback_result.get("model") or fallback_model or _DEFAULT_ANTHROPIC_MODEL).strip()
+        warnings.insert(
+            0,
+            f"Gemini hit a quota/rate limit and the extractor fell back to Anthropic `{fallback_model_name}`.",
+        )
+        fallback_result["warnings"] = warnings
+        fallback_result["requested_provider"] = primary_provider
+        fallback_result["requested_model"] = primary_model or _DEFAULT_GEMINI_MODEL
+        fallback_result["fallback_reason"] = str(exc)
+        return fallback_result

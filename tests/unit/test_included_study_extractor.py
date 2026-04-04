@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from io import BytesIO
 from types import SimpleNamespace
+from urllib.error import HTTPError
 
 from cortex_engine.included_study_extractor import (
+    IncludedStudyExtractorQuotaError,
     get_gemini_api_key,
     parse_included_study_extraction_response,
     run_included_study_extractor,
+    run_included_study_extractor_with_fallback,
 )
 
 
@@ -168,3 +172,96 @@ def test_run_included_study_extractor_anthropic_normalizes_tables(monkeypatch, t
     assert result["provider"] == "anthropic"
     assert result["tables"][0]["table_number"] == "4"
     assert result["tables"][0]["groups"][0]["citations"][0]["reference_number"] == "54"
+
+
+def test_run_included_study_extractor_gemini_raises_quota_error(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "review.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
+
+    monkeypatch.setattr("cortex_engine.included_study_extractor.get_gemini_api_key", lambda: "AI-test-key")
+
+    def _raise_quota(*_args, **_kwargs):
+        raise HTTPError(
+            url="https://example.test",
+            code=429,
+            msg="Too Many Requests",
+            hdrs=None,
+            fp=BytesIO(
+                b'{"error":{"code":429,"message":"Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count"}}'
+            ),
+        )
+
+    monkeypatch.setattr("cortex_engine.included_study_extractor._gemini_generate_content", _raise_quota)
+
+    try:
+        run_included_study_extractor(
+            pdf_path=str(pdf_path),
+            provider="gemini",
+            model="gemini-2.5-pro",
+            review_title="Review",
+        )
+        assert False, "Expected IncludedStudyExtractorQuotaError"
+    except IncludedStudyExtractorQuotaError as exc:
+        assert exc.status_code == 429
+        assert "quota/rate limit" in str(exc).lower()
+
+
+def test_run_included_study_extractor_with_fallback_uses_anthropic(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "review.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
+
+    def _fake_run(*, pdf_path, provider, model, review_title):
+        if provider == "gemini":
+            raise IncludedStudyExtractorQuotaError("gemini", 429, "Gemini quota/rate limit exceeded", body="quota")
+        return {
+            "provider": "anthropic",
+            "model": model or "claude-sonnet-4-6",
+            "tables": [
+                {
+                    "table_number": "2",
+                    "table_title": "Overview",
+                    "grouping_basis": "Grouped by trial",
+                    "groups": [
+                        {
+                            "group_label": "Global",
+                            "trial_label": "JULIET",
+                            "notes": "",
+                            "citations": [
+                                {
+                                    "display": "Maziarz 2020 [19]",
+                                    "authors": "Maziarz",
+                                    "year": "2020",
+                                    "reference_number": "19",
+                                    "resolved_title": "Title",
+                                    "resolved_authors": "Maziarz",
+                                    "resolved_year": "2020",
+                                    "resolved_journal": "",
+                                    "resolved_doi": "",
+                                    "notes": "",
+                                    "needs_review": False,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "warnings": [],
+            "raw_response": "{}",
+        }
+
+    monkeypatch.setattr("cortex_engine.included_study_extractor.run_included_study_extractor", _fake_run)
+    monkeypatch.setattr("cortex_engine.included_study_extractor.included_study_extractor_available", lambda provider: provider == "anthropic")
+
+    result = run_included_study_extractor_with_fallback(
+        pdf_path=str(pdf_path),
+        provider="gemini",
+        model="gemini-2.5-pro",
+        review_title="Review",
+        fallback_provider="anthropic",
+        fallback_model="claude-sonnet-4-6",
+    )
+
+    assert result["provider"] == "anthropic"
+    assert result["requested_provider"] == "gemini"
+    assert result["requested_model"] == "gemini-2.5-pro"
+    assert "fell back to anthropic" in result["warnings"][0].lower()
