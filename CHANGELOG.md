@@ -32,6 +32,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Study Miner now includes a direct paper-retrieval loop that resolves the selected bibliography rows through Research Resolver and then runs URL Ingestor on the preferred OA/DOI URLs, with results synced back into the existing resolver and URL-ingest tabs.
 - Added a separate `Included Study Extractor` tab that sends the full review PDF to Gemini or Claude, extracts grouped included-study tables at the trial/instrument level, resolves bibliography entries when possible, and lets operators select papers for resolver/retrieval without going through the row-heavy Study Miner path.
 - Included Study Extractor now surfaces Gemini quota/rate-limit failures more clearly and can fall back automatically to Anthropic when Gemini free-tier PDF extraction quota is exhausted.
+- Included Study Extractor now keeps Claude fallback off by default and includes a lightweight `Test Gemini Access` check so API access can be verified before attempting a full PDF extraction.
 
 ### ⚠️ Known Limitation
 - Rotated multi-page systematic-review tables are still not reconstructed reliably. The Claude rescue path now prefers the full source PDF, but very large PDFs can still fall back to extracted table evidence and the model can still struggle with ambiguous continuation pages.

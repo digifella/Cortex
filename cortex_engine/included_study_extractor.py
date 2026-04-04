@@ -190,6 +190,62 @@ def _extract_gemini_text(response_json: Dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
+def run_included_study_access_check(provider: str = "gemini", model: str = "") -> Dict[str, Any]:
+    provider_name = str(provider or "gemini").strip().lower() or "gemini"
+    if provider_name == "anthropic":
+        client = _anthropic_client()
+        model_name = str(model or _DEFAULT_ANTHROPIC_MODEL).strip() or _DEFAULT_ANTHROPIC_MODEL
+        response = client.messages.create(
+            model=model_name,
+            max_tokens=32,
+            messages=[{"role": "user", "content": [{"type": "text", "text": "Reply with exactly ACCESS_OK"}]}],
+        )
+        parts: List[str] = []
+        for block in response.content:
+            text = str(getattr(block, "text", "") or "").strip()
+            if text:
+                parts.append(text)
+        preview = "\n".join(parts).strip()
+        return {
+            "provider": "anthropic",
+            "model": model_name,
+            "ok": bool(preview),
+            "preview": preview[:200],
+        }
+
+    api_key = get_gemini_api_key()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    model_name = str(model or _DEFAULT_GEMINI_MODEL).strip() or _DEFAULT_GEMINI_MODEL
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": "Reply with exactly ACCESS_OK"},
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0,
+            "maxOutputTokens": 32,
+        },
+    }
+    try:
+        response_json = _gemini_generate_content(model_name, payload, api_key)
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        _raise_gemini_http_error(int(exc.code or 0), body)
+    except URLError as exc:
+        raise RuntimeError(f"Gemini API connection failed: {exc}") from exc
+    preview = _extract_gemini_text(response_json)
+    return {
+        "provider": "gemini",
+        "model": model_name,
+        "ok": bool(preview),
+        "preview": preview[:200],
+    }
+
+
 def _anthropic_client():
     import anthropic
 

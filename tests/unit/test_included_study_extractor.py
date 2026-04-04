@@ -8,6 +8,7 @@ from cortex_engine.included_study_extractor import (
     IncludedStudyExtractorQuotaError,
     get_gemini_api_key,
     parse_included_study_extraction_response,
+    run_included_study_access_check,
     run_included_study_extractor,
     run_included_study_extractor_with_fallback,
 )
@@ -108,6 +109,27 @@ def test_run_included_study_extractor_gemini_normalizes_grouped_tables(monkeypat
     citation = result["tables"][0]["groups"][0]["citations"][0]
     assert citation["reference_number"] == "17"
     assert citation["resolved_doi"] == "10.1000/example"
+
+
+def test_run_included_study_access_check_gemini_uses_tiny_prompt(monkeypatch):
+    monkeypatch.setattr("cortex_engine.included_study_extractor.get_gemini_api_key", lambda: "AI-test-key")
+
+    captured = {}
+
+    def _fake_generate(model, payload, api_key):
+        captured["model"] = model
+        captured["payload"] = payload
+        captured["api_key"] = api_key
+        return {"candidates": [{"content": {"parts": [{"text": "ACCESS_OK"}]}}]}
+
+    monkeypatch.setattr("cortex_engine.included_study_extractor._gemini_generate_content", _fake_generate)
+
+    result = run_included_study_access_check(provider="gemini", model="gemini-2.5-pro")
+
+    assert result["ok"] is True
+    assert result["preview"] == "ACCESS_OK"
+    assert captured["model"] == "gemini-2.5-pro"
+    assert captured["payload"]["contents"][0]["parts"] == [{"text": "Reply with exactly ACCESS_OK"}]
 
 
 def test_run_included_study_extractor_anthropic_normalizes_tables(monkeypatch, tmp_path):
