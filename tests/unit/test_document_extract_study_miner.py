@@ -724,3 +724,71 @@ def test_run_study_miner_paper_retrieval_chains_resolver_and_url_ingestor(temp_d
     assert output["url_zip_bytes"] == b"zip-bytes"
     assert any("Research Resolver:" in message for message in messages)
     assert any("URL Ingestor:" in message for message in messages)
+
+
+def test_included_study_editor_rows_flattens_grouped_tables_for_selection():
+    module = _load_document_extract_module()
+
+    rows = module._included_study_editor_rows(
+        [
+            {
+                "table_number": "2",
+                "table_title": "Overview of Included Studies on HRQOL Measures",
+                "grouping_basis": "Grouped by instrument",
+                "groups": [
+                    {
+                        "group_label": "EORTC QLQ-C30",
+                        "trial_label": "TRANSCEND NHL 001",
+                        "citations": [
+                            {
+                                "display": "Patrick 2021 [17]",
+                                "resolved_title": "Health-related quality of life with lisocabtagene maraleucel",
+                                "resolved_authors": "Patrick D",
+                                "resolved_year": "2021",
+                                "reference_number": "17",
+                                "needs_review": False,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["combined_group"] == "EORTC QLQ-C30 / TRANSCEND NHL 001"
+    assert rows[0]["title"] == "Health-related quality of life with lisocabtagene maraleucel"
+    assert rows[0]["reference_number"] == "17"
+
+
+def test_merge_included_study_editor_rows_builds_research_payload_rows():
+    module = _load_document_extract_module()
+
+    merged = module._merge_included_study_editor_rows(
+        [
+            {
+                "keep": True,
+                "row_id": 1,
+                "table_number": "2",
+                "table_title": "Overview of Included Studies on HRQOL Measures",
+                "grouping_basis": "Grouped by instrument",
+                "group_label": "EORTC QLQ-C30",
+                "trial_label": "TRANSCEND NHL 001",
+                "combined_group": "EORTC QLQ-C30 / TRANSCEND NHL 001",
+                "citation_display": "Patrick 2021 [17]",
+                "title": "Health-related quality of life with lisocabtagene maraleucel",
+                "authors": "Patrick D",
+                "year": "2021",
+                "doi": "10.1000/example",
+                "journal": "Blood Advances",
+                "reference_number": "17",
+                "notes": "",
+                "needs_review": "",
+            }
+        ]
+    )
+
+    assert len(merged) == 1
+    assert merged[0]["title"] == "Health-related quality of life with lisocabtagene maraleucel"
+    assert merged[0]["extra_fields"]["table_number"] == "2"
+    assert merged[0]["extra_fields"]["combined_group"] == "EORTC QLQ-C30 / TRANSCEND NHL 001"
