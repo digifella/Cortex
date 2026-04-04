@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from cortex_engine.review_study_miner import (
+    _parse_reference_entries,
     ReviewMiningOptions,
     assess_review_documents,
     extract_review_table_blocks,
@@ -55,6 +56,39 @@ def test_extract_review_table_blocks_returns_markdown_tables():
     assert len(blocks) == 1
     assert blocks[0]["row_count"] == 1
     assert "| Study | Design |" in blocks[0]["markdown"]
+
+
+def test_extract_review_table_blocks_captures_nearby_context():
+    markdown = """
+# Systematic review of lymphoma interventions
+
+Table 2. Characteristics of included studies
+Outcomes were grouped by quality of life domains.
+| Study | Design |
+| --- | --- |
+| Smith 2020 | Randomized trial |
+Follow-up was typically 12 months.
+"""
+
+    blocks = extract_review_table_blocks(markdown)
+
+    assert len(blocks) == 1
+    assert "Table 2. Characteristics of included studies" in blocks[0]["context_text"]
+    assert "Outcomes were grouped by quality of life domains." in blocks[0]["context_text"]
+    assert "Follow-up was typically 12 months." in blocks[0]["context_text"]
+
+
+def test_parse_reference_entries_accepts_bare_reference_excerpt():
+    entries = _parse_reference_entries(
+        """
+        [19] Maziarz RT, Schuster SJ. Quality of life outcomes after CAR-T therapy in lymphoma. Leukemia & Lymphoma. 2020.
+        [20] Patrick DL, Ghosh N. Treatment-related quality of life in diffuse large B-cell lymphoma. Lancet Haematology. 2021.
+        """
+    )
+
+    assert len(entries) == 2
+    assert entries[0]["reference_number"] == "19"
+    assert entries[1]["year"] == "2021"
 
 
 def test_review_study_miner_scans_reference_list_for_keyword_matches():

@@ -20,9 +20,19 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Research Resolver open-access detection now falls back to publisher-page and publisher-policy signals for cases like MDPI-hosted articles that are free to access but underreported by Unpaywall.
 - Gemma 4 local Ollama models are now first-class options for Cortex synthesis/research workflows, with long-context metadata and recommendation support across model selection surfaces.
 - Study Miner now supports batch systematic-review screening, bibliography-linked candidate extraction, parse-evidence inspection, and an opt-in Claude Sonnet rescue path for complex review tables.
+- Claude Sonnet table rescue now attaches the source PDF directly when available, using extracted table/page hints only to steer the model toward the likely review tables.
+- Study Miner now includes an Ollama local table rescue path that renders continuation-table PDF pages, asks a local vision model for structured rows, and then links those rows back to the review references.
+- Study Miner local table rescue now defaults to `qwen3.5:35b-a3b` when available, with lighter Ollama vision fallbacks retained for smaller setups.
+- Study Miner now carries table-slice metadata through local rescue, dedupes bibliography rows by review/table/reference, and offers both master and per-table CSV downloads for easier reconciliation of multi-table review PDFs.
+- Study Miner now merges adjacent markdown table blocks into table families and assigns slice-specific fallback PDF page windows when snapshot crops are unavailable, reducing cross-table contamination on multi-table review PDFs.
+- Added fixture-based Study Miner regression tests for the full review-paper exports so table-family separation for Tables 2-5 can be checked in pytest instead of repeated manual Streamlit reruns.
+- Added `scripts/refresh_study_miner_full_paper_fixtures.py` so the pinned Study Miner full-paper CSV fixtures can be refreshed intentionally from the latest exports without manual file copying.
+- Study Miner exports now hide low-value table slices with no explicit reference numbers by default, while still allowing them to be included on demand for inspection.
+- Study Miner now normalizes bibliography-linked citation display from matched references and harmonizes obviously weak/truncated study labels against stronger overlapping trial labels, reducing OCR noise like broken surnames and clipped trial names in exports.
+- Study Miner now includes a direct paper-retrieval loop that resolves the selected bibliography rows through Research Resolver and then runs URL Ingestor on the preferred OA/DOI URLs, with results synced back into the existing resolver and URL-ingest tabs.
 
 ### ⚠️ Known Limitation
-- Rotated multi-page systematic-review tables are still not reconstructed reliably. The current Claude rescue path receives detected table snapshots, extracted markdown table blocks, and the reference section, not the full PDF, so it can inherit upstream table-reconstruction errors.
+- Rotated multi-page systematic-review tables are still not reconstructed reliably. The Claude rescue path now prefers the full source PDF, but very large PDFs can still fall back to extracted table evidence and the model can still struggle with ambiguous continuation pages.
 
 ### 🧠 Cortex Intelligence Intake + Review Loop
 
@@ -44,6 +54,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fixed intel extraction crashes on list-valued evidence payloads.
 - Fixed mailbox attachment persistence so duplicate filenames no longer overwrite each other.
 - Fixed direct Cortex website callback handling so application-level JSON errors are treated as real delivery failures.
+- Fixed Study Miner local Ollama rescue for thinking-capable models such as `qwen3.5:35b-a3b` by disabling reasoning mode in the chat payload so JSON lands in `message.content` instead of an empty response.
+- Increased the local Ollama table-rescue output budget and tightened the JSON-only instruction so multi-page continuation tables are less likely to truncate before Cortex can parse them.
+- Fixed Study Miner reference parsing so local/cloud table rescue can link against bare extracted reference excerpts even when the `References` heading has already been stripped.
+- Added continuation-row cleanup in local table rescue so obvious measure-label spillover rows inherit the correct study, citation, and treatment context from the prior row.
+- Study Miner candidate review now includes `Select All` / `Deselect All` controls, and parse-evidence rendering is optional so row selection no longer forces the heaviest table/image UI to rebuild on every click.
+- Study Miner local rescue now runs a second full-PDF local reconciliation pass after the initial table extraction, using `qwen3.5:35b-a3b` to consolidate grouped study citations, recover missing references, and cross-check bibliography links against the whole review.
+- Study Miner now shows a local rescue log pane during Ollama runs so you can see the active model, rescue/reconciliation stages, candidate counts, and a short local output preview instead of only a spinner.
+- Study Miner CSV export now includes explicit bibliography reconciliation fields such as `reference_number`, `reference_match_method`, and `reference_validation`, and filters structural junk rows from the candidate table before export.
+- Fixed Study Miner table-scoped reconciliation so ref-matched local reconciliation rows snap back onto the provisional table groups instead of introducing new comparison-label groups into the export.
 
 ### ⚙️ Local Queue Worker Harness
 

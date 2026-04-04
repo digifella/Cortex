@@ -144,6 +144,7 @@ def _parse_markdown_tables(text: str) -> List[Dict[str, Any]]:
         if "|" not in lines[idx]:
             idx += 1
             continue
+        block_start = idx
         block: List[str] = []
         while idx < len(lines) and "|" in lines[idx]:
             block.append(lines[idx])
@@ -159,7 +160,15 @@ def _parse_markdown_tables(text: str) -> List[Dict[str, Any]]:
             body_rows = body_rows[1:]
         if not body_rows:
             continue
-        tables.append({"header": header, "rows": body_rows, "raw_lines": block})
+        tables.append(
+            {
+                "header": header,
+                "rows": body_rows,
+                "raw_lines": block,
+                "line_start": block_start,
+                "line_end": idx - 1,
+            }
+        )
     return tables
 
 
@@ -182,6 +191,36 @@ def _table_header_score(header: Sequence[str]) -> int:
         if _contains_phrase(joined, hint):
             score += 1
     return score
+
+
+def _clean_table_context_line(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    if "|" in raw and _split_table_row(raw):
+        return ""
+    return re.sub(r"\s+", " ", raw).strip()
+
+
+def _collect_table_context(lines: Sequence[str], line_start: int, line_end: int, *, max_lines: int = 4) -> Tuple[List[str], List[str]]:
+    before: List[str] = []
+    idx = max(0, int(line_start) - 1)
+    while idx >= 0 and len(before) < max_lines:
+        cleaned = _clean_table_context_line(lines[idx])
+        if cleaned:
+            before.append(cleaned)
+        idx -= 1
+    before.reverse()
+
+    after: List[str] = []
+    idx = min(len(lines), int(line_end) + 1)
+    while idx < len(lines) and len(after) < max_lines:
+        cleaned = _clean_table_context_line(lines[idx])
+        if cleaned:
+            after.append(cleaned)
+        idx += 1
+
+    return before, after
 
 
 def _pick_citation_cell(header: Sequence[str], row: Sequence[str]) -> str:
@@ -258,6 +297,11 @@ def _reference_match_key(text: str) -> str:
 
 def _parse_reference_entries(text: str) -> List[Dict[str, Any]]:
     section = _references_section(text)
+    if not section:
+        raw_text = str(text or "").strip()
+        candidate_lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        numbered_lines = sum(1 for line in candidate_lines if _NUMBERED_REFERENCE_START_RE.match(line))
+        section = raw_text if numbered_lines >= 1 else ""
     if not section:
         return []
 
@@ -458,16 +502,30 @@ class ReviewMiningOptions:
 
 def extract_review_table_blocks(text: str, *, max_tables: int = 12) -> List[Dict[str, Any]]:
     blocks: List[Dict[str, Any]] = []
+    lines = str(text or "").splitlines()
     for idx, table in enumerate(_parse_markdown_tables(text), start=1):
         if idx > max_tables:
             break
         raw_lines = [str(line or "") for line in (table.get("raw_lines") or [])]
+        context_before, context_after = _collect_table_context(
+            lines,
+            int(table.get("line_start") or 0),
+            int(table.get("line_end") or 0),
+        )
+        context_parts: List[str] = []
+        if context_before:
+            context_parts.append("Before table:\n" + "\n".join(context_before))
+        if context_after:
+            context_parts.append("After table:\n" + "\n".join(context_after))
         blocks.append(
             {
                 "table_index": idx,
                 "header": [str(item or "") for item in (table.get("header") or [])],
                 "row_count": len(table.get("rows") or []),
                 "markdown": "\n".join(raw_lines).strip(),
+                "context_before": "\n".join(context_before).strip(),
+                "context_after": "\n".join(context_after).strip(),
+                "context_text": "\n\n".join(context_parts).strip()[:1600],
             }
         )
     return blocks

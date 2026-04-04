@@ -18,7 +18,7 @@ import unicodedata
 import subprocess
 import hashlib
 from datetime import datetime
-from typing import Any, List, Dict, Optional
+from typing import Any, Callable, List, Dict, Optional
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
@@ -45,13 +45,25 @@ from cortex_engine.research_resolve import (
     run_research_resolve,
 )
 from cortex_engine.review_study_miner import (
+    _NON_STUDY_ROW_LABELS,
+    _normalize_text,
+    _reference_number_pointers,
     ReviewMiningOptions,
     assess_review_documents,
     extract_review_reference_section,
     extract_review_table_blocks,
     mine_review_documents,
 )
+from cortex_engine.review_table_local_rescue import (
+    annotate_local_candidate_completeness,
+    local_table_rescue_available,
+    local_table_rescue_host,
+    merge_local_table_candidates,
+    run_local_table_reconciliation,
+    run_local_table_rescue,
+)
 from cortex_engine.review_table_rescue import anthropic_key_source, claude_table_rescue_available, run_claude_table_rescue
+from cortex_engine.url_ingestor import URLIngestor
 from cortex_engine.url_ingestor_ui import render_url_ingestor_ui
 
 # Set up logging
@@ -106,6 +118,29 @@ def _editor_records(value: Any) -> List[Dict[str, Any]]:
         except Exception:
             return []
     return []
+
+
+def _append_study_miner_local_log(message: str, *, placeholder=None) -> None:
+    text = str(message or "").strip()
+    if not text:
+        return
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    lines = list(st.session_state.get("study_miner_local_log_lines") or [])
+    lines.append(f"[{timestamp}] {text}")
+    st.session_state["study_miner_local_log_lines"] = lines[-80:]
+    if placeholder is not None:
+        try:
+            placeholder.code("\n".join(st.session_state["study_miner_local_log_lines"]), language="text")
+        except Exception:
+            pass
+
+
+def _render_study_miner_local_log(expanded: bool = False) -> None:
+    lines = list(st.session_state.get("study_miner_local_log_lines") or [])
+    if not lines:
+        return
+    with st.expander("Local Rescue Log", expanded=expanded):
+        st.code("\n".join(lines[-80:]), language="text")
 
 
 def _merge_research_editor_rows(editor_rows: List[Dict[str, Any]], citations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -170,15 +205,35 @@ def _research_unresolved_rows(unresolved: List[Dict[str, Any]]) -> List[Dict[str
 def _study_miner_candidate_rows(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     rows = []
     for item in candidates or []:
-        reference_number = str(item.get("reference_number") or "").strip()
-        reference_match_method = str(item.get("reference_match_method") or "").strip()
+        extras = dict(item.get("extra_fields") or {})
+        reference_number = str(item.get("reference_number") or extras.get("reference_number") or "").strip()
+        reference_match_method = str(item.get("reference_match_method") or extras.get("reference_match_method") or "").strip()
+        if not reference_number:
+            inline_numbers = _reference_number_pointers(
+                " | ".join(
+                    [
+                        str(extras.get("author_year") or "").strip(),
+                        str(item.get("raw_citation") or "").strip(),
+                        str(item.get("title") or "").strip(),
+                    ]
+                )
+            )
+            if inline_numbers:
+                reference_number = str(inline_numbers[0] or "").strip()
+                reference_match_method = reference_match_method or "table_inline_reference"
+        reference_validation = str(item.get("reference_validation") or "").strip()
         needs_review = bool(item.get("needs_review"))
         review_warning = str(item.get("review_warning") or "").strip()
+        group_parts = [str(extras.get("region") or "").strip(), str(extras.get("study") or "").strip()]
         rows.append(
             {
                 "keep": bool(item.get("meets_criteria")) and not needs_review,
                 "row_id": item.get("row_id"),
                 "source_review_title": item.get("source_review_title") or item.get("source_name", ""),
+                "table_index": int(extras.get("table_index") or 0),
+                "table_label": str(extras.get("table_label") or "").strip(),
+                "table_group": " / ".join(part for part in group_parts if part),
+                "table_citation": str(extras.get("author_year") or "").strip(),
                 "title": item.get("title", ""),
                 "authors": item.get("authors", ""),
                 "year": item.get("year", ""),
@@ -187,6 +242,9 @@ def _study_miner_candidate_rows(candidates: List[Dict[str, Any]]) -> List[Dict[s
                 "source_section": item.get("source_section", ""),
                 "matches": "yes" if item.get("meets_criteria") else "",
                 "score": int(item.get("relevance_score") or 0),
+                "reference_number": reference_number,
+                "reference_match_method": reference_match_method,
+                "reference_validation": reference_validation,
                 "reference_link": f"ref {reference_number} ({reference_match_method})" if reference_number and reference_match_method else "",
                 "needs_review": "yes" if needs_review else "",
                 "review_warning": review_warning,
@@ -194,7 +252,63 @@ def _study_miner_candidate_rows(candidates: List[Dict[str, Any]]) -> List[Dict[s
                 "outcome_matches": ", ".join(item.get("outcome_matches") or []),
             }
         )
-    return rows
+    return _study_miner_harmonize_group_labels(rows)
+
+
+def _is_structural_study_miner_candidate(item: Dict[str, Any]) -> bool:
+    extras = dict(item.get("extra_fields") or {})
+    texts = [
+        str(item.get("title") or ""),
+        str(item.get("raw_citation") or ""),
+        str(extras.get("study") or ""),
+        str(extras.get("author_year") or ""),
+    ]
+    normalized = " ".join(part for part in (_normalize_text(text) for text in texts) if part).strip()
+    if not normalized:
+        return False
+    if normalized in _NON_STUDY_ROW_LABELS:
+        return True
+    if normalized in {
+        "region study author year",
+        "study author year",
+        "author year",
+        "region study author year study design study type",
+    }:
+        return True
+    tokens = normalized.split()
+    structural_tokens = {
+        "region",
+        "study",
+        "author",
+        "authors",
+        "year",
+        "design",
+        "type",
+        "outcomes",
+        "outcome",
+        "population",
+        "treatment",
+        "scale",
+        "utility",
+        "values",
+        "source",
+        "follow",
+        "up",
+        "followup",
+        "assessment",
+        "measures",
+        "time",
+        "point",
+        "hrqol",
+        "qol",
+    }
+    if tokens and len(tokens) <= 12 and set(tokens).issubset(structural_tokens):
+        return True
+    return False
+
+
+def _filter_study_miner_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [dict(item) for item in candidates or [] if not _is_structural_study_miner_candidate(item)]
 
 
 def _study_miner_document_rows(documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -242,6 +356,107 @@ def _merge_study_miner_editor_rows(editor_rows: List[Dict[str, Any]], candidates
             base[key] = str(row.get(key) or "").strip()
         selected.append(base)
     return selected
+
+
+def _build_study_miner_research_payload(
+    candidates: List[Dict[str, Any]],
+    *,
+    check_open_access: bool,
+    enrich_sjr: bool,
+    unpaywall_email: str,
+) -> Dict[str, Any]:
+    return validate_research_resolve_input(
+        {
+            "citations": list(candidates or []),
+            "options": {
+                "check_open_access": bool(check_open_access),
+                "enrich_sjr": bool(enrich_sjr),
+                "unpaywall_email": str(unpaywall_email or "").strip(),
+            },
+        }
+    )
+
+
+def _run_study_miner_paper_retrieval(
+    *,
+    candidates: List[Dict[str, Any]],
+    db_root: Path,
+    resolver_options: Dict[str, Any],
+    ingest_options: Dict[str, Any],
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+    def _emit(message: str) -> None:
+        text = str(message or "").strip()
+        if text and progress_cb is not None:
+            progress_cb(text)
+
+    payload = _build_study_miner_research_payload(
+        candidates,
+        check_open_access=bool(resolver_options.get("check_open_access", True)),
+        enrich_sjr=bool(resolver_options.get("enrich_sjr", True)),
+        unpaywall_email=str(resolver_options.get("unpaywall_email") or "").strip(),
+    )
+
+    resolver_run_dir = Path(db_root) / "research_resolve" / time.strftime("%Y%m%d_%H%M%S")
+    resolver_run_dir.mkdir(parents=True, exist_ok=True)
+    _emit(f"Research Resolver: resolving {len(payload.get('citations') or [])} citation(s)")
+
+    resolver_output = run_research_resolve(
+        payload=payload,
+        run_dir=resolver_run_dir,
+        progress_cb=lambda pct, message, stage=None: _emit(
+            f"Research Resolver: {message}" + (f" [{stage}]" if stage else "")
+        ),
+    )
+
+    preferred_urls = build_research_preferred_url_list(list(resolver_output.get("resolved") or []))
+    _emit(f"Research Resolver: found {len(preferred_urls)} preferred URL(s) for retrieval")
+
+    url_results: List[Any] = []
+    url_csv_path = ""
+    url_json_path = ""
+    url_zip_bytes = b""
+    url_run_dir = None
+
+    if preferred_urls:
+        url_run_dir = Path(db_root) / "url_ingest" / time.strftime("%Y%m%d_%H%M%S")
+        url_run_dir.mkdir(parents=True, exist_ok=True)
+        ingestor = URLIngestor(url_run_dir, timeout=int(ingest_options.get("timeout_seconds") or 25))
+        _emit(f"URL Ingestor: retrieving {len(preferred_urls)} URL(s)")
+        url_results = ingestor.process_urls(
+            urls=preferred_urls,
+            convert_to_md=bool(ingest_options.get("convert_to_md", True)),
+            use_vision_for_md=bool(ingest_options.get("use_vision_for_md", False)),
+            textify_options=dict(ingest_options.get("textify_options") or {}),
+            capture_web_md_on_no_pdf=bool(ingest_options.get("capture_web_md_on_no_pdf", True)),
+            progress_cb=lambda done, total, message: _emit(f"URL Ingestor: {message} ({done}/{total})"),
+            event_cb=lambda message: _emit(f"URL Ingestor: {message}"),
+        )
+        csv_path, json_path = ingestor.build_reports(url_results)
+        url_csv_path = str(csv_path)
+        url_json_path = str(json_path)
+        url_zip_bytes = ingestor.build_zip_bytes(url_results, csv_path, json_path)
+
+    return {
+        "resolver_payload": payload,
+        "resolver_output": resolver_output,
+        "preferred_urls": preferred_urls,
+        "resolver_run_dir": str(resolver_run_dir),
+        "url_results": url_results,
+        "url_csv_path": url_csv_path,
+        "url_json_path": url_json_path,
+        "url_zip_bytes": url_zip_bytes,
+        "url_run_dir": str(url_run_dir) if url_run_dir else "",
+    }
+
+
+def _set_study_miner_keep_state(editor_rows: List[Dict[str, Any]], keep_value: bool) -> List[Dict[str, Any]]:
+    updated: List[Dict[str, Any]] = []
+    for row in editor_rows or []:
+        normalized = dict(row)
+        normalized["keep"] = bool(keep_value)
+        updated.append(normalized)
+    return updated
 
 
 def _study_miner_stats_rows(stats: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -308,6 +523,9 @@ def _render_study_miner_parse_evidence(documents: List[Dict[str, Any]], candidat
                     if table_blocks:
                         for block in table_blocks[:4]:
                             st.markdown(f"Table {int(block.get('table_index') or 0)} • {int(block.get('row_count') or 0)} row(s)")
+                            if str(block.get("context_text") or "").strip():
+                                st.caption("Nearby table context")
+                                st.code(str(block.get("context_text") or ""), language="markdown")
                             st.code(str(block.get("markdown") or ""), language="markdown")
                     else:
                         st.info("No markdown table block detected in extracted review text.")
@@ -324,9 +542,11 @@ def _render_study_miner_parse_evidence(documents: List[Dict[str, Any]], candidat
 
 
 def _study_miner_candidate_key(item: Dict[str, Any]) -> str:
+    extras = dict(item.get("extra_fields") or {})
     return " | ".join(
         [
             str(item.get("source_review") or item.get("source_name") or "").strip().lower(),
+            str(extras.get("table_index") or "").strip(),
             str(item.get("doi") or "").strip().lower(),
             re.sub(r"\s+", " ", str(item.get("title") or "").strip().lower()),
             re.sub(r"\s+", " ", str(item.get("authors") or "").strip().lower()),
@@ -334,6 +554,464 @@ def _study_miner_candidate_key(item: Dict[str, Any]) -> str:
             str(item.get("reference_number") or "").strip(),
         ]
     )
+
+
+def _annotate_study_miner_slice_candidates(
+    candidates: List[Dict[str, Any]],
+    *,
+    table_index: int,
+    table_label: str,
+) -> List[Dict[str, Any]]:
+    annotated: List[Dict[str, Any]] = []
+    normalized_table_index = int(table_index or 0)
+    normalized_table_label = str(table_label or "").strip()
+    for item in candidates or []:
+        candidate = dict(item)
+        extras = dict(candidate.get("extra_fields") or {})
+        extras["table_index"] = normalized_table_index
+        extras["table_label"] = normalized_table_label
+        candidate["extra_fields"] = extras
+        annotated.append(candidate)
+    return annotated
+
+
+def _study_miner_group_looks_like_citation(study_value: str) -> bool:
+    text = str(study_value or "").strip()
+    normalized = _normalize_text(text)
+    if not normalized:
+        return False
+    if re.search(r"\b(?:19|20)\d{2}\b", text) and re.search(r"\[\d{1,3}\]", text):
+        return True
+    if " et al" in normalized:
+        return True
+    if normalized.startswith("clinicaltrials gov"):
+        return True
+    return False
+
+
+def _study_miner_candidate_reference_key(item: Dict[str, Any]) -> str:
+    extras = dict(item.get("extra_fields") or {})
+    reference_number = str(item.get("reference_number") or extras.get("reference_number") or "").strip()
+    return " | ".join(
+        [
+            _normalize_text(str(item.get("source_review") or item.get("source_name") or "")),
+            str(extras.get("table_index") or "").strip(),
+            reference_number,
+            "" if reference_number else _normalize_text(str(item.get("raw_citation") or item.get("title") or "")),
+        ]
+    )
+
+
+def _study_miner_candidate_score(item: Dict[str, Any]) -> int:
+    extras = dict(item.get("extra_fields") or {})
+    score = int(item.get("relevance_score") or 0)
+    for field_name in ("reference_number", "title", "authors", "year"):
+        if str(item.get(field_name) or "").strip():
+            score += 1
+    for field_name in (
+        "study_design",
+        "patient_population",
+        "treatment",
+        "followup_times_assessed",
+        "assessment_method",
+        "mapped_utility_measure",
+    ):
+        if str(extras.get(field_name) or "").strip():
+            score += 1
+    source_section = str(item.get("source_section") or "").strip()
+    if "local_rescue" in source_section:
+        score += 3
+    if "local_reconciliation" in source_section:
+        score += 1
+    if str(extras.get("table_index") or "").strip():
+        score += 1
+    if str(extras.get("author_year") or "").strip().find("[") >= 0:
+        score += 1
+    if _study_miner_group_looks_like_citation(str(extras.get("study") or "")):
+        score -= 4
+    else:
+        score += 2
+    return score
+
+
+def _merge_study_miner_candidate_records(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(existing)
+    preferred = incoming if _study_miner_candidate_score(incoming) > _study_miner_candidate_score(merged) else merged
+    fallback = merged if preferred is incoming else incoming
+
+    for field_name in (
+        "source_section",
+        "reference_match_method",
+        "reference_validation",
+        "review_warning",
+    ):
+        values: List[str] = []
+        for raw in (merged.get(field_name, ""), incoming.get(field_name, "")):
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            for part in [piece.strip() for piece in re.split(r"\s*;\s*|\s*,\s*", text) if piece.strip()]:
+                if part not in values:
+                    values.append(part)
+        merged[field_name] = "; ".join(values)
+
+    for field_name in ("needs_review", "meets_criteria"):
+        merged[field_name] = bool(merged.get(field_name)) or bool(incoming.get(field_name))
+    merged["relevance_score"] = max(int(merged.get("relevance_score") or 0), int(incoming.get("relevance_score") or 0))
+    merged["design_matches"] = sorted(dict.fromkeys(list(merged.get("design_matches") or []) + list(incoming.get("design_matches") or [])))
+    merged["outcome_matches"] = sorted(dict.fromkeys(list(merged.get("outcome_matches") or []) + list(incoming.get("outcome_matches") or [])))
+
+    for field_name in (
+        "title",
+        "authors",
+        "year",
+        "doi",
+        "journal",
+        "raw_citation",
+        "raw_excerpt",
+        "reference_number",
+        "source_review",
+        "source_name",
+        "source_review_title",
+    ):
+        merged[field_name] = preferred.get(field_name) or fallback.get(field_name) or merged.get(field_name)
+
+    merged["row_id"] = preferred.get("row_id") or fallback.get("row_id") or merged.get("row_id")
+
+    extras = dict(fallback.get("extra_fields") or {})
+    preferred_extras = dict(preferred.get("extra_fields") or {})
+    for field_name in (
+        "region",
+        "study",
+        "author_year",
+        "study_design",
+        "patient_population",
+        "treatment",
+        "followup_times_assessed",
+        "assessment_method",
+        "scale",
+        "baseline_mean_sd",
+        "mean_change_last_followup_sd",
+        "mapped_utility_measure",
+        "table_index",
+        "table_label",
+        "source_review",
+        "source_review_title",
+        "source_doc_id",
+    ):
+        extras[field_name] = preferred_extras.get(field_name) or extras.get(field_name) or ""
+    merged["extra_fields"] = extras
+    return merged
+
+
+def _dedupe_study_miner_candidates_by_table_reference(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    index_by_key: Dict[str, int] = {}
+    for item in candidates or []:
+        candidate = dict(item)
+        key = _study_miner_candidate_reference_key(candidate)
+        if not key.strip(" |"):
+            deduped.append(candidate)
+            continue
+        existing_idx = index_by_key.get(key)
+        if existing_idx is None:
+            deduped.append(candidate)
+            index_by_key[key] = len(deduped) - 1
+            continue
+        deduped[existing_idx] = _merge_study_miner_candidate_records(deduped[existing_idx], candidate)
+    return _filter_study_miner_candidates(deduped)
+
+
+def _study_label_is_generic_bucket(study_value: str) -> bool:
+    normalized = _normalize_text(study_value)
+    return normalized in {"cua", "cea", "tto", "all tables", "table block", "global", "us", "uk", "nr"}
+
+
+def _study_label_looks_specific_trial(study_value: str) -> bool:
+    study_text = str(study_value or "").strip()
+    normalized = _normalize_text(study_text)
+    if not normalized or _study_label_is_generic_bucket(study_text) or _study_miner_group_looks_like_citation(study_text):
+        return False
+    if re.search(r"\d", study_text):
+        return True
+    upper_ratio = sum(1 for ch in study_text if ch.isupper()) / max(1, sum(1 for ch in study_text if ch.isalpha()))
+    return upper_ratio >= 0.45 or len(normalized.split()) >= 2
+
+
+def _normalize_study_miner_study_label(study_value: str) -> str:
+    study_text = re.sub(r"\s+", " ", str(study_value or "").strip())
+    if not study_text:
+        return ""
+
+    def _normalize_token(token: str) -> str:
+        alpha_chars = [ch for ch in token if ch.isalpha()]
+        if len(alpha_chars) < 6:
+            return token
+        upper_ratio = sum(1 for ch in alpha_chars if ch.isupper()) / max(1, len(alpha_chars))
+        if upper_ratio < 0.75:
+            return token
+        return re.sub(r"([A-Z])\1+", r"\1", token)
+
+    return " ".join(_normalize_token(part) for part in study_text.split())
+
+
+def _study_miner_split_group(row: Dict[str, Any]) -> tuple[str, str]:
+    region = str(row.get("region") or "").strip()
+    study = str(row.get("study") or "").strip()
+    if region or study:
+        return region, study
+    group_text = str(row.get("table_group") or "").strip()
+    if " / " in group_text:
+        region_part, study_part = group_text.split(" / ", 1)
+        return region_part.strip(), study_part.strip()
+    return "", group_text
+
+
+def _study_miner_group_quality(study_value: str) -> int:
+    study_text = str(study_value or "").strip()
+    compact = re.sub(r"[^a-z0-9]+", "", _normalize_text(study_text))
+    score = len(compact)
+    if re.search(r"\d", study_text):
+        score += 6
+    if len(study_text.split()) >= 2:
+        score += 3
+    if _study_label_looks_specific_trial(study_text):
+        score += 4
+    return score
+
+
+def _study_miner_harmonize_group_labels(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized_rows = [dict(item) for item in rows or []]
+    group_refs: Dict[tuple[str, str, str], set[str]] = {}
+    label_lookup: Dict[tuple[str, str, str], str] = {}
+
+    for row in normalized_rows:
+        region, study = _study_miner_split_group(row)
+        normalized_study = _normalize_study_miner_study_label(study)
+        if region or normalized_study:
+            row["region"] = region
+            row["study"] = normalized_study or study
+            row["table_group"] = " / ".join(part for part in [region, row["study"]] if part)
+        key = (
+            str(row.get("source_review_title") or "").strip(),
+            _normalize_text(region),
+            _normalize_text(str(row.get("study") or study or "").strip()),
+        )
+        if not key[2]:
+            continue
+        label_lookup[key] = str(row.get("study") or study or "").strip()
+        reference_number = str(row.get("reference_number") or "").strip()
+        if reference_number:
+            group_refs.setdefault(key, set()).add(reference_number)
+
+    replacements: Dict[tuple[str, str, str], str] = {}
+    grouped_by_review_region: Dict[tuple[str, str], List[tuple[str, set[str], str]]] = {}
+    for key, refs in group_refs.items():
+        review_title, region_key, study_key = key
+        grouped_by_review_region.setdefault((review_title, region_key), []).append(
+            (study_key, refs, label_lookup.get(key, ""))
+        )
+
+    for (review_title, region_key), study_items in grouped_by_review_region.items():
+        for weak_key, weak_refs, weak_label in study_items:
+            weak_compact = re.sub(r"[^a-z0-9]+", "", weak_key)
+            if len(weak_compact) < 5:
+                continue
+            best_label = ""
+            best_score = -1
+            for strong_key, strong_refs, strong_label in study_items:
+                if strong_key == weak_key:
+                    continue
+                if not (weak_refs & strong_refs):
+                    continue
+                strong_compact = re.sub(r"[^a-z0-9]+", "", strong_key)
+                if not strong_compact.startswith(weak_compact):
+                    continue
+                if len(strong_compact) <= len(weak_compact):
+                    continue
+                score = _study_miner_group_quality(strong_label)
+                if score > best_score:
+                    best_score = score
+                    best_label = strong_label
+            if best_label:
+                replacements[(review_title, region_key, weak_key)] = best_label
+
+    if not replacements:
+        return normalized_rows
+
+    adjusted: List[Dict[str, Any]] = []
+    for row in normalized_rows:
+        region, study = _study_miner_split_group(row)
+        key = (
+            str(row.get("source_review_title") or "").strip(),
+            _normalize_text(region),
+            _normalize_text(study),
+        )
+        replacement = replacements.get(key)
+        if replacement:
+            row["region"] = region
+            row["study"] = replacement
+            row["table_group"] = " / ".join(part for part in [region, replacement] if part)
+        adjusted.append(row)
+    return adjusted
+
+
+def _study_miner_treatment_tokens(text: str) -> set[str]:
+    stopwords = {
+        "adult",
+        "adults",
+        "and",
+        "autologous",
+        "based",
+        "car",
+        "cell",
+        "cells",
+        "chemotherapy",
+        "clinical",
+        "general",
+        "health",
+        "hypothetical",
+        "in",
+        "line",
+        "lines",
+        "of",
+        "pathway",
+        "patients",
+        "population",
+        "prior",
+        "r",
+        "r",
+        "refractory",
+        "relapsed",
+        "salvage",
+        "study",
+        "systemic",
+        "therapy",
+        "treatment",
+        "trial",
+        "with",
+    }
+    return {
+        token
+        for token in _normalize_text(text).split()
+        if token and token not in stopwords and len(token) > 2
+    }
+
+
+def _study_miner_row_looks_economic(candidate: Dict[str, Any]) -> bool:
+    extras = dict(candidate.get("extra_fields") or {})
+    haystack = " | ".join(
+        [
+            str(extras.get("study_design") or ""),
+            str(extras.get("patient_population") or ""),
+            str(extras.get("treatment") or ""),
+            str(extras.get("assessment_method") or ""),
+            str(candidate.get("raw_excerpt") or ""),
+        ]
+    )
+    normalized = _normalize_text(haystack)
+    return any(
+        marker in normalized
+        for marker in (
+            "vignette",
+            "general adult population",
+            "hypothetical",
+            "tto",
+            "time trade off",
+            "disutility",
+        )
+    )
+
+
+def _study_miner_relabel_outlier_group_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
+    for item in candidates or []:
+        extras = dict(item.get("extra_fields") or {})
+        table_index = str(extras.get("table_index") or "").strip()
+        study = str(extras.get("study") or "").strip()
+        grouped.setdefault((table_index, _normalize_text(study)), []).append(dict(item))
+
+    adjusted: List[Dict[str, Any]] = []
+    for (_table_index, _study_key), group_items in grouped.items():
+        study_label = str(dict(group_items[0].get("extra_fields") or {}).get("study") or "").strip()
+        if len(group_items) < 3 or not _study_label_looks_specific_trial(study_label):
+            adjusted.extend(group_items)
+            continue
+
+        token_counts: Dict[str, int] = {}
+        supported_rows = 0
+        for item in group_items:
+            if _study_miner_row_looks_economic(item):
+                continue
+            extras = dict(item.get("extra_fields") or {})
+            tokens = _study_miner_treatment_tokens(str(extras.get("treatment") or ""))
+            if not tokens:
+                continue
+            supported_rows += 1
+            for token in tokens:
+                token_counts[token] = int(token_counts.get(token) or 0) + 1
+        dominant_tokens = {
+            token
+            for token, count in token_counts.items()
+            if count >= max(2, (supported_rows + 1) // 2)
+        }
+
+        for item in group_items:
+            candidate = dict(item)
+            extras = dict(candidate.get("extra_fields") or {})
+            author_year = str(extras.get("author_year") or candidate.get("raw_citation") or "").strip()
+            treatment_tokens = _study_miner_treatment_tokens(str(extras.get("treatment") or ""))
+            relabel_reason = ""
+            replacement_study = ""
+            if _study_miner_row_looks_economic(candidate):
+                relabel_reason = "row looks like economic/vignette evidence rather than the trial group"
+                assessment = _normalize_text(str(extras.get("assessment_method") or ""))
+                replacement_study = "TTO" if "tto" in assessment or "time trade off" in assessment else author_year
+            elif dominant_tokens and treatment_tokens and dominant_tokens.isdisjoint(treatment_tokens):
+                relabel_reason = "treatment does not match dominant trial-group therapy"
+                replacement_study = author_year
+
+            if relabel_reason and replacement_study:
+                extras["study"] = replacement_study
+                candidate["extra_fields"] = extras
+                candidate["needs_review"] = True
+                warning = str(candidate.get("review_warning") or "").strip()
+                candidate["review_warning"] = "; ".join(
+                    part for part in [warning, relabel_reason] if part
+                )
+            adjusted.append(candidate)
+
+    return _dedupe_study_miner_candidates_by_table_reference(adjusted)
+
+
+def _reassign_candidates_to_matching_table_slices(
+    candidates: List[Dict[str, Any]],
+    table_slices: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    slice_kind_by_index: Dict[int, str] = {
+        int(item.get("table_index") or 0): _classify_table_slice_kind(item)
+        for item in table_slices or []
+        if int(item.get("table_index") or 0) > 0
+    }
+    economic_slice_indices = [idx for idx, kind in slice_kind_by_index.items() if kind == "economic"]
+    if not economic_slice_indices:
+        return candidates
+    target_economic_index = min(economic_slice_indices)
+    target_economic_label = f"table {target_economic_index}"
+
+    adjusted: List[Dict[str, Any]] = []
+    for item in candidates or []:
+        candidate = dict(item)
+        extras = dict(candidate.get("extra_fields") or {})
+        table_index = int(extras.get("table_index") or 0)
+        current_kind = slice_kind_by_index.get(table_index, "")
+        candidate_is_economic = _study_miner_row_looks_economic(candidate) or _study_label_is_generic_bucket(str(extras.get("study") or ""))
+        if candidate_is_economic and current_kind and current_kind != "economic":
+            extras["table_index"] = target_economic_index
+            extras["table_label"] = target_economic_label
+            candidate["extra_fields"] = extras
+        adjusted.append(candidate)
+    return adjusted
 
 
 def _merge_study_miner_candidates(
@@ -365,10 +1043,302 @@ def _merge_study_miner_candidates(
         seen.add(key)
         merged.append(normalized)
         next_row_id += 1
+    return _filter_study_miner_candidates(merged)
+
+
+def _filter_base_table_candidates_after_local_rescue(
+    candidates: List[Dict[str, Any]],
+    *,
+    review_source_name: str,
+) -> List[Dict[str, Any]]:
+    filtered: List[Dict[str, Any]] = []
+    for item in candidates or []:
+        source_review = str(item.get("source_review") or item.get("source_name") or "").strip()
+        source_section = str(item.get("source_section") or "").strip()
+        if source_review == review_source_name and source_section == "table":
+            continue
+        filtered.append(dict(item))
+    return filtered
+
+
+def _study_miner_export_rows(editor_rows: List[Dict[str, Any]], candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    by_row_id = {str(item.get("row_id")): dict(item) for item in candidates or []}
+    exported: List[Dict[str, Any]] = []
+    for row in editor_rows or []:
+        row_id = str(row.get("row_id") or "").strip()
+        base = dict(by_row_id.get(row_id) or {})
+        extras = dict(base.get("extra_fields") or {})
+        structural_probe = {
+            "title": row.get("title", base.get("title", "")),
+            "raw_citation": base.get("raw_citation", row.get("table_citation", "")),
+            "extra_fields": {
+                "study": extras.get("study", ""),
+                "author_year": extras.get("author_year", row.get("table_citation", "")),
+            },
+        }
+        if _is_structural_study_miner_candidate(structural_probe):
+            continue
+        reference_number = str(row.get("reference_number", base.get("reference_number", extras.get("reference_number", ""))) or "").strip()
+        reference_match_method = str(
+            row.get("reference_match_method", base.get("reference_match_method", extras.get("reference_match_method", ""))) or ""
+        ).strip()
+        if not reference_number:
+            inline_numbers = _reference_number_pointers(
+                " | ".join(
+                    [
+                        str(row.get("table_citation", "")),
+                        str(base.get("raw_citation", "")),
+                        str(row.get("title", "")),
+                    ]
+                )
+            )
+            if inline_numbers:
+                reference_number = str(inline_numbers[0] or "").strip()
+                reference_match_method = reference_match_method or "table_inline_reference"
+        reference_link = str(row.get("reference_link", "") or "").strip()
+        if not reference_link and reference_number and reference_match_method:
+            reference_link = f"ref {reference_number} ({reference_match_method})"
+        exported.append(
+            {
+                "keep": bool(row.get("keep", True)),
+                "row_id": row.get("row_id"),
+                "source_review_title": row.get("source_review_title", ""),
+                "table_index": int(row.get("table_index") or extras.get("table_index") or 0),
+                "table_label": str(row.get("table_label") or extras.get("table_label") or "").strip(),
+                "table_group": row.get("table_group", ""),
+                "table_citation": row.get("table_citation", ""),
+                "title": row.get("title", ""),
+                "authors": row.get("authors", ""),
+                "year": row.get("year", ""),
+                "doi": row.get("doi", ""),
+                "journal": row.get("journal", ""),
+                "source_section": row.get("source_section", ""),
+                "matches": row.get("matches", ""),
+                "score": row.get("score", ""),
+                "reference_number": reference_number,
+                "reference_match_method": reference_match_method,
+                "reference_validation": row.get("reference_validation", base.get("reference_validation", "")),
+                "reference_link": reference_link,
+                "needs_review": row.get("needs_review", ""),
+                "review_warning": row.get("review_warning", ""),
+                "design_matches": row.get("design_matches", ""),
+                "outcome_matches": row.get("outcome_matches", ""),
+                "region": extras.get("region", ""),
+                "study": extras.get("study", ""),
+                "study_design": extras.get("study_design", ""),
+                "patient_population": extras.get("patient_population", ""),
+                "treatment": extras.get("treatment", ""),
+                "followup_times_assessed": extras.get("followup_times_assessed", ""),
+                "assessment_method": extras.get("assessment_method", ""),
+                "scale": extras.get("scale", ""),
+                "baseline_mean_sd": extras.get("baseline_mean_sd", ""),
+                "mean_change_last_followup_sd": extras.get("mean_change_last_followup_sd", ""),
+                "mapped_utility_measure": extras.get("mapped_utility_measure", ""),
+                "raw_citation": base.get("raw_citation", ""),
+                "raw_excerpt": base.get("raw_excerpt", ""),
+            }
+        )
+    return _study_miner_harmonize_group_labels(_dedupe_study_miner_export_rows(exported))
+
+
+def _study_miner_export_key(row: Dict[str, Any]) -> str:
+    reference_number = str(row.get("reference_number") or "").strip()
+    return " | ".join(
+        [
+            _normalize_text(str(row.get("source_review_title") or "")),
+            str(row.get("table_index") or "").strip(),
+            reference_number,
+            "" if reference_number else _normalize_text(str(row.get("table_citation") or row.get("title") or "")),
+        ]
+    )
+
+
+def _study_miner_export_score(row: Dict[str, Any]) -> int:
+    score = 0
+    for field_name in (
+        "reference_number",
+        "authors",
+        "year",
+        "study_design",
+        "patient_population",
+        "treatment",
+        "followup_times_assessed",
+        "assessment_method",
+        "baseline_mean_sd",
+        "mean_change_last_followup_sd",
+        "mapped_utility_measure",
+    ):
+        if str(row.get(field_name) or "").strip():
+            score += 1
+    if "[" in str(row.get("table_citation") or "") and "]" in str(row.get("table_citation") or ""):
+        score += 2
+    if "local_rescue" in str(row.get("source_section") or "").strip():
+        score += 2
+    if "local_reconciliation" in str(row.get("source_section") or "").strip():
+        score += 1
+    if str(row.get("table_index") or "").strip():
+        score += 1
+    if _study_miner_group_looks_like_citation(str(row.get("study") or row.get("table_group") or "")):
+        score -= 4
+    else:
+        score += 2
+    return score
+
+
+def _merge_study_miner_export_rows(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(existing)
+    for field_name in (
+        "source_section",
+        "reference_match_method",
+        "reference_validation",
+        "review_warning",
+        "design_matches",
+        "outcome_matches",
+    ):
+        values: List[str] = []
+        for raw in (merged.get(field_name, ""), incoming.get(field_name, "")):
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            for part in [piece.strip() for piece in re.split(r"\s*;\s*|\s*,\s*", text) if piece.strip()]:
+                if part not in values:
+                    values.append(part)
+        merged[field_name] = "; ".join(values)
+
+    for field_name in (
+        "keep",
+        "needs_review",
+    ):
+        merged[field_name] = bool(merged.get(field_name)) or bool(incoming.get(field_name))
+
+    preferred = incoming if _study_miner_export_score(incoming) > _study_miner_export_score(merged) else merged
+    fallback = merged if preferred is incoming else incoming
+
+    for field_name in (
+        "row_id",
+        "source_review_title",
+        "table_label",
+        "table_group",
+        "table_citation",
+        "title",
+        "authors",
+        "year",
+        "doi",
+        "journal",
+        "matches",
+        "score",
+        "reference_number",
+        "reference_link",
+        "region",
+        "study",
+        "study_design",
+        "patient_population",
+        "treatment",
+        "followup_times_assessed",
+        "assessment_method",
+        "scale",
+        "baseline_mean_sd",
+        "mean_change_last_followup_sd",
+        "mapped_utility_measure",
+        "raw_citation",
+        "raw_excerpt",
+    ):
+        merged[field_name] = str(preferred.get(field_name) or fallback.get(field_name) or "").strip()
+
+    merged["table_index"] = int(preferred.get("table_index") or fallback.get("table_index") or 0)
+
     return merged
 
 
-def _refresh_study_miner_stats(candidates: List[Dict[str, Any]], base_stats: Dict[str, Any], rescue_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _group_study_miner_export_rows_by_table(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[tuple[str, int, str], List[Dict[str, Any]]] = {}
+    for row in rows or []:
+        review_title = str(row.get("source_review_title") or "").strip()
+        table_index = int(row.get("table_index") or 0)
+        table_label = str(row.get("table_label") or "").strip()
+        key = (review_title, table_index, table_label)
+        grouped.setdefault(key, []).append(dict(row))
+    ordered: List[Dict[str, Any]] = []
+    for (review_title, table_index, table_label), items in sorted(
+        grouped.items(),
+        key=lambda item: (
+            _normalize_text(item[0][0]),
+            int(item[0][1] or 0),
+            _normalize_text(item[0][2]),
+        ),
+    ):
+        label = table_label or (f"table {table_index}" if table_index > 0 else "all tables")
+        ordered.append(
+            {
+                "source_review_title": review_title,
+                "table_index": table_index,
+                "table_label": label,
+                "rows": items,
+            }
+        )
+    return ordered
+
+
+def _study_miner_export_group_is_low_value(group: Dict[str, Any]) -> bool:
+    rows = [dict(item) for item in list(group.get("rows") or []) if isinstance(item, dict)]
+    if not rows:
+        return True
+    reference_count = sum(1 for item in rows if str(item.get("reference_number") or "").strip())
+    if reference_count > 0:
+        return False
+    return True
+
+
+def _filter_study_miner_export_groups(
+    groups: List[Dict[str, Any]],
+    *,
+    include_low_value: bool = False,
+) -> List[Dict[str, Any]]:
+    filtered: List[Dict[str, Any]] = []
+    for group in groups or []:
+        low_value = _study_miner_export_group_is_low_value(group)
+        enriched = dict(group)
+        enriched["low_value"] = low_value
+        if low_value and not include_low_value:
+            continue
+        filtered.append(enriched)
+    return filtered
+
+
+def _dedupe_study_miner_export_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    index_by_key: Dict[str, int] = {}
+    for row in rows or []:
+        normalized = dict(row)
+        if _is_structural_study_miner_candidate(
+            {
+                "title": normalized.get("title", ""),
+                "raw_citation": normalized.get("raw_citation", normalized.get("table_citation", "")),
+                "extra_fields": {
+                    "study": normalized.get("study", ""),
+                    "author_year": normalized.get("table_citation", ""),
+                },
+            }
+        ):
+            continue
+        if not str(normalized.get("table_group") or "").strip() and not str(normalized.get("reference_number") or "").strip():
+            continue
+        key = _study_miner_export_key(normalized)
+        existing_idx = index_by_key.get(key)
+        if existing_idx is None:
+            deduped.append(normalized)
+            index_by_key[key] = len(deduped) - 1
+            continue
+        deduped[existing_idx] = _merge_study_miner_export_rows(deduped[existing_idx], normalized)
+    return deduped
+
+
+def _refresh_study_miner_stats(
+    candidates: List[Dict[str, Any]],
+    base_stats: Dict[str, Any],
+    cloud_rescue_runs: List[Dict[str, Any]],
+    local_rescue_runs: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     stats = dict(base_stats or {})
     stats["candidates_total"] = len(candidates)
     stats["candidates_matching"] = sum(1 for item in candidates if item.get("meets_criteria"))
@@ -379,7 +1349,8 @@ def _refresh_study_miner_stats(candidates: List[Dict[str, Any]], base_stats: Dic
     )
     stats["needs_review"] = sum(1 for item in candidates if item.get("needs_review"))
     stats["reference_mismatches"] = sum(1 for item in candidates if str(item.get("reference_validation") or "") == "mismatch")
-    stats["cloud_rescue_candidates"] = sum(len(item.get("candidates") or []) for item in rescue_runs or [])
+    stats["local_rescue_candidates"] = sum(len(item.get("candidates") or []) for item in local_rescue_runs or [])
+    stats["cloud_rescue_candidates"] = sum(len(item.get("candidates") or []) for item in cloud_rescue_runs or [])
     return stats
 
 
@@ -410,6 +1381,202 @@ def _study_miner_cloud_rescue_recommended(result: Dict[str, Any], documents: Lis
     return False
 
 
+def _study_miner_table_slices(document: Dict[str, Any]) -> List[Dict[str, Any]]:
+    table_blocks = [dict(item) for item in list(document.get("table_blocks") or []) if isinstance(item, dict)]
+    table_snapshots = [dict(item) for item in list(document.get("table_snapshots") or []) if isinstance(item, dict)]
+    if not table_blocks:
+        return [{"label": "all tables", "table_index": 0, "table_blocks": [], "table_snapshots": table_snapshots}]
+
+    def _table_block_context_number(block: Dict[str, Any]) -> int:
+        haystack = " ".join(
+            [
+                str(block.get("context_before") or ""),
+                str(block.get("context_text") or ""),
+                str(block.get("context_after") or ""),
+            ]
+        )
+        match = re.search(r"\btable\s+(\d{1,3})\b", haystack, flags=re.IGNORECASE)
+        return int(match.group(1)) if match else 0
+
+    def _table_block_header_signature(block: Dict[str, Any]) -> str:
+        header = list(block.get("header") or [])
+        text = " | ".join(str(item or "") for item in header[:3])
+        return _normalize_text(text)
+
+    def _table_block_is_continuation(block: Dict[str, Any]) -> bool:
+        haystack = " ".join(
+            [
+                str(block.get("context_before") or ""),
+                str(block.get("context_text") or ""),
+                str(block.get("context_after") or ""),
+            ]
+        )
+        return "continued" in _normalize_text(haystack)
+
+    def _resolve_table_family_numbers(blocks: List[Dict[str, Any]]) -> List[int]:
+        numbers = [_table_block_context_number(block) for block in blocks]
+        signatures = [_table_block_header_signature(block) for block in blocks]
+        continuations = [_table_block_is_continuation(block) for block in blocks]
+        resolved = list(numbers)
+        for idx in range(len(blocks)):
+            if resolved[idx] > 0:
+                continue
+            if idx > 0 and resolved[idx - 1] > 0 and (
+                signatures[idx] == signatures[idx - 1] or continuations[idx]
+            ):
+                resolved[idx] = resolved[idx - 1]
+                continue
+            if idx + 1 < len(blocks) and resolved[idx + 1] > 0 and signatures[idx] == signatures[idx + 1]:
+                resolved[idx] = resolved[idx + 1]
+        next_synthetic = max([value for value in resolved if value > 0] + [0]) + 1
+        for idx in range(len(resolved)):
+            if resolved[idx] > 0:
+                continue
+            if idx > 0 and signatures[idx] and signatures[idx] == signatures[idx - 1]:
+                resolved[idx] = resolved[idx - 1]
+                continue
+            resolved[idx] = next_synthetic
+            next_synthetic += 1
+        return resolved
+
+    family_numbers = _resolve_table_family_numbers(table_blocks)
+    family_blocks: Dict[int, List[Dict[str, Any]]] = {}
+    for block, family_number in zip(table_blocks, family_numbers):
+        family_blocks.setdefault(int(family_number), []).append(dict(block))
+
+    slices: List[Dict[str, Any]] = []
+    for family_number, blocks in family_blocks.items():
+        block_indices = {int(item.get("table_index") or 0) for item in blocks}
+        block_snapshots = [
+            dict(item)
+            for item in table_snapshots
+            if int(item.get("table_index") or 0) in block_indices or int(item.get("table_index") or 0) == family_number
+        ]
+        label = f"table {family_number}" if family_number > 0 else "table block"
+        slices.append(
+            {
+                "label": label,
+                "table_index": int(family_number),
+                "block_count": len(blocks),
+                "source_block_indices": sorted(block_indices),
+                "table_blocks": blocks,
+                "table_snapshots": block_snapshots,
+            }
+        )
+    if not slices:
+        return [{"label": "all tables", "table_index": 0, "table_blocks": table_blocks, "table_snapshots": table_snapshots}]
+    return slices
+
+
+def _estimate_slice_page_numbers(pdf_path: str, table_slices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized_slices = [dict(item) for item in table_slices or []]
+    if not normalized_slices:
+        return []
+    if not str(pdf_path or "").strip().lower().endswith(".pdf"):
+        return normalized_slices
+    if any(list(item.get("table_snapshots") or []) for item in normalized_slices):
+        return normalized_slices
+
+    try:
+        import fitz
+
+        with fitz.open(str(pdf_path)) as doc:
+            total_pages = int(len(doc) or 0)
+    except Exception:
+        return normalized_slices
+
+    if total_pages <= 0:
+        return normalized_slices
+
+    total_weight = sum(max(1, int(item.get("block_count") or len(list(item.get("table_blocks") or [])) or 1)) for item in normalized_slices)
+    allow_overlap = len(normalized_slices) == 1
+    consumed = 0
+    for idx, item in enumerate(normalized_slices):
+        weight = max(1, int(item.get("block_count") or len(list(item.get("table_blocks") or [])) or 1))
+        start_ratio = consumed / float(total_weight)
+        consumed += weight
+        end_ratio = consumed / float(total_weight)
+        start_page = int(start_ratio * total_pages) + 1
+        end_page = max(start_page, int((end_ratio * total_pages) + 0.9999))
+        if allow_overlap and idx > 0:
+            start_page = max(1, start_page - 1)
+        if allow_overlap and idx < len(normalized_slices) - 1:
+            end_page = min(total_pages, end_page + 1)
+        item["heuristic_page_numbers"] = list(range(start_page, min(total_pages, end_page) + 1))
+    return normalized_slices
+
+
+def _slice_has_explicit_table_context(table_slice: Dict[str, Any]) -> bool:
+    table_index = int(table_slice.get("table_index") or 0)
+    if table_index <= 0:
+        return True
+    pattern = re.compile(rf"\btable\s+{table_index}\b", flags=re.IGNORECASE)
+    for block in list(table_slice.get("table_blocks") or []):
+        haystack = " ".join(
+            [
+                str(block.get("context_before") or ""),
+                str(block.get("context_text") or ""),
+                str(block.get("context_after") or ""),
+            ]
+        )
+        if pattern.search(haystack):
+            return True
+    return False
+
+
+def _classify_table_slice_kind(table_slice: Dict[str, Any]) -> str:
+    context_text = " ".join(
+        " ".join(
+            [
+                str(block.get("context_before") or ""),
+                str(block.get("context_text") or ""),
+                str(block.get("context_after") or ""),
+            ]
+        )
+        for block in list(table_slice.get("table_blocks") or [])
+    )
+    header_text = " ".join(
+        " ".join(str(item or "") for item in list(block.get("header") or []))
+        for block in list(table_slice.get("table_blocks") or [])
+    )
+    normalized_context = _normalize_text(context_text)
+    normalized_headers = _normalize_text(header_text)
+    if any(
+        marker in normalized_context
+        for marker in (
+            "economic studies",
+            "hta report",
+            "hta reports",
+            "cost utility",
+            "cost effectiveness",
+        )
+    ) or any(
+        marker in normalized_headers
+        for marker in (
+            "cua",
+            "cea",
+            "tto",
+            "source of utility values",
+            "utility values reported",
+            "utility values in remission",
+        )
+    ):
+        return "economic"
+    if any(marker in normalized_context for marker in ("hrqol", "quality of life")) or any(
+        marker in normalized_headers
+        for marker in (
+            "fact",
+            "eortc",
+            "sf 36",
+            "eq 5d",
+            "author year",
+            "utilities",
+        )
+    ):
+        return "hrqol"
+    return ""
+
+
 def _run_study_miner_cloud_rescue(
     result: Dict[str, Any],
     documents: List[Dict[str, Any]],
@@ -429,6 +1596,7 @@ def _run_study_miner_cloud_rescue(
             table_snapshots=list(document.get("table_snapshots") or []),
             table_blocks=list(document.get("table_blocks") or []),
             references_text=extract_review_reference_section(str(document.get("text") or "")),
+            pdf_path=str(document.get("file_path") or ""),
         )
         rescue_runs.append(
             {
@@ -448,7 +1616,212 @@ def _run_study_miner_cloud_rescue(
     updated_result["candidates"] = merged_candidates
     updated_result["cloud_rescue_runs"] = rescue_runs
     updated_result["cloud_rescue_attempted"] = True
-    updated_result["stats"] = _refresh_study_miner_stats(merged_candidates, dict(result.get("stats") or {}), rescue_runs)
+    updated_result["stats"] = _refresh_study_miner_stats(
+        merged_candidates,
+        dict(result.get("stats") or {}),
+        rescue_runs,
+        list(updated_result.get("local_rescue_runs") or []),
+    )
+    return updated_result
+
+
+def _run_study_miner_local_rescue(
+    result: Dict[str, Any],
+    documents: List[Dict[str, Any]],
+    *,
+    design_query: str,
+    outcome_query: str,
+    model: str,
+    log_callback: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+    rescue_runs: List[Dict[str, Any]] = []
+    merged_candidates = list(result.get("candidates") or [])
+    for document in documents:
+        if not bool(document.get("confirm_review")):
+            continue
+        review_name = str(document.get("review_title") or document.get("source_name") or "Review").strip()
+        references_text = extract_review_reference_section(str(document.get("text") or ""))
+        table_slices = _estimate_slice_page_numbers(
+            str(document.get("file_path") or "").strip(),
+            _study_miner_table_slices(document),
+        )
+        explicit_table_slices = [dict(item) for item in table_slices if _slice_has_explicit_table_context(item)]
+        if explicit_table_slices:
+            table_slices = explicit_table_slices
+        slice_results: List[Dict[str, Any]] = []
+        pdf_path = str(document.get("file_path") or "").strip()
+        for table_slice in table_slices:
+            slice_label = str(table_slice.get("label") or "table block").strip()
+            table_index = int(table_slice.get("table_index") or 0)
+            if log_callback:
+                log_callback(f"{review_name}: starting local table rescue for {slice_label} with model `{model}`")
+            rescue_result = run_local_table_rescue(
+                review_title=review_name,
+                design_query=design_query,
+                outcome_query=outcome_query,
+                table_snapshots=list(table_slice.get("table_snapshots") or []),
+                table_blocks=list(table_slice.get("table_blocks") or []),
+                references_text=references_text,
+                pdf_path=pdf_path,
+                page_numbers=list(table_slice.get("heuristic_page_numbers") or []),
+                model=model,
+            )
+            rescue_candidates = _annotate_study_miner_slice_candidates(
+                list(rescue_result.get("candidates") or []),
+                table_index=table_index,
+                table_label=slice_label,
+            )
+            rescue_result = {
+                **rescue_result,
+                "candidates": rescue_candidates,
+            }
+            if log_callback:
+                log_callback(
+                    f"{review_name}: {slice_label} table pass returned {len(rescue_result.get('candidates') or [])} grouped candidate(s) across "
+                    f"{len(list(rescue_result.get('pages_used') or []))} page(s)"
+                )
+            final_local_result = rescue_result
+            if pdf_path.lower().endswith(".pdf") and list(rescue_result.get("candidates") or []):
+                if log_callback:
+                    log_callback(f"{review_name}: starting full-PDF reconciliation for {slice_label}")
+                reconciliation_result = run_local_table_reconciliation(
+                    review_title=review_name,
+                    design_query=design_query,
+                    outcome_query=outcome_query,
+                    provisional_candidates=list(rescue_result.get("candidates") or []),
+                    references_text=references_text,
+                    review_text=str(document.get("text") or ""),
+                    pdf_path=pdf_path,
+                    page_numbers=list(rescue_result.get("pages_used") or []),
+                    preserve_group_labels=True,
+                    model=model,
+                )
+                reconciliation_candidates = _annotate_study_miner_slice_candidates(
+                    list(reconciliation_result.get("candidates") or []),
+                    table_index=table_index,
+                    table_label=slice_label,
+                )
+                reconciliation_result = {
+                    **reconciliation_result,
+                    "candidates": reconciliation_candidates,
+                }
+                if log_callback:
+                    log_callback(
+                        f"{review_name}: {slice_label} reconciliation returned {len(reconciliation_result.get('candidates') or [])} candidate(s) across "
+                        f"{len(list(reconciliation_result.get('pages_used') or []))} page(s)"
+                    )
+                if list(reconciliation_result.get("candidates") or []):
+                    merged_local_candidates = merge_local_table_candidates(
+                        list(rescue_result.get("candidates") or []),
+                        list(reconciliation_result.get("candidates") or []),
+                    )
+                    final_local_result = {
+                        **reconciliation_result,
+                        "candidates": merged_local_candidates,
+                        "provisional_candidates": list(rescue_result.get("candidates") or []),
+                        "reconciliation_candidates": list(reconciliation_result.get("candidates") or []),
+                        "reconciled_with_full_pdf": True,
+                        "reconciliation_warnings": list(reconciliation_result.get("warnings") or []),
+                        "reconciliation_pages_used": list(reconciliation_result.get("pages_used") or []),
+                    }
+                else:
+                    final_local_result = {
+                        **rescue_result,
+                        "reconciled_with_full_pdf": False,
+                        "reconciliation_warnings": list(reconciliation_result.get("warnings") or []),
+                    }
+                    if log_callback:
+                        log_callback(f"{review_name}: {slice_label} reconciliation did not add candidates; keeping table-pass result")
+            slice_results.append(
+                {
+                    **final_local_result,
+                    "slice_label": slice_label,
+                    "table_index": table_index,
+                }
+            )
+        merged_local_candidates = merge_local_table_candidates(*(list(item.get("candidates") or []) for item in slice_results))
+        merged_local_candidates = _reassign_candidates_to_matching_table_slices(
+            merged_local_candidates,
+            table_slices,
+        )
+        merged_local_candidates = _study_miner_relabel_outlier_group_candidates(merged_local_candidates)
+        merged_local_candidates = annotate_local_candidate_completeness(
+            merged_local_candidates,
+            references_text=references_text,
+        )
+        merged_local_candidates = _dedupe_study_miner_candidates_by_table_reference(merged_local_candidates)
+        final_local_result = {
+            "provider": "ollama",
+            "model": model,
+            "used_page_images": any(bool(item.get("used_page_images")) for item in slice_results),
+            "pages_used": sorted(
+                {
+                    int(page)
+                    for item in slice_results
+                    for page in list(item.get("pages_used") or [])
+                    if int(page or 0) > 0
+                }
+            ),
+            "candidates": merged_local_candidates,
+            "warnings": [warning for item in slice_results for warning in list(item.get("warnings") or [])],
+            "raw_response": "\n\n".join(
+                str(item.get("raw_response") or "").strip()
+                for item in slice_results
+                if str(item.get("raw_response") or "").strip()
+            ),
+            "provisional_candidates": [candidate for item in slice_results for candidate in list(item.get("provisional_candidates") or item.get("candidates") or [])],
+            "reconciliation_candidates": [candidate for item in slice_results for candidate in list(item.get("reconciliation_candidates") or [])],
+            "reconciled_with_full_pdf": any(bool(item.get("reconciled_with_full_pdf")) for item in slice_results),
+            "reconciliation_warnings": [warning for item in slice_results for warning in list(item.get("reconciliation_warnings") or [])],
+            "reconciliation_pages_used": sorted(
+                {
+                    int(page)
+                    for item in slice_results
+                    for page in list(item.get("reconciliation_pages_used") or [])
+                    if int(page or 0) > 0
+                }
+            ),
+            "slice_runs": slice_results,
+        }
+        if log_callback:
+            review_needed = sum(1 for item in merged_local_candidates if item.get("needs_review"))
+            log_callback(
+                f"{review_name}: merged local result now has {len(merged_local_candidates)} candidate(s); "
+                f"{review_needed} flagged for review"
+            )
+        raw_preview = str(final_local_result.get("raw_response") or "").strip()
+        if log_callback and raw_preview:
+            preview = raw_preview[:700].replace("\n", " ")
+            log_callback(f"{review_name}: local model output preview: {preview}")
+        rescue_runs.append(
+            {
+                "source_name": str(document.get("source_name") or "").strip(),
+                "review_title": str(document.get("review_title") or "").strip(),
+                **final_local_result,
+            }
+        )
+        merged_candidates = _merge_study_miner_candidates(
+            merged_candidates,
+            list(final_local_result.get("candidates") or []),
+            source_name=str(document.get("source_name") or "").strip(),
+            review_title=str(document.get("review_title") or "").strip(),
+            source_doc_id=str(document.get("doc_id") or ""),
+        )
+        merged_candidates = _filter_base_table_candidates_after_local_rescue(
+            merged_candidates,
+            review_source_name=str(document.get("source_name") or "").strip(),
+        )
+        merged_candidates = _dedupe_study_miner_candidates_by_table_reference(merged_candidates)
+    updated_result = dict(result)
+    updated_result["candidates"] = merged_candidates
+    updated_result["local_rescue_runs"] = rescue_runs
+    updated_result["local_rescue_attempted"] = True
+    updated_result["stats"] = _refresh_study_miner_stats(
+        merged_candidates,
+        dict(result.get("stats") or {}),
+        list(updated_result.get("cloud_rescue_runs") or []),
+        rescue_runs,
+    )
     return updated_result
 
 
@@ -3778,26 +5151,37 @@ def _render_study_miner_tab():
         result = st.session_state.get("study_miner_result") or {}
         candidates = list(result.get("candidates") or [])
         evidence_documents = list(result.get("documents") or st.session_state.get("study_miner_documents") or [])
-        cloud_recommended = bool(result) and _study_miner_cloud_rescue_recommended(result, evidence_documents)
-        auto_cloud_rescue = st.session_state.get("study_miner_auto_cloud_rescue", True)
+        rescue_recommended = bool(result) and _study_miner_cloud_rescue_recommended(result, evidence_documents)
+        default_local_model = st.session_state.get(
+            "study_miner_local_rescue_model",
+            os.environ.get("CORTEX_REVIEW_TABLE_OLLAMA_MODEL", "qwen3.5:35b-a3b"),
+        )
+        auto_local_rescue = st.session_state.get("study_miner_auto_local_rescue", True)
+        local_available = local_table_rescue_available()
         if (
             result
-            and cloud_recommended
-            and auto_cloud_rescue
-            and claude_table_rescue_available()
-            and not bool(result.get("cloud_rescue_attempted"))
+            and rescue_recommended
+            and auto_local_rescue
+            and local_available
+            and not bool(result.get("local_rescue_attempted"))
         ):
-            with st.spinner("Local parse looks confused. Running Claude Sonnet table rescue..."):
-                updated_result = _run_study_miner_cloud_rescue(
+            auto_log_placeholder = st.empty()
+            st.session_state["study_miner_local_log_lines"] = []
+            _append_study_miner_local_log(f"Auto local rescue queued with model `{default_local_model}`", placeholder=auto_log_placeholder)
+            with st.spinner("Local parse looks confused. Running Ollama table rescue..."):
+                updated_result = _run_study_miner_local_rescue(
                     result,
                     evidence_documents,
                     design_query=design_query,
                     outcome_query=outcome_query,
+                    model=default_local_model,
+                    log_callback=lambda message: _append_study_miner_local_log(message, placeholder=auto_log_placeholder),
                 )
             st.session_state["study_miner_result"] = updated_result
             st.session_state["study_miner_editor_rows"] = _study_miner_candidate_rows(updated_result.get("candidates") or [])
             result = updated_result
             candidates = list(updated_result.get("candidates") or [])
+            rescue_recommended = bool(result) and _study_miner_cloud_rescue_recommended(result, evidence_documents)
         if candidates:
             st.divider()
             st.subheader("Mined Study Candidates")
@@ -3812,15 +5196,78 @@ def _render_study_miner_tab():
             if per_review:
                 with st.expander("Per-review mining summary", expanded=False):
                     st.dataframe(_study_miner_review_rows(per_review), use_container_width=True, hide_index=True)
-            _render_study_miner_parse_evidence(evidence_documents, candidates)
+            show_parse_evidence = st.checkbox(
+                "Show parse evidence",
+                value=st.session_state.get("study_miner_show_parse_evidence", False),
+                key="study_miner_show_parse_evidence",
+                help="Displays rendered table snapshots and extracted markdown. Keep this off while selecting rows to avoid slow reruns.",
+            )
+            if show_parse_evidence:
+                _render_study_miner_parse_evidence(evidence_documents, candidates)
+            else:
+                st.caption("Parse evidence is hidden to keep candidate selection responsive.")
+            _render_study_miner_local_log(expanded=False)
+
+            with st.expander("Local Table Rescue", expanded=False):
+                st.caption("Preferred fallback for multi-page continuation tables. Uses a local Ollama vision model on the actual table pages, then links the extracted rows back to references locally.")
+                st.checkbox(
+                    "Auto-run local Ollama rescue when the parse looks confused",
+                    value=True,
+                    key="study_miner_auto_local_rescue",
+                )
+                local_model = st.text_input(
+                    "Ollama vision model",
+                    value=default_local_model,
+                    key="study_miner_local_rescue_model",
+                )
+                st.caption(f"Ollama endpoint: `{local_table_rescue_host()}`")
+                if rescue_recommended:
+                    st.warning("This review looks like a continuation-table case. Local Ollama rescue is recommended.")
+                if not local_available:
+                    st.info("Ollama is not reachable. Start the local server and ensure a vision model such as `qwen3.5:35b-a3b` is available, then run local rescue.")
+                elif st.button("Run Local Table Rescue", use_container_width=True, key="study_miner_local_rescue_btn"):
+                    local_log_placeholder = st.empty()
+                    st.session_state["study_miner_local_log_lines"] = []
+                    _append_study_miner_local_log(f"Manual local rescue queued with model `{local_model}`", placeholder=local_log_placeholder)
+                    with st.spinner("Running Ollama table rescue..."):
+                        updated_result = _run_study_miner_local_rescue(
+                            result,
+                            evidence_documents,
+                            design_query=design_query,
+                            outcome_query=outcome_query,
+                            model=local_model,
+                            log_callback=lambda message: _append_study_miner_local_log(message, placeholder=local_log_placeholder),
+                        )
+                    st.session_state["study_miner_result"] = updated_result
+                    st.session_state["study_miner_editor_rows"] = _study_miner_candidate_rows(updated_result.get("candidates") or [])
+                    result = updated_result
+                    candidates = list(updated_result.get("candidates") or [])
+                    stats = updated_result["stats"]
+                    rescue_recommended = bool(result) and _study_miner_cloud_rescue_recommended(result, evidence_documents)
+                    st.success("Local table rescue candidates added to Study Miner.")
+
+                local_runs = list((st.session_state.get("study_miner_result") or {}).get("local_rescue_runs") or [])
+                if local_runs:
+                    for run in local_runs:
+                        warnings = list(run.get("warnings") or [])
+                        model_name = str(run.get("model") or "").strip()
+                        review_name = str(run.get("review_title") or run.get("source_name") or "Review").strip()
+                        st.markdown(f"**{review_name}** via `{model_name}`")
+                        pages_used = [int(page) for page in list(run.get("pages_used") or []) if int(page or 0) > 0]
+                        if pages_used:
+                            st.caption(f"Pages used: {', '.join(str(page) for page in pages_used)}")
+                        if bool(run.get("reconciled_with_full_pdf")):
+                            reconciliation_pages = [int(page) for page in list(run.get("reconciliation_pages_used") or []) if int(page or 0) > 0]
+                            st.caption("Full-PDF reconciliation: yes")
+                            if reconciliation_pages:
+                                st.caption(f"Reconciliation pages: {', '.join(str(page) for page in reconciliation_pages)}")
+                        if warnings:
+                            for warning in warnings:
+                                st.warning(warning)
+                        st.caption(f"{len(run.get('candidates') or [])} local candidate(s) returned.")
 
             with st.expander("Cloud Table Rescue", expanded=False):
-                st.caption("Paid Claude Sonnet fallback for rotated or multi-page review tables. Use this only when the local parser is visibly confused.")
-                st.checkbox(
-                    "Auto-run Claude rescue when the local parse looks confused",
-                    value=True,
-                    key="study_miner_auto_cloud_rescue",
-                )
+                st.caption("Optional paid fallback if the local rescue still misses rows. Use this only after trying the local LM Studio rescue.")
                 rescue_enabled = st.checkbox(
                     "Enable Claude Sonnet rescue for complex tables",
                     value=False,
@@ -3829,8 +5276,8 @@ def _render_study_miner_tab():
                 key_source = anthropic_key_source()
                 if key_source:
                     st.caption(f"Anthropic key source: `{key_source}`")
-                if cloud_recommended:
-                    st.warning("This review looks like a complex table case. Claude rescue is recommended.")
+                if rescue_recommended:
+                    st.warning("This review still looks like a complex table case. Claude rescue remains available as a secondary fallback.")
                 if not claude_table_rescue_available():
                     st.info("ANTHROPIC_API_KEY is not available to Streamlit. Put it in `.env`, export it before launch, or keep it in `worker/config.env`.")
                 elif rescue_enabled and st.button("Run Claude Table Rescue", use_container_width=True, key="study_miner_cloud_rescue_btn"):
@@ -3855,12 +5302,27 @@ def _render_study_miner_tab():
                         model_name = str(run.get("model") or "").strip()
                         review_name = str(run.get("review_title") or run.get("source_name") or "Review").strip()
                         st.markdown(f"**{review_name}** via `{model_name}`")
+                        st.caption(
+                            "Evidence mode: "
+                            + ("full attached PDF" if bool(run.get("used_full_pdf")) else "extracted tables only")
+                        )
                         if warnings:
                             for warning in warnings:
                                 st.warning(warning)
                         st.caption(f"{len(run.get('candidates') or [])} cloud candidate(s) returned.")
 
             editor_source = st.session_state.get("study_miner_editor_rows") or _study_miner_candidate_rows(candidates)
+            bulk_left, bulk_mid, bulk_right = st.columns([1, 1, 4])
+            with bulk_left:
+                if st.button("Select All", use_container_width=True, key="study_miner_select_all"):
+                    st.session_state["study_miner_editor_rows"] = _set_study_miner_keep_state(editor_source, True)
+                    st.rerun()
+            with bulk_mid:
+                if st.button("Deselect All", use_container_width=True, key="study_miner_deselect_all"):
+                    st.session_state["study_miner_editor_rows"] = _set_study_miner_keep_state(editor_source, False)
+                    st.rerun()
+            with bulk_right:
+                st.caption("Bulk selection updates the cached candidate table directly so you do not need to click through every row.")
             edited = st.data_editor(
                 editor_source,
                 use_container_width=True,
@@ -3870,6 +5332,10 @@ def _render_study_miner_tab():
                     "keep": st.column_config.CheckboxColumn("Keep", default=True),
                     "row_id": st.column_config.NumberColumn("Row", format="%d"),
                     "source_review_title": st.column_config.TextColumn("Review", width="medium"),
+                    "table_index": st.column_config.NumberColumn("Table", format="%d"),
+                    "table_label": st.column_config.TextColumn("Table slice", width="small"),
+                    "table_group": st.column_config.TextColumn("Table group", width="medium"),
+                    "table_citation": st.column_config.TextColumn("Table citation", width="medium"),
                     "title": st.column_config.TextColumn("Title / Citation", width="large"),
                     "authors": st.column_config.TextColumn("Authors", width="medium"),
                     "year": st.column_config.TextColumn("Year", width="small"),
@@ -3884,7 +5350,7 @@ def _render_study_miner_tab():
                     "design_matches": st.column_config.TextColumn("Design hits", width="medium"),
                     "outcome_matches": st.column_config.TextColumn("Outcome hits", width="medium"),
                 },
-                disabled=["row_id", "source_review_title", "source_section", "matches", "score", "reference_link", "needs_review", "review_warning", "design_matches", "outcome_matches"],
+                disabled=["row_id", "source_review_title", "table_index", "table_label", "table_group", "table_citation", "source_section", "matches", "score", "reference_link", "needs_review", "review_warning", "design_matches", "outcome_matches"],
             )
             editor_rows = _editor_records(edited)
             if editor_rows:
@@ -3894,6 +5360,89 @@ def _render_study_miner_tab():
             st.caption(f"{selected_count} candidate citation(s) selected.")
             if int(stats.get("needs_review") or 0) > 0:
                 st.warning("Some table rows were linked with inconsistencies or low confidence. Review those rows before sending them onward.")
+
+            export_rows = _study_miner_export_rows(editor_rows, candidates)
+            raw_grouped_export_rows = [
+                item
+                for item in _group_study_miner_export_rows_by_table(export_rows)
+                if int(item.get("table_index") or 0) > 0
+            ]
+            include_low_value_tables = st.checkbox(
+                "Include low-value table slices in exports",
+                value=False,
+                key="study_miner_include_low_value_tables",
+                help="Show table slices that produced no explicit reference numbers. These are usually low-value for bibliography reconciliation.",
+            )
+            grouped_export_rows = _filter_study_miner_export_groups(
+                raw_grouped_export_rows,
+                include_low_value=include_low_value_tables,
+            )
+            export_table_keys = {
+                (
+                    str(item.get("source_review_title") or "").strip(),
+                    int(item.get("table_index") or 0),
+                )
+                for item in grouped_export_rows
+            }
+            filtered_export_rows = [
+                dict(item)
+                for item in export_rows
+                if (
+                    str(item.get("source_review_title") or "").strip(),
+                    int(item.get("table_index") or 0),
+                )
+                in export_table_keys
+            ]
+            suppressed_groups = [
+                item
+                for item in raw_grouped_export_rows
+                if (
+                    str(item.get("source_review_title") or "").strip(),
+                    int(item.get("table_index") or 0),
+                )
+                not in export_table_keys
+            ]
+            export_col1, export_col2 = st.columns(2)
+            with export_col1:
+                if filtered_export_rows:
+                    import pandas as pd
+
+                    study_miner_csv = pd.DataFrame(filtered_export_rows).to_csv(index=False)
+                    st.download_button(
+                        "Download Study Miner CSV",
+                        data=study_miner_csv,
+                        file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_study_miner_export.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="study_miner_download_csv",
+                    )
+            with export_col2:
+                st.caption("CSV export includes explicit `table_index`, `table_label`, `reference_number`, `reference_match_method`, and reconciliation fields for bibliography lookup.")
+                if suppressed_groups and not include_low_value_tables:
+                    suppressed_labels = ", ".join(str(item.get("table_label") or "table").strip() for item in suppressed_groups)
+                    st.caption(f"Low-value table slices hidden by default: {suppressed_labels}")
+
+            if grouped_export_rows:
+                st.caption("Per-table CSV downloads use the detected table slices so you can inspect each table separately.")
+                table_download_columns = st.columns(min(3, max(1, len(grouped_export_rows))))
+                for idx, group in enumerate(grouped_export_rows):
+                    with table_download_columns[idx % len(table_download_columns)]:
+                        import pandas as pd
+
+                        group_csv = pd.DataFrame(group.get("rows") or []).to_csv(index=False)
+                        review_slug = re.sub(r"[^A-Za-z0-9]+", "_", str(group.get("source_review_title") or "review").strip()).strip("_") or "review"
+                        label_slug = re.sub(r"[^A-Za-z0-9]+", "_", str(group.get("table_label") or "table").strip()).strip("_") or "table"
+                        st.download_button(
+                            f"Download {group.get('table_label')} CSV",
+                            data=group_csv,
+                            file_name=(
+                                f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_{review_slug}_"
+                                f"{label_slug}_study_miner_export.csv"
+                            ),
+                            mime="text/csv",
+                            use_container_width=True,
+                            key=f"study_miner_download_csv_{idx}",
+                        )
 
             if st.button("Send Selected to Research Resolver", use_container_width=True, key="study_miner_send_to_resolver"):
                 selected_candidates = _merge_study_miner_editor_rows(editor_rows, candidates)
@@ -3906,37 +5455,157 @@ def _render_study_miner_tab():
                 st.session_state["research_editor_rows"] = build_research_preview_rows(selected_candidates)
                 st.success("Selected candidates copied into Research Resolver.")
 
+            with st.expander("Paper Retrieval", expanded=False):
+                st.caption("Resolve the selected Study Miner bibliography rows and immediately attempt OA PDF/web retrieval for each matched paper.")
+                retrieval_c1, retrieval_c2 = st.columns(2)
+                with retrieval_c1:
+                    retrieval_check_oa = st.checkbox(
+                        "Check Open Access via Unpaywall",
+                        value=bool(st.session_state.get("research_check_oa", True)),
+                        key="study_miner_retrieval_check_oa",
+                    )
+                    retrieval_enrich_sjr = st.checkbox(
+                        "Enrich journal rankings via SJR",
+                        value=bool(st.session_state.get("research_enrich_sjr", True)),
+                        key="study_miner_retrieval_enrich_sjr",
+                    )
+                    retrieval_unpaywall_email = st.text_input(
+                        "Unpaywall contact email",
+                        value=st.session_state.get("research_unpaywall_email", ""),
+                        key="study_miner_retrieval_unpaywall_email",
+                    )
+                with retrieval_c2:
+                    retrieval_convert_to_md = st.checkbox(
+                        "Convert retrieved PDFs to Markdown",
+                        value=True,
+                        key="study_miner_retrieval_convert_to_md",
+                    )
+                    retrieval_use_vision = st.checkbox(
+                        "Use vision during PDF->MD conversion",
+                        value=bool(st.session_state.get("url_ingestor_use_vision", False)),
+                        key="study_miner_retrieval_use_vision",
+                    )
+                    retrieval_capture_web = st.checkbox(
+                        "Capture web page as Markdown when PDF unavailable",
+                        value=True,
+                        key="study_miner_retrieval_capture_web",
+                    )
+                    retrieval_timeout_seconds = st.number_input(
+                        "Request timeout (seconds)",
+                        min_value=5,
+                        max_value=120,
+                        value=int(st.session_state.get("url_ingestor_timeout_seconds", 25) or 25),
+                        step=5,
+                        key="study_miner_retrieval_timeout_seconds",
+                    )
+
+                if retrieval_check_oa and not str(retrieval_unpaywall_email or "").strip():
+                    st.info("Open-access enrichment will be limited until an Unpaywall email is provided.")
+
+                if st.button(
+                    "Resolve + Retrieve Selected Papers",
+                    use_container_width=True,
+                    key="study_miner_retrieve_papers_btn",
+                    disabled=(selected_count == 0),
+                ):
+                    try:
+                        db_root = _resolve_db_root()
+                        selected_candidates = _merge_study_miner_editor_rows(editor_rows, candidates)
+                        retrieval_log_placeholder = st.empty()
+                        retrieval_log_lines: List[str] = []
+
+                        def _retrieval_log(message: str) -> None:
+                            stamp = time.strftime("%H:%M:%S")
+                            retrieval_log_lines.append(f"{stamp} {message}")
+                            if len(retrieval_log_lines) > 300:
+                                del retrieval_log_lines[:-300]
+                            retrieval_log_placeholder.text_area(
+                                "Paper retrieval log",
+                                value="\n".join(retrieval_log_lines),
+                                height=220,
+                                disabled=True,
+                            )
+
+                        with st.spinner("Resolving citations and retrieving papers..."):
+                            retrieval_output = _run_study_miner_paper_retrieval(
+                                candidates=selected_candidates,
+                                db_root=db_root,
+                                resolver_options={
+                                    "check_open_access": retrieval_check_oa,
+                                    "enrich_sjr": retrieval_enrich_sjr,
+                                    "unpaywall_email": retrieval_unpaywall_email,
+                                },
+                                ingest_options={
+                                    "convert_to_md": retrieval_convert_to_md,
+                                    "use_vision_for_md": retrieval_use_vision,
+                                    "capture_web_md_on_no_pdf": retrieval_capture_web,
+                                    "timeout_seconds": retrieval_timeout_seconds,
+                                    "textify_options": {"pdf_strategy": "hybrid"},
+                                },
+                                progress_cb=_retrieval_log,
+                            )
+
+                        st.session_state["research_parse_result"] = {
+                            "source_name": "Study Miner",
+                            "citations": retrieval_output.get("resolver_payload", {}).get("citations") or selected_candidates,
+                            "detected_fields": ["title", "authors", "year", "doi", "journal", "notes"],
+                            "warnings": [],
+                        }
+                        st.session_state["research_editor_rows"] = build_research_preview_rows(
+                            retrieval_output.get("resolver_payload", {}).get("citations") or selected_candidates
+                        )
+                        st.session_state["research_resolve_output"] = retrieval_output.get("resolver_output") or {}
+                        st.session_state["research_resolve_run_dir"] = str(retrieval_output.get("resolver_run_dir") or "")
+                        st.session_state["research_resolve_log_lines"] = list(retrieval_log_lines)
+                        st.session_state["url_ingestor_input"] = "\n".join(retrieval_output.get("preferred_urls") or [])
+                        st.session_state["url_ingestor_results"] = list(retrieval_output.get("url_results") or [])
+                        st.session_state["url_ingestor_csv_path"] = str(retrieval_output.get("url_csv_path") or "")
+                        st.session_state["url_ingestor_json_path"] = str(retrieval_output.get("url_json_path") or "")
+                        st.session_state["url_ingestor_zip_bytes"] = retrieval_output.get("url_zip_bytes") or b""
+                        st.session_state["url_ingestor_run_dir"] = str(retrieval_output.get("url_run_dir") or "")
+                        st.session_state["url_ingestor_event_log"] = list(retrieval_log_lines)
+                        st.success(
+                            f"Resolved {len((retrieval_output.get('resolver_output') or {}).get('resolved') or [])} citation(s) "
+                            f"and queued {len(retrieval_output.get('preferred_urls') or [])} URL(s) for retrieval."
+                        )
+                    except Exception as e:
+                        st.error(f"Paper retrieval failed: {e}")
+
             with st.expander("Mining stats", expanded=False):
                 st.dataframe(_study_miner_stats_rows(stats), use_container_width=True, hide_index=True)
-        elif result and cloud_recommended:
-            st.warning("The local parser looks confused on this review. Claude rescue is recommended.")
-            with st.expander("Cloud Table Rescue", expanded=True):
+        elif result and rescue_recommended:
+            st.warning("The local parser looks confused on this review. Local Ollama rescue is recommended.")
+            _render_study_miner_local_log(expanded=False)
+            with st.expander("Local Table Rescue", expanded=True):
                 st.checkbox(
-                    "Auto-run Claude rescue when the local parse looks confused",
+                    "Auto-run local Ollama rescue when the parse looks confused",
                     value=True,
-                    key="study_miner_auto_cloud_rescue",
+                    key="study_miner_auto_local_rescue_empty",
                 )
-                rescue_enabled = st.checkbox(
-                    "Enable Claude Sonnet rescue for complex tables",
-                    value=False,
-                    key="study_miner_cloud_rescue_enabled_empty",
+                local_model = st.text_input(
+                    "Ollama vision model",
+                    value=default_local_model,
+                    key="study_miner_local_rescue_model_empty",
                 )
-                key_source = anthropic_key_source()
-                if key_source:
-                    st.caption(f"Anthropic key source: `{key_source}`")
-                if not claude_table_rescue_available():
-                    st.info("ANTHROPIC_API_KEY is not available to Streamlit. Put it in `.env`, export it before launch, or keep it in `worker/config.env`.")
-                elif rescue_enabled and st.button("Run Claude Table Rescue", use_container_width=True, key="study_miner_cloud_rescue_btn_empty"):
-                    with st.spinner("Running Claude Sonnet table rescue..."):
-                        updated_result = _run_study_miner_cloud_rescue(
+                st.caption(f"Ollama endpoint: `{local_table_rescue_host()}`")
+                if not local_available:
+                    st.info("Ollama is not reachable. Start the local server and ensure a vision model is available, then run local rescue.")
+                elif st.button("Run Local Table Rescue", use_container_width=True, key="study_miner_local_rescue_btn_empty"):
+                    local_log_placeholder = st.empty()
+                    st.session_state["study_miner_local_log_lines"] = []
+                    _append_study_miner_local_log(f"Manual local rescue queued with model `{local_model}`", placeholder=local_log_placeholder)
+                    with st.spinner("Running Ollama table rescue..."):
+                        updated_result = _run_study_miner_local_rescue(
                             result,
                             evidence_documents,
                             design_query=design_query,
                             outcome_query=outcome_query,
+                            model=local_model,
+                            log_callback=lambda message: _append_study_miner_local_log(message, placeholder=local_log_placeholder),
                         )
                     st.session_state["study_miner_result"] = updated_result
                     st.session_state["study_miner_editor_rows"] = _study_miner_candidate_rows(updated_result.get("candidates") or [])
-                    st.success("Claude table rescue candidates added to Study Miner.")
+                    st.success("Local table rescue candidates added to Study Miner.")
         elif result:
             st.info("No candidate studies matched the confirmed review documents and current criteria.")
 

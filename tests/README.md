@@ -36,6 +36,12 @@ tests/
 
 ## What's Tested
 
+### Study Miner Full-Paper Regression Fixtures ✅
+- Stable CSV fixtures for the multi-table systematic review used during Study Miner rescue tuning
+- Invariants for Table 2/3/4 separation and bibliography-linked reference preservation
+- Guardrails so low-value later tables do not silently replace the main included-study tables during refactors
+- Fixture refresh helper: `python scripts/refresh_study_miner_full_paper_fixtures.py --source-dir /path/to/exports`
+
 ### Path Utilities (46 tests) ✅
 - Windows to WSL path conversion
 - Docker path detection and mounting
