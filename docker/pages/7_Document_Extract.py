@@ -325,6 +325,11 @@ def _combine_included_study_slice_runs(slice_runs: List[Dict[str, Any]], *, prov
     }
 
 
+def _included_study_slice_run_is_completed(slice_run: Dict[str, Any]) -> bool:
+    extraction = dict(slice_run.get("extraction") or {})
+    return bool(extraction)
+
+
 def _upsert_included_study_slice_run(slice_runs: List[Dict[str, Any]], slice_run: Dict[str, Any]) -> List[Dict[str, Any]]:
     label = str(slice_run.get("label") or "").strip()
     updated: List[Dict[str, Any]] = []
@@ -5350,7 +5355,7 @@ def _render_included_study_extractor_tab():
             completed_labels = {
                 str(item.get("label") or "").strip()
                 for item in existing_slice_runs
-                if str(item.get("label") or "").strip() and dict(item.get("extraction") or {}).get("tables")
+                if str(item.get("label") or "").strip() and _included_study_slice_run_is_completed(item)
             }
             auto_retry_sliced_quota = False
             sliced_retry_wait_cap = 75

@@ -892,3 +892,16 @@ def test_upsert_included_study_slice_run_appends_new_label():
     )
 
     assert [item["label"] for item in updated] == ["table 2", "table 4"]
+
+
+def test_included_study_slice_run_is_completed_for_warning_only_extraction():
+    module = _load_document_extract_module()
+
+    assert module._included_study_slice_run_is_completed(
+        {
+            "label": "table 2",
+            "extraction": {"tables": [], "warnings": ["No included-study tables parsed"], "raw_response": "{}"},
+        }
+    ) is True
+
+    assert module._included_study_slice_run_is_completed({"label": "table 3"}) is False
