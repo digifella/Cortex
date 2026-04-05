@@ -5836,6 +5836,9 @@ def _render_included_study_extractor_tab():
 
                 selected_count = sum(1 for item in editor_rows if bool(item.get("keep", True)))
                 st.caption(f"{selected_count} paper(s) selected for resolution/retrieval.")
+                resolver_check_oa = bool(st.session_state.get("research_check_oa", True))
+                resolver_enrich_sjr = bool(st.session_state.get("research_enrich_sjr", True))
+                resolver_unpaywall_email = str(st.session_state.get("research_unpaywall_email", "") or "").strip()
 
                 export_rows = _merge_included_study_editor_rows(editor_rows)
                 if export_rows:
@@ -5852,9 +5855,9 @@ def _render_included_study_extractor_tab():
                     )
                     resolver_payload = _build_included_study_research_payload(
                         editor_rows,
-                        check_open_access=check_open_access,
-                        enrich_sjr=enrich_sjr,
-                        unpaywall_email=unpaywall_email,
+                        check_open_access=resolver_check_oa,
+                        enrich_sjr=resolver_enrich_sjr,
+                        unpaywall_email=resolver_unpaywall_email,
                         extraction_scope=str(st.session_state.get("included_study_scope") or "all_trials"),
                         output_detail=str(st.session_state.get("included_study_output_detail") or "reference_map"),
                         focus_label=focus_label,
@@ -5876,9 +5879,9 @@ def _render_included_study_extractor_tab():
                 ):
                     payload = _build_included_study_research_payload(
                         editor_rows,
-                        check_open_access=check_open_access,
-                        enrich_sjr=enrich_sjr,
-                        unpaywall_email=unpaywall_email,
+                        check_open_access=resolver_check_oa,
+                        enrich_sjr=resolver_enrich_sjr,
+                        unpaywall_email=resolver_unpaywall_email,
                         extraction_scope=str(st.session_state.get("included_study_scope") or "all_trials"),
                         output_detail=str(st.session_state.get("included_study_output_detail") or "reference_map"),
                         focus_label=focus_label,
