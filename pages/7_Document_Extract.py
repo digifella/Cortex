@@ -40,6 +40,7 @@ from cortex_engine.handoff_contract import validate_research_resolve_input
 from cortex_engine.included_study_extractor import (
     IncludedStudyExtractorQuotaError,
     anthropic_key_source as included_study_anthropic_key_source,
+    extract_retry_after_seconds,
     gemini_key_source,
     included_study_extractor_available,
     run_included_study_access_check,
@@ -5268,6 +5269,27 @@ def _render_included_study_extractor_tab():
                 f"Detected {len(slice_result.get('table_slices') or [])} table slice(s) and "
                 f"{len(slice_result.get('bibliography_entries') or [])} parsed bibliography entrie(s)."
             )
+            auto_retry_sliced_quota = False
+            sliced_retry_wait_cap = 75
+            if provider == "gemini":
+                retry_c1, retry_c2 = st.columns([2, 1])
+                with retry_c1:
+                    auto_retry_sliced_quota = st.checkbox(
+                        "Auto-wait and retry sliced Gemini requests on quota errors",
+                        value=bool(st.session_state.get("included_study_sliced_auto_retry_quota", True)),
+                        key="included_study_sliced_auto_retry_quota",
+                    )
+                with retry_c2:
+                    sliced_retry_wait_cap = int(
+                        st.number_input(
+                            "Max retry wait (s)",
+                            min_value=10,
+                            max_value=180,
+                            value=int(st.session_state.get("included_study_sliced_retry_wait_cap", 75) or 75),
+                            step=5,
+                            key="included_study_sliced_retry_wait_cap",
+                        )
+                    )
             if selected and st.button(
                 "Extract All Sliced Tables",
                 type="secondary",
@@ -5278,16 +5300,62 @@ def _render_included_study_extractor_tab():
                 try:
                     review_title = _user_visible_stem(selected)
                     slice_runs: List[Dict[str, Any]] = []
+                    progress_lines: List[str] = []
+                    progress_box = st.empty()
+
+                    def _slice_progress(message: str) -> None:
+                        progress_lines.append(f"{time.strftime('%H:%M:%S')} {message}")
+                        progress_box.text_area(
+                            "Sliced extraction log",
+                            value="\n".join(progress_lines[-200:]),
+                            height=220,
+                            disabled=True,
+                        )
+
                     with st.spinner("Extracting sliced tables one by one..."):
                         for table_slice in list(slice_result.get("table_slices") or []):
-                            extraction = run_included_study_table_extractor(
-                                pdf_path=str(table_slice.get("pdf_path") or ""),
-                                bibliography_text=str(slice_result.get("bibliography_text") or ""),
-                                provider=provider,
-                                model=model,
-                                review_title=review_title,
-                                table_label=str(table_slice.get("label") or ""),
-                            )
+                            label = str(table_slice.get("label") or "").strip() or "table"
+                            _slice_progress(f"Starting {label} with {provider} / {model}")
+                            attempts = 0
+                            while True:
+                                attempts += 1
+                                try:
+                                    extraction = run_included_study_table_extractor(
+                                        pdf_path=str(table_slice.get("pdf_path") or ""),
+                                        bibliography_text=str(slice_result.get("bibliography_text") or ""),
+                                        provider=provider,
+                                        model=model,
+                                        review_title=review_title,
+                                        table_label=label,
+                                    )
+                                    warnings = list(extraction.get("warnings") or [])
+                                    _slice_progress(
+                                        f"Completed {label}: {len(list(extraction.get('tables') or []))} table(s), "
+                                        f"{len(warnings)} warning(s)"
+                                    )
+                                    break
+                                except IncludedStudyExtractorQuotaError as e:
+                                    retry_after = extract_retry_after_seconds(str(e))
+                                    if (
+                                        provider == "gemini"
+                                        and auto_retry_sliced_quota
+                                        and attempts == 1
+                                        and retry_after is not None
+                                        and retry_after <= float(sliced_retry_wait_cap)
+                                    ):
+                                        wait_seconds = max(1.0, float(retry_after) + 2.0)
+                                        _slice_progress(
+                                            f"{label}: Gemini quota hit, waiting {round(wait_seconds, 1)}s before retry"
+                                        )
+                                        time.sleep(wait_seconds)
+                                        continue
+                                    partial_result = _combine_included_study_slice_runs(slice_runs, provider=provider, model=model)
+                                    st.session_state["included_study_slice_runs"] = slice_runs
+                                    st.session_state["included_study_result"] = partial_result
+                                    st.session_state["included_study_editor_rows"] = _included_study_editor_rows(
+                                        partial_result.get("tables") or []
+                                    )
+                                    raise
                             slice_runs.append({**dict(table_slice), "extraction": extraction})
                     st.session_state["included_study_slice_runs"] = slice_runs
                     combined = _combine_included_study_slice_runs(slice_runs, provider=provider, model=model)

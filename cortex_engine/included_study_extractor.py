@@ -37,6 +37,16 @@ class IncludedStudyExtractorQuotaError(IncludedStudyExtractorAPIError):
     pass
 
 
+def extract_retry_after_seconds(message: str) -> float | None:
+    match = re.search(r"retry in\s+([0-9]+(?:\.[0-9]+)?)s", str(message or ""), flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except Exception:
+        return None
+
+
 def _worker_env_value(name: str) -> str:
     env_path = _ROOT / "worker" / "config.env"
     if not env_path.exists():

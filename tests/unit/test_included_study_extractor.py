@@ -6,6 +6,7 @@ from urllib.error import HTTPError
 
 from cortex_engine.included_study_extractor import (
     IncludedStudyExtractorQuotaError,
+    extract_retry_after_seconds,
     get_gemini_api_key,
     parse_included_study_extraction_response,
     run_included_study_access_check,
@@ -32,6 +33,10 @@ def test_parse_included_study_extraction_response_handles_fenced_json():
     )
 
     assert payload["tables"][0]["table_number"] == "2"
+
+
+def test_extract_retry_after_seconds_parses_gemini_message():
+    assert extract_retry_after_seconds("Please retry in 44.976849546s.") == 44.976849546
 
 
 def test_get_gemini_api_key_falls_back_to_worker_env(monkeypatch):
