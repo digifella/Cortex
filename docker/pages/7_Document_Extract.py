@@ -366,6 +366,7 @@ def _run_included_study_table_slice(
     model: str,
     review_title: str,
     extraction_scope: str,
+    output_detail: str,
     auto_retry_quota: bool,
     retry_wait_cap: float,
     max_quota_retries: int,
@@ -384,6 +385,7 @@ def _run_included_study_table_slice(
                 review_title=review_title,
                 table_label=label,
                 extraction_scope=extraction_scope,
+                output_detail=output_detail,
             )
             warnings = list(extraction.get("warnings") or [])
             if progress_callback:
@@ -5274,6 +5276,14 @@ def _render_included_study_extractor_tab():
             key="included_study_scope",
             help="Use the stricter option when you only want randomized/clinical trial evidence rather than every included study row.",
         )
+        output_detail = st.selectbox(
+            "Output Detail",
+            options=["reference_map", "detailed_fields"],
+            index=0,
+            format_func=lambda value: "Reference map only" if value == "reference_map" else "Detailed study fields",
+            key="included_study_output_detail",
+            help="Reference map keeps the output compact and focuses on trial/group/citation links. Detailed fields asks for study design, sample size, and outcome details when present.",
+        )
         if provider == "anthropic":
             st.caption("Recommended for included-study table fidelity: `Anthropic / Claude Sonnet`.")
         else:
@@ -5489,6 +5499,7 @@ def _render_included_study_extractor_tab():
                                     model=model,
                                     review_title=review_title,
                                     extraction_scope=extraction_scope,
+                                    output_detail=output_detail,
                                     auto_retry_quota=auto_retry_sliced_quota,
                                     retry_wait_cap=float(sliced_retry_wait_cap),
                                     max_quota_retries=int(sliced_max_quota_retries),
@@ -5527,6 +5538,7 @@ def _render_included_study_extractor_tab():
                         fallback_provider="anthropic" if (provider == "gemini" and fallback_to_anthropic) else "",
                         fallback_model=fallback_model if (provider == "gemini" and fallback_to_anthropic) else "",
                         extraction_scope=extraction_scope,
+                        output_detail=output_detail,
                     )
                 st.session_state["included_study_result"] = result
                 st.session_state["included_study_editor_rows"] = _included_study_editor_rows(result.get("tables") or [])
@@ -5612,6 +5624,7 @@ def _render_included_study_extractor_tab():
                                         model=model,
                                         review_title=_user_visible_stem(selected) if selected else "",
                                         extraction_scope=str(st.session_state.get("included_study_scope") or "all_trials"),
+                                        output_detail=str(st.session_state.get("included_study_output_detail") or "reference_map"),
                                         auto_retry_quota=bool(
                                             st.session_state.get("included_study_sliced_auto_retry_quota", True)
                                         ),

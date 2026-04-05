@@ -376,12 +376,13 @@ def test_run_included_study_extractor_anthropic_surfaces_non_terminal_stop_reaso
 
 
 def test_scope_prompts_include_requested_study_filter():
-    full_prompt = _included_study_prompt("Review", "rct_or_clinical")
-    table_prompt = _single_table_prompt("table 2", "Review", "refs", "rct_or_clinical")
+    full_prompt = _included_study_prompt("Review", "rct_or_clinical", "reference_map")
+    table_prompt = _single_table_prompt("table 2", "Review", "refs", "rct_or_clinical", "reference_map")
 
     assert "Only include randomized controlled trials" in full_prompt
     assert "Only include randomized controlled trials" in table_prompt
     assert "study_design" in table_prompt
+    assert "compact reference map only" in full_prompt.lower()
 
 
 def test_run_included_study_extractor_gemini_raises_quota_error(monkeypatch, tmp_path):
@@ -420,7 +421,7 @@ def test_run_included_study_extractor_with_fallback_uses_anthropic(monkeypatch, 
     pdf_path = tmp_path / "review.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
 
-    def _fake_run(*, pdf_path, provider, model, review_title, extraction_scope="all_trials"):
+    def _fake_run(*, pdf_path, provider, model, review_title, extraction_scope="all_trials", output_detail="reference_map"):
         if provider == "gemini":
             raise IncludedStudyExtractorQuotaError("gemini", 429, "Gemini quota/rate limit exceeded", body="quota")
         return {
