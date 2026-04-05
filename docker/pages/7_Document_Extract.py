@@ -445,7 +445,11 @@ def _store_included_study_slice_state(slice_runs: List[Dict[str, Any]], *, provi
     combined = _combine_included_study_slice_runs(slice_runs, provider=provider, model=model)
     st.session_state["included_study_slice_runs"] = list(slice_runs or [])
     st.session_state["included_study_result"] = combined
-    st.session_state["included_study_editor_rows"] = _included_study_editor_rows(combined.get("tables") or [])
+    combined_rows = _included_study_editor_rows(combined.get("tables") or [])
+    st.session_state["included_study_editor_rows"] = combined_rows
+    rows_by_focus = dict(st.session_state.get("included_study_editor_rows_by_focus") or {})
+    rows_by_focus["__combined__"] = combined_rows
+    st.session_state["included_study_editor_rows_by_focus"] = rows_by_focus
     return combined
 
 
@@ -5683,6 +5687,9 @@ def _render_included_study_extractor_tab():
                                     {**dict(table_slice), "extraction": extraction},
                                 )
                                 _store_included_study_slice_state(slice_runs, provider=provider, model=model)
+                                rows_by_focus = dict(st.session_state.get("included_study_editor_rows_by_focus") or {})
+                                rows_by_focus[label] = _included_study_editor_rows(list(extraction.get("tables") or []))
+                                st.session_state["included_study_editor_rows_by_focus"] = rows_by_focus
                                 st.session_state["included_study_result_focus_label"] = label
                                 st.success(f"{label} extracted.")
                                 st.rerun()
@@ -5786,15 +5793,33 @@ def _render_included_study_extractor_tab():
                                     line += f" [{notes}]"
                                 st.write(line)
 
-                editor_source = st.session_state.get("included_study_editor_rows") or _included_study_editor_rows(tables)
+                current_editor_rows = _included_study_editor_rows(tables)
+                focus_key = focus_label or "__combined__"
+                rows_by_focus = dict(st.session_state.get("included_study_editor_rows_by_focus") or {})
+                if focus_label:
+                    editor_source = list(rows_by_focus.get(focus_key) or current_editor_rows)
+                else:
+                    editor_source = list(
+                        rows_by_focus.get("__combined__")
+                        or st.session_state.get("included_study_editor_rows")
+                        or current_editor_rows
+                    )
                 bulk_left, bulk_mid, bulk_right = st.columns([1, 1, 4])
                 with bulk_left:
                     if st.button("Select All", use_container_width=True, key="included_study_select_all"):
-                        st.session_state["included_study_editor_rows"] = _set_included_study_keep_state(editor_source, True)
+                        updated_rows = _set_included_study_keep_state(editor_source, True)
+                        rows_by_focus[focus_key] = updated_rows
+                        st.session_state["included_study_editor_rows_by_focus"] = rows_by_focus
+                        if not focus_label:
+                            st.session_state["included_study_editor_rows"] = updated_rows
                         st.rerun()
                 with bulk_mid:
                     if st.button("Deselect All", use_container_width=True, key="included_study_deselect_all"):
-                        st.session_state["included_study_editor_rows"] = _set_included_study_keep_state(editor_source, False)
+                        updated_rows = _set_included_study_keep_state(editor_source, False)
+                        rows_by_focus[focus_key] = updated_rows
+                        st.session_state["included_study_editor_rows_by_focus"] = rows_by_focus
+                        if not focus_label:
+                            st.session_state["included_study_editor_rows"] = updated_rows
                         st.rerun()
                 with bulk_right:
                     st.caption("Selection is at the paper level, not the raw table-row level.")
@@ -5832,7 +5857,10 @@ def _render_included_study_extractor_tab():
                 )
                 editor_rows = _editor_records(edited)
                 if editor_rows:
-                    st.session_state["included_study_editor_rows"] = editor_rows
+                    rows_by_focus[focus_key] = editor_rows
+                    st.session_state["included_study_editor_rows_by_focus"] = rows_by_focus
+                    if not focus_label:
+                        st.session_state["included_study_editor_rows"] = editor_rows
 
                 selected_count = sum(1 for item in editor_rows if bool(item.get("keep", True)))
                 st.caption(f"{selected_count} paper(s) selected for resolution/retrieval.")
