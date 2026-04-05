@@ -5371,6 +5371,10 @@ def _render_included_study_extractor_tab():
                 f"Detected {len(slice_result.get('table_slices') or [])} table slice(s) and "
                 f"{len(slice_result.get('bibliography_entries') or [])} parsed bibliography entrie(s)."
             )
+            st.info(
+                "Recommended path: slice first, then extract each table PDF separately. "
+                "`Extract Included-Study Tables` is the whole-review direct call and is mainly kept as a fallback."
+            )
             existing_slice_runs = list(st.session_state.get("included_study_slice_runs") or [])
             completed_labels = {
                 str(item.get("label") or "").strip()
@@ -5431,6 +5435,7 @@ def _render_included_study_extractor_tab():
                 use_container_width=True,
                 key="included_study_extract_sliced_btn",
                 disabled=not included_study_extractor_available(provider),
+                help="Runs the sliced workflow table-by-table using the table PDFs and bibliography created by the Review Slicer.",
             ):
                 try:
                     review_title = _user_visible_stem(selected)
@@ -5481,11 +5486,12 @@ def _render_included_study_extractor_tab():
                     st.error(f"Sliced-table extraction failed: {e}")
 
         if selected and st.button(
-            "Extract Included-Study Tables",
+            "Extract Whole PDF Directly",
             type="primary",
             use_container_width=True,
             key="included_study_extract_btn",
             disabled=not included_study_extractor_available(provider),
+            help="Legacy/full-review path. Sends the whole review PDF directly to the model instead of using the sliced table PDFs.",
         ):
             try:
                 review_title = _user_visible_stem(selected)
@@ -5516,7 +5522,9 @@ def _render_included_study_extractor_tab():
         if slice_result:
             bibliography_text = str(slice_result.get("bibliography_text") or "")
             bibliography_entries = list(slice_result.get("bibliography_entries") or [])
-            with st.expander("Sliced Artifacts", expanded=False):
+            st.subheader("Per-Table Actions")
+            st.caption("Use these buttons to run or download each sliced table individually.")
+            with st.expander("Sliced Artifacts", expanded=True):
                 st.caption(
                     f"Table slices: {len(slice_result.get('table_slices') or [])} • "
                     f"Bibliography entries: {len(bibliography_entries)}"
