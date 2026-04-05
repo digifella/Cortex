@@ -38,6 +38,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Included Study Extractor now asks Gemini for a leaner first-pass table schema and normalizes labels like `Table 2` into numeric table numbers, reducing truncated JSON failures on `gemini-2.5-flash`.
 - Included Study Extractor now has a staged review-slicer workflow: it can split a review PDF into per-table snippet PDFs, extract the bibliography into separate text/CSV artifacts, and run Gemini/Claude table-by-table against those smaller snippets instead of only against the full review PDF.
 - Tightened the staged review slicer so it detects real top-of-page table headings, follows only explicit continuation pages, and finds bibliography pages from numbered reference entries near the end of the review instead of mistaking narrative table mentions for new tables.
+- Included Study Extractor now defaults to Anthropic `Claude Sonnet` when an Anthropic key is available, while keeping Gemini Flash as the cheaper explicitly opt-in path for operators who want lower-cost but rate-limited extraction.
 - Sliced included-study extraction now keeps a per-slice progress log, can auto-wait/retry Gemini free-tier quota throttles across multiple backoff cycles per table slice, and preserves completed slices so operators can resume remaining tables or rerun single slices after a quota pause.
 
 ### ⚠️ Known Limitation

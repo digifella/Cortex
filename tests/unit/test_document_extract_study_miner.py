@@ -905,3 +905,19 @@ def test_included_study_slice_run_is_completed_for_warning_only_extraction():
     ) is True
 
     assert module._included_study_slice_run_is_completed({"label": "table 3"}) is False
+
+
+def test_included_study_defaults_prefer_anthropic_when_available():
+    module = _load_document_extract_module()
+    module.included_study_extractor_available = lambda provider: provider == "anthropic"
+
+    assert module._included_study_default_provider() == "anthropic"
+    assert module._included_study_default_model("anthropic") == "claude-sonnet-4-6"
+    assert module._included_study_default_model("gemini") == "gemini-2.5-flash"
+
+
+def test_included_study_defaults_fall_back_to_gemini_when_anthropic_unavailable():
+    module = _load_document_extract_module()
+    module.included_study_extractor_available = lambda provider: False
+
+    assert module._included_study_default_provider() == "gemini"

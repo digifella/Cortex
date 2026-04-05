@@ -407,6 +407,19 @@ def _store_included_study_slice_state(slice_runs: List[Dict[str, Any]], *, provi
     return combined
 
 
+def _included_study_default_provider() -> str:
+    if included_study_extractor_available("anthropic"):
+        return "anthropic"
+    return "gemini"
+
+
+def _included_study_default_model(provider: str) -> str:
+    provider_name = str(provider or "").strip().lower()
+    if provider_name == "anthropic":
+        return "claude-sonnet-4-6"
+    return "gemini-2.5-flash"
+
+
 def _included_study_slice_zip_bytes(slice_meta: Dict[str, Any], bibliography_text: str, extraction: Dict[str, Any] | None = None) -> bytes:
     label = str(slice_meta.get("label") or "table").strip().replace(" ", "_")
     mem = io.BytesIO()
@@ -5223,19 +5236,26 @@ def _render_included_study_extractor_tab():
         st.header("PDF Input")
         st.session_state["included_study_batch"] = False
         selected = _file_input_widget("included_study", ["pdf"], label="Choose review PDF:")
+        default_provider = _included_study_default_provider()
+        if not str(st.session_state.get("included_study_provider") or "").strip():
+            st.session_state["included_study_provider"] = default_provider
 
         provider = st.selectbox(
             "Provider",
-            options=["gemini", "anthropic"],
-            index=0,
+            options=["anthropic", "gemini"],
+            index=0 if default_provider == "anthropic" else 1,
             key="included_study_provider",
         )
-        default_model = "gemini-2.5-flash" if provider == "gemini" else "claude-sonnet-4-6"
+        default_model = _included_study_default_model(provider)
         model = st.text_input(
             "Model",
             value=st.session_state.get("included_study_model", default_model) or default_model,
             key="included_study_model",
         )
+        if provider == "anthropic":
+            st.caption("Recommended for included-study table fidelity: `Anthropic / Claude Sonnet`.")
+        else:
+            st.caption("Cheaper/rate-limited path: `Gemini 2.5 Flash`. Use when you explicitly want the lower-cost option.")
         fallback_to_anthropic = False
         fallback_model = "claude-sonnet-4-6"
         if provider == "gemini":
