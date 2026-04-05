@@ -240,6 +240,10 @@ def _included_study_editor_rows(tables: List[Dict[str, Any]]) -> List[Dict[str, 
                 resolved_doi = str(citation.get("resolved_doi") or "").strip()
                 notes = str(citation.get("notes") or group.get("notes") or "").strip()
                 needs_review = bool(citation.get("needs_review"))
+                study_design = str(citation.get("study_design") or "").strip()
+                sample_size = str(citation.get("sample_size") or "").strip()
+                outcome_measure = str(citation.get("outcome_measure") or "").strip()
+                outcome_result = str(citation.get("outcome_result") or "").strip()
                 rows.append(
                     {
                         "keep": not needs_review,
@@ -257,6 +261,10 @@ def _included_study_editor_rows(tables: List[Dict[str, Any]]) -> List[Dict[str, 
                         "doi": resolved_doi,
                         "journal": resolved_journal,
                         "reference_number": str(citation.get("reference_number") or "").strip(),
+                        "study_design": study_design,
+                        "sample_size": sample_size,
+                        "outcome_measure": outcome_measure,
+                        "outcome_result": outcome_result,
                         "notes": notes,
                         "needs_review": "yes" if needs_review else "",
                     }
@@ -289,6 +297,10 @@ def _merge_included_study_editor_rows(editor_rows: List[Dict[str, Any]]) -> List
                     "reference_number": str(row.get("reference_number") or "").strip(),
                     "citation_display": str(row.get("citation_display") or "").strip(),
                     "needs_review": str(row.get("needs_review") or "").strip(),
+                    "study_design": str(row.get("study_design") or "").strip(),
+                    "sample_size": str(row.get("sample_size") or "").strip(),
+                    "outcome_measure": str(row.get("outcome_measure") or "").strip(),
+                    "outcome_result": str(row.get("outcome_result") or "").strip(),
                 },
             }
         )
@@ -353,6 +365,7 @@ def _run_included_study_table_slice(
     provider: str,
     model: str,
     review_title: str,
+    extraction_scope: str,
     auto_retry_quota: bool,
     retry_wait_cap: float,
     max_quota_retries: int,
@@ -370,6 +383,7 @@ def _run_included_study_table_slice(
                 model=model,
                 review_title=review_title,
                 table_label=label,
+                extraction_scope=extraction_scope,
             )
             warnings = list(extraction.get("warnings") or [])
             if progress_callback:
@@ -5252,6 +5266,14 @@ def _render_included_study_extractor_tab():
             value=st.session_state.get("included_study_model", default_model) or default_model,
             key="included_study_model",
         )
+        extraction_scope = st.selectbox(
+            "Study Scope",
+            options=["all_trials", "rct_or_clinical"],
+            index=0,
+            format_func=lambda value: "All included trials/studies" if value == "all_trials" else "RCT/clinical trials only",
+            key="included_study_scope",
+            help="Use the stricter option when you only want randomized/clinical trial evidence rather than every included study row.",
+        )
         if provider == "anthropic":
             st.caption("Recommended for included-study table fidelity: `Anthropic / Claude Sonnet`.")
         else:
@@ -5466,6 +5488,7 @@ def _render_included_study_extractor_tab():
                                     provider=provider,
                                     model=model,
                                     review_title=review_title,
+                                    extraction_scope=extraction_scope,
                                     auto_retry_quota=auto_retry_sliced_quota,
                                     retry_wait_cap=float(sliced_retry_wait_cap),
                                     max_quota_retries=int(sliced_max_quota_retries),
@@ -5503,6 +5526,7 @@ def _render_included_study_extractor_tab():
                         review_title=review_title,
                         fallback_provider="anthropic" if (provider == "gemini" and fallback_to_anthropic) else "",
                         fallback_model=fallback_model if (provider == "gemini" and fallback_to_anthropic) else "",
+                        extraction_scope=extraction_scope,
                     )
                 st.session_state["included_study_result"] = result
                 st.session_state["included_study_editor_rows"] = _included_study_editor_rows(result.get("tables") or [])
@@ -5587,6 +5611,7 @@ def _render_included_study_extractor_tab():
                                         provider=provider,
                                         model=model,
                                         review_title=_user_visible_stem(selected) if selected else "",
+                                        extraction_scope=str(st.session_state.get("included_study_scope") or "all_trials"),
                                         auto_retry_quota=bool(
                                             st.session_state.get("included_study_sliced_auto_retry_quota", True)
                                         ),

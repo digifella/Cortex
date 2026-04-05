@@ -6,6 +6,8 @@ from urllib.error import HTTPError
 
 from cortex_engine.included_study_extractor import (
     IncludedStudyExtractorQuotaError,
+    _included_study_prompt,
+    _single_table_prompt,
     extract_retry_after_seconds,
     get_gemini_api_key,
     parse_included_study_extraction_response,
@@ -278,6 +280,10 @@ def test_run_included_study_extractor_anthropic_normalizes_tables(monkeypatch, t
                                       "resolved_year": "2022",
                                       "resolved_journal": "",
                                       "resolved_doi": "",
+                                      "study_design": "Cost-utility analysis",
+                                      "sample_size": "",
+                                      "outcome_measure": "Utility values",
+                                      "outcome_result": "",
                                       "notes": "",
                                       "needs_review": false
                                     }
@@ -309,6 +315,7 @@ def test_run_included_study_extractor_anthropic_normalizes_tables(monkeypatch, t
     assert result["provider"] == "anthropic"
     assert result["tables"][0]["table_number"] == "4"
     assert result["tables"][0]["groups"][0]["citations"][0]["reference_number"] == "54"
+    assert result["tables"][0]["groups"][0]["citations"][0]["study_design"] == "Cost-utility analysis"
 
 
 def test_run_included_study_extractor_anthropic_surfaces_non_terminal_stop_reason(monkeypatch, tmp_path):
@@ -368,6 +375,15 @@ def test_run_included_study_extractor_anthropic_surfaces_non_terminal_stop_reaso
     assert any("Anthropic stop reason: max_tokens" in item for item in result["warnings"])
 
 
+def test_scope_prompts_include_requested_study_filter():
+    full_prompt = _included_study_prompt("Review", "rct_or_clinical")
+    table_prompt = _single_table_prompt("table 2", "Review", "refs", "rct_or_clinical")
+
+    assert "Only include randomized controlled trials" in full_prompt
+    assert "Only include randomized controlled trials" in table_prompt
+    assert "study_design" in table_prompt
+
+
 def test_run_included_study_extractor_gemini_raises_quota_error(monkeypatch, tmp_path):
     pdf_path = tmp_path / "review.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
@@ -404,7 +420,7 @@ def test_run_included_study_extractor_with_fallback_uses_anthropic(monkeypatch, 
     pdf_path = tmp_path / "review.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
 
-    def _fake_run(*, pdf_path, provider, model, review_title):
+    def _fake_run(*, pdf_path, provider, model, review_title, extraction_scope="all_trials"):
         if provider == "gemini":
             raise IncludedStudyExtractorQuotaError("gemini", 429, "Gemini quota/rate limit exceeded", body="quota")
         return {

@@ -23,6 +23,7 @@ _COMMON_GEMINI_ACCESS_TEST_MODELS = (
     "gemini-2.5-pro",
     "gemini-3-flash-preview",
 )
+_DEFAULT_EXTRACTION_SCOPE = "all_trials"
 
 
 class IncludedStudyExtractorAPIError(RuntimeError):
@@ -310,6 +311,10 @@ def _normalize_citation_item(item: Dict[str, Any]) -> Dict[str, Any]:
     resolved_doi = _normalize_doi(str(item.get("resolved_doi") or item.get("doi") or "").strip())
     notes = re.sub(r"\s+", " ", str(item.get("notes") or "").strip())
     needs_review = bool(item.get("needs_review"))
+    study_design = re.sub(r"\s+", " ", str(item.get("study_design") or "").strip())
+    sample_size = re.sub(r"\s+", " ", str(item.get("sample_size") or "").strip())
+    outcome_measure = re.sub(r"\s+", " ", str(item.get("outcome_measure") or "").strip())
+    outcome_result = re.sub(r"\s+", " ", str(item.get("outcome_result") or "").strip())
 
     if not authors and display:
         inferred_authors, inferred_year = _extract_authors_and_year(display)
@@ -332,6 +337,10 @@ def _normalize_citation_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "resolved_doi": resolved_doi,
         "notes": notes,
         "needs_review": needs_review,
+        "study_design": study_design,
+        "sample_size": sample_size,
+        "outcome_measure": outcome_measure,
+        "outcome_result": outcome_result,
     }
 
 
@@ -381,6 +390,8 @@ def _normalize_extracted_tables(payload: Dict[str, Any]) -> List[Dict[str, Any]]
                 "table_number": table_number,
                 "table_title": table_title,
                 "grouping_basis": grouping_basis,
+                "included_study_count": re.sub(r"\s+", " ", str(raw_table.get("included_study_count") or "").strip()),
+                "included_rct_count": re.sub(r"\s+", " ", str(raw_table.get("included_rct_count") or "").strip()),
                 "groups": groups,
             }
         )
@@ -416,11 +427,22 @@ def _finalize_included_study_result(
     }
 
 
-def _included_study_prompt(review_title: str = "") -> str:
+def _scope_instruction(extraction_scope: str) -> str:
+    scope_name = str(extraction_scope or _DEFAULT_EXTRACTION_SCOPE).strip().lower()
+    if scope_name == "rct_or_clinical":
+        return (
+            "Only include randomized controlled trials, clinical trials, or explicitly trial-based study reports. "
+            "Exclude observational-only, vignette-only, economic-only, or narrative-only studies unless they are directly tied to a trial group in the table."
+        )
+    return "Include all eligible included-study rows shown in the target included-study tables."
+
+
+def _included_study_prompt(review_title: str = "", extraction_scope: str = _DEFAULT_EXTRACTION_SCOPE) -> str:
     return (
         "You are extracting included-study tables from a systematic review PDF.\n\n"
         "Return only the tables that list included studies, health state utility studies, or HTA reports included in the review.\n"
         "Ignore eligibility tables, search strategy tables, risk-of-bias tables, and narrative text that does not list included studies.\n\n"
+        f"Study selection scope: {_scope_instruction(extraction_scope)}\n\n"
         "Return compact JSON only. Keep the output short.\n\n"
         "For each included-study table:\n"
         "1. Return the table number as digits only, for example `2`, not `Table 2`.\n"
@@ -428,9 +450,10 @@ def _included_study_prompt(review_title: str = "") -> str:
         "3. Explain the grouping basis briefly.\n"
         "4. Preserve the grouping structure the table uses conceptually.\n"
         "5. For each cited paper/report, return only a short display label, short author label if known, year, and bibliography reference number when present.\n"
-        "6. Do not include full author lists, long paper titles, journals, or DOIs unless they are trivially obvious. Prefer leaving those fields blank.\n"
-        "7. If multiple papers are grouped under the same trial, keep them grouped under that trial.\n"
-        "8. If uncertain, set needs_review=true and explain briefly in notes.\n\n"
+        "6. Prefer structured trial-detail fields when the table provides them: study design, sample size, outcome measure, and outcome result.\n"
+        "7. Do not include full author lists, long paper titles, journals, or DOIs unless they are trivially obvious. Prefer leaving those fields blank.\n"
+        "8. If multiple papers are grouped under the same trial, keep them grouped under that trial.\n"
+        "9. If uncertain, set needs_review=true and explain briefly in notes.\n\n"
         f"Review title: {review_title}\n\n"
         "Return JSON with this exact shape:\n"
         "{\n"
@@ -439,6 +462,8 @@ def _included_study_prompt(review_title: str = "") -> str:
         '      "table_number": "",\n'
         '      "table_title": "",\n'
         '      "grouping_basis": "",\n'
+        '      "included_study_count": "",\n'
+        '      "included_rct_count": "",\n'
         '      "groups": [\n'
         "        {\n"
         '          "group_label": "",\n'
@@ -455,6 +480,10 @@ def _included_study_prompt(review_title: str = "") -> str:
         '              "resolved_year": "",\n'
         '              "resolved_journal": "",\n'
         '              "resolved_doi": "",\n'
+        '              "study_design": "",\n'
+        '              "sample_size": "",\n'
+        '              "outcome_measure": "",\n'
+        '              "outcome_result": "",\n'
         '              "notes": "",\n'
         '              "needs_review": false\n'
         "            }\n"
@@ -468,7 +497,12 @@ def _included_study_prompt(review_title: str = "") -> str:
     )
 
 
-def _single_table_prompt(table_label: str = "", review_title: str = "", bibliography_text: str = "") -> str:
+def _single_table_prompt(
+    table_label: str = "",
+    review_title: str = "",
+    bibliography_text: str = "",
+    extraction_scope: str = _DEFAULT_EXTRACTION_SCOPE,
+) -> str:
     compact_bibliography = str(bibliography_text or "").strip()
     if len(compact_bibliography) > 18000:
         compact_bibliography = compact_bibliography[:18000].rstrip() + "\n...[truncated]"
@@ -476,6 +510,7 @@ def _single_table_prompt(table_label: str = "", review_title: str = "", bibliogr
         "You are extracting one included-study table from a systematic review PDF.\n\n"
         "Return compact JSON only.\n"
         "This PDF contains one table snippet, not the whole review.\n"
+        f"Study selection scope: {_scope_instruction(extraction_scope)}\n"
         "Use the supplied bibliography text only to reconcile reference numbers and short author/year labels when possible.\n"
         "Keep the output short.\n"
         "Do not emit full author lists.\n"
@@ -493,6 +528,8 @@ def _single_table_prompt(table_label: str = "", review_title: str = "", bibliogr
         '      "table_number": "",\n'
         '      "table_title": "",\n'
         '      "grouping_basis": "",\n'
+        '      "included_study_count": "",\n'
+        '      "included_rct_count": "",\n'
         '      "groups": [\n'
         "        {\n"
         '          "group_label": "",\n'
@@ -509,6 +546,10 @@ def _single_table_prompt(table_label: str = "", review_title: str = "", bibliogr
         '              "resolved_year": "",\n'
         '              "resolved_journal": "",\n'
         '              "resolved_doi": "",\n'
+        '              "study_design": "",\n'
+        '              "sample_size": "",\n'
+        '              "outcome_measure": "",\n'
+        '              "outcome_result": "",\n'
         '              "notes": "",\n'
         '              "needs_review": false\n'
         "            }\n"
@@ -555,10 +596,11 @@ def run_included_study_extractor(
     provider: str = "gemini",
     model: str = "",
     review_title: str = "",
+    extraction_scope: str = _DEFAULT_EXTRACTION_SCOPE,
 ) -> Dict[str, Any]:
     pdf_b64, _size_bytes = _build_pdf_inline_data(pdf_path)
     provider_name = str(provider or "gemini").strip().lower()
-    prompt = _included_study_prompt(review_title)
+    prompt = _included_study_prompt(review_title, extraction_scope)
 
     if provider_name == "anthropic":
         client = _anthropic_client()
@@ -649,10 +691,16 @@ def run_included_study_table_extractor(
     model: str = "",
     review_title: str = "",
     table_label: str = "",
+    extraction_scope: str = _DEFAULT_EXTRACTION_SCOPE,
 ) -> Dict[str, Any]:
     pdf_b64, _size_bytes = _build_pdf_inline_data(pdf_path)
     provider_name = str(provider or "gemini").strip().lower()
-    prompt = _single_table_prompt(table_label=table_label, review_title=review_title, bibliography_text=bibliography_text)
+    prompt = _single_table_prompt(
+        table_label=table_label,
+        review_title=review_title,
+        bibliography_text=bibliography_text,
+        extraction_scope=extraction_scope,
+    )
 
     if provider_name == "anthropic":
         client = _anthropic_client()
@@ -741,6 +789,7 @@ def run_included_study_extractor_with_fallback(
     provider: str = "gemini",
     model: str = "",
     review_title: str = "",
+    extraction_scope: str = _DEFAULT_EXTRACTION_SCOPE,
     fallback_provider: str = "",
     fallback_model: str = "",
 ) -> Dict[str, Any]:
@@ -752,6 +801,7 @@ def run_included_study_extractor_with_fallback(
             provider=primary_provider,
             model=primary_model,
             review_title=review_title,
+            extraction_scope=extraction_scope,
         )
         result["requested_provider"] = primary_provider
         result["requested_model"] = primary_model or result.get("model") or ""
@@ -765,6 +815,7 @@ def run_included_study_extractor_with_fallback(
             provider="anthropic",
             model=fallback_model,
             review_title=review_title,
+            extraction_scope=extraction_scope,
         )
         warnings = [str(item).strip() for item in list(fallback_result.get("warnings") or []) if str(item).strip()]
         fallback_model_name = str(fallback_result.get("model") or fallback_model or _DEFAULT_ANTHROPIC_MODEL).strip()

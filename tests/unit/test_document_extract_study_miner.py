@@ -748,6 +748,10 @@ def test_included_study_editor_rows_flattens_grouped_tables_for_selection():
                                 "resolved_authors": "Patrick D",
                                 "resolved_year": "2021",
                                 "reference_number": "17",
+                                "study_design": "Phase 1 single-arm trial",
+                                "sample_size": "256",
+                                "outcome_measure": "EORTC QLQ-C30 global health status",
+                                "outcome_result": "19.7 (25.6)",
                                 "needs_review": False,
                             }
                         ],
@@ -761,6 +765,8 @@ def test_included_study_editor_rows_flattens_grouped_tables_for_selection():
     assert rows[0]["combined_group"] == "EORTC QLQ-C30 / TRANSCEND NHL 001"
     assert rows[0]["title"] == "Health-related quality of life with lisocabtagene maraleucel"
     assert rows[0]["reference_number"] == "17"
+    assert rows[0]["study_design"] == "Phase 1 single-arm trial"
+    assert rows[0]["sample_size"] == "256"
 
 
 def test_merge_included_study_editor_rows_builds_research_payload_rows():
@@ -784,6 +790,10 @@ def test_merge_included_study_editor_rows_builds_research_payload_rows():
                 "doi": "10.1000/example",
                 "journal": "Blood Advances",
                 "reference_number": "17",
+                "study_design": "Phase 1 single-arm trial",
+                "sample_size": "256",
+                "outcome_measure": "EORTC QLQ-C30 global health status",
+                "outcome_result": "19.7 (25.6)",
                 "notes": "",
                 "needs_review": "",
             }
@@ -794,6 +804,7 @@ def test_merge_included_study_editor_rows_builds_research_payload_rows():
     assert merged[0]["title"] == "Health-related quality of life with lisocabtagene maraleucel"
     assert merged[0]["extra_fields"]["table_number"] == "2"
     assert merged[0]["extra_fields"]["combined_group"] == "EORTC QLQ-C30 / TRANSCEND NHL 001"
+    assert merged[0]["extra_fields"]["study_design"] == "Phase 1 single-arm trial"
 
 
 def test_run_included_study_table_slice_retries_multiple_quota_waits_before_success():
@@ -820,6 +831,7 @@ def test_run_included_study_table_slice_retries_multiple_quota_waits_before_succ
         provider="gemini",
         model="gemini-2.5-flash",
         review_title="Review",
+        extraction_scope="all_trials",
         auto_retry_quota=True,
         retry_wait_cap=75,
         max_quota_retries=3,
@@ -856,6 +868,7 @@ def test_run_included_study_table_slice_raises_after_retry_budget_exhausted():
             provider="gemini",
             model="gemini-2.5-flash",
             review_title="Review",
+            extraction_scope="all_trials",
             auto_retry_quota=True,
             retry_wait_cap=75,
             max_quota_retries=2,
