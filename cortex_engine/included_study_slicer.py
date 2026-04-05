@@ -13,6 +13,7 @@ from cortex_engine.review_study_miner import _normalize_text, _parse_reference_e
 
 
 _TABLE_START_RE = re.compile(r"\btable\s+(\d{1,3})\b[:.\s-]*(.*)", re.IGNORECASE)
+_NUMBERED_REFERENCE_LINE_RE = re.compile(r"^\[?\d{1,3}[\].)]\s")
 
 
 def _page_text(doc: fitz.Document, page_index: int) -> str:
@@ -22,8 +23,12 @@ def _page_text(doc: fitz.Document, page_index: int) -> str:
         return ""
 
 
+def _top_lines(text: str, *, max_lines: int = 16) -> List[str]:
+    return [line.strip() for line in str(text or "").splitlines() if line.strip()][:max_lines]
+
+
 def _looks_like_reference_heading(text: str) -> bool:
-    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    lines = _top_lines(text, max_lines=12)
     for line in lines[:12]:
         normalized = _normalize_text(line)
         if normalized in {"references", "bibliography"}:
@@ -31,10 +36,41 @@ def _looks_like_reference_heading(text: str) -> bool:
     return False
 
 
+def _looks_like_reference_page(text: str, *, page_number: int, total_pages: int) -> bool:
+    if _looks_like_reference_heading(text):
+        return True
+    if page_number < max(2, total_pages // 2):
+        return False
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    numbered_top = sum(1 for line in lines[:40] if _NUMBERED_REFERENCE_LINE_RE.match(line))
+    return numbered_top >= 3
+
+
+def _page_table_heading(text: str) -> Dict[str, Any] | None:
+    lines = _top_lines(text, max_lines=14)
+    for line in lines:
+        normalized_line = _normalize_text(line)
+        if not normalized_line.startswith("table "):
+            continue
+        match = _TABLE_START_RE.search(line)
+        if not match:
+            continue
+        table_number = int(match.group(1) or 0)
+        title = str(match.group(2) or "").strip(" -:.")
+        continued = "continued" in normalized_line
+        return {
+            "table_number": table_number,
+            "title": title,
+            "continued": continued,
+            "raw_line": line,
+        }
+    return None
+
+
 def _extract_table_title(page_text: str, table_number: int) -> str:
-    lines = [line.strip() for line in str(page_text or "").splitlines() if line.strip()]
+    lines = _top_lines(page_text, max_lines=20)
     pattern = re.compile(rf"\btable\s+{int(table_number)}\b[:.\s-]*(.*)", re.IGNORECASE)
-    for line in lines[:20]:
+    for line in lines:
         match = pattern.search(line)
         if match:
             trailing = str(match.group(1) or "").strip(" -:.")
@@ -43,26 +79,30 @@ def _extract_table_title(page_text: str, table_number: int) -> str:
     return ""
 
 
-def _classify_table_kind(text: str) -> str:
-    normalized = _normalize_text(text)
-    if any(marker in normalized for marker in ("hta report", "hta reports", "nice", "cadth", "pbac")):
+def _classify_table_kind(title_text: str, body_text: str = "") -> str:
+    normalized_title = _normalize_text(title_text)
+    normalized_body = _normalize_text(body_text)
+    if "picos criteria" in normalized_title:
+        return "other"
+    if any(marker in normalized_title for marker in ("hta report", "hta reports")):
         return "hta"
-    if any(marker in normalized for marker in ("economic studies", "cost utility", "cost effectiveness", "cua", "cea", "tto")):
+    if "economic studies" in normalized_title:
         return "economic"
     if any(
-        marker in normalized
+        marker in normalized_title
         for marker in (
             "included studies",
             "hrqol",
-            "quality of life",
             "health state utility",
             "utility values",
-            "fact g",
-            "eq 5d",
-            "eortc",
-            "sf 36",
         )
     ):
+        return "included_studies"
+    if any(marker in normalized_body for marker in ("hta report", "hta reports")):
+        return "hta"
+    if any(marker in normalized_body for marker in ("economic studies", "cost utility", "cost effectiveness")):
+        return "economic"
+    if any(marker in normalized_body for marker in ("included studies", "hrqol", "health state utility values")):
         return "included_studies"
     return "other"
 
@@ -126,35 +166,58 @@ def slice_review_pdf(pdf_path: str, *, work_dir: str = "") -> Dict[str, Any]:
 
         bibliography_start = None
         for idx, text in enumerate(page_texts):
-            if _looks_like_reference_heading(text):
+            if _looks_like_reference_page(text, page_number=idx + 1, total_pages=total_pages):
                 bibliography_start = idx + 1
                 break
         bibliography_pages = list(range(bibliography_start, total_pages + 1)) if bibliography_start else []
         bibliography_text = "\n\n".join(page_texts[(bibliography_start - 1) :]) if bibliography_start else ""
         bibliography_entries = _parse_reference_entries(bibliography_text) if bibliography_text else []
 
+        page_headings = [_page_table_heading(text) for text in page_texts]
         starts: List[Dict[str, Any]] = []
         for idx, text in enumerate(page_texts):
             page_number = idx + 1
             if bibliography_start and page_number >= bibliography_start:
                 continue
-            match = _TABLE_START_RE.search(text)
-            if not match:
+            heading = page_headings[idx]
+            if not heading:
                 continue
-            starts.append({"page_number": page_number, "table_number": int(match.group(1) or 0)})
+            if bool(heading.get("continued")):
+                continue
+            starts.append(
+                {
+                    "page_number": page_number,
+                    "table_number": int(heading.get("table_number") or 0),
+                    "heading_title": str(heading.get("title") or "").strip(),
+                }
+            )
 
         table_slices: List[Dict[str, Any]] = []
         for pos, start in enumerate(starts):
             page_number = int(start["page_number"])
             table_number = int(start["table_number"])
-            next_page = bibliography_start or (total_pages + 1)
-            if pos + 1 < len(starts):
-                next_page = min(next_page, int(starts[pos + 1]["page_number"]))
-            end_page = max(page_number, next_page - 1)
-            pages = list(range(page_number, end_page + 1))
+            pages = [page_number]
+            probe_page = page_number + 1
+            while probe_page <= total_pages:
+                if bibliography_start and probe_page >= bibliography_start:
+                    break
+                if pos + 1 < len(starts) and probe_page >= int(starts[pos + 1]["page_number"]):
+                    break
+                heading = page_headings[probe_page - 1]
+                if not heading:
+                    break
+                if int(heading.get("table_number") or 0) != table_number:
+                    break
+                if not bool(heading.get("continued")):
+                    break
+                pages.append(probe_page)
+                probe_page += 1
+            end_page = pages[-1]
             slice_text = "\n\n".join(page_texts[page_number - 1 : end_page])
-            title = _extract_table_title(page_texts[page_number - 1], table_number)
-            kind = _classify_table_kind(slice_text)
+            title = str(start.get("heading_title") or "").strip() or _extract_table_title(page_texts[page_number - 1], table_number)
+            kind = _classify_table_kind(title, slice_text)
+            if kind == "other":
+                continue
             pdf_name = f"table_{table_number}.pdf"
             pdf_out = output_root / pdf_name
             _write_pdf_slice(doc, pages, pdf_out)

@@ -37,6 +37,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Included Study Extractor now keeps the run visible even when zero tables are parsed, surfacing warnings plus downloadable raw model output instead of showing a misleading “complete” state with no visible result.
 - Included Study Extractor now asks Gemini for a leaner first-pass table schema and normalizes labels like `Table 2` into numeric table numbers, reducing truncated JSON failures on `gemini-2.5-flash`.
 - Included Study Extractor now has a staged review-slicer workflow: it can split a review PDF into per-table snippet PDFs, extract the bibliography into separate text/CSV artifacts, and run Gemini/Claude table-by-table against those smaller snippets instead of only against the full review PDF.
+- Tightened the staged review slicer so it detects real top-of-page table headings, follows only explicit continuation pages, and finds bibliography pages from numbered reference entries near the end of the review instead of mistaking narrative table mentions for new tables.
 
 ### ⚠️ Known Limitation
 - Rotated multi-page systematic-review tables are still not reconstructed reliably. The Claude rescue path now prefers the full source PDF, but very large PDFs can still fall back to extracted table evidence and the model can still struggle with ambiguous continuation pages.
