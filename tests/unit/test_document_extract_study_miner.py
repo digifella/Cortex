@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 def _load_document_extract_module():
     path = Path("/home/longboardfella/cortex_suite/pages/7_Document_Extract.py")
@@ -792,3 +794,74 @@ def test_merge_included_study_editor_rows_builds_research_payload_rows():
     assert merged[0]["title"] == "Health-related quality of life with lisocabtagene maraleucel"
     assert merged[0]["extra_fields"]["table_number"] == "2"
     assert merged[0]["extra_fields"]["combined_group"] == "EORTC QLQ-C30 / TRANSCEND NHL 001"
+
+
+def test_run_included_study_table_slice_retries_multiple_quota_waits_before_success():
+    module = _load_document_extract_module()
+    waits = []
+    calls = {"count": 0}
+
+    def _fake_run(**kwargs):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise module.IncludedStudyExtractorQuotaError(
+                "gemini",
+                429,
+                f"Gemini quota/rate limit exceeded. Please retry in {40 + calls['count']}s.",
+            )
+        return {"tables": [{"table_number": "2"}], "warnings": [], "raw_response": "{}"}
+
+    progress = []
+    module.run_included_study_table_extractor = _fake_run
+
+    result = module._run_included_study_table_slice(
+        table_slice={"label": "table 2", "pdf_path": "/tmp/table_2.pdf"},
+        bibliography_text="refs",
+        provider="gemini",
+        model="gemini-2.5-flash",
+        review_title="Review",
+        auto_retry_quota=True,
+        retry_wait_cap=75,
+        max_quota_retries=3,
+        progress_callback=progress.append,
+        sleep_fn=waits.append,
+    )
+
+    assert result["tables"][0]["table_number"] == "2"
+    assert calls["count"] == 3
+    assert waits == [43.0, 44.0]
+    assert any("waiting 43.0s before retry (1/3)" in item for item in progress)
+    assert any("waiting 44.0s before retry (2/3)" in item for item in progress)
+
+
+def test_run_included_study_table_slice_raises_after_retry_budget_exhausted():
+    module = _load_document_extract_module()
+    waits = []
+    calls = {"count": 0}
+
+    def _always_quota(**kwargs):
+        calls["count"] += 1
+        raise module.IncludedStudyExtractorQuotaError(
+            "gemini",
+            429,
+            "Gemini quota/rate limit exceeded. Please retry in 30s.",
+        )
+
+    module.run_included_study_table_extractor = _always_quota
+
+    with pytest.raises(module.IncludedStudyExtractorQuotaError):
+        module._run_included_study_table_slice(
+            table_slice={"label": "table 3", "pdf_path": "/tmp/table_3.pdf"},
+            bibliography_text="refs",
+            provider="gemini",
+            model="gemini-2.5-flash",
+            review_title="Review",
+            auto_retry_quota=True,
+            retry_wait_cap=75,
+            max_quota_retries=2,
+            progress_callback=None,
+            sleep_fn=waits.append,
+        )
+
+    assert calls["count"] == 3
+    assert waits == [32.0, 32.0]
