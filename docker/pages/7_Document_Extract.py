@@ -462,6 +462,15 @@ def _included_study_slice_zip_bytes(slice_meta: Dict[str, Any], bibliography_tex
     return mem.getvalue()
 
 
+def _included_study_rows_to_xlsx_bytes(rows: List[Dict[str, Any]], sheet_name: str = "included_study") -> bytes:
+    import pandas as pd
+
+    mem = io.BytesIO()
+    with pd.ExcelWriter(mem, engine="openpyxl") as writer:
+        pd.DataFrame(rows or []).to_excel(writer, index=False, sheet_name=str(sheet_name or "included_study")[:31])
+    return mem.getvalue()
+
+
 def _study_miner_candidate_rows(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     rows = []
     for item in candidates or []:
@@ -5596,8 +5605,16 @@ def _render_included_study_extractor_tab():
                     if extraction and not extraction.get("tables"):
                         status = "warning"
                     zip_bytes = _included_study_slice_zip_bytes(table_slice, bibliography_text, extraction or None)
+                    slice_rows = _included_study_editor_rows(list(extraction.get("tables") or [])) if extraction else []
+                    slice_csv = ""
+                    slice_xlsx = b""
+                    if slice_rows:
+                        import pandas as pd
+
+                        slice_csv = pd.DataFrame(slice_rows).to_csv(index=False)
+                        slice_xlsx = _included_study_rows_to_xlsx_bytes(slice_rows, sheet_name=label.replace(" ", "_"))
                     key_suffix = str(table_slice.get("pdf_file_name") or table_slice.get("pdf_path") or idx).replace("/", "_")
-                    b1, b2 = st.columns([2, 1])
+                    b1, b2, b3, b4 = st.columns([2, 1, 1, 1])
                     with b1:
                         st.download_button(
                             f"Download {label} ZIP",
@@ -5640,6 +5657,7 @@ def _render_included_study_extractor_tab():
                                     {**dict(table_slice), "extraction": extraction},
                                 )
                                 _store_included_study_slice_state(slice_runs, provider=provider, model=model)
+                                st.session_state["included_study_result_focus_label"] = label
                                 st.success(f"{label} extracted.")
                                 st.rerun()
                             except IncludedStudyExtractorQuotaError as e:
@@ -5649,9 +5667,50 @@ def _render_included_study_extractor_tab():
                                 )
                             except Exception as e:
                                 st.error(f"{label} extraction failed: {e}")
+                    with b3:
+                        if slice_rows:
+                            st.download_button(
+                                f"{label} CSV",
+                                data=slice_csv,
+                                file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_{label.replace(' ', '_')}.csv",
+                                mime="text/csv",
+                                use_container_width=True,
+                                key=f"included_study_download_slice_csv_{idx}_{key_suffix}",
+                            )
+                    with b4:
+                        if slice_rows:
+                            st.download_button(
+                                f"{label} XLSX",
+                                data=slice_xlsx,
+                                file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_{label.replace(' ', '_')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                key=f"included_study_download_slice_xlsx_{idx}_{key_suffix}",
+                            )
         result = st.session_state.get("included_study_result") or {}
+        focus_label = str(st.session_state.get("included_study_result_focus_label") or "").strip()
+        if focus_label:
+            focused_run = next(
+                (
+                    dict(item)
+                    for item in slice_runs
+                    if str(item.get("label") or "").strip() == focus_label and dict(item.get("extraction") or {})
+                ),
+                {},
+            )
+            focused_extraction = dict(focused_run.get("extraction") or {})
+            if focused_extraction:
+                result = focused_extraction
         tables = list(result.get("tables") or [])
         if result:
+            if focus_label:
+                fc1, fc2 = st.columns([3, 1])
+                with fc1:
+                    st.caption(f"Showing focused result for `{focus_label}`.")
+                with fc2:
+                    if st.button("Show combined results", use_container_width=True, key="included_study_clear_focus"):
+                        st.session_state["included_study_result_focus_label"] = ""
+                        st.rerun()
             provider_label = str(result.get("provider") or "").strip()
             model_label = str(result.get("model") or "").strip()
             requested_provider = str(result.get("requested_provider") or "").strip()

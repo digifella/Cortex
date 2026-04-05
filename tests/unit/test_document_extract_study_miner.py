@@ -936,3 +936,14 @@ def test_included_study_defaults_fall_back_to_gemini_when_anthropic_unavailable(
     module.included_study_extractor_available = lambda provider: False
 
     assert module._included_study_default_provider() == "gemini"
+
+
+def test_included_study_rows_to_xlsx_bytes_round_trips_basic_rows():
+    module = _load_document_extract_module()
+
+    payload = module._included_study_rows_to_xlsx_bytes(
+        [{"table_number": "2", "trial_label": "JULIET", "reference_number": "19"}],
+        sheet_name="table_2",
+    )
+
+    assert payload.startswith(b"PK")
