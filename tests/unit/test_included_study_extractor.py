@@ -9,6 +9,7 @@ from cortex_engine.included_study_extractor import (
     get_gemini_api_key,
     parse_included_study_extraction_response,
     run_included_study_access_check,
+    run_included_study_access_check_matrix,
     run_included_study_extractor,
     run_included_study_extractor_with_fallback,
 )
@@ -130,6 +131,23 @@ def test_run_included_study_access_check_gemini_uses_tiny_prompt(monkeypatch):
     assert result["preview"] == "ACCESS_OK"
     assert captured["model"] == "gemini-2.5-pro"
     assert captured["payload"]["contents"][0]["parts"] == [{"text": "Reply with exactly ACCESS_OK"}]
+
+
+def test_run_included_study_access_check_matrix_collects_successes_and_failures(monkeypatch):
+    def _fake_check(provider="gemini", model=""):
+        if model == "gemini-2.5-pro":
+            raise IncludedStudyExtractorQuotaError("gemini", 429, "quota")
+        return {"provider": provider, "model": model, "ok": True, "preview": "ACCESS_OK"}
+
+    monkeypatch.setattr("cortex_engine.included_study_extractor.run_included_study_access_check", _fake_check)
+
+    rows = run_included_study_access_check_matrix(["gemini-2.5-flash", "gemini-2.5-pro"])
+
+    assert rows[0]["model"] == "gemini-2.5-flash"
+    assert rows[0]["ok"] is True
+    assert rows[1]["model"] == "gemini-2.5-pro"
+    assert rows[1]["ok"] is False
+    assert "quota" in rows[1]["error"].lower()
 
 
 def test_run_included_study_extractor_anthropic_normalizes_tables(monkeypatch, tmp_path):

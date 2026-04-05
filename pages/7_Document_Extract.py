@@ -43,6 +43,7 @@ from cortex_engine.included_study_extractor import (
     gemini_key_source,
     included_study_extractor_available,
     run_included_study_access_check,
+    run_included_study_access_check_matrix,
     run_included_study_extractor_with_fallback,
 )
 from cortex_engine.research_resolve import (
@@ -5097,7 +5098,7 @@ def _render_included_study_extractor_tab():
             index=0,
             key="included_study_provider",
         )
-        default_model = "gemini-2.5-pro" if provider == "gemini" else "claude-sonnet-4-6"
+        default_model = "gemini-2.5-flash" if provider == "gemini" else "claude-sonnet-4-6"
         model = st.text_input(
             "Model",
             value=st.session_state.get("included_study_model", default_model) or default_model,
@@ -5128,35 +5129,47 @@ def _render_included_study_extractor_tab():
             missing_name = "GEMINI_API_KEY" if provider == "gemini" else "ANTHROPIC_API_KEY"
             st.info(f"{missing_name} is not currently available to Streamlit.")
 
-        if provider == "gemini" and st.button(
-            "Test Gemini Access",
-            use_container_width=True,
-            key="included_study_test_gemini_access_btn",
-            disabled=not included_study_extractor_available("gemini"),
-        ):
-            try:
-                with st.spinner("Testing Gemini access with a tiny prompt..."):
-                    access_result = run_included_study_access_check(provider="gemini", model=model)
-                st.session_state["included_study_access_check_result"] = access_result
-                st.success("Gemini access test succeeded.")
-            except IncludedStudyExtractorQuotaError as e:
-                st.session_state["included_study_access_check_result"] = {
-                    "provider": "gemini",
-                    "model": model,
-                    "ok": False,
-                    "preview": "",
-                    "error": str(e),
-                }
-                st.error(f"Gemini access test failed: {e}")
-            except Exception as e:
-                st.session_state["included_study_access_check_result"] = {
-                    "provider": "gemini",
-                    "model": model,
-                    "ok": False,
-                    "preview": "",
-                    "error": str(e),
-                }
-                st.error(f"Gemini access test failed: {e}")
+        if provider == "gemini":
+            access_c1, access_c2 = st.columns(2)
+            with access_c1:
+                if st.button(
+                    "Test Gemini Access",
+                    use_container_width=True,
+                    key="included_study_test_gemini_access_btn",
+                    disabled=not included_study_extractor_available("gemini"),
+                ):
+                    try:
+                        with st.spinner("Testing Gemini access with a tiny prompt..."):
+                            access_result = run_included_study_access_check(provider="gemini", model=model)
+                        st.session_state["included_study_access_check_result"] = access_result
+                        st.success("Gemini access test succeeded.")
+                    except IncludedStudyExtractorQuotaError as e:
+                        st.session_state["included_study_access_check_result"] = {
+                            "provider": "gemini",
+                            "model": model,
+                            "ok": False,
+                            "preview": "",
+                            "error": str(e),
+                        }
+                        st.error(f"Gemini access test failed: {e}")
+                    except Exception as e:
+                        st.session_state["included_study_access_check_result"] = {
+                            "provider": "gemini",
+                            "model": model,
+                            "ok": False,
+                            "preview": "",
+                            "error": str(e),
+                        }
+                        st.error(f"Gemini access test failed: {e}")
+            with access_c2:
+                if st.button(
+                    "Test Common Gemini Models",
+                    use_container_width=True,
+                    key="included_study_test_gemini_matrix_btn",
+                    disabled=not included_study_extractor_available("gemini"),
+                ):
+                    with st.spinner("Testing common Gemini models with tiny prompts..."):
+                        st.session_state["included_study_access_check_matrix"] = run_included_study_access_check_matrix()
 
         access_result = st.session_state.get("included_study_access_check_result") or {}
         if provider == "gemini" and access_result:
@@ -5169,6 +5182,19 @@ def _render_included_study_extractor_tab():
                 st.caption(f"Gemini access OK: `{access_provider}` / `{access_model}` -> `{access_preview or 'ACCESS_OK'}`")
             elif access_error:
                 st.caption(f"Last Gemini access test failed for `{access_model}`: {access_error}")
+        access_matrix = list(st.session_state.get("included_study_access_check_matrix") or [])
+        if provider == "gemini" and access_matrix:
+            matrix_rows = []
+            for item in access_matrix:
+                matrix_rows.append(
+                    {
+                        "model": str(item.get("model") or "").strip(),
+                        "ok": "yes" if bool(item.get("ok")) else "no",
+                        "preview": str(item.get("preview") or "").strip(),
+                        "error": str(item.get("error") or "").strip(),
+                    }
+                )
+            st.dataframe(matrix_rows, use_container_width=True, hide_index=True)
 
         if selected and st.button(
             "Extract Included-Study Tables",

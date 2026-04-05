@@ -15,9 +15,14 @@ from cortex_engine.review_study_miner import _extract_authors_and_year
 
 _ROOT = Path(__file__).resolve().parent.parent
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
-_DEFAULT_GEMINI_MODEL = os.environ.get("CORTEX_INCLUDED_STUDY_GEMINI_MODEL", "").strip() or "gemini-2.5-pro"
+_DEFAULT_GEMINI_MODEL = os.environ.get("CORTEX_INCLUDED_STUDY_GEMINI_MODEL", "").strip() or "gemini-2.5-flash"
 _DEFAULT_ANTHROPIC_MODEL = os.environ.get("CORTEX_INCLUDED_STUDY_ANTHROPIC_MODEL", "").strip() or "claude-sonnet-4-6"
 _MAX_INLINE_PDF_BYTES = 22 * 1024 * 1024
+_COMMON_GEMINI_ACCESS_TEST_MODELS = (
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-3-flash-preview",
+)
 
 
 class IncludedStudyExtractorAPIError(RuntimeError):
@@ -244,6 +249,29 @@ def run_included_study_access_check(provider: str = "gemini", model: str = "") -
         "ok": bool(preview),
         "preview": preview[:200],
     }
+
+
+def run_included_study_access_check_matrix(models: Sequence[str] | None = None) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_model in list(models or _COMMON_GEMINI_ACCESS_TEST_MODELS):
+        model_name = str(raw_model or "").strip()
+        if not model_name or model_name in seen:
+            continue
+        seen.add(model_name)
+        try:
+            result = run_included_study_access_check(provider="gemini", model=model_name)
+            result["error"] = ""
+        except Exception as exc:
+            result = {
+                "provider": "gemini",
+                "model": model_name,
+                "ok": False,
+                "preview": "",
+                "error": str(exc),
+            }
+        results.append(result)
+    return results
 
 
 def _anthropic_client():

@@ -26,6 +26,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Added a separate `Included Study Extractor` tab that sends the full review PDF to Gemini or Claude, extracts grouped included-study tables at the trial/instrument level, resolves bibliography entries when possible, and lets operators select papers for resolver/retrieval without going through the row-heavy Study Miner path.
 - Included Study Extractor now surfaces Gemini quota/rate-limit failures more clearly and can fall back automatically to Anthropic when Gemini free-tier PDF extraction quota is exhausted.
 - Included Study Extractor now keeps Claude fallback off by default and includes a lightweight `Test Gemini Access` check so API access can be verified before attempting a full PDF extraction.
+- Included Study Extractor now defaults Gemini to `gemini-2.5-flash` and adds a one-click common-model access matrix so operators can see which Gemini models a project can actually call before running a full review PDF.
 
 ### 🌐 URL Ingestor UX + Source Capture Improvements
 
