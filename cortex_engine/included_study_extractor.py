@@ -458,6 +458,56 @@ def _included_study_prompt(review_title: str = "") -> str:
     )
 
 
+def _single_table_prompt(table_label: str = "", review_title: str = "", bibliography_text: str = "") -> str:
+    compact_bibliography = str(bibliography_text or "").strip()
+    if len(compact_bibliography) > 18000:
+        compact_bibliography = compact_bibliography[:18000].rstrip() + "\n...[truncated]"
+    return (
+        "You are extracting one included-study table from a systematic review PDF.\n\n"
+        "Return compact JSON only.\n"
+        "This PDF contains one table snippet, not the whole review.\n"
+        "Use the supplied bibliography text to reconcile reference numbers and short author/year labels when possible.\n"
+        "Keep the output short. Do not emit full author lists unless necessary.\n\n"
+        f"Review title: {review_title}\n"
+        f"Table label: {table_label}\n\n"
+        "Bibliography text from the same review:\n"
+        f"{compact_bibliography}\n\n"
+        "Return JSON with this exact shape:\n"
+        "{\n"
+        '  "tables": [\n'
+        "    {\n"
+        '      "table_number": "",\n'
+        '      "table_title": "",\n'
+        '      "grouping_basis": "",\n'
+        '      "groups": [\n'
+        "        {\n"
+        '          "group_label": "",\n'
+        '          "trial_label": "",\n'
+        '          "notes": "",\n'
+        '          "citations": [\n'
+        "            {\n"
+        '              "display": "",\n'
+        '              "authors": "",\n'
+        '              "year": "",\n'
+        '              "reference_number": "",\n'
+        '              "resolved_title": "",\n'
+        '              "resolved_authors": "",\n'
+        '              "resolved_year": "",\n'
+        '              "resolved_journal": "",\n'
+        '              "resolved_doi": "",\n'
+        '              "notes": "",\n'
+        '              "needs_review": false\n'
+        "            }\n"
+        "          ]\n"
+        "        }\n"
+        "      ]\n"
+        "    }\n"
+        "  ],\n"
+        '  "warnings": []\n'
+        "}\n"
+    )
+
+
 def _gemini_response_warnings(response_json: Dict[str, Any]) -> List[str]:
     warnings: List[str] = []
     for candidate in list(response_json.get("candidates") or []):
@@ -542,6 +592,99 @@ def run_included_study_extractor(
             "temperature": 0,
             "responseMimeType": "application/json",
             "maxOutputTokens": 8192,
+        },
+    }
+    try:
+        response_json = _gemini_generate_content(model_name, payload, api_key)
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        _raise_gemini_http_error(int(exc.code or 0), body)
+    except URLError as exc:
+        raise RuntimeError(f"Gemini API connection failed: {exc}") from exc
+    raw_response = _extract_gemini_text(response_json)
+    parsed = parse_included_study_extraction_response(raw_response)
+    return _finalize_included_study_result(
+        provider="gemini",
+        model=model_name,
+        parsed=parsed,
+        raw_response=raw_response,
+        extra_warnings=_gemini_response_warnings(response_json),
+    )
+
+
+def run_included_study_table_extractor(
+    *,
+    pdf_path: str,
+    bibliography_text: str,
+    provider: str = "gemini",
+    model: str = "",
+    review_title: str = "",
+    table_label: str = "",
+) -> Dict[str, Any]:
+    pdf_b64, _size_bytes = _build_pdf_inline_data(pdf_path)
+    provider_name = str(provider or "gemini").strip().lower()
+    prompt = _single_table_prompt(table_label=table_label, review_title=review_title, bibliography_text=bibliography_text)
+
+    if provider_name == "anthropic":
+        client = _anthropic_client()
+        model_name = str(model or _DEFAULT_ANTHROPIC_MODEL).strip() or _DEFAULT_ANTHROPIC_MODEL
+        response = client.messages.create(
+            model=model_name,
+            max_tokens=5000,
+            system="Extract one grouped included-study table from the PDF snippet and return only valid JSON.",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": pdf_b64,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        )
+        parts: List[str] = []
+        for block in response.content:
+            text = str(getattr(block, "text", "") or "").strip()
+            if text:
+                parts.append(text)
+        raw_response = "\n".join(parts).strip()
+        parsed = parse_included_study_extraction_response(raw_response)
+        return _finalize_included_study_result(
+            provider="anthropic",
+            model=model_name,
+            parsed=parsed,
+            raw_response=raw_response,
+        )
+
+    api_key = get_gemini_api_key()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    model_name = str(model or _DEFAULT_GEMINI_MODEL).strip() or _DEFAULT_GEMINI_MODEL
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inline_data": {
+                            "mime_type": "application/pdf",
+                            "data": pdf_b64,
+                        }
+                    },
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0,
+            "responseMimeType": "application/json",
+            "maxOutputTokens": 4096,
         },
     }
     try:

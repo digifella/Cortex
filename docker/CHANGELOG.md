@@ -29,6 +29,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Included Study Extractor now defaults Gemini to `gemini-2.5-flash` and adds a one-click common-model access matrix so operators can see which Gemini models a project can actually call before running a full review PDF.
 - Included Study Extractor now keeps the run visible even when zero tables are parsed, surfacing warnings plus downloadable raw model output instead of showing a misleading “complete” state with no visible result.
 - Included Study Extractor now asks Gemini for a leaner first-pass table schema and normalizes labels like `Table 2` into numeric table numbers, reducing truncated JSON failures on `gemini-2.5-flash`.
+- Included Study Extractor now has a staged review-slicer workflow: it can split a review PDF into per-table snippet PDFs, extract the bibliography into separate text/CSV artifacts, and run Gemini/Claude table-by-table against those smaller snippets instead of only against the full review PDF.
 
 ### 🌐 URL Ingestor UX + Source Capture Improvements
 

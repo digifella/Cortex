@@ -45,7 +45,9 @@ from cortex_engine.included_study_extractor import (
     run_included_study_access_check,
     run_included_study_access_check_matrix,
     run_included_study_extractor_with_fallback,
+    run_included_study_table_extractor,
 )
+from cortex_engine.included_study_slicer import slice_review_pdf
 from cortex_engine.research_resolve import (
     build_research_preferred_url_list,
     build_research_preview_rows,
@@ -299,6 +301,53 @@ def _set_included_study_keep_state(editor_rows: List[Dict[str, Any]], keep_value
         normalized["keep"] = bool(keep_value)
         updated.append(normalized)
     return updated
+
+
+def _combine_included_study_slice_runs(slice_runs: List[Dict[str, Any]], *, provider: str, model: str) -> Dict[str, Any]:
+    tables: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    raw_parts: List[str] = []
+    for item in slice_runs or []:
+        extraction = dict(item.get("extraction") or {})
+        label = str(item.get("label") or "").strip()
+        tables.extend(list(extraction.get("tables") or []))
+        warnings.extend([f"{label}: {warning}" for warning in list(extraction.get("warnings") or []) if str(warning).strip()])
+        raw = str(extraction.get("raw_response") or "").strip()
+        if raw:
+            raw_parts.append(f"## {label}\n{raw}")
+    return {
+        "provider": provider,
+        "model": model,
+        "tables": tables,
+        "warnings": warnings,
+        "raw_response": "\n\n".join(raw_parts),
+    }
+
+
+def _included_study_slice_zip_bytes(slice_meta: Dict[str, Any], bibliography_text: str, extraction: Dict[str, Any] | None = None) -> bytes:
+    label = str(slice_meta.get("label") or "table").strip().replace(" ", "_")
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        pdf_path = Path(str(slice_meta.get("pdf_path") or "").strip())
+        if pdf_path.exists():
+            zf.writestr(str(slice_meta.get("pdf_file_name") or pdf_path.name), pdf_path.read_bytes())
+        manifest = {
+            "table_number": str(slice_meta.get("table_number") or "").strip(),
+            "table_title": str(slice_meta.get("table_title") or "").strip(),
+            "kind": str(slice_meta.get("kind") or "").strip(),
+            "page_numbers": list(slice_meta.get("page_numbers") or []),
+            "label": str(slice_meta.get("label") or "").strip(),
+        }
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+        zf.writestr("bibliography.txt", str(bibliography_text or ""))
+        if extraction:
+            zf.writestr("extraction.json", json.dumps(extraction, indent=2))
+            rows = _included_study_editor_rows(list(extraction.get("tables") or []))
+            if rows:
+                import pandas as pd
+
+                zf.writestr("extraction.csv", pd.DataFrame(rows).to_csv(index=False))
+    return mem.getvalue()
 
 
 def _study_miner_candidate_rows(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -5196,6 +5245,60 @@ def _render_included_study_extractor_tab():
                 )
             st.dataframe(matrix_rows, use_container_width=True, hide_index=True)
 
+        st.subheader("Review Slicer")
+        if selected and st.button(
+            "Slice PDF into Table PDFs + Bibliography",
+            use_container_width=True,
+            key="included_study_slice_pdf_btn",
+        ):
+            try:
+                with st.spinner("Slicing review PDF into table snippets and bibliography..."):
+                    slice_result = slice_review_pdf(str(selected))
+                st.session_state["included_study_slice_result"] = slice_result
+                st.success(
+                    f"Sliced {len(slice_result.get('table_slices') or [])} table PDF(s); bibliography pages: "
+                    f"{', '.join(str(p) for p in list(slice_result.get('bibliography_pages') or [])) or 'none'}"
+                )
+            except Exception as e:
+                st.error(f"PDF slicing failed: {e}")
+
+        slice_result = st.session_state.get("included_study_slice_result") or {}
+        if slice_result:
+            st.caption(
+                f"Detected {len(slice_result.get('table_slices') or [])} table slice(s) and "
+                f"{len(slice_result.get('bibliography_entries') or [])} parsed bibliography entrie(s)."
+            )
+            if selected and st.button(
+                "Extract All Sliced Tables",
+                type="secondary",
+                use_container_width=True,
+                key="included_study_extract_sliced_btn",
+                disabled=not included_study_extractor_available(provider),
+            ):
+                try:
+                    review_title = _user_visible_stem(selected)
+                    slice_runs: List[Dict[str, Any]] = []
+                    with st.spinner("Extracting sliced tables one by one..."):
+                        for table_slice in list(slice_result.get("table_slices") or []):
+                            extraction = run_included_study_table_extractor(
+                                pdf_path=str(table_slice.get("pdf_path") or ""),
+                                bibliography_text=str(slice_result.get("bibliography_text") or ""),
+                                provider=provider,
+                                model=model,
+                                review_title=review_title,
+                                table_label=str(table_slice.get("label") or ""),
+                            )
+                            slice_runs.append({**dict(table_slice), "extraction": extraction})
+                    st.session_state["included_study_slice_runs"] = slice_runs
+                    combined = _combine_included_study_slice_runs(slice_runs, provider=provider, model=model)
+                    st.session_state["included_study_result"] = combined
+                    st.session_state["included_study_editor_rows"] = _included_study_editor_rows(combined.get("tables") or [])
+                    st.success("Sliced-table extraction complete.")
+                except IncludedStudyExtractorQuotaError as e:
+                    st.error(f"Sliced-table extraction failed: {e}")
+                except Exception as e:
+                    st.error(f"Sliced-table extraction failed: {e}")
+
         if selected and st.button(
             "Extract Included-Study Tables",
             type="primary",
@@ -5227,6 +5330,52 @@ def _render_included_study_extractor_tab():
 
     with right:
         st.header("Grouped Output")
+        slice_result = st.session_state.get("included_study_slice_result") or {}
+        slice_runs = list(st.session_state.get("included_study_slice_runs") or [])
+        if slice_result:
+            bibliography_text = str(slice_result.get("bibliography_text") or "")
+            bibliography_entries = list(slice_result.get("bibliography_entries") or [])
+            with st.expander("Sliced Artifacts", expanded=False):
+                st.caption(
+                    f"Table slices: {len(slice_result.get('table_slices') or [])} • "
+                    f"Bibliography entries: {len(bibliography_entries)}"
+                )
+                if bibliography_text:
+                    st.download_button(
+                        "Download Bibliography TXT",
+                        data=bibliography_text,
+                        file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_bibliography.txt",
+                        mime="text/plain",
+                        use_container_width=True,
+                        key="included_study_download_bibliography_txt",
+                    )
+                bibliography_csv_path = str(slice_result.get("bibliography_csv_path") or "").strip()
+                if bibliography_csv_path and Path(bibliography_csv_path).exists():
+                    st.download_button(
+                        "Download Bibliography CSV",
+                        data=Path(bibliography_csv_path).read_bytes(),
+                        file_name=Path(bibliography_csv_path).name,
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="included_study_download_bibliography_csv",
+                    )
+                run_lookup = {
+                    str(item.get("label") or "").strip(): dict(item)
+                    for item in slice_runs
+                    if str(item.get("label") or "").strip()
+                }
+                for table_slice in list(slice_result.get("table_slices") or []):
+                    label = str(table_slice.get("label") or "table").strip()
+                    extraction = dict(run_lookup.get(label, {}).get("extraction") or {})
+                    zip_bytes = _included_study_slice_zip_bytes(table_slice, bibliography_text, extraction or None)
+                    st.download_button(
+                        f"Download {label} ZIP",
+                        data=zip_bytes,
+                        file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_{label.replace(' ', '_')}.zip",
+                        mime="application/zip",
+                        use_container_width=True,
+                        key=f"included_study_download_slice_zip_{label}",
+                    )
         result = st.session_state.get("included_study_result") or {}
         tables = list(result.get("tables") or [])
         if result:
