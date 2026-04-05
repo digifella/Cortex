@@ -5364,17 +5364,18 @@ def _render_included_study_extractor_tab():
                     for item in slice_runs
                     if str(item.get("label") or "").strip()
                 }
-                for table_slice in list(slice_result.get("table_slices") or []):
+                for idx, table_slice in enumerate(list(slice_result.get("table_slices") or []), start=1):
                     label = str(table_slice.get("label") or "table").strip()
                     extraction = dict(run_lookup.get(label, {}).get("extraction") or {})
                     zip_bytes = _included_study_slice_zip_bytes(table_slice, bibliography_text, extraction or None)
+                    key_suffix = str(table_slice.get("pdf_file_name") or table_slice.get("pdf_path") or idx).replace("/", "_")
                     st.download_button(
                         f"Download {label} ZIP",
                         data=zip_bytes,
                         file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_{label.replace(' ', '_')}.zip",
                         mime="application/zip",
                         use_container_width=True,
-                        key=f"included_study_download_slice_zip_{label}",
+                        key=f"included_study_download_slice_zip_{idx}_{key_suffix}",
                     )
         result = st.session_state.get("included_study_result") or {}
         tables = list(result.get("tables") or [])
