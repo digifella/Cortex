@@ -311,6 +311,63 @@ def test_run_included_study_extractor_anthropic_normalizes_tables(monkeypatch, t
     assert result["tables"][0]["groups"][0]["citations"][0]["reference_number"] == "54"
 
 
+def test_run_included_study_extractor_anthropic_surfaces_non_terminal_stop_reason(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "review.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                stop_reason="max_tokens",
+                content=[
+                    SimpleNamespace(
+                        text="""
+                        {
+                          "tables": [
+                            {
+                              "table_number": "2",
+                              "table_title": "Overview",
+                              "grouping_basis": "Grouped by trial",
+                              "groups": [
+                                {
+                                  "group_label": "Global",
+                                  "trial_label": "JULIET",
+                                  "citations": [
+                                    {
+                                      "display": "Maziarz 2020 [19]",
+                                      "authors": "Maziarz",
+                                      "year": "2020",
+                                      "reference_number": "19",
+                                      "notes": "",
+                                      "needs_review": false
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                        """
+                    )
+                ],
+            )
+
+    class _FakeClient:
+        def __init__(self):
+            self.messages = _FakeMessages()
+
+    monkeypatch.setattr("cortex_engine.included_study_extractor._anthropic_client", lambda: _FakeClient())
+
+    result = run_included_study_extractor(
+        pdf_path=str(pdf_path),
+        provider="anthropic",
+        model="claude-sonnet-4-6",
+        review_title="Review",
+    )
+
+    assert any("Anthropic stop reason: max_tokens" in item for item in result["warnings"])
+
+
 def test_run_included_study_extractor_gemini_raises_quota_error(monkeypatch, tmp_path):
     pdf_path = tmp_path / "review.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")

@@ -476,8 +476,12 @@ def _single_table_prompt(table_label: str = "", review_title: str = "", bibliogr
         "You are extracting one included-study table from a systematic review PDF.\n\n"
         "Return compact JSON only.\n"
         "This PDF contains one table snippet, not the whole review.\n"
-        "Use the supplied bibliography text to reconcile reference numbers and short author/year labels when possible.\n"
-        "Keep the output short. Do not emit full author lists unless necessary.\n\n"
+        "Use the supplied bibliography text only to reconcile reference numbers and short author/year labels when possible.\n"
+        "Keep the output short.\n"
+        "Do not emit full author lists.\n"
+        "Do not emit long paper titles or journal names unless a very short title is the only way to disambiguate the citation.\n"
+        "Prefer leaving optional resolved fields blank rather than filling them with long text.\n"
+        "Keep notes brief and high-level; do not restate every numeric table value.\n\n"
         f"Review title: {review_title}\n"
         f"Table label: {table_label}\n\n"
         "Bibliography text from the same review:\n"
@@ -514,7 +518,13 @@ def _single_table_prompt(table_label: str = "", review_title: str = "", bibliogr
         "    }\n"
         "  ],\n"
         '  "warnings": []\n'
-        "}\n"
+        "}\n\n"
+        "Important:\n"
+        "- `display` should usually be like `Author 2021 [17]`.\n"
+        "- `authors` should be short, e.g. `Patrick` or `Patrick et al.`.\n"
+        "- `resolved_title` should be empty unless a short disambiguating title is trivial.\n"
+        "- Leave `resolved_authors`, `resolved_year`, `resolved_journal`, and `resolved_doi` blank unless trivially obvious and short.\n"
+        "- Consolidate repeated measure rows rather than repeating every metric.\n"
     )
 
 
@@ -528,6 +538,14 @@ def _gemini_response_warnings(response_json: Dict[str, Any]) -> List[str]:
     block_reason = str(prompt_feedback.get("blockReason") or "").strip()
     if block_reason:
         warnings.append(f"Gemini prompt feedback: {block_reason}")
+    return warnings
+
+
+def _anthropic_response_warnings(response: Any) -> List[str]:
+    warnings: List[str] = []
+    stop_reason = str(getattr(response, "stop_reason", "") or "").strip()
+    if stop_reason and stop_reason.lower() not in {"end_turn", "stop_sequence"}:
+        warnings.append(f"Anthropic stop reason: {stop_reason}")
     return warnings
 
 
@@ -578,6 +596,7 @@ def run_included_study_extractor(
             model=model_name,
             parsed=parsed,
             raw_response=raw_response,
+            extra_warnings=_anthropic_response_warnings(response),
         )
 
     api_key = get_gemini_api_key()
@@ -671,6 +690,7 @@ def run_included_study_table_extractor(
             model=model_name,
             parsed=parsed,
             raw_response=raw_response,
+            extra_warnings=_anthropic_response_warnings(response),
         )
 
     api_key = get_gemini_api_key()
