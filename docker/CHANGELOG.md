@@ -5,14 +5,21 @@ All notable changes to the Cortex Suite project will be documented in this file.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-### ⚙️ Local Queue Worker Harness
+### 📚 Research Resolver + Document Extract Workflow
 
 ### ✨ New Features
-- Added `worker/` local queue harness for polling `queue_worker_api.php`, downloading inputs, heartbeats, handler execution, and uploading completion/failure.
-- Added handler registry and `pdf_anonymise` worker handler scaffold for generic type-based task execution.
+- Added `research_resolve` queue-worker support for citation spreadsheet resolution via CrossRef, Unpaywall, and SJR enrichment.
+- Added a permanent `Research Resolver` tab to Document Extract for pasted/uploaded TSV, CSV, and XLSX citation sheets.
+- Added spreadsheet parsing helpers for column detection, DOI deduplication, editable preview, and preferred OA/DOI URL handoff.
+- Moved the URL PDF Ingestor workflow into Document Extract as a dedicated sibling tab for tighter resolver-to-ingest flow.
 
 ### 🚀 Improvements
-- Worker `pdf_anonymise` path reuses existing `cortex_engine.anonymizer.DocumentAnonymizer` to avoid duplicate anonymization logic with Document Extract UI.
+- URL ingestor Streamlit UI is now shared through `cortex_engine/url_ingestor_ui.py` so the in-page tab and legacy standalone page stay aligned.
+- Legacy `pages/14_URL_Ingestor.py` now acts as a thin compatibility wrapper that points users to the integrated Document Extract workflow.
+- Journal ranking enrichment now accepts the SCImago JSON dataset expected by the website resolver design, while retaining XLSX fallback.
+- Research Resolver open-access detection now falls back to publisher-page and publisher-policy signals for cases like MDPI-hosted articles that are free to access but underreported by Unpaywall.
+- Gemma 4 local Ollama models are now first-class options for Cortex synthesis/research workflows, with long-context metadata and recommendation support across model selection surfaces.
+- Study Miner now supports batch systematic-review screening, bibliography-linked candidate extraction, parse-evidence inspection, and an opt-in Claude Sonnet rescue path for complex review tables.
 - Claude Sonnet table rescue now attaches the source PDF directly when available, using extracted table/page hints only to steer the model toward the likely review tables.
 - Study Miner now includes an Ollama local table rescue path that renders continuation-table PDF pages, asks a local vision model for structured rows, and then links those rows back to the review references.
 - Study Miner local table rescue now defaults to `qwen3.5:35b-a3b` when available, with lighter Ollama vision fallbacks retained for smaller setups.
@@ -34,6 +41,49 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Included Study Extractor now defaults to Anthropic `Claude Sonnet` when an Anthropic key is available, while keeping Gemini Flash as the cheaper explicitly opt-in path for operators who want lower-cost but rate-limited extraction.
 - Included Study Extractor now has a `Study Scope` switch for `All included trials/studies` versus `RCT/clinical trials only`, and the Sonnet/Gemini prompts now request optional structured fields such as study design, sample size, outcome measure, and outcome result when the table provides them.
 - Sliced included-study extraction now keeps a per-slice progress log, can auto-wait/retry Gemini free-tier quota throttles across multiple backoff cycles per table slice, and preserves completed slices so operators can resume remaining tables or rerun single slices after a quota pause.
+- Included Study Extractor now exports a grouped website handoff JSON and a ZIP bundle containing the selected CSV plus both resolver and website payload JSON, so website testing can consume the same table-aware selection without losing the flat resolver handoff.
+
+### ⚠️ Known Limitation
+- Rotated multi-page systematic-review tables are still not reconstructed reliably. The Claude rescue path now prefers the full source PDF, but very large PDFs can still fall back to extracted table evidence and the model can still struggle with ambiguous continuation pages.
+
+### 🧠 Cortex Intelligence Intake + Review Loop
+
+### ✨ New Features
+- Added direct IMAP mailbox intake for Cortex-owned intelligence inboxes via `worker/intel_mailbox_worker.py` and `cortex_engine/intel_mailbox.py`.
+- Added `intel_extract` pipeline for email, HTML, attachment, OCR, and image-based entity extraction with website callback delivery.
+- Added stakeholder intelligence storage, matching, target update detection, and digest generation for person/organisation/theme workflows.
+- Added Streamlit `Stakeholder Signals` review page for manual signal testing, digest generation, and profile/update review.
+
+### 🚀 Improvements
+- Expanded queue handoff contract and worker registry to support `intel_extract`, `stakeholder_profile_sync`, `signal_ingest`, and `signal_digest`.
+- Added rich profile sync support for external profile IDs, organisation metadata, watch state, and current profile fields used by Market Radar.
+- Updated YouTube summarisation output to include smarter report titles and source clip metadata.
+- WATCH digest synthesis now prefers local `qwen3.5` Ollama models with fallback logic and configurable timeout.
+- Vision model selection now prefers installed `qwen3-vl` models and falls back cleanly to `llava:latest`.
+
+### 🔧 Bug Fixes
+- Fixed queue worker completion/failure response validation so false positives fail loudly.
+- Fixed intel extraction crashes on list-valued evidence payloads.
+- Fixed mailbox attachment persistence so duplicate filenames no longer overwrite each other.
+- Fixed direct Cortex website callback handling so application-level JSON errors are treated as real delivery failures.
+- Fixed Study Miner local Ollama rescue for thinking-capable models such as `qwen3.5:35b-a3b` by disabling reasoning mode in the chat payload so JSON lands in `message.content` instead of an empty response.
+- Increased the local Ollama table-rescue output budget and tightened the JSON-only instruction so multi-page continuation tables are less likely to truncate before Cortex can parse them.
+- Fixed Study Miner reference parsing so local/cloud table rescue can link against bare extracted reference excerpts even when the `References` heading has already been stripped.
+- Added continuation-row cleanup in local table rescue so obvious measure-label spillover rows inherit the correct study, citation, and treatment context from the prior row.
+- Study Miner candidate review now includes `Select All` / `Deselect All` controls, and parse-evidence rendering is optional so row selection no longer forces the heaviest table/image UI to rebuild on every click.
+- Study Miner local rescue now runs a second full-PDF local reconciliation pass after the initial table extraction, using `qwen3.5:35b-a3b` to consolidate grouped study citations, recover missing references, and cross-check bibliography links against the whole review.
+- Study Miner now shows a local rescue log pane during Ollama runs so you can see the active model, rescue/reconciliation stages, candidate counts, and a short local output preview instead of only a spinner.
+- Study Miner CSV export now includes explicit bibliography reconciliation fields such as `reference_number`, `reference_match_method`, and `reference_validation`, and filters structural junk rows from the candidate table before export.
+- Fixed Study Miner table-scoped reconciliation so ref-matched local reconciliation rows snap back onto the provisional table groups instead of introducing new comparison-label groups into the export.
+
+### ⚙️ Local Queue Worker Harness
+
+### ✨ New Features
+- Added `worker/` local queue harness for polling `queue_worker_api.php`, downloading inputs, heartbeats, handler execution, and uploading completion/failure.
+- Added handler registry and `pdf_anonymise` worker handler scaffold for generic type-based task execution.
+
+### 🚀 Improvements
+- Worker `pdf_anonymise` path reuses existing `cortex_engine.anonymizer.DocumentAnonymizer` to avoid duplicate anonymization logic with Document Extract UI.
 
 ### 🌐 URL Ingestor UX + Source Capture Improvements
 
@@ -79,15 +129,6 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     - `credibility`
 
 ### 🔧 Bug Fixes
-- Fixed Study Miner local Ollama rescue for thinking-capable models such as `qwen3.5:35b-a3b` by disabling reasoning mode in the chat payload so JSON lands in `message.content` instead of an empty response.
-- Increased the local Ollama table-rescue output budget and tightened the JSON-only instruction so multi-page continuation tables are less likely to truncate before Cortex can parse them.
-- Fixed Study Miner reference parsing so local/cloud table rescue can link against bare extracted reference excerpts even when the `References` heading has already been stripped.
-- Added continuation-row cleanup in local table rescue so obvious measure-label spillover rows inherit the correct study, citation, and treatment context from the prior row.
-- Study Miner candidate review now includes `Select All` / `Deselect All` controls, and parse-evidence rendering is optional so row selection no longer forces the heaviest table/image UI to rebuild on every click.
-- Study Miner local rescue now runs a second full-PDF local reconciliation pass after the initial table extraction, using `qwen3.5:35b-a3b` to consolidate grouped study citations, recover missing references, and cross-check bibliography links against the whole review.
-- Study Miner now shows a local rescue log pane during Ollama runs so you can see the active model, rescue/reconciliation stages, candidate counts, and a short local output preview instead of only a spinner.
-- Study Miner CSV export now includes explicit bibliography reconciliation fields such as `reference_number`, `reference_match_method`, and `reference_validation`, and filters structural junk rows from the candidate table before export.
-- Fixed Study Miner table-scoped reconciliation so ref-matched local reconciliation rows snap back onto the provisional table groups instead of introducing new comparison-label groups into the export.
 - Restored `run_synthesis` compatibility shim in `cortex_engine/knowledge_synthesizer.py` to prevent breakage in legacy call paths.
 - Async ingestion metadata now always includes canonical credibility defaults, avoiding missing-tier records on alternate ingestion paths.
 - Credibility retrofit scope matching now supports mixed collection identifier formats (`doc_id` hashes, UUID chunk IDs, nested `_node_content.metadata.doc_id`).

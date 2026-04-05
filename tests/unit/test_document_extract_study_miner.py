@@ -807,6 +807,102 @@ def test_merge_included_study_editor_rows_builds_research_payload_rows():
     assert merged[0]["extra_fields"]["study_design"] == "Phase 1 single-arm trial"
 
 
+def test_build_included_study_website_payload_groups_selected_rows():
+    module = _load_document_extract_module()
+
+    editor_rows = [
+        {
+            "keep": True,
+            "row_id": 1,
+            "table_number": "2",
+            "table_title": "Overview of Included Studies on HRQOL Measures",
+            "grouping_basis": "Grouped by instrument",
+            "group_label": "EORTC QLQ-C30",
+            "trial_label": "TRANSCEND NHL 001",
+            "combined_group": "EORTC QLQ-C30 / TRANSCEND NHL 001",
+            "citation_display": "Patrick 2021 [17]",
+            "title": "Health-related quality of life with lisocabtagene maraleucel",
+            "authors": "Patrick D",
+            "year": "2021",
+            "doi": "",
+            "journal": "",
+            "reference_number": "17",
+            "study_design": "",
+            "sample_size": "",
+            "outcome_measure": "",
+            "outcome_result": "",
+            "notes": "",
+            "needs_review": "",
+        },
+        {
+            "keep": True,
+            "row_id": 2,
+            "table_number": "2",
+            "table_title": "Overview of Included Studies on HRQOL Measures",
+            "grouping_basis": "Grouped by instrument",
+            "group_label": "EORTC QLQ-C30",
+            "trial_label": "TRANSCEND NHL 001",
+            "combined_group": "EORTC QLQ-C30 / TRANSCEND NHL 001",
+            "citation_display": "Patrick 2020 [37]",
+            "title": "Impact of lisocabtagene maraleucel",
+            "authors": "Patrick D",
+            "year": "2020",
+            "doi": "",
+            "journal": "",
+            "reference_number": "37",
+            "study_design": "",
+            "sample_size": "",
+            "outcome_measure": "",
+            "outcome_result": "",
+            "notes": "Co-citation",
+            "needs_review": "",
+        },
+        {
+            "keep": False,
+            "row_id": 3,
+            "table_number": "3",
+            "table_title": "Overview of Included Studies on Health State Utility Values",
+            "grouping_basis": "Grouped by instrument",
+            "group_label": "EQ-5D",
+            "trial_label": "ZUMA-1",
+            "combined_group": "EQ-5D / ZUMA-1",
+            "citation_display": "Lin 2019 [42]",
+            "title": "Preference-weighted health status",
+            "authors": "Lin V",
+            "year": "2019",
+            "doi": "",
+            "journal": "",
+            "reference_number": "42",
+            "study_design": "",
+            "sample_size": "",
+            "outcome_measure": "",
+            "outcome_result": "",
+            "notes": "",
+            "needs_review": "",
+        },
+    ]
+
+    resolver_payload = {"citations": [{"row_id": 1, "title": "Health-related quality of life with lisocabtagene maraleucel"}]}
+    payload = module._build_included_study_website_payload(
+        editor_rows,
+        extraction_scope="rct_or_clinical",
+        output_detail="reference_map",
+        focus_label="table 2",
+        resolver_payload=resolver_payload,
+    )
+
+    assert payload["action"] == "included_study_extract_handoff"
+    assert payload["included_study_context"]["focused_table_label"] == "table 2"
+    assert payload["selection_summary"]["selected_paper_count"] == 2
+    assert payload["selection_summary"]["table_count"] == 1
+    assert payload["selection_summary"]["group_count"] == 1
+    assert len(payload["tables"]) == 1
+    assert payload["tables"][0]["table_number"] == "2"
+    assert payload["tables"][0]["groups"][0]["combined_group"] == "EORTC QLQ-C30 / TRANSCEND NHL 001"
+    assert [item["reference_number"] for item in payload["tables"][0]["groups"][0]["citations"]] == ["17", "37"]
+    assert payload["resolver_payload"] == resolver_payload
+
+
 def test_run_included_study_table_slice_retries_multiple_quota_waits_before_success():
     module = _load_document_extract_module()
     waits = []

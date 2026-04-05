@@ -333,6 +333,119 @@ def _build_included_study_research_payload(
     return payload
 
 
+def _build_included_study_website_payload(
+    editor_rows: List[Dict[str, Any]],
+    *,
+    extraction_scope: str,
+    output_detail: str,
+    focus_label: str = "",
+    resolver_payload: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    selected_rows = [dict(row) for row in editor_rows or [] if bool(row.get("keep", True))]
+    tables: List[Dict[str, Any]] = []
+    table_lookup: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+
+    for row in selected_rows:
+        table_number = str(row.get("table_number") or "").strip()
+        table_title = str(row.get("table_title") or "").strip()
+        grouping_basis = str(row.get("grouping_basis") or "").strip()
+        table_key = (table_number, table_title, grouping_basis)
+        table_entry = table_lookup.get(table_key)
+        if table_entry is None:
+            table_entry = {
+                "table_number": table_number,
+                "table_title": table_title,
+                "grouping_basis": grouping_basis,
+                "groups": [],
+            }
+            table_entry["_group_lookup"] = {}
+            table_lookup[table_key] = table_entry
+            tables.append(table_entry)
+
+        group_label = str(row.get("group_label") or "").strip()
+        trial_label = str(row.get("trial_label") or "").strip()
+        combined_group = str(row.get("combined_group") or "").strip()
+        group_key = (group_label, trial_label, combined_group)
+        group_lookup = table_entry["_group_lookup"]
+        group_entry = group_lookup.get(group_key)
+        if group_entry is None:
+            group_entry = {
+                "group_label": group_label,
+                "trial_label": trial_label,
+                "combined_group": combined_group,
+                "citations": [],
+            }
+            group_lookup[group_key] = group_entry
+            table_entry["groups"].append(group_entry)
+
+        group_entry["citations"].append(
+            {
+                "citation_display": str(row.get("citation_display") or "").strip(),
+                "title": str(row.get("title") or "").strip(),
+                "authors": str(row.get("authors") or "").strip(),
+                "year": str(row.get("year") or "").strip(),
+                "doi": str(row.get("doi") or "").strip(),
+                "journal": str(row.get("journal") or "").strip(),
+                "reference_number": str(row.get("reference_number") or "").strip(),
+                "notes": str(row.get("notes") or "").strip(),
+                "needs_review": str(row.get("needs_review") or "").strip().lower() == "yes",
+                "study_design": str(row.get("study_design") or "").strip(),
+                "sample_size": str(row.get("sample_size") or "").strip(),
+                "outcome_measure": str(row.get("outcome_measure") or "").strip(),
+                "outcome_result": str(row.get("outcome_result") or "").strip(),
+            }
+        )
+
+    for table_entry in tables:
+        table_entry.pop("_group_lookup", None)
+
+    payload = {
+        "action": "included_study_extract_handoff",
+        "source_workflow": "included_study_extractor",
+        "included_study_context": {
+            "extraction_scope": str(extraction_scope or "").strip(),
+            "output_detail": str(output_detail or "").strip(),
+            "focused_table_label": str(focus_label or "").strip(),
+        },
+        "selection_summary": {
+            "selected_paper_count": len(selected_rows),
+            "table_count": len(tables),
+            "group_count": sum(len(list(item.get("groups") or [])) for item in tables),
+        },
+        "tables": tables,
+    }
+    if resolver_payload:
+        payload["resolver_payload"] = dict(resolver_payload)
+    return payload
+
+
+def _build_included_study_handoff_bundle_bytes(
+    editor_rows: List[Dict[str, Any]],
+    *,
+    extraction_scope: str,
+    output_detail: str,
+    focus_label: str = "",
+    resolver_payload: Dict[str, Any],
+) -> bytes:
+    import pandas as pd
+
+    website_payload = _build_included_study_website_payload(
+        editor_rows,
+        extraction_scope=extraction_scope,
+        output_detail=output_detail,
+        focus_label=focus_label,
+        resolver_payload=resolver_payload,
+    )
+    selected_rows = [dict(row) for row in editor_rows or [] if bool(row.get("keep", True))]
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("included_study_selection.csv", pd.DataFrame(editor_rows or []).to_csv(index=False))
+        zf.writestr("included_study_selected_rows.csv", pd.DataFrame(selected_rows or []).to_csv(index=False))
+        zf.writestr("research_resolver_payload.json", json.dumps(resolver_payload, indent=2))
+        zf.writestr("included_study_website_handoff.json", json.dumps(website_payload, indent=2))
+    return mem.getvalue()
+
+
 def _set_included_study_keep_state(editor_rows: List[Dict[str, Any]], keep_value: bool) -> List[Dict[str, Any]]:
     updated: List[Dict[str, Any]] = []
     for row in editor_rows or []:
@@ -5873,14 +5986,6 @@ def _render_included_study_extractor_tab():
                     import pandas as pd
 
                     export_csv = pd.DataFrame(editor_rows).to_csv(index=False)
-                    st.download_button(
-                        "Download Included-Study Selection CSV",
-                        data=export_csv,
-                        file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_included_study_extractor.csv",
-                        mime="text/csv",
-                        use_container_width=True,
-                        key="included_study_download_csv",
-                    )
                     resolver_payload = _build_included_study_research_payload(
                         editor_rows,
                         check_open_access=resolver_check_oa,
@@ -5890,6 +5995,28 @@ def _render_included_study_extractor_tab():
                         output_detail=str(st.session_state.get("included_study_output_detail") or "reference_map"),
                         focus_label=focus_label,
                     )
+                    website_payload = _build_included_study_website_payload(
+                        editor_rows,
+                        extraction_scope=str(st.session_state.get("included_study_scope") or "all_trials"),
+                        output_detail=str(st.session_state.get("included_study_output_detail") or "reference_map"),
+                        focus_label=focus_label,
+                        resolver_payload=resolver_payload,
+                    )
+                    handoff_bundle = _build_included_study_handoff_bundle_bytes(
+                        editor_rows,
+                        extraction_scope=str(st.session_state.get("included_study_scope") or "all_trials"),
+                        output_detail=str(st.session_state.get("included_study_output_detail") or "reference_map"),
+                        focus_label=focus_label,
+                        resolver_payload=resolver_payload,
+                    )
+                    st.download_button(
+                        "Download Included-Study Selection CSV",
+                        data=export_csv,
+                        file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_included_study_extractor.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="included_study_download_csv",
+                    )
                     st.download_button(
                         "Download Research Resolver Payload JSON",
                         data=json.dumps(resolver_payload, indent=2),
@@ -5897,6 +6024,22 @@ def _render_included_study_extractor_tab():
                         mime="application/json",
                         use_container_width=True,
                         key="included_study_download_resolver_payload",
+                    )
+                    st.download_button(
+                        "Download Website Handoff JSON",
+                        data=json.dumps(website_payload, indent=2),
+                        file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_included_study_website_handoff.json",
+                        mime="application/json",
+                        use_container_width=True,
+                        key="included_study_download_website_payload",
+                    )
+                    st.download_button(
+                        "Download Website Handoff ZIP",
+                        data=handoff_bundle,
+                        file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_included_study_handoff_bundle.zip",
+                        mime="application/zip",
+                        use_container_width=True,
+                        key="included_study_download_website_bundle",
                     )
 
                 if st.button(
