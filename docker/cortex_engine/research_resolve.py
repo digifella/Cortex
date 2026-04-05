@@ -241,6 +241,7 @@ def parse_research_spreadsheet_upload(filename: str, data: bytes) -> Dict[str, A
 def build_research_preview_rows(citations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     rows = []
     for citation in citations or []:
+        extra_fields = dict(citation.get("extra_fields") or {})
         rows.append(
             {
                 "keep": True,
@@ -251,6 +252,10 @@ def build_research_preview_rows(citations: List[Dict[str, Any]]) -> List[Dict[st
                 "doi": citation.get("doi", ""),
                 "journal": citation.get("journal", ""),
                 "accession": citation.get("accession", ""),
+                "source_table": extra_fields.get("table_number") or "",
+                "source_trial": extra_fields.get("trial_label") or "",
+                "source_group": extra_fields.get("combined_group") or extra_fields.get("group_label") or "",
+                "source_ref": extra_fields.get("reference_number") or "",
                 "confidence": citation.get("preview_confidence") or _preview_confidence(citation),
             }
         )

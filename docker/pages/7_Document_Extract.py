@@ -307,6 +307,32 @@ def _merge_included_study_editor_rows(editor_rows: List[Dict[str, Any]]) -> List
     return merged
 
 
+def _build_included_study_research_payload(
+    editor_rows: List[Dict[str, Any]],
+    *,
+    check_open_access: bool,
+    enrich_sjr: bool,
+    unpaywall_email: str,
+    extraction_scope: str,
+    output_detail: str,
+    focus_label: str = "",
+) -> Dict[str, Any]:
+    citations = _merge_included_study_editor_rows(editor_rows)
+    payload = _build_study_miner_research_payload(
+        citations,
+        check_open_access=check_open_access,
+        enrich_sjr=enrich_sjr,
+        unpaywall_email=unpaywall_email,
+    )
+    payload["source_workflow"] = "included_study_extractor"
+    payload["included_study_context"] = {
+        "extraction_scope": str(extraction_scope or "").strip(),
+        "output_detail": str(output_detail or "").strip(),
+        "focused_table_label": str(focus_label or "").strip(),
+    }
+    return payload
+
+
 def _set_included_study_keep_state(editor_rows: List[Dict[str, Any]], keep_value: bool) -> List[Dict[str, Any]]:
     updated: List[Dict[str, Any]] = []
     for row in editor_rows or []:
@@ -5824,6 +5850,23 @@ def _render_included_study_extractor_tab():
                         use_container_width=True,
                         key="included_study_download_csv",
                     )
+                    resolver_payload = _build_included_study_research_payload(
+                        editor_rows,
+                        check_open_access=check_open_access,
+                        enrich_sjr=enrich_sjr,
+                        unpaywall_email=unpaywall_email,
+                        extraction_scope=str(st.session_state.get("included_study_scope") or "all_trials"),
+                        output_detail=str(st.session_state.get("included_study_output_detail") or "reference_map"),
+                        focus_label=focus_label,
+                    )
+                    st.download_button(
+                        "Download Research Resolver Payload JSON",
+                        data=json.dumps(resolver_payload, indent=2),
+                        file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_included_study_research_payload.json",
+                        mime="application/json",
+                        use_container_width=True,
+                        key="included_study_download_resolver_payload",
+                    )
 
                 if st.button(
                     "Send Selected to Research Resolver",
@@ -5831,12 +5874,22 @@ def _render_included_study_extractor_tab():
                     key="included_study_send_to_resolver",
                     disabled=(selected_count == 0),
                 ):
-                    selected_citations = _merge_included_study_editor_rows(editor_rows)
+                    payload = _build_included_study_research_payload(
+                        editor_rows,
+                        check_open_access=check_open_access,
+                        enrich_sjr=enrich_sjr,
+                        unpaywall_email=unpaywall_email,
+                        extraction_scope=str(st.session_state.get("included_study_scope") or "all_trials"),
+                        output_detail=str(st.session_state.get("included_study_output_detail") or "reference_map"),
+                        focus_label=focus_label,
+                    )
+                    selected_citations = list(payload.get("citations") or [])
                     st.session_state["research_parse_result"] = {
                         "source_name": "Included Study Extractor",
                         "citations": selected_citations,
                         "detected_fields": ["title", "authors", "year", "doi", "journal", "notes"],
                         "warnings": [],
+                        "source_payload": payload,
                     }
                     st.session_state["research_editor_rows"] = build_research_preview_rows(selected_citations)
                     st.success("Selected papers copied into Research Resolver.")
@@ -5892,7 +5945,16 @@ def _render_included_study_extractor_tab():
                     ):
                         try:
                             db_root = _resolve_db_root()
-                            selected_citations = _merge_included_study_editor_rows(editor_rows)
+                            payload = _build_included_study_research_payload(
+                                editor_rows,
+                                check_open_access=retrieval_check_oa,
+                                enrich_sjr=retrieval_enrich_sjr,
+                                unpaywall_email=retrieval_unpaywall_email,
+                                extraction_scope=str(st.session_state.get("included_study_scope") or "all_trials"),
+                                output_detail=str(st.session_state.get("included_study_output_detail") or "reference_map"),
+                                focus_label=focus_label,
+                            )
+                            selected_citations = list(payload.get("citations") or [])
                             retrieval_log_placeholder = st.empty()
                             retrieval_log_lines: List[str] = []
 
@@ -5929,6 +5991,7 @@ def _render_included_study_extractor_tab():
                                 "citations": retrieval_output.get("resolver_payload", {}).get("citations") or selected_citations,
                                 "detected_fields": ["title", "authors", "year", "doi", "journal", "notes"],
                                 "warnings": [],
+                                "source_payload": payload,
                             }
                             st.session_state["research_editor_rows"] = build_research_preview_rows(
                                 retrieval_output.get("resolver_payload", {}).get("citations") or selected_citations
@@ -6720,6 +6783,10 @@ def _render_research_resolver_tab():
                     "doi": st.column_config.TextColumn("DOI", width="medium"),
                     "journal": st.column_config.TextColumn("Journal", width="medium"),
                     "accession": st.column_config.TextColumn("Accession", width="small"),
+                    "source_table": st.column_config.TextColumn("Table", width="small"),
+                    "source_trial": st.column_config.TextColumn("Trial", width="medium"),
+                    "source_group": st.column_config.TextColumn("Grouped under", width="medium"),
+                    "source_ref": st.column_config.TextColumn("Ref", width="small"),
                     "confidence": st.column_config.TextColumn("Preview", width="small"),
                 },
                 disabled=["row_id", "confidence"],
