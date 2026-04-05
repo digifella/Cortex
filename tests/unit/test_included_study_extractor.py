@@ -378,11 +378,13 @@ def test_run_included_study_extractor_anthropic_surfaces_non_terminal_stop_reaso
 def test_scope_prompts_include_requested_study_filter():
     full_prompt = _included_study_prompt("Review", "rct_or_clinical", "reference_map")
     table_prompt = _single_table_prompt("table 2", "Review", "refs", "rct_or_clinical", "reference_map")
+    detailed_prompt = _single_table_prompt("table 2", "Review", "refs", "rct_or_clinical", "detailed_fields")
 
     assert "Only include randomized controlled trials" in full_prompt
     assert "Only include randomized controlled trials" in table_prompt
-    assert "study_design" in table_prompt
     assert "compact reference map only" in full_prompt.lower()
+    assert '"resolved_title"' not in table_prompt
+    assert "study_design" in detailed_prompt
 
 
 def test_run_included_study_extractor_gemini_raises_quota_error(monkeypatch, tmp_path):

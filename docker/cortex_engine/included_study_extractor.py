@@ -451,11 +451,49 @@ def _output_detail_instruction(output_detail: str) -> str:
     )
 
 
+def _is_detailed_output(output_detail: str) -> bool:
+    return str(output_detail or _DEFAULT_OUTPUT_DETAIL).strip().lower() == "detailed_fields"
+
+
 def _included_study_prompt(
     review_title: str = "",
     extraction_scope: str = _DEFAULT_EXTRACTION_SCOPE,
     output_detail: str = _DEFAULT_OUTPUT_DETAIL,
 ) -> str:
+    detailed = _is_detailed_output(output_detail)
+    citation_detail = (
+        '              "display": "",\n'
+        '              "authors": "",\n'
+        '              "year": "",\n'
+        '              "reference_number": "",\n'
+        '              "resolved_title": "",\n'
+        '              "resolved_authors": "",\n'
+        '              "resolved_year": "",\n'
+        '              "resolved_journal": "",\n'
+        '              "resolved_doi": "",\n'
+        '              "study_design": "",\n'
+        '              "sample_size": "",\n'
+        '              "outcome_measure": "",\n'
+        '              "outcome_result": "",\n'
+        '              "notes": "",\n'
+        '              "needs_review": false\n'
+        if detailed
+        else
+        '              "display": "",\n'
+        '              "authors": "",\n'
+        '              "year": "",\n'
+        '              "reference_number": "",\n'
+        '              "notes": "",\n'
+        '              "needs_review": false\n'
+    )
+    table_detail = (
+        '      "grouping_basis": "",\n'
+        '      "included_study_count": "",\n'
+        '      "included_rct_count": "",\n'
+        if detailed
+        else
+        '      "grouping_basis": "",\n'
+    )
     return (
         "You are extracting included-study tables from a systematic review PDF.\n\n"
         "Return only the tables that list included studies, health state utility studies, or HTA reports included in the review.\n"
@@ -480,9 +518,7 @@ def _included_study_prompt(
         "    {\n"
         '      "table_number": "",\n'
         '      "table_title": "",\n'
-        '      "grouping_basis": "",\n'
-        '      "included_study_count": "",\n'
-        '      "included_rct_count": "",\n'
+        f"{table_detail}"
         '      "groups": [\n'
         "        {\n"
         '          "group_label": "",\n'
@@ -490,21 +526,7 @@ def _included_study_prompt(
         '          "notes": "",\n'
         '          "citations": [\n'
         "            {\n"
-        '              "display": "",\n'
-        '              "authors": "",\n'
-        '              "year": "",\n'
-        '              "reference_number": "",\n'
-        '              "resolved_title": "",\n'
-        '              "resolved_authors": "",\n'
-        '              "resolved_year": "",\n'
-        '              "resolved_journal": "",\n'
-        '              "resolved_doi": "",\n'
-        '              "study_design": "",\n'
-        '              "sample_size": "",\n'
-        '              "outcome_measure": "",\n'
-        '              "outcome_result": "",\n'
-        '              "notes": "",\n'
-        '              "needs_review": false\n'
+        f"{citation_detail}"
         "            }\n"
         "          ]\n"
         "        }\n"
@@ -523,6 +545,40 @@ def _single_table_prompt(
     extraction_scope: str = _DEFAULT_EXTRACTION_SCOPE,
     output_detail: str = _DEFAULT_OUTPUT_DETAIL,
 ) -> str:
+    detailed = _is_detailed_output(output_detail)
+    citation_detail = (
+        '              "display": "",\n'
+        '              "authors": "",\n'
+        '              "year": "",\n'
+        '              "reference_number": "",\n'
+        '              "resolved_title": "",\n'
+        '              "resolved_authors": "",\n'
+        '              "resolved_year": "",\n'
+        '              "resolved_journal": "",\n'
+        '              "resolved_doi": "",\n'
+        '              "study_design": "",\n'
+        '              "sample_size": "",\n'
+        '              "outcome_measure": "",\n'
+        '              "outcome_result": "",\n'
+        '              "notes": "",\n'
+        '              "needs_review": false\n'
+        if detailed
+        else
+        '              "display": "",\n'
+        '              "authors": "",\n'
+        '              "year": "",\n'
+        '              "reference_number": "",\n'
+        '              "notes": "",\n'
+        '              "needs_review": false\n'
+    )
+    table_detail = (
+        '      "grouping_basis": "",\n'
+        '      "included_study_count": "",\n'
+        '      "included_rct_count": "",\n'
+        if detailed
+        else
+        '      "grouping_basis": "",\n'
+    )
     compact_bibliography = str(bibliography_text or "").strip()
     if len(compact_bibliography) > 18000:
         compact_bibliography = compact_bibliography[:18000].rstrip() + "\n...[truncated]"
@@ -548,9 +604,7 @@ def _single_table_prompt(
         "    {\n"
         '      "table_number": "",\n'
         '      "table_title": "",\n'
-        '      "grouping_basis": "",\n'
-        '      "included_study_count": "",\n'
-        '      "included_rct_count": "",\n'
+        f"{table_detail}"
         '      "groups": [\n'
         "        {\n"
         '          "group_label": "",\n'
@@ -558,21 +612,7 @@ def _single_table_prompt(
         '          "notes": "",\n'
         '          "citations": [\n'
         "            {\n"
-        '              "display": "",\n'
-        '              "authors": "",\n'
-        '              "year": "",\n'
-        '              "reference_number": "",\n'
-        '              "resolved_title": "",\n'
-        '              "resolved_authors": "",\n'
-        '              "resolved_year": "",\n'
-        '              "resolved_journal": "",\n'
-        '              "resolved_doi": "",\n'
-        '              "study_design": "",\n'
-        '              "sample_size": "",\n'
-        '              "outcome_measure": "",\n'
-        '              "outcome_result": "",\n'
-        '              "notes": "",\n'
-        '              "needs_review": false\n'
+        f"{citation_detail}"
         "            }\n"
         "          ]\n"
         "        }\n"
@@ -584,9 +624,15 @@ def _single_table_prompt(
         "Important:\n"
         "- `display` should usually be like `Author 2021 [17]`.\n"
         "- `authors` should be short, e.g. `Patrick` or `Patrick et al.`.\n"
-        "- `resolved_title` should be empty unless a short disambiguating title is trivial.\n"
-        "- Leave `resolved_authors`, `resolved_year`, `resolved_journal`, and `resolved_doi` blank unless trivially obvious and short.\n"
-        "- Consolidate repeated measure rows rather than repeating every metric.\n"
+        + (
+            "- `resolved_title` should be empty unless a short disambiguating title is trivial.\n"
+            "- Leave `resolved_authors`, `resolved_year`, `resolved_journal`, and `resolved_doi` blank unless trivially obvious and short.\n"
+            "- Consolidate repeated measure rows rather than repeating every metric.\n"
+            if detailed
+            else
+            "- Do not include resolved titles, journals, DOIs, sample sizes, or detailed outcome fields in reference-map mode unless absolutely necessary.\n"
+            "- Consolidate repeated measure rows and keep only the minimal citation/trial mapping.\n"
+        )
     )
 
 
@@ -729,9 +775,10 @@ def run_included_study_table_extractor(
     if provider_name == "anthropic":
         client = _anthropic_client()
         model_name = str(model or _DEFAULT_ANTHROPIC_MODEL).strip() or _DEFAULT_ANTHROPIC_MODEL
+        max_tokens = 5000 if _is_detailed_output(output_detail) else 2600
         response = client.messages.create(
             model=model_name,
-            max_tokens=5000,
+            max_tokens=max_tokens,
             system="Extract one grouped included-study table from the PDF snippet and return only valid JSON.",
             messages=[
                 {
