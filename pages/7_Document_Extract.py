@@ -5229,7 +5229,7 @@ def _render_included_study_extractor_tab():
         st.header("Grouped Output")
         result = st.session_state.get("included_study_result") or {}
         tables = list(result.get("tables") or [])
-        if tables:
+        if result:
             provider_label = str(result.get("provider") or "").strip()
             model_label = str(result.get("model") or "").strip()
             requested_provider = str(result.get("requested_provider") or "").strip()
@@ -5255,219 +5255,235 @@ def _render_included_study_extractor_tab():
             t2.metric("Groups", total_groups)
             t3.metric("Cited papers", total_citations)
 
-            for table in tables:
-                label = f"Table {str(table.get('table_number') or '?').strip()}: {str(table.get('table_title') or '').strip()}"
-                with st.expander(label, expanded=False):
-                    grouping_basis = str(table.get("grouping_basis") or "").strip()
-                    if grouping_basis:
-                        st.caption(f"Grouping basis: {grouping_basis}")
-                    for group in list(table.get("groups") or []):
-                        combined_group = _included_study_group_label(group)
-                        st.markdown(f"**{combined_group or 'Group'}**")
-                        citations = list(group.get("citations") or [])
-                        for citation in citations:
-                            display = str(citation.get("display") or "").strip()
-                            resolved_title = str(citation.get("resolved_title") or "").strip()
-                            notes = str(citation.get("notes") or "").strip()
-                            line = display
-                            if resolved_title:
-                                line += f" -> {resolved_title}"
-                            if notes:
-                                line += f" [{notes}]"
-                            st.write(line)
+            if not tables:
+                st.warning("The extractor run completed, but no included-study tables were parsed into structured output.")
+            else:
+                for table in tables:
+                    label = f"Table {str(table.get('table_number') or '?').strip()}: {str(table.get('table_title') or '').strip()}"
+                    with st.expander(label, expanded=False):
+                        grouping_basis = str(table.get("grouping_basis") or "").strip()
+                        if grouping_basis:
+                            st.caption(f"Grouping basis: {grouping_basis}")
+                        for group in list(table.get("groups") or []):
+                            combined_group = _included_study_group_label(group)
+                            st.markdown(f"**{combined_group or 'Group'}**")
+                            citations = list(group.get("citations") or [])
+                            for citation in citations:
+                                display = str(citation.get("display") or "").strip()
+                                resolved_title = str(citation.get("resolved_title") or "").strip()
+                                notes = str(citation.get("notes") or "").strip()
+                                line = display
+                                if resolved_title:
+                                    line += f" -> {resolved_title}"
+                                if notes:
+                                    line += f" [{notes}]"
+                                st.write(line)
 
-            editor_source = st.session_state.get("included_study_editor_rows") or _included_study_editor_rows(tables)
-            bulk_left, bulk_mid, bulk_right = st.columns([1, 1, 4])
-            with bulk_left:
-                if st.button("Select All", use_container_width=True, key="included_study_select_all"):
-                    st.session_state["included_study_editor_rows"] = _set_included_study_keep_state(editor_source, True)
-                    st.rerun()
-            with bulk_mid:
-                if st.button("Deselect All", use_container_width=True, key="included_study_deselect_all"):
-                    st.session_state["included_study_editor_rows"] = _set_included_study_keep_state(editor_source, False)
-                    st.rerun()
-            with bulk_right:
-                st.caption("Selection is at the paper level, not the raw table-row level.")
+                editor_source = st.session_state.get("included_study_editor_rows") or _included_study_editor_rows(tables)
+                bulk_left, bulk_mid, bulk_right = st.columns([1, 1, 4])
+                with bulk_left:
+                    if st.button("Select All", use_container_width=True, key="included_study_select_all"):
+                        st.session_state["included_study_editor_rows"] = _set_included_study_keep_state(editor_source, True)
+                        st.rerun()
+                with bulk_mid:
+                    if st.button("Deselect All", use_container_width=True, key="included_study_deselect_all"):
+                        st.session_state["included_study_editor_rows"] = _set_included_study_keep_state(editor_source, False)
+                        st.rerun()
+                with bulk_right:
+                    st.caption("Selection is at the paper level, not the raw table-row level.")
 
-            edited = st.data_editor(
-                editor_source,
-                use_container_width=True,
-                hide_index=True,
-                key="included_study_editor",
-                column_config={
-                    "keep": st.column_config.CheckboxColumn("Keep", default=True),
-                    "row_id": st.column_config.NumberColumn("Row", format="%d"),
-                    "table_number": st.column_config.TextColumn("Table", width="small"),
-                    "table_title": st.column_config.TextColumn("Table title", width="medium"),
-                    "combined_group": st.column_config.TextColumn("Grouped under", width="medium"),
-                    "citation_display": st.column_config.TextColumn("Table citation", width="medium"),
-                    "title": st.column_config.TextColumn("Resolved title", width="large"),
-                    "authors": st.column_config.TextColumn("Authors", width="medium"),
-                    "year": st.column_config.TextColumn("Year", width="small"),
-                    "doi": st.column_config.TextColumn("DOI", width="medium"),
-                    "journal": st.column_config.TextColumn("Journal", width="medium"),
-                    "reference_number": st.column_config.TextColumn("Ref", width="small"),
-                    "needs_review": st.column_config.TextColumn("Needs review", width="small"),
-                    "notes": st.column_config.TextColumn("Notes", width="medium"),
-                },
-                disabled=[
-                    "row_id",
-                    "table_number",
-                    "table_title",
-                    "combined_group",
-                    "citation_display",
-                    "reference_number",
-                    "needs_review",
-                ],
-            )
-            editor_rows = _editor_records(edited)
-            if editor_rows:
-                st.session_state["included_study_editor_rows"] = editor_rows
-
-            selected_count = sum(1 for item in editor_rows if bool(item.get("keep", True)))
-            st.caption(f"{selected_count} paper(s) selected for resolution/retrieval.")
-
-            export_rows = _merge_included_study_editor_rows(editor_rows)
-            if export_rows:
-                import pandas as pd
-
-                export_csv = pd.DataFrame(editor_rows).to_csv(index=False)
-                st.download_button(
-                    "Download Included-Study Selection CSV",
-                    data=export_csv,
-                    file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_included_study_extractor.csv",
-                    mime="text/csv",
+                edited = st.data_editor(
+                    editor_source,
                     use_container_width=True,
-                    key="included_study_download_csv",
+                    hide_index=True,
+                    key="included_study_editor",
+                    column_config={
+                        "keep": st.column_config.CheckboxColumn("Keep", default=True),
+                        "row_id": st.column_config.NumberColumn("Row", format="%d"),
+                        "table_number": st.column_config.TextColumn("Table", width="small"),
+                        "table_title": st.column_config.TextColumn("Table title", width="medium"),
+                        "combined_group": st.column_config.TextColumn("Grouped under", width="medium"),
+                        "citation_display": st.column_config.TextColumn("Table citation", width="medium"),
+                        "title": st.column_config.TextColumn("Resolved title", width="large"),
+                        "authors": st.column_config.TextColumn("Authors", width="medium"),
+                        "year": st.column_config.TextColumn("Year", width="small"),
+                        "doi": st.column_config.TextColumn("DOI", width="medium"),
+                        "journal": st.column_config.TextColumn("Journal", width="medium"),
+                        "reference_number": st.column_config.TextColumn("Ref", width="small"),
+                        "needs_review": st.column_config.TextColumn("Needs review", width="small"),
+                        "notes": st.column_config.TextColumn("Notes", width="medium"),
+                    },
+                    disabled=[
+                        "row_id",
+                        "table_number",
+                        "table_title",
+                        "combined_group",
+                        "citation_display",
+                        "reference_number",
+                        "needs_review",
+                    ],
                 )
+                editor_rows = _editor_records(edited)
+                if editor_rows:
+                    st.session_state["included_study_editor_rows"] = editor_rows
 
-            if st.button(
-                "Send Selected to Research Resolver",
-                use_container_width=True,
-                key="included_study_send_to_resolver",
-                disabled=(selected_count == 0),
-            ):
-                selected_citations = _merge_included_study_editor_rows(editor_rows)
-                st.session_state["research_parse_result"] = {
-                    "source_name": "Included Study Extractor",
-                    "citations": selected_citations,
-                    "detected_fields": ["title", "authors", "year", "doi", "journal", "notes"],
-                    "warnings": [],
-                }
-                st.session_state["research_editor_rows"] = build_research_preview_rows(selected_citations)
-                st.success("Selected papers copied into Research Resolver.")
+                selected_count = sum(1 for item in editor_rows if bool(item.get("keep", True)))
+                st.caption(f"{selected_count} paper(s) selected for resolution/retrieval.")
 
-            with st.expander("Paper Retrieval", expanded=False):
-                retrieval_c1, retrieval_c2 = st.columns(2)
-                with retrieval_c1:
-                    retrieval_check_oa = st.checkbox(
-                        "Check Open Access via Unpaywall",
-                        value=bool(st.session_state.get("research_check_oa", True)),
-                        key="included_study_retrieval_check_oa",
-                    )
-                    retrieval_enrich_sjr = st.checkbox(
-                        "Enrich journal rankings via SJR",
-                        value=bool(st.session_state.get("research_enrich_sjr", True)),
-                        key="included_study_retrieval_enrich_sjr",
-                    )
-                    retrieval_unpaywall_email = st.text_input(
-                        "Unpaywall contact email",
-                        value=st.session_state.get("research_unpaywall_email", ""),
-                        key="included_study_retrieval_unpaywall_email",
-                    )
-                with retrieval_c2:
-                    retrieval_convert_to_md = st.checkbox(
-                        "Convert retrieved PDFs to Markdown",
-                        value=True,
-                        key="included_study_retrieval_convert_to_md",
-                    )
-                    retrieval_use_vision = st.checkbox(
-                        "Use vision during PDF->MD conversion",
-                        value=bool(st.session_state.get("url_ingestor_use_vision", False)),
-                        key="included_study_retrieval_use_vision",
-                    )
-                    retrieval_capture_web = st.checkbox(
-                        "Capture web page as Markdown when PDF unavailable",
-                        value=True,
-                        key="included_study_retrieval_capture_web",
-                    )
-                    retrieval_timeout_seconds = st.number_input(
-                        "Request timeout (seconds)",
-                        min_value=5,
-                        max_value=120,
-                        value=int(st.session_state.get("url_ingestor_timeout_seconds", 25) or 25),
-                        step=5,
-                        key="included_study_retrieval_timeout_seconds",
+                export_rows = _merge_included_study_editor_rows(editor_rows)
+                if export_rows:
+                    import pandas as pd
+
+                    export_csv = pd.DataFrame(editor_rows).to_csv(index=False)
+                    st.download_button(
+                        "Download Included-Study Selection CSV",
+                        data=export_csv,
+                        file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_included_study_extractor.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="included_study_download_csv",
                     )
 
                 if st.button(
-                    "Resolve + Retrieve Selected Papers",
+                    "Send Selected to Research Resolver",
                     use_container_width=True,
-                    key="included_study_retrieve_papers_btn",
+                    key="included_study_send_to_resolver",
                     disabled=(selected_count == 0),
                 ):
-                    try:
-                        db_root = _resolve_db_root()
-                        selected_citations = _merge_included_study_editor_rows(editor_rows)
-                        retrieval_log_placeholder = st.empty()
-                        retrieval_log_lines: List[str] = []
+                    selected_citations = _merge_included_study_editor_rows(editor_rows)
+                    st.session_state["research_parse_result"] = {
+                        "source_name": "Included Study Extractor",
+                        "citations": selected_citations,
+                        "detected_fields": ["title", "authors", "year", "doi", "journal", "notes"],
+                        "warnings": [],
+                    }
+                    st.session_state["research_editor_rows"] = build_research_preview_rows(selected_citations)
+                    st.success("Selected papers copied into Research Resolver.")
 
-                        def _retrieval_log(message: str) -> None:
-                            stamp = time.strftime("%H:%M:%S")
-                            retrieval_log_lines.append(f"{stamp} {message}")
-                            retrieval_log_placeholder.text_area(
-                                "Paper retrieval log",
-                                value="\n".join(retrieval_log_lines[-300:]),
-                                height=220,
-                                disabled=True,
-                            )
+                with st.expander("Paper Retrieval", expanded=False):
+                    retrieval_c1, retrieval_c2 = st.columns(2)
+                    with retrieval_c1:
+                        retrieval_check_oa = st.checkbox(
+                            "Check Open Access via Unpaywall",
+                            value=bool(st.session_state.get("research_check_oa", True)),
+                            key="included_study_retrieval_check_oa",
+                        )
+                        retrieval_enrich_sjr = st.checkbox(
+                            "Enrich journal rankings via SJR",
+                            value=bool(st.session_state.get("research_enrich_sjr", True)),
+                            key="included_study_retrieval_enrich_sjr",
+                        )
+                        retrieval_unpaywall_email = st.text_input(
+                            "Unpaywall contact email",
+                            value=st.session_state.get("research_unpaywall_email", ""),
+                            key="included_study_retrieval_unpaywall_email",
+                        )
+                    with retrieval_c2:
+                        retrieval_convert_to_md = st.checkbox(
+                            "Convert retrieved PDFs to Markdown",
+                            value=True,
+                            key="included_study_retrieval_convert_to_md",
+                        )
+                        retrieval_use_vision = st.checkbox(
+                            "Use vision during PDF->MD conversion",
+                            value=bool(st.session_state.get("url_ingestor_use_vision", False)),
+                            key="included_study_retrieval_use_vision",
+                        )
+                        retrieval_capture_web = st.checkbox(
+                            "Capture web page as Markdown when PDF unavailable",
+                            value=True,
+                            key="included_study_retrieval_capture_web",
+                        )
+                        retrieval_timeout_seconds = st.number_input(
+                            "Request timeout (seconds)",
+                            min_value=5,
+                            max_value=120,
+                            value=int(st.session_state.get("url_ingestor_timeout_seconds", 25) or 25),
+                            step=5,
+                            key="included_study_retrieval_timeout_seconds",
+                        )
 
-                        with st.spinner("Resolving citations and retrieving papers..."):
-                            retrieval_output = _run_study_miner_paper_retrieval(
-                                candidates=selected_citations,
-                                db_root=db_root,
-                                resolver_options={
-                                    "check_open_access": retrieval_check_oa,
-                                    "enrich_sjr": retrieval_enrich_sjr,
-                                    "unpaywall_email": retrieval_unpaywall_email,
-                                },
-                                ingest_options={
-                                    "convert_to_md": retrieval_convert_to_md,
-                                    "use_vision_for_md": retrieval_use_vision,
-                                    "capture_web_md_on_no_pdf": retrieval_capture_web,
-                                    "timeout_seconds": retrieval_timeout_seconds,
-                                    "textify_options": {"pdf_strategy": "hybrid"},
-                                },
-                                progress_cb=_retrieval_log,
+                    if st.button(
+                        "Resolve + Retrieve Selected Papers",
+                        use_container_width=True,
+                        key="included_study_retrieve_papers_btn",
+                        disabled=(selected_count == 0),
+                    ):
+                        try:
+                            db_root = _resolve_db_root()
+                            selected_citations = _merge_included_study_editor_rows(editor_rows)
+                            retrieval_log_placeholder = st.empty()
+                            retrieval_log_lines: List[str] = []
+
+                            def _retrieval_log(message: str) -> None:
+                                stamp = time.strftime("%H:%M:%S")
+                                retrieval_log_lines.append(f"{stamp} {message}")
+                                retrieval_log_placeholder.text_area(
+                                    "Paper retrieval log",
+                                    value="\n".join(retrieval_log_lines[-300:]),
+                                    height=220,
+                                    disabled=True,
+                                )
+
+                            with st.spinner("Resolving citations and retrieving papers..."):
+                                retrieval_output = _run_study_miner_paper_retrieval(
+                                    candidates=selected_citations,
+                                    db_root=db_root,
+                                    resolver_options={
+                                        "check_open_access": retrieval_check_oa,
+                                        "enrich_sjr": retrieval_enrich_sjr,
+                                        "unpaywall_email": retrieval_unpaywall_email,
+                                    },
+                                    ingest_options={
+                                        "convert_to_md": retrieval_convert_to_md,
+                                        "use_vision_for_md": retrieval_use_vision,
+                                        "capture_web_md_on_no_pdf": retrieval_capture_web,
+                                        "timeout_seconds": retrieval_timeout_seconds,
+                                        "textify_options": {"pdf_strategy": "hybrid"},
+                                    },
+                                    progress_cb=_retrieval_log,
+                                )
+                            st.session_state["research_parse_result"] = {
+                                "source_name": "Included Study Extractor",
+                                "citations": retrieval_output.get("resolver_payload", {}).get("citations") or selected_citations,
+                                "detected_fields": ["title", "authors", "year", "doi", "journal", "notes"],
+                                "warnings": [],
+                            }
+                            st.session_state["research_editor_rows"] = build_research_preview_rows(
+                                retrieval_output.get("resolver_payload", {}).get("citations") or selected_citations
                             )
-                        st.session_state["research_parse_result"] = {
-                            "source_name": "Included Study Extractor",
-                            "citations": retrieval_output.get("resolver_payload", {}).get("citations") or selected_citations,
-                            "detected_fields": ["title", "authors", "year", "doi", "journal", "notes"],
-                            "warnings": [],
-                        }
-                        st.session_state["research_editor_rows"] = build_research_preview_rows(
-                            retrieval_output.get("resolver_payload", {}).get("citations") or selected_citations
-                        )
-                        st.session_state["research_resolve_output"] = retrieval_output.get("resolver_output") or {}
-                        st.session_state["research_resolve_run_dir"] = str(retrieval_output.get("resolver_run_dir") or "")
-                        st.session_state["research_resolve_log_lines"] = list(retrieval_log_lines)
-                        st.session_state["url_ingestor_input"] = "\n".join(retrieval_output.get("preferred_urls") or [])
-                        st.session_state["url_ingestor_results"] = list(retrieval_output.get("url_results") or [])
-                        st.session_state["url_ingestor_csv_path"] = str(retrieval_output.get("url_csv_path") or "")
-                        st.session_state["url_ingestor_json_path"] = str(retrieval_output.get("url_json_path") or "")
-                        st.session_state["url_ingestor_zip_bytes"] = retrieval_output.get("url_zip_bytes") or b""
-                        st.session_state["url_ingestor_run_dir"] = str(retrieval_output.get("url_run_dir") or "")
-                        st.session_state["url_ingestor_event_log"] = list(retrieval_log_lines)
-                        st.success(
-                            f"Resolved {len((retrieval_output.get('resolver_output') or {}).get('resolved') or [])} citation(s) "
-                            f"and queued {len(retrieval_output.get('preferred_urls') or [])} URL(s) for retrieval."
-                        )
-                    except Exception as e:
-                        st.error(f"Paper retrieval failed: {e}")
+                            st.session_state["research_resolve_output"] = retrieval_output.get("resolver_output") or {}
+                            st.session_state["research_resolve_run_dir"] = str(retrieval_output.get("resolver_run_dir") or "")
+                            st.session_state["research_resolve_log_lines"] = list(retrieval_log_lines)
+                            st.session_state["url_ingestor_input"] = "\n".join(retrieval_output.get("preferred_urls") or [])
+                            st.session_state["url_ingestor_results"] = list(retrieval_output.get("url_results") or [])
+                            st.session_state["url_ingestor_csv_path"] = str(retrieval_output.get("url_csv_path") or "")
+                            st.session_state["url_ingestor_json_path"] = str(retrieval_output.get("url_json_path") or "")
+                            st.session_state["url_ingestor_zip_bytes"] = retrieval_output.get("url_zip_bytes") or b""
+                            st.session_state["url_ingestor_run_dir"] = str(retrieval_output.get("url_run_dir") or "")
+                            st.session_state["url_ingestor_event_log"] = list(retrieval_log_lines)
+                            st.success(
+                                f"Resolved {len((retrieval_output.get('resolver_output') or {}).get('resolved') or [])} citation(s) "
+                                f"and queued {len(retrieval_output.get('preferred_urls') or [])} URL(s) for retrieval."
+                            )
+                        except Exception as e:
+                            st.error(f"Paper retrieval failed: {e}")
 
             with st.expander("Raw Model Output", expanded=False):
-                st.code(str(result.get("raw_response") or "").strip(), language="json")
+                raw_text = str(result.get("raw_response") or "").strip()
+                st.caption(f"Raw output length: {len(raw_text)} characters")
+                if raw_text:
+                    st.code(raw_text, language="json")
+                    st.download_button(
+                        "Download Raw Model Output",
+                        data=raw_text,
+                        file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_included_study_raw_output.txt",
+                        mime="text/plain",
+                        use_container_width=True,
+                        key="included_study_download_raw_output",
+                    )
+                else:
+                    st.info("No raw model output was returned for this run.")
         else:
             st.info("Upload a review PDF and run the extractor to get grouped included-study tables.")
 

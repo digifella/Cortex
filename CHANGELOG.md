@@ -34,6 +34,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Included Study Extractor now surfaces Gemini quota/rate-limit failures more clearly and can fall back automatically to Anthropic when Gemini free-tier PDF extraction quota is exhausted.
 - Included Study Extractor now keeps Claude fallback off by default and includes a lightweight `Test Gemini Access` check so API access can be verified before attempting a full PDF extraction.
 - Included Study Extractor now defaults Gemini to `gemini-2.5-flash` and adds a one-click common-model access matrix so operators can see which Gemini models a project can actually call before running a full review PDF.
+- Included Study Extractor now keeps the run visible even when zero tables are parsed, surfacing warnings plus downloadable raw model output instead of showing a misleading “complete” state with no visible result.
 
 ### ⚠️ Known Limitation
 - Rotated multi-page systematic-review tables are still not reconstructed reliably. The Claude rescue path now prefers the full source PDF, but very large PDFs can still fall back to extracted table evidence and the model can still struggle with ambiguous continuation pages.

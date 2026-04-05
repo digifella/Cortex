@@ -369,6 +369,33 @@ def _normalize_extracted_tables(payload: Dict[str, Any]) -> List[Dict[str, Any]]
     return tables
 
 
+def _finalize_included_study_result(
+    *,
+    provider: str,
+    model: str,
+    parsed: Dict[str, Any],
+    raw_response: str,
+) -> Dict[str, Any]:
+    tables = _normalize_extracted_tables(parsed)
+    warnings = [str(item).strip() for item in list(parsed.get("warnings") or []) if str(item).strip()]
+    raw_text = str(raw_response or "").strip()
+    if not tables:
+        if raw_text:
+            warnings.insert(
+                0,
+                "The model call completed but Cortex could not parse any included-study tables from the response. Inspect Raw Model Output.",
+            )
+        else:
+            warnings.insert(0, "The model call completed but returned no parsable output.")
+    return {
+        "provider": str(provider or "").strip(),
+        "model": str(model or "").strip(),
+        "tables": tables,
+        "warnings": warnings,
+        "raw_response": raw_text,
+    }
+
+
 def _included_study_prompt(review_title: str = "") -> str:
     return (
         "You are extracting included-study tables from a systematic review PDF.\n\n"
@@ -461,13 +488,12 @@ def run_included_study_extractor(
                 parts.append(text)
         raw_response = "\n".join(parts).strip()
         parsed = parse_included_study_extraction_response(raw_response)
-        return {
-            "provider": "anthropic",
-            "model": model_name,
-            "tables": _normalize_extracted_tables(parsed),
-            "warnings": [str(item).strip() for item in list(parsed.get("warnings") or []) if str(item).strip()],
-            "raw_response": raw_response,
-        }
+        return _finalize_included_study_result(
+            provider="anthropic",
+            model=model_name,
+            parsed=parsed,
+            raw_response=raw_response,
+        )
 
     api_key = get_gemini_api_key()
     if not api_key:
@@ -502,13 +528,12 @@ def run_included_study_extractor(
         raise RuntimeError(f"Gemini API connection failed: {exc}") from exc
     raw_response = _extract_gemini_text(response_json)
     parsed = parse_included_study_extraction_response(raw_response)
-    return {
-        "provider": "gemini",
-        "model": model_name,
-        "tables": _normalize_extracted_tables(parsed),
-        "warnings": [str(item).strip() for item in list(parsed.get("warnings") or []) if str(item).strip()],
-        "raw_response": raw_response,
-    }
+    return _finalize_included_study_result(
+        provider="gemini",
+        model=model_name,
+        parsed=parsed,
+        raw_response=raw_response,
+    )
 
 
 def run_included_study_extractor_with_fallback(

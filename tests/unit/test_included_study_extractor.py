@@ -112,6 +112,40 @@ def test_run_included_study_extractor_gemini_normalizes_grouped_tables(monkeypat
     assert citation["resolved_doi"] == "10.1000/example"
 
 
+def test_run_included_study_extractor_warns_when_no_tables_are_parsed(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "review.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
+
+    monkeypatch.setattr("cortex_engine.included_study_extractor.get_gemini_api_key", lambda: "AI-test-key")
+    monkeypatch.setattr(
+        "cortex_engine.included_study_extractor._gemini_generate_content",
+        lambda model, payload, api_key: {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": "I found several possible included-study tables, but here is a prose summary instead of JSON."
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    result = run_included_study_extractor(
+        pdf_path=str(pdf_path),
+        provider="gemini",
+        model="gemini-2.5-flash",
+        review_title="Review",
+    )
+
+    assert result["tables"] == []
+    assert "could not parse any included-study tables" in result["warnings"][0].lower()
+    assert "prose summary" in result["raw_response"].lower()
+
+
 def test_run_included_study_access_check_gemini_uses_tiny_prompt(monkeypatch):
     monkeypatch.setattr("cortex_engine.included_study_extractor.get_gemini_api_key", lambda: "AI-test-key")
 
