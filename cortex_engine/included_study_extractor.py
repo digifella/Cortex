@@ -428,9 +428,16 @@ def _finalize_included_study_result(
     }
 
 
-def _scope_instruction(extraction_scope: str) -> str:
+def _scope_instruction(extraction_scope: str, table_kind: str = "") -> str:
     scope_name = str(extraction_scope or _DEFAULT_EXTRACTION_SCOPE).strip().lower()
+    kind_name = str(table_kind or "").strip().lower()
     if scope_name == "rct_or_clinical":
+        if kind_name in {"economic", "hta"}:
+            return (
+                "Prioritize randomized controlled trials, clinical trials, or explicitly trial-linked study reports. "
+                "For economic or HTA tables, still return JSON for the included study/economic rows shown in the table, "
+                "but clearly flag indirect model-based or non-trial rows with needs_review=true instead of refusing the table."
+            )
         return (
             "Only include randomized controlled trials, clinical trials, or explicitly trial-based study reports. "
             "Exclude observational-only, vignette-only, economic-only, or narrative-only studies unless they are directly tied to a trial group in the table."
@@ -540,6 +547,8 @@ def _included_study_prompt(
 
 def _single_table_prompt(
     table_label: str = "",
+    table_title: str = "",
+    table_kind: str = "",
     review_title: str = "",
     bibliography_text: str = "",
     extraction_scope: str = _DEFAULT_EXTRACTION_SCOPE,
@@ -586,9 +595,10 @@ def _single_table_prompt(
         "You are extracting one included-study table from a systematic review PDF.\n\n"
         "Return compact JSON only.\n"
         "This PDF contains one table snippet, not the whole review.\n"
-        f"Study selection scope: {_scope_instruction(extraction_scope)}\n"
+        f"Study selection scope: {_scope_instruction(extraction_scope, table_kind)}\n"
         f"Output detail: {_output_detail_instruction(output_detail)}\n"
         "Use the supplied bibliography text only to reconcile reference numbers and short author/year labels when possible.\n"
+        "Even if the table is mostly economic-model or HTA evidence, still return the best structured JSON you can for the rows shown instead of returning prose-only commentary.\n"
         "Keep the output short.\n"
         "Do not emit full author lists.\n"
         "Do not emit long paper titles or journal names unless a very short title is the only way to disambiguate the citation.\n"
@@ -596,6 +606,8 @@ def _single_table_prompt(
         "Keep notes brief and high-level; do not restate every numeric table value.\n\n"
         f"Review title: {review_title}\n"
         f"Table label: {table_label}\n\n"
+        f"Table title: {table_title}\n"
+        f"Table kind hint: {table_kind or 'unknown'}\n\n"
         "Bibliography text from the same review:\n"
         f"{compact_bibliography}\n\n"
         "Return JSON with this exact shape:\n"
@@ -759,6 +771,8 @@ def run_included_study_table_extractor(
     model: str = "",
     review_title: str = "",
     table_label: str = "",
+    table_title: str = "",
+    table_kind: str = "",
     extraction_scope: str = _DEFAULT_EXTRACTION_SCOPE,
     output_detail: str = _DEFAULT_OUTPUT_DETAIL,
 ) -> Dict[str, Any]:
@@ -766,6 +780,8 @@ def run_included_study_table_extractor(
     provider_name = str(provider or "gemini").strip().lower()
     prompt = _single_table_prompt(
         table_label=table_label,
+        table_title=table_title,
+        table_kind=table_kind,
         review_title=review_title,
         bibliography_text=bibliography_text,
         extraction_scope=extraction_scope,

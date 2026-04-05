@@ -571,6 +571,8 @@ def _run_included_study_table_slice(
                 model=model,
                 review_title=review_title,
                 table_label=label,
+                table_title=str(table_slice.get("table_title") or ""),
+                table_kind=str(table_slice.get("kind") or ""),
                 extraction_scope=extraction_scope,
                 output_detail=output_detail,
             )

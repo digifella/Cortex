@@ -377,11 +377,22 @@ def test_run_included_study_extractor_anthropic_surfaces_non_terminal_stop_reaso
 
 def test_scope_prompts_include_requested_study_filter():
     full_prompt = _included_study_prompt("Review", "rct_or_clinical", "reference_map")
-    table_prompt = _single_table_prompt("table 2", "Review", "refs", "rct_or_clinical", "reference_map")
-    detailed_prompt = _single_table_prompt("table 2", "Review", "refs", "rct_or_clinical", "detailed_fields")
+    table_prompt = _single_table_prompt("table 2", "", "", "Review", "refs", "rct_or_clinical", "reference_map")
+    detailed_prompt = _single_table_prompt("table 2", "", "", "Review", "refs", "rct_or_clinical", "detailed_fields")
+    economic_prompt = _single_table_prompt(
+        "table 4",
+        "Overview of economic studies reporting health state utility values",
+        "economic",
+        "Review",
+        "refs",
+        "rct_or_clinical",
+        "reference_map",
+    )
 
     assert "Only include randomized controlled trials" in full_prompt
     assert "Only include randomized controlled trials" in table_prompt
+    assert "For economic or HTA tables, still return JSON" in economic_prompt
+    assert "Table kind hint: economic" in economic_prompt
     assert "compact reference map only" in full_prompt.lower()
     assert '"resolved_title"' not in table_prompt
     assert "study_design" in detailed_prompt
