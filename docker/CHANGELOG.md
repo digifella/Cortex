@@ -42,6 +42,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Included Study Extractor now has a `Study Scope` switch for `All included trials/studies` versus `RCT/clinical trials only`, and the Sonnet/Gemini prompts now request optional structured fields such as study design, sample size, outcome measure, and outcome result when the table provides them.
 - Sliced included-study extraction now keeps a per-slice progress log, can auto-wait/retry Gemini free-tier quota throttles across multiple backoff cycles per table slice, and preserves completed slices so operators can resume remaining tables or rerun single slices after a quota pause.
 - Included Study Extractor now exports a grouped website handoff JSON and a ZIP bundle containing the selected CSV plus both resolver and website payload JSON, so website testing can consume the same table-aware selection without losing the flat resolver handoff.
+- Included Study Extractor website handoffs now embed a queue-ready `research_resolve` job JSON with trace metadata, so the website can render grouped included-study tables and immediately enqueue citation resolution from the same export.
 
 ### ⚠️ Known Limitation
 - Rotated multi-page systematic-review tables are still not reconstructed reliably. The Claude rescue path now prefers the full source PDF, but very large PDFs can still fall back to extracted table evidence and the model can still struggle with ambiguous continuation pages.

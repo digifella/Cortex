@@ -903,6 +903,55 @@ def test_build_included_study_website_payload_groups_selected_rows():
     assert payload["resolver_payload"] == resolver_payload
 
 
+def test_build_included_study_research_queue_job_wraps_resolver_payload():
+    module = _load_document_extract_module()
+
+    editor_rows = [
+        {
+            "keep": True,
+            "row_id": 1,
+            "table_number": "3",
+            "table_title": "Overview of included studies on health state utility values",
+            "grouping_basis": "Grouped by instrument",
+            "group_label": "EQ-5D / US",
+            "trial_label": "TRANSCEND NHL 001",
+            "combined_group": "EQ-5D / US / TRANSCEND NHL 001",
+            "citation_display": "Patrick 2021 [17]",
+            "title": "Effect of lisocabtagene maraleucel on HRQoL",
+            "authors": "Patrick DL",
+            "year": "2021",
+            "doi": "",
+            "journal": "",
+            "reference_number": "17",
+            "study_design": "",
+            "sample_size": "",
+            "outcome_measure": "",
+            "outcome_result": "",
+            "notes": "",
+            "needs_review": "",
+        }
+    ]
+
+    payload = module._build_included_study_research_queue_job(
+        editor_rows,
+        check_open_access=True,
+        enrich_sjr=False,
+        unpaywall_email=" person@example.com ",
+        extraction_scope="rct_or_clinical",
+        output_detail="reference_map",
+        focus_label="table 3",
+    )
+
+    assert payload["job_type"] == "research_resolve"
+    assert payload["source_workflow"] == "included_study_extractor"
+    assert payload["project_id"] == "included_study_extractor"
+    assert payload["source_system"] == "cortex_streamlit"
+    assert payload["trace_id"].startswith("trace-")
+    assert payload["input_data"]["citations"][0]["title"] == "Effect of lisocabtagene maraleucel on HRQoL"
+    assert payload["input_data"]["citations"][0]["extra_fields"]["reference_number"] == "17"
+    assert payload["input_data"]["options"]["unpaywall_email"] == "person@example.com"
+
+
 def test_run_included_study_table_slice_retries_multiple_quota_waits_before_success():
     module = _load_document_extract_module()
     waits = []

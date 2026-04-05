@@ -36,7 +36,7 @@ from cortex_engine.version_config import VERSION_STRING
 from cortex_engine.journal_authority import classify_journal_authority
 from cortex_engine.preface_classification import classify_credibility_tier
 from cortex_engine.document_preface import add_document_preface
-from cortex_engine.handoff_contract import validate_research_resolve_input
+from cortex_engine.handoff_contract import normalize_handoff_metadata, validate_research_resolve_input
 from cortex_engine.included_study_extractor import (
     IncludedStudyExtractorQuotaError,
     anthropic_key_source as included_study_anthropic_key_source,
@@ -333,6 +333,40 @@ def _build_included_study_research_payload(
     return payload
 
 
+def _build_included_study_research_queue_job(
+    editor_rows: List[Dict[str, Any]],
+    *,
+    check_open_access: bool,
+    enrich_sjr: bool,
+    unpaywall_email: str,
+    extraction_scope: str,
+    output_detail: str,
+    focus_label: str = "",
+) -> Dict[str, Any]:
+    input_data = _build_included_study_research_payload(
+        editor_rows,
+        check_open_access=check_open_access,
+        enrich_sjr=enrich_sjr,
+        unpaywall_email=unpaywall_email,
+        extraction_scope=extraction_scope,
+        output_detail=output_detail,
+        focus_label=focus_label,
+    )
+    metadata = normalize_handoff_metadata(
+        input_data={
+            "source_system": "cortex_streamlit",
+            "project_id": "included_study_extractor",
+        }
+    )
+    return {
+        **metadata,
+        "job_type": "research_resolve",
+        "job_label": f"Included Study Resolver - {str(focus_label or 'selected tables').strip()}",
+        "source_workflow": "included_study_extractor",
+        "input_data": validate_research_resolve_input(input_data),
+    }
+
+
 def _build_included_study_website_payload(
     editor_rows: List[Dict[str, Any]],
     *,
@@ -340,6 +374,7 @@ def _build_included_study_website_payload(
     output_detail: str,
     focus_label: str = "",
     resolver_payload: Dict[str, Any] | None = None,
+    resolver_queue_job: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     selected_rows = [dict(row) for row in editor_rows or [] if bool(row.get("keep", True))]
     tables: List[Dict[str, Any]] = []
@@ -416,6 +451,8 @@ def _build_included_study_website_payload(
     }
     if resolver_payload:
         payload["resolver_payload"] = dict(resolver_payload)
+    if resolver_queue_job:
+        payload["resolver_queue_job"] = dict(resolver_queue_job)
     return payload
 
 
@@ -429,12 +466,22 @@ def _build_included_study_handoff_bundle_bytes(
 ) -> bytes:
     import pandas as pd
 
+    resolver_queue_job = _build_included_study_research_queue_job(
+        editor_rows,
+        check_open_access=bool(dict(resolver_payload or {}).get("options", {}).get("check_open_access", True)),
+        enrich_sjr=bool(dict(resolver_payload or {}).get("options", {}).get("enrich_sjr", True)),
+        unpaywall_email=str(dict(resolver_payload or {}).get("options", {}).get("unpaywall_email", "") or "").strip(),
+        extraction_scope=extraction_scope,
+        output_detail=output_detail,
+        focus_label=focus_label,
+    )
     website_payload = _build_included_study_website_payload(
         editor_rows,
         extraction_scope=extraction_scope,
         output_detail=output_detail,
         focus_label=focus_label,
         resolver_payload=resolver_payload,
+        resolver_queue_job=resolver_queue_job,
     )
     selected_rows = [dict(row) for row in editor_rows or [] if bool(row.get("keep", True))]
     mem = io.BytesIO()
@@ -442,6 +489,7 @@ def _build_included_study_handoff_bundle_bytes(
         zf.writestr("included_study_selection.csv", pd.DataFrame(editor_rows or []).to_csv(index=False))
         zf.writestr("included_study_selected_rows.csv", pd.DataFrame(selected_rows or []).to_csv(index=False))
         zf.writestr("research_resolver_payload.json", json.dumps(resolver_payload, indent=2))
+        zf.writestr("research_resolver_queue_job.json", json.dumps(resolver_queue_job, indent=2))
         zf.writestr("included_study_website_handoff.json", json.dumps(website_payload, indent=2))
     return mem.getvalue()
 
@@ -5995,12 +6043,22 @@ def _render_included_study_extractor_tab():
                         output_detail=str(st.session_state.get("included_study_output_detail") or "reference_map"),
                         focus_label=focus_label,
                     )
+                    resolver_queue_job = _build_included_study_research_queue_job(
+                        editor_rows,
+                        check_open_access=resolver_check_oa,
+                        enrich_sjr=resolver_enrich_sjr,
+                        unpaywall_email=resolver_unpaywall_email,
+                        extraction_scope=str(st.session_state.get("included_study_scope") or "all_trials"),
+                        output_detail=str(st.session_state.get("included_study_output_detail") or "reference_map"),
+                        focus_label=focus_label,
+                    )
                     website_payload = _build_included_study_website_payload(
                         editor_rows,
                         extraction_scope=str(st.session_state.get("included_study_scope") or "all_trials"),
                         output_detail=str(st.session_state.get("included_study_output_detail") or "reference_map"),
                         focus_label=focus_label,
                         resolver_payload=resolver_payload,
+                        resolver_queue_job=resolver_queue_job,
                     )
                     handoff_bundle = _build_included_study_handoff_bundle_bytes(
                         editor_rows,
@@ -6024,6 +6082,14 @@ def _render_included_study_extractor_tab():
                         mime="application/json",
                         use_container_width=True,
                         key="included_study_download_resolver_payload",
+                    )
+                    st.download_button(
+                        "Download Research Resolver Queue Job JSON",
+                        data=json.dumps(resolver_queue_job, indent=2),
+                        file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_included_study_research_resolve_job.json",
+                        mime="application/json",
+                        use_container_width=True,
+                        key="included_study_download_resolver_queue_job",
                     )
                     st.download_button(
                         "Download Website Handoff JSON",
