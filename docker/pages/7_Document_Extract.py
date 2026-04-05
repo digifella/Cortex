@@ -325,6 +325,22 @@ def _combine_included_study_slice_runs(slice_runs: List[Dict[str, Any]], *, prov
     }
 
 
+def _upsert_included_study_slice_run(slice_runs: List[Dict[str, Any]], slice_run: Dict[str, Any]) -> List[Dict[str, Any]]:
+    label = str(slice_run.get("label") or "").strip()
+    updated: List[Dict[str, Any]] = []
+    replaced = False
+    for item in slice_runs or []:
+        item_label = str(item.get("label") or "").strip()
+        if label and item_label == label:
+            updated.append(dict(slice_run))
+            replaced = True
+        else:
+            updated.append(dict(item))
+    if not replaced:
+        updated.append(dict(slice_run))
+    return updated
+
+
 def _run_included_study_table_slice(
     *,
     table_slice: Dict[str, Any],
@@ -376,6 +392,14 @@ def _run_included_study_table_slice(
                 sleep_fn(wait_seconds)
                 continue
             raise
+
+
+def _store_included_study_slice_state(slice_runs: List[Dict[str, Any]], *, provider: str, model: str) -> Dict[str, Any]:
+    combined = _combine_included_study_slice_runs(slice_runs, provider=provider, model=model)
+    st.session_state["included_study_slice_runs"] = list(slice_runs or [])
+    st.session_state["included_study_result"] = combined
+    st.session_state["included_study_editor_rows"] = _included_study_editor_rows(combined.get("tables") or [])
+    return combined
 
 
 def _included_study_slice_zip_bytes(slice_meta: Dict[str, Any], bibliography_text: str, extraction: Dict[str, Any] | None = None) -> bytes:
@@ -5322,11 +5346,18 @@ def _render_included_study_extractor_tab():
                 f"Detected {len(slice_result.get('table_slices') or [])} table slice(s) and "
                 f"{len(slice_result.get('bibliography_entries') or [])} parsed bibliography entrie(s)."
             )
+            existing_slice_runs = list(st.session_state.get("included_study_slice_runs") or [])
+            completed_labels = {
+                str(item.get("label") or "").strip()
+                for item in existing_slice_runs
+                if str(item.get("label") or "").strip() and dict(item.get("extraction") or {}).get("tables")
+            }
             auto_retry_sliced_quota = False
             sliced_retry_wait_cap = 75
             sliced_max_quota_retries = 3
+            rerun_completed_slices = False
             if provider == "gemini":
-                retry_c1, retry_c2, retry_c3 = st.columns([2, 1, 1])
+                retry_c1, retry_c2, retry_c3, retry_c4 = st.columns([2, 1, 1, 1])
                 with retry_c1:
                     auto_retry_sliced_quota = st.checkbox(
                         "Auto-wait and retry sliced Gemini requests on quota errors",
@@ -5355,8 +5386,22 @@ def _render_included_study_extractor_tab():
                             key="included_study_sliced_max_quota_retries",
                         )
                     )
+                with retry_c4:
+                    rerun_completed_slices = st.checkbox(
+                        "Re-run completed slices",
+                        value=bool(st.session_state.get("included_study_sliced_rerun_completed", False)),
+                        key="included_study_sliced_rerun_completed",
+                    )
+            if completed_labels and not rerun_completed_slices:
+                st.caption(
+                    f"Completed slices already in session: {', '.join(sorted(completed_labels))}. "
+                    "Batch extraction will skip them and only resume the remaining tables."
+                )
+            batch_label = "Extract All Sliced Tables"
+            if completed_labels and not rerun_completed_slices:
+                batch_label = "Extract Remaining Sliced Tables"
             if selected and st.button(
-                "Extract All Sliced Tables",
+                batch_label,
                 type="secondary",
                 use_container_width=True,
                 key="included_study_extract_sliced_btn",
@@ -5364,7 +5409,7 @@ def _render_included_study_extractor_tab():
             ):
                 try:
                     review_title = _user_visible_stem(selected)
-                    slice_runs: List[Dict[str, Any]] = []
+                    slice_runs: List[Dict[str, Any]] = list(existing_slice_runs)
                     progress_lines: List[str] = []
                     progress_box = st.empty()
 
@@ -5380,6 +5425,9 @@ def _render_included_study_extractor_tab():
                     with st.spinner("Extracting sliced tables one by one..."):
                         for table_slice in list(slice_result.get("table_slices") or []):
                             label = str(table_slice.get("label") or "").strip() or "table"
+                            if label in completed_labels and not rerun_completed_slices:
+                                _slice_progress(f"Skipping {label}: already completed")
+                                continue
                             _slice_progress(f"Starting {label} with {provider} / {model}")
                             try:
                                 extraction = _run_included_study_table_slice(
@@ -5394,21 +5442,16 @@ def _render_included_study_extractor_tab():
                                     progress_callback=_slice_progress,
                                 )
                             except IncludedStudyExtractorQuotaError:
-                                partial_result = _combine_included_study_slice_runs(slice_runs, provider=provider, model=model)
-                                st.session_state["included_study_slice_runs"] = slice_runs
-                                st.session_state["included_study_result"] = partial_result
-                                st.session_state["included_study_editor_rows"] = _included_study_editor_rows(
-                                    partial_result.get("tables") or []
-                                )
+                                _store_included_study_slice_state(slice_runs, provider=provider, model=model)
                                 raise
-                            slice_runs.append({**dict(table_slice), "extraction": extraction})
-                    st.session_state["included_study_slice_runs"] = slice_runs
-                    combined = _combine_included_study_slice_runs(slice_runs, provider=provider, model=model)
-                    st.session_state["included_study_result"] = combined
-                    st.session_state["included_study_editor_rows"] = _included_study_editor_rows(combined.get("tables") or [])
+                            slice_runs = _upsert_included_study_slice_run(slice_runs, {**dict(table_slice), "extraction": extraction})
+                    combined = _store_included_study_slice_state(slice_runs, provider=provider, model=model)
                     st.success("Sliced-table extraction complete.")
                 except IncludedStudyExtractorQuotaError as e:
-                    st.error(f"Sliced-table extraction failed: {e}")
+                    st.warning(
+                        f"Sliced-table extraction paused on a Gemini quota limit: {e}. "
+                        "Completed slices were kept. Wait for the quota window, then rerun to resume the remaining tables."
+                    )
                 except Exception as e:
                     st.error(f"Sliced-table extraction failed: {e}")
 
@@ -5480,16 +5523,61 @@ def _render_included_study_extractor_tab():
                 for idx, table_slice in enumerate(list(slice_result.get("table_slices") or []), start=1):
                     label = str(table_slice.get("label") or "table").strip()
                     extraction = dict(run_lookup.get(label, {}).get("extraction") or {})
+                    status = "complete" if extraction.get("tables") else "pending"
+                    if extraction and not extraction.get("tables"):
+                        status = "warning"
                     zip_bytes = _included_study_slice_zip_bytes(table_slice, bibliography_text, extraction or None)
                     key_suffix = str(table_slice.get("pdf_file_name") or table_slice.get("pdf_path") or idx).replace("/", "_")
-                    st.download_button(
-                        f"Download {label} ZIP",
-                        data=zip_bytes,
-                        file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_{label.replace(' ', '_')}.zip",
-                        mime="application/zip",
-                        use_container_width=True,
-                        key=f"included_study_download_slice_zip_{idx}_{key_suffix}",
-                    )
+                    b1, b2 = st.columns([2, 1])
+                    with b1:
+                        st.download_button(
+                            f"Download {label} ZIP",
+                            data=zip_bytes,
+                            file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_{label.replace(' ', '_')}.zip",
+                            mime="application/zip",
+                            use_container_width=True,
+                            key=f"included_study_download_slice_zip_{idx}_{key_suffix}",
+                        )
+                    with b2:
+                        st.caption(f"Status: {status}")
+                        if st.button(
+                            f"Extract {label}",
+                            use_container_width=True,
+                            key=f"included_study_extract_slice_{idx}_{key_suffix}",
+                            disabled=not included_study_extractor_available(provider),
+                        ):
+                            try:
+                                with st.spinner(f"Extracting {label}..."):
+                                    extraction = _run_included_study_table_slice(
+                                        table_slice=table_slice,
+                                        bibliography_text=bibliography_text,
+                                        provider=provider,
+                                        model=model,
+                                        review_title=_user_visible_stem(selected) if selected else "",
+                                        auto_retry_quota=bool(
+                                            st.session_state.get("included_study_sliced_auto_retry_quota", True)
+                                        ),
+                                        retry_wait_cap=float(
+                                            st.session_state.get("included_study_sliced_retry_wait_cap", 75) or 75
+                                        ),
+                                        max_quota_retries=int(
+                                            st.session_state.get("included_study_sliced_max_quota_retries", 3) or 3
+                                        ),
+                                    )
+                                slice_runs = _upsert_included_study_slice_run(
+                                    slice_runs,
+                                    {**dict(table_slice), "extraction": extraction},
+                                )
+                                _store_included_study_slice_state(slice_runs, provider=provider, model=model)
+                                st.success(f"{label} extracted.")
+                                st.rerun()
+                            except IncludedStudyExtractorQuotaError as e:
+                                _store_included_study_slice_state(slice_runs, provider=provider, model=model)
+                                st.warning(
+                                    f"{label} paused on a Gemini quota limit: {e}. Wait for the quota window and retry this slice."
+                                )
+                            except Exception as e:
+                                st.error(f"{label} extraction failed: {e}")
         result = st.session_state.get("included_study_result") or {}
         tables = list(result.get("tables") or [])
         if result:

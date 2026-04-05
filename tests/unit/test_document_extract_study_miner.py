@@ -865,3 +865,30 @@ def test_run_included_study_table_slice_raises_after_retry_budget_exhausted():
 
     assert calls["count"] == 3
     assert waits == [32.0, 32.0]
+
+
+def test_upsert_included_study_slice_run_replaces_same_label():
+    module = _load_document_extract_module()
+
+    updated = module._upsert_included_study_slice_run(
+        [
+            {"label": "table 2", "extraction": {"tables": [{"table_number": "2"}]}},
+            {"label": "table 3", "extraction": {"tables": [{"table_number": "3"}]}},
+        ],
+        {"label": "table 2", "extraction": {"tables": [{"table_number": "2b"}]}},
+    )
+
+    assert len(updated) == 2
+    assert updated[0]["extraction"]["tables"][0]["table_number"] == "2b"
+    assert updated[1]["label"] == "table 3"
+
+
+def test_upsert_included_study_slice_run_appends_new_label():
+    module = _load_document_extract_module()
+
+    updated = module._upsert_included_study_slice_run(
+        [{"label": "table 2", "extraction": {"tables": [{"table_number": "2"}]}}],
+        {"label": "table 4", "extraction": {"tables": [{"table_number": "4"}]}},
+    )
+
+    assert [item["label"] for item in updated] == ["table 2", "table 4"]
