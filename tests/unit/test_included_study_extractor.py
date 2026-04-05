@@ -112,6 +112,64 @@ def test_run_included_study_extractor_gemini_normalizes_grouped_tables(monkeypat
     assert citation["resolved_doi"] == "10.1000/example"
 
 
+def test_run_included_study_extractor_normalizes_table_number_prefix(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "review.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
+
+    monkeypatch.setattr("cortex_engine.included_study_extractor.get_gemini_api_key", lambda: "AI-test-key")
+    monkeypatch.setattr(
+        "cortex_engine.included_study_extractor._gemini_generate_content",
+        lambda model, payload, api_key: {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": """
+                                {
+                                  "tables": [
+                                    {
+                                      "table_number": "Table 2",
+                                      "table_title": "Overview of Included Studies on HRQOL Measures",
+                                      "grouping_basis": "Grouped by instrument",
+                                      "groups": [
+                                        {
+                                          "group_label": "FACT-G",
+                                          "trial_label": "JULIET",
+                                          "citations": [
+                                            {
+                                              "display": "Maziarz 2020 [19]",
+                                              "authors": "Maziarz",
+                                              "year": "2020",
+                                              "reference_number": "19",
+                                              "notes": "",
+                                              "needs_review": false
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                                """
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    result = run_included_study_extractor(
+        pdf_path=str(pdf_path),
+        provider="gemini",
+        model="gemini-2.5-flash",
+        review_title="Review",
+    )
+
+    assert result["tables"][0]["table_number"] == "2"
+
+
 def test_run_included_study_extractor_warns_when_no_tables_are_parsed(monkeypatch, tmp_path):
     pdf_path = tmp_path / "review.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")

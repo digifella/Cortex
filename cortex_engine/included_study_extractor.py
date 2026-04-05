@@ -325,12 +325,20 @@ def _normalize_citation_item(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _normalize_table_number(value: Any) -> str:
+    raw = re.sub(r"\s+", " ", str(value or "").strip())
+    if not raw:
+        return ""
+    match = re.search(r"(\d{1,3})", raw)
+    return str(match.group(1) or "").strip() if match else raw
+
+
 def _normalize_extracted_tables(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     tables: List[Dict[str, Any]] = []
     for raw_table in list(payload.get("tables") or []):
         if not isinstance(raw_table, dict):
             continue
-        table_number = str(raw_table.get("table_number") or raw_table.get("number") or "").strip()
+        table_number = _normalize_table_number(raw_table.get("table_number") or raw_table.get("number") or "")
         table_title = re.sub(r"\s+", " ", str(raw_table.get("table_title") or raw_table.get("title") or "").strip())
         grouping_basis = re.sub(r"\s+", " ", str(raw_table.get("grouping_basis") or "").strip())
         groups: List[Dict[str, Any]] = []
@@ -375,9 +383,11 @@ def _finalize_included_study_result(
     model: str,
     parsed: Dict[str, Any],
     raw_response: str,
+    extra_warnings: Sequence[str] | None = None,
 ) -> Dict[str, Any]:
     tables = _normalize_extracted_tables(parsed)
     warnings = [str(item).strip() for item in list(parsed.get("warnings") or []) if str(item).strip()]
+    warnings.extend(str(item).strip() for item in list(extra_warnings or []) if str(item).strip())
     raw_text = str(raw_response or "").strip()
     if not tables:
         if raw_text:
@@ -401,14 +411,16 @@ def _included_study_prompt(review_title: str = "") -> str:
         "You are extracting included-study tables from a systematic review PDF.\n\n"
         "Return only the tables that list included studies, health state utility studies, or HTA reports included in the review.\n"
         "Ignore eligibility tables, search strategy tables, risk-of-bias tables, and narrative text that does not list included studies.\n\n"
+        "Return compact JSON only. Keep the output short.\n\n"
         "For each included-study table:\n"
-        "1. Return the exact table number and table title.\n"
-        "2. Explain the grouping basis briefly.\n"
-        "3. Preserve the grouping structure the table uses conceptually.\n"
-        "4. For each cited paper/report, return the short display label used in the table, including bibliography reference number when present.\n"
-        "5. Resolve the actual bibliography entry when possible from the review bibliography, including the real paper title, authors, year, journal, and DOI.\n"
-        "6. If multiple papers are grouped under the same trial, keep them grouped under that trial.\n"
-        "7. If uncertain, set needs_review=true and explain briefly in notes.\n\n"
+        "1. Return the table number as digits only, for example `2`, not `Table 2`.\n"
+        "2. Return the table title.\n"
+        "3. Explain the grouping basis briefly.\n"
+        "4. Preserve the grouping structure the table uses conceptually.\n"
+        "5. For each cited paper/report, return only a short display label, short author label if known, year, and bibliography reference number when present.\n"
+        "6. Do not include full author lists, long paper titles, journals, or DOIs unless they are trivially obvious. Prefer leaving those fields blank.\n"
+        "7. If multiple papers are grouped under the same trial, keep them grouped under that trial.\n"
+        "8. If uncertain, set needs_review=true and explain briefly in notes.\n\n"
         f"Review title: {review_title}\n\n"
         "Return JSON with this exact shape:\n"
         "{\n"
@@ -444,6 +456,19 @@ def _included_study_prompt(review_title: str = "") -> str:
         '  "warnings": []\n'
         "}\n"
     )
+
+
+def _gemini_response_warnings(response_json: Dict[str, Any]) -> List[str]:
+    warnings: List[str] = []
+    for candidate in list(response_json.get("candidates") or []):
+        finish_reason = str(candidate.get("finishReason") or "").strip()
+        if finish_reason and finish_reason.upper() != "STOP":
+            warnings.append(f"Gemini finish reason: {finish_reason}")
+    prompt_feedback = response_json.get("promptFeedback") if isinstance(response_json.get("promptFeedback"), dict) else {}
+    block_reason = str(prompt_feedback.get("blockReason") or "").strip()
+    if block_reason:
+        warnings.append(f"Gemini prompt feedback: {block_reason}")
+    return warnings
 
 
 def run_included_study_extractor(
@@ -533,6 +558,7 @@ def run_included_study_extractor(
         model=model_name,
         parsed=parsed,
         raw_response=raw_response,
+        extra_warnings=_gemini_response_warnings(response_json),
     )
 
 
