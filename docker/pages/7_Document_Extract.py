@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 import os
 import shutil
+import csv
 import json
 import re
 import tempfile
@@ -214,12 +215,222 @@ def _research_unresolved_rows(unresolved: List[Dict[str, Any]]) -> List[Dict[str
     return rows
 
 
+def _sanitize_review_filename(name: str, fallback: str = "file") -> str:
+    text = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode("ascii")
+    text = re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("._-")
+    return text or fallback
+
+
+def _rows_to_xlsx_bytes(rows: List[Dict[str, Any]], sheet_name: str) -> bytes:
+    import pandas as pd
+
+    mem = io.BytesIO()
+    with pd.ExcelWriter(mem, engine="openpyxl") as writer:
+        pd.DataFrame(rows or []).to_excel(writer, index=False, sheet_name=str(sheet_name or "sheet")[:31])
+    return mem.getvalue()
+
+
+def _read_csv_dicts_from_zip(zf: zipfile.ZipFile, member_name: str) -> List[Dict[str, Any]]:
+    with zf.open(member_name) as fh:
+        wrapper = io.TextIOWrapper(fh, encoding="utf-8-sig", newline="")
+        try:
+            return [dict(row) for row in csv.DictReader(wrapper)]
+        finally:
+            wrapper.detach()
+
+
+def _resolve_bundle_artifact_member(names: List[str], report_path: str, prefix: str) -> str:
+    raw = str(report_path or "").strip()
+    if not raw:
+        return ""
+    normalized = raw.replace("\\", "/")
+    if normalized in names:
+        return normalized
+    base_name = Path(normalized).name
+    matches = [name for name in names if name.startswith(prefix) and Path(name).name == base_name]
+    return matches[0] if len(matches) == 1 else ""
+
+
+def _parse_research_resolve_bundle(bundle_bytes: bytes, bundle_name: str = "research_resolve_bundle.zip") -> Dict[str, Any]:
+    with zipfile.ZipFile(io.BytesIO(bundle_bytes)) as zf:
+        names = list(zf.namelist())
+        resolved_rows = _read_csv_dicts_from_zip(zf, "resolved_citations.csv") if "resolved_citations.csv" in names else []
+        unresolved_rows = _read_csv_dicts_from_zip(zf, "unresolved_citations.csv") if "unresolved_citations.csv" in names else []
+        report_members = sorted(
+            name for name in names if name.startswith("retrieval/reports/") and name.lower().endswith(".csv")
+        )
+        report_rows = _read_csv_dicts_from_zip(zf, report_members[0]) if report_members else []
+        preferred_urls = []
+        if "preferred_urls.txt" in names:
+            preferred_urls = [line.strip() for line in zf.read("preferred_urls.txt").decode("utf-8", errors="replace").splitlines() if line.strip()]
+        result_json = {}
+        if "research_resolve_result.json" in names:
+            try:
+                result_json = json.loads(zf.read("research_resolve_result.json").decode("utf-8", errors="replace"))
+            except Exception:
+                result_json = {}
+
+    report_lookup: Dict[str, Dict[str, Any]] = {}
+    for report in report_rows:
+        for key in (
+            str(report.get("input_url") or "").strip(),
+            str(report.get("final_url") or "").strip(),
+            str(report.get("pdf_url") or "").strip(),
+        ):
+            if key and key not in report_lookup:
+                report_lookup[key] = dict(report)
+
+    review_rows: List[Dict[str, Any]] = []
+    for row in resolved_rows:
+        resolved_url = str(row.get("resolved_url") or "").strip()
+        pdf_url = str(row.get("open_access_pdf_url") or "").strip()
+        preferred_url = pdf_url or resolved_url
+        report = None
+        for key in [preferred_url, resolved_url, pdf_url]:
+            if key and key in report_lookup:
+                report = dict(report_lookup[key])
+                break
+        report = report or {}
+        bundle_pdf_member = _resolve_bundle_artifact_member(names, str(report.get("pdf_path") or ""), "retrieval/pdfs/")
+        bundle_md_member = _resolve_bundle_artifact_member(names, str(report.get("md_path") or ""), "retrieval/markdown/")
+        auto_pdf_present = bool(bundle_pdf_member)
+        auto_markdown_present = bool(bundle_md_member)
+        if auto_pdf_present:
+            final_status = "retrieved_auto_pdf"
+        elif auto_markdown_present:
+            final_status = "retrieved_auto_web"
+        else:
+            final_status = ""
+        review_rows.append(
+            {
+                "row_id": str(row.get("row_id") or "").strip(),
+                "table_number": str(row.get("table_number") or "").strip(),
+                "table_title": str(row.get("table_title") or "").strip(),
+                "combined_group": str(row.get("combined_group") or "").strip(),
+                "citation_display": str(row.get("citation_display") or "").strip(),
+                "reference_number": str(row.get("reference_number") or "").strip(),
+                "matched_title": str(row.get("matched_title") or row.get("input_title") or "").strip(),
+                "resolved_doi": str(row.get("resolved_doi") or "").strip(),
+                "resolved_url": resolved_url,
+                "open_access_pdf_url": pdf_url,
+                "confidence": str(row.get("confidence") or "").strip(),
+                "source_api": str(row.get("source_api") or "").strip(),
+                "resolution_method": str(row.get("resolution_method") or "").strip(),
+                "publisher": str(row.get("publisher") or "").strip(),
+                "journal_name": str(row.get("journal_name") or "").strip(),
+                "preferred_url": preferred_url,
+                "retrieval_status": str(report.get("status") or "").strip(),
+                "retrieval_reason": str(report.get("reason") or "").strip(),
+                "http_code": str(report.get("http_code") or "").strip(),
+                "auto_pdf_present": auto_pdf_present,
+                "auto_markdown_present": auto_markdown_present,
+                "auto_pdf_member": bundle_pdf_member,
+                "auto_markdown_member": bundle_md_member,
+                "manual_pdf_filename": "",
+                "manual_url": "",
+                "review_notes": "",
+                "final_status": final_status,
+            }
+        )
+
+    return {
+        "bundle_name": bundle_name,
+        "bundle_bytes": bundle_bytes,
+        "names": names,
+        "resolved_rows": resolved_rows,
+        "unresolved_rows": unresolved_rows,
+        "report_rows": report_rows,
+        "preferred_urls": preferred_urls,
+        "result_json": result_json,
+        "review_rows": review_rows,
+    }
+
+
+def _zip_member_bytes(bundle_bytes: bytes, member_name: str) -> bytes:
+    with zipfile.ZipFile(io.BytesIO(bundle_bytes)) as zf:
+        return zf.read(member_name)
+
+
+def _build_retrieval_researcher_package(
+    bundle_bytes: bytes,
+    review_rows: List[Dict[str, Any]],
+    manual_uploads: Dict[str, Dict[str, Any]],
+    *,
+    source_bundle_name: str = "research_resolve_bundle.zip",
+) -> bytes:
+    import pandas as pd
+
+    final_rows: List[Dict[str, Any]] = []
+    missing_rows: List[Dict[str, Any]] = []
+    for row in review_rows or []:
+        row_copy = dict(row)
+        row_id = str(row_copy.get("row_id") or "").strip()
+        manual = dict((manual_uploads or {}).get(row_id) or {})
+        row_copy["manual_pdf_uploaded"] = "yes" if manual.get("data") else ""
+        row_copy["manual_pdf_filename"] = str(manual.get("name") or row_copy.get("manual_pdf_filename") or "").strip()
+        final_rows.append(row_copy)
+        if str(row_copy.get("final_status") or "").strip() in {"", "unavailable", "wrong_match", "excluded"}:
+            missing_rows.append(row_copy)
+
+    manifest = {
+        "source_bundle_name": source_bundle_name,
+        "row_count": len(final_rows),
+        "status_counts": {},
+        "manual_pdf_count": sum(1 for item in final_rows if item.get("manual_pdf_uploaded")),
+        "auto_pdf_count": sum(1 for item in final_rows if item.get("auto_pdf_present")),
+        "auto_markdown_count": sum(1 for item in final_rows if item.get("auto_markdown_present")),
+        "missing_or_flagged_count": len(missing_rows),
+    }
+    for item in final_rows:
+        key = str(item.get("final_status") or "").strip() or "review_needed"
+        manifest["status_counts"][key] = int(manifest["status_counts"].get(key) or 0) + 1
+
+    csv_bytes = pd.DataFrame(final_rows).to_csv(index=False).encode("utf-8")
+    missing_csv_bytes = pd.DataFrame(missing_rows).to_csv(index=False).encode("utf-8")
+    xlsx_bytes = _rows_to_xlsx_bytes(final_rows, "retrieval_review")
+    missing_xlsx_bytes = _rows_to_xlsx_bytes(missing_rows, "missing_rows")
+
+    out_mem = io.BytesIO()
+    with zipfile.ZipFile(out_mem, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        zf.writestr("final_reviewed_citations.csv", csv_bytes)
+        zf.writestr("final_reviewed_citations.xlsx", xlsx_bytes)
+        zf.writestr("missing_or_unavailable.csv", missing_csv_bytes)
+        zf.writestr("missing_or_unavailable.xlsx", missing_xlsx_bytes)
+        zf.writestr(f"originals/{_sanitize_review_filename(source_bundle_name, 'research_resolve_bundle.zip')}", bundle_bytes)
+
+        with zipfile.ZipFile(io.BytesIO(bundle_bytes)) as src:
+            for name in src.namelist():
+                if name.startswith("retrieval/pdfs/"):
+                    zf.writestr(f"resolved/pdfs/{Path(name).name}", src.read(name))
+                elif name.startswith("retrieval/markdown/"):
+                    zf.writestr(f"resolved/markdown/{Path(name).name}", src.read(name))
+
+        for row_id, upload in (manual_uploads or {}).items():
+            data = upload.get("data")
+            if not data:
+                continue
+            safe_name = _sanitize_review_filename(str(upload.get("name") or f"{row_id}.pdf"), fallback=f"{row_id}.pdf")
+            zf.writestr(f"resolved/manual_pdfs/{safe_name}", data)
+
+    return out_mem.getvalue()
+
+
 def _included_study_group_label(group: Dict[str, Any]) -> str:
     trial_label = str(group.get("trial_label") or "").strip()
     group_label = str(group.get("group_label") or "").strip()
     if trial_label and group_label:
         return f"{group_label} / {trial_label}"
     return trial_label or group_label
+
+
+def _included_study_keep_selected(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return False
+    return normalized in {"true", "1", "yes", "y", "on"}
 
 
 def _included_study_editor_rows(tables: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -265,6 +476,8 @@ def _included_study_editor_rows(tables: List[Dict[str, Any]]) -> List[Dict[str, 
                         "sample_size": sample_size,
                         "outcome_measure": outcome_measure,
                         "outcome_result": outcome_result,
+                        "bibliography_entry_text": str(citation.get("bibliography_entry_text") or "").strip(),
+                        "bibliography_match_method": str(citation.get("bibliography_match_method") or "").strip(),
                         "notes": notes,
                         "needs_review": "yes" if needs_review else "",
                     }
@@ -276,7 +489,7 @@ def _included_study_editor_rows(tables: List[Dict[str, Any]]) -> List[Dict[str, 
 def _merge_included_study_editor_rows(editor_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     merged: List[Dict[str, Any]] = []
     for row in editor_rows or []:
-        if not bool(row.get("keep", True)):
+        if not _included_study_keep_selected(row.get("keep", True)):
             continue
         merged.append(
             {
@@ -301,6 +514,8 @@ def _merge_included_study_editor_rows(editor_rows: List[Dict[str, Any]]) -> List
                     "sample_size": str(row.get("sample_size") or "").strip(),
                     "outcome_measure": str(row.get("outcome_measure") or "").strip(),
                     "outcome_result": str(row.get("outcome_result") or "").strip(),
+                    "bibliography_entry_text": str(row.get("bibliography_entry_text") or "").strip(),
+                    "bibliography_match_method": str(row.get("bibliography_match_method") or "").strip(),
                 },
             }
         )
@@ -7159,6 +7374,259 @@ def _render_research_resolver_tab():
             run_dir = st.session_state.get("research_resolve_run_dir")
             if run_dir:
                 st.caption(f"Saved run output: {run_dir}")
+
+    _render_research_retrieval_review_stage()
+
+
+def _render_research_retrieval_review_stage() -> None:
+    st.divider()
+    st.subheader("Review Retrieval Results")
+    st.caption(
+        "Load the current local resolver bundle or upload a `research_resolve_bundle.zip`, "
+        "review which papers were retrieved automatically, attach any manual PDFs you can obtain, "
+        "and export a curated researcher package."
+    )
+
+    current_run_dir = str(st.session_state.get("research_resolve_run_dir") or "").strip()
+    current_bundle_path = Path(current_run_dir) / "research_resolve_bundle.zip" if current_run_dir else None
+
+    load_c1, load_c2 = st.columns([1, 1])
+    with load_c1:
+        if current_bundle_path and current_bundle_path.exists():
+            if st.button("Load Current Resolver Bundle", use_container_width=True, key="research_review_load_current"):
+                parsed = _parse_research_resolve_bundle(
+                    current_bundle_path.read_bytes(),
+                    bundle_name=current_bundle_path.name,
+                )
+                st.session_state["research_review_bundle"] = parsed
+                st.session_state["research_review_rows"] = list(parsed.get("review_rows") or [])
+                st.session_state["research_review_manual_uploads"] = {}
+        else:
+            st.caption("No current local resolver bundle found.")
+
+    with load_c2:
+        uploaded_bundle = st.file_uploader(
+            "Upload `research_resolve_bundle.zip`",
+            type=["zip"],
+            key="research_review_bundle_upload",
+        )
+        if uploaded_bundle is not None and st.button("Load Uploaded Bundle", use_container_width=True, key="research_review_load_uploaded"):
+            parsed = _parse_research_resolve_bundle(uploaded_bundle.getvalue(), bundle_name=uploaded_bundle.name)
+            st.session_state["research_review_bundle"] = parsed
+            st.session_state["research_review_rows"] = list(parsed.get("review_rows") or [])
+            st.session_state["research_review_manual_uploads"] = {}
+
+    bundle = st.session_state.get("research_review_bundle") or {}
+    review_rows = list(st.session_state.get("research_review_rows") or bundle.get("review_rows") or [])
+    if not bundle or not review_rows:
+        st.info("Load a resolver bundle above to review retrieval outcomes and assemble a final researcher package.")
+        return
+
+    bundle_bytes = bundle.get("bundle_bytes") or b""
+    bundle_name = str(bundle.get("bundle_name") or "research_resolve_bundle.zip")
+    unresolved_rows = list(bundle.get("unresolved_rows") or [])
+    manual_uploads = dict(st.session_state.get("research_review_manual_uploads") or {})
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Resolved rows", len(review_rows))
+    m2.metric("Auto PDFs", sum(1 for row in review_rows if bool(row.get("auto_pdf_present"))))
+    m3.metric("Auto web", sum(1 for row in review_rows if bool(row.get("auto_markdown_present")) and not bool(row.get("auto_pdf_present"))))
+    m4.metric("Manual PDFs", sum(1 for row in review_rows if str(row.get("final_status") or "") == "retrieved_manual_pdf"))
+    m5.metric("Unresolved rows", len(unresolved_rows))
+
+    filter_options = [
+        "All",
+        "PDF retrieved",
+        "Resolved but no PDF",
+        "Web only",
+        "Unresolved",
+        "Needs manual review",
+    ]
+    active_filter = st.selectbox("Filter rows", filter_options, key="research_review_filter")
+
+    def _matches_filter(item: Dict[str, Any]) -> bool:
+        status = str(item.get("final_status") or "").strip()
+        has_pdf = bool(item.get("auto_pdf_present")) or status == "retrieved_manual_pdf"
+        has_web = bool(item.get("auto_markdown_present")) or status in {"retrieved_auto_web", "web_only_confirmed"}
+        if active_filter == "All":
+            return True
+        if active_filter == "PDF retrieved":
+            return has_pdf
+        if active_filter == "Resolved but no PDF":
+            return not has_pdf
+        if active_filter == "Web only":
+            return has_web and not has_pdf
+        if active_filter == "Needs manual review":
+            return status in {"", "wrong_match", "unavailable"} or (not has_pdf and not has_web)
+        return True
+
+    filtered_rows = [dict(row) for row in review_rows if _matches_filter(row)]
+
+    edited = st.data_editor(
+        filtered_rows,
+        use_container_width=True,
+        hide_index=True,
+        key="research_review_editor",
+        column_config={
+            "row_id": st.column_config.TextColumn("Row", width="small"),
+            "table_number": st.column_config.TextColumn("Table", width="small"),
+            "reference_number": st.column_config.TextColumn("Ref", width="small"),
+            "citation_display": st.column_config.TextColumn("Citation", width="medium"),
+            "combined_group": st.column_config.TextColumn("Grouped under", width="medium"),
+            "matched_title": st.column_config.TextColumn("Resolved title", width="large"),
+            "resolved_doi": st.column_config.TextColumn("DOI", width="medium"),
+            "preferred_url": st.column_config.LinkColumn("Best URL", display_text="open"),
+            "resolved_url": st.column_config.LinkColumn("Resolved URL", display_text="open"),
+            "open_access_pdf_url": st.column_config.LinkColumn("PDF URL", display_text="pdf"),
+            "auto_pdf_present": st.column_config.CheckboxColumn("Auto PDF"),
+            "auto_markdown_present": st.column_config.CheckboxColumn("Auto web"),
+            "final_status": st.column_config.SelectboxColumn(
+                "Final status",
+                options=[
+                    "",
+                    "retrieved_auto_pdf",
+                    "retrieved_auto_web",
+                    "retrieved_manual_pdf",
+                    "web_only_confirmed",
+                    "unavailable",
+                    "wrong_match",
+                    "excluded",
+                ],
+            ),
+            "review_notes": st.column_config.TextColumn("Review notes", width="medium"),
+            "manual_pdf_filename": st.column_config.TextColumn("Manual PDF", width="medium"),
+        },
+        disabled=[
+            "row_id",
+            "table_number",
+            "reference_number",
+            "citation_display",
+            "combined_group",
+            "matched_title",
+            "resolved_doi",
+            "preferred_url",
+            "resolved_url",
+            "open_access_pdf_url",
+            "auto_pdf_present",
+            "auto_markdown_present",
+            "manual_pdf_filename",
+        ],
+    )
+    edited_rows = _editor_records(edited)
+    if edited_rows:
+        edited_by_id = {str(item.get("row_id") or "").strip(): dict(item) for item in edited_rows}
+        merged_rows: List[Dict[str, Any]] = []
+        for original in review_rows:
+            row_id = str(original.get("row_id") or "").strip()
+            merged = dict(original)
+            if row_id in edited_by_id:
+                merged.update(
+                    {
+                        "final_status": str(edited_by_id[row_id].get("final_status") or merged.get("final_status") or "").strip(),
+                        "review_notes": str(edited_by_id[row_id].get("review_notes") or "").strip(),
+                    }
+                )
+            if row_id in manual_uploads:
+                merged["manual_pdf_filename"] = str(manual_uploads[row_id].get("name") or "").strip()
+                if str(merged.get("final_status") or "").strip() != "excluded":
+                    merged["final_status"] = "retrieved_manual_pdf"
+            merged_rows.append(merged)
+        review_rows = merged_rows
+        st.session_state["research_review_rows"] = review_rows
+
+    selectable_rows = [row for row in review_rows if _matches_filter(row)] or review_rows
+    row_labels = {
+        f"{row.get('row_id')} • [{row.get('reference_number')}] {row.get('citation_display') or row.get('matched_title')}"
+        : str(row.get("row_id") or "").strip()
+        for row in selectable_rows
+    }
+    selected_label = st.selectbox("Open / update a row", list(row_labels.keys()), key="research_review_selected_row")
+    selected_row_id = row_labels.get(selected_label, "")
+    selected_row = next((row for row in review_rows if str(row.get("row_id") or "").strip() == selected_row_id), {})
+
+    if selected_row:
+        act_c1, act_c2, act_c3, act_c4 = st.columns(4)
+        preferred_url = str(selected_row.get("preferred_url") or "").strip()
+        resolved_url = str(selected_row.get("resolved_url") or "").strip()
+        pdf_url = str(selected_row.get("open_access_pdf_url") or "").strip()
+        if preferred_url:
+            act_c1.link_button("Open Best URL", preferred_url, use_container_width=True)
+        if resolved_url and resolved_url != preferred_url:
+            act_c2.link_button("Open Resolved URL", resolved_url, use_container_width=True)
+        if pdf_url and pdf_url not in {preferred_url, resolved_url}:
+            act_c3.link_button("Open PDF URL", pdf_url, use_container_width=True)
+        if str(selected_row.get("resolved_doi") or "").strip():
+            doi_link = f"https://doi.org/{selected_row['resolved_doi']}"
+            act_c4.link_button("Open DOI", doi_link, use_container_width=True)
+
+        selected_pdf_member = str(selected_row.get("auto_pdf_member") or "").strip()
+        selected_md_member = str(selected_row.get("auto_markdown_member") or "").strip()
+        if selected_pdf_member or selected_md_member:
+            download_c1, download_c2 = st.columns(2)
+            if selected_pdf_member:
+                download_c1.download_button(
+                    "Download Auto PDF",
+                    data=_zip_member_bytes(bundle_bytes, selected_pdf_member),
+                    file_name=Path(selected_pdf_member).name,
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key=f"research_review_auto_pdf_{selected_row_id}",
+                )
+            if selected_md_member:
+                download_c2.download_button(
+                    "Download Auto Markdown",
+                    data=_zip_member_bytes(bundle_bytes, selected_md_member),
+                    file_name=Path(selected_md_member).name,
+                    mime="text/markdown",
+                    use_container_width=True,
+                    key=f"research_review_auto_md_{selected_row_id}",
+                )
+
+        manual_pdf = st.file_uploader(
+            "Attach manual PDF for selected row",
+            type=["pdf"],
+            key=f"research_review_manual_pdf_upload_{selected_row_id}",
+        )
+        upload_c1, upload_c2 = st.columns(2)
+        if manual_pdf is not None and upload_c1.button("Attach Manual PDF", use_container_width=True, key=f"research_review_attach_{selected_row_id}"):
+            manual_uploads[selected_row_id] = {"name": manual_pdf.name, "data": manual_pdf.getvalue()}
+            st.session_state["research_review_manual_uploads"] = manual_uploads
+            for row in review_rows:
+                if str(row.get("row_id") or "").strip() == selected_row_id:
+                    row["manual_pdf_filename"] = manual_pdf.name
+                    if str(row.get("final_status") or "").strip() != "excluded":
+                        row["final_status"] = "retrieved_manual_pdf"
+            st.session_state["research_review_rows"] = review_rows
+            st.success(f"Attached manual PDF to row {selected_row_id}.")
+        if selected_row_id in manual_uploads and upload_c2.button("Remove Manual PDF", use_container_width=True, key=f"research_review_remove_{selected_row_id}"):
+            manual_uploads.pop(selected_row_id, None)
+            st.session_state["research_review_manual_uploads"] = manual_uploads
+            for row in review_rows:
+                if str(row.get("row_id") or "").strip() == selected_row_id:
+                    row["manual_pdf_filename"] = ""
+                    if str(row.get("final_status") or "").strip() == "retrieved_manual_pdf":
+                        row["final_status"] = ""
+            st.session_state["research_review_rows"] = review_rows
+            st.success(f"Removed manual PDF from row {selected_row_id}.")
+
+    if unresolved_rows:
+        with st.expander("Unresolved rows from bundle", expanded=False):
+            st.dataframe(unresolved_rows, use_container_width=True, hide_index=True)
+
+    package_bytes = _build_retrieval_researcher_package(
+        bundle_bytes,
+        review_rows,
+        manual_uploads,
+        source_bundle_name=bundle_name,
+    )
+    st.download_button(
+        "Download Final Researcher Package",
+        data=package_bytes,
+        file_name=f"{datetime.now().strftime('%Y-%m-%dT%H-%M')}_researcher_package.zip",
+        mime="application/zip",
+        use_container_width=True,
+        key="research_review_download_package",
+    )
 
 
 # ======================================================================

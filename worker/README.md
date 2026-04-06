@@ -9,6 +9,7 @@ This folder contains the local/offline queue worker for the website work queue A
 - `handlers/__init__.py`: Job-type handler registry.
 - `handlers/pdf_anonymise.py`: `pdf_anonymise` handler (reuses `cortex_engine.anonymizer`).
 - `handlers/pdf_textify.py`: `pdf_textify` handler (reuses `cortex_engine.textifier`).
+- `handlers/included_study_extract.py`: `included_study_extract` handler (systematic review PDF -> grouped included-study table artifacts).
 - `handlers/url_ingest.py`: `url_ingest` handler (open-access PDF discovery + optional textify).
 - `handlers/research_resolve.py`: `research_resolve` handler (citation resolution via CrossRef/Unpaywall/SJR).
 - `handlers/org_profile_refresh.py`: `org_profile_refresh` handler (official-source organisation refresh with structured profile proposals).
@@ -49,6 +50,7 @@ venv/bin/python worker/intel_mailbox_worker.py
 ## Current Supported Job Types
 - `pdf_anonymise`
 - `pdf_textify`
+- `included_study_extract`
 - `url_ingest`
 - `research_resolve`
 - `org_profile_refresh`

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
 from pathlib import Path
 from types import SimpleNamespace
+import zipfile
 
 import pytest
 
@@ -807,6 +810,57 @@ def test_merge_included_study_editor_rows_builds_research_payload_rows():
     assert merged[0]["extra_fields"]["study_design"] == "Phase 1 single-arm trial"
 
 
+def test_merge_included_study_editor_rows_coerces_keep_strings():
+    module = _load_document_extract_module()
+
+    merged = module._merge_included_study_editor_rows(
+        [
+            {
+                "keep": "TRUE",
+                "row_id": 1,
+                "table_number": "3",
+                "table_title": "Overview of included studies on health state utility values",
+                "grouping_basis": "Utility assessment method and region",
+                "group_label": "EQ-5D / Global",
+                "trial_label": "SADAL",
+                "combined_group": "EQ-5D / Global / SADAL",
+                "citation_display": "Shah 2021 [38]",
+                "title": "Health-related quality of life and utility outcomes with selinexor in relapsed/refractory diffuse large B-cell lymphoma",
+                "authors": "Shah J",
+                "year": "2021",
+                "doi": "",
+                "journal": "Future Oncology",
+                "reference_number": "38",
+                "notes": "",
+                "needs_review": "",
+            },
+            {
+                "keep": "False",
+                "row_id": 2,
+                "table_number": "3",
+                "table_title": "Overview of included studies on health state utility values",
+                "grouping_basis": "Utility assessment method and region",
+                "group_label": "TTO / UK",
+                "trial_label": "Hypothetical CAR T vignette study",
+                "combined_group": "TTO / UK / Hypothetical CAR T vignette study",
+                "citation_display": "Howell 2022 [44]",
+                "title": "Howell 2022 [44]",
+                "authors": "Howell D",
+                "year": "2022",
+                "doi": "",
+                "journal": "",
+                "reference_number": "44",
+                "notes": "",
+                "needs_review": "yes",
+            },
+        ]
+    )
+
+    assert len(merged) == 1
+    assert merged[0]["row_id"] == 1
+    assert merged[0]["extra_fields"]["reference_number"] == "38"
+
+
 def test_build_included_study_website_payload_groups_selected_rows():
     module = _load_document_extract_module()
 
@@ -1092,3 +1146,102 @@ def test_included_study_rows_to_xlsx_bytes_round_trips_basic_rows():
     )
 
     assert payload.startswith(b"PK")
+
+
+def test_parse_research_resolve_bundle_builds_review_rows():
+    module = _load_document_extract_module()
+
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "resolved_citations.csv",
+            "\n".join(
+                [
+                    "row_id,table_number,table_title,combined_group,citation_display,reference_number,input_title,matched_title,resolved_doi,resolved_url,source_api,resolution_method,confidence,publisher,journal_name,open_access_pdf_url",
+                    "1,3,Table 3,EQ-5D / Global / CheckMate 436,Zinzani 2019 [45],45,Input A,Matched A,10.1200/jco.19.01492,https://doi.org/10.1200/jco.19.01492,review_bibliography,bibliography_reference_number,high,ASCO,Journal of Clinical Oncology,",
+                    "2,3,Table 3,EQ-5D / NR / Orfanos 2022,Orfanos 2022 [46],46,Input B,Matched B,10.1016/j.jval.2021.11.1195,https://doi.org/10.1016/j.jval.2021.11.1195,review_bibliography,bibliography_reference_number,high,Elsevier,Value in Health,",
+                ]
+            ),
+        )
+        zf.writestr("unresolved_citations.csv", "row_id,input_title,reason,best_candidate\n3,Missing paper,no_match,\n")
+        zf.writestr("preferred_urls.txt", "https://doi.org/10.1200/jco.19.01492\nhttps://doi.org/10.1016/j.jval.2021.11.1195\n")
+        zf.writestr("research_resolve_result.json", json.dumps({"status": "completed", "stats": {"total": 2}}))
+        zf.writestr(
+            "retrieval/reports/url_ingest_report_1.csv",
+            "\n".join(
+                [
+                    "input_url,final_url,page_title,status,reason,http_code,open_access_pdf_found,pdf_url,pdf_path,md_path,converted_to_md,web_captured,elapsed_seconds",
+                    "https://doi.org/10.1200/jco.19.01492,https://ascopubs.org/doi/10.1200/JCO.19.01492,Example,web_markdown,web_page_captured_http_error,403,FALSE,,,/tmp/run/retrieval/markdown/asco.md,FALSE,TRUE,0.8",
+                    "https://doi.org/10.1016/j.jval.2021.11.1195,https://linkinghub.elsevier.com/retrieve/pii/S1098301521029909,Example,downloaded,,200,TRUE,https://example.org/file.pdf,/tmp/run/retrieval/pdfs/example.pdf,/tmp/run/retrieval/markdown/example.md,TRUE,FALSE,0.4",
+                ]
+            ),
+        )
+        zf.writestr("retrieval/markdown/asco.md", "# ASCO landing")
+        zf.writestr("retrieval/markdown/example.md", "# Example")
+        zf.writestr("retrieval/pdfs/example.pdf", b"%PDF-1.4 test")
+
+    parsed = module._parse_research_resolve_bundle(mem.getvalue(), "bundle.zip")
+
+    assert parsed["bundle_name"] == "bundle.zip"
+    assert len(parsed["review_rows"]) == 2
+    row_by_id = {row["row_id"]: row for row in parsed["review_rows"]}
+    assert row_by_id["1"]["auto_markdown_present"] is True
+    assert row_by_id["1"]["auto_pdf_present"] is False
+    assert row_by_id["1"]["final_status"] == "retrieved_auto_web"
+    assert row_by_id["2"]["auto_pdf_present"] is True
+    assert row_by_id["2"]["final_status"] == "retrieved_auto_pdf"
+    assert len(parsed["unresolved_rows"]) == 1
+
+
+def test_build_retrieval_researcher_package_includes_manual_pdf():
+    module = _load_document_extract_module()
+
+    source_bundle = io.BytesIO()
+    with zipfile.ZipFile(source_bundle, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("retrieval/markdown/example.md", "# Example")
+        zf.writestr("retrieval/pdfs/example.pdf", b"%PDF-1.4 auto")
+        zf.writestr("resolved_citations.csv", "row_id\n1\n")
+
+    review_rows = [
+        {
+            "row_id": "1",
+            "reference_number": "45",
+            "citation_display": "Zinzani 2019 [45]",
+            "matched_title": "Matched A",
+            "final_status": "retrieved_auto_pdf",
+            "auto_pdf_present": True,
+            "auto_markdown_present": True,
+            "manual_pdf_filename": "",
+            "review_notes": "",
+        },
+        {
+            "row_id": "2",
+            "reference_number": "46",
+            "citation_display": "Orfanos 2022 [46]",
+            "matched_title": "Matched B",
+            "final_status": "retrieved_manual_pdf",
+            "auto_pdf_present": False,
+            "auto_markdown_present": False,
+            "manual_pdf_filename": "manual.pdf",
+            "review_notes": "uploaded manually",
+        },
+    ]
+    manual_uploads = {"2": {"name": "manual.pdf", "data": b"%PDF-1.4 manual"}}
+
+    package_bytes = module._build_retrieval_researcher_package(
+        source_bundle.getvalue(),
+        review_rows,
+        manual_uploads,
+        source_bundle_name="bundle.zip",
+    )
+
+    with zipfile.ZipFile(io.BytesIO(package_bytes)) as zf:
+        names = set(zf.namelist())
+        assert "manifest.json" in names
+        assert "final_reviewed_citations.csv" in names
+        assert "missing_or_unavailable.csv" in names
+        assert "resolved/pdfs/example.pdf" in names
+        assert "resolved/markdown/example.md" in names
+        assert "resolved/manual_pdfs/manual.pdf" in names
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        assert manifest["manual_pdf_count"] == 1

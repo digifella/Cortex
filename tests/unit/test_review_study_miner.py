@@ -91,6 +91,46 @@ def test_parse_reference_entries_accepts_bare_reference_excerpt():
     assert entries[1]["year"] == "2021"
 
 
+def test_parse_reference_entries_normalizes_wrapped_words_and_urls():
+    entries = _parse_reference_entries(
+        """
+        70. ClinicalTrials.gov. Study evaluating the safety and efficacy of KTE-C19 in adult participants with refractory aggressive non-
+        Hodgkin lymphoma (ZUMA-1 (NCT02348216). 2015. https://
+        clini​caltr​ials.​gov/​ct2/​show/​NCT02​348216. Accessed 13 Dec 2022.
+        """
+    )
+
+    assert len(entries) == 1
+    assert entries[0]["reference_number"] == "70"
+    assert "non-Hodgkin lymphoma" in entries[0]["title"]
+    assert "https://clinicaltrials.gov/ct2/show/NCT02348216" in entries[0]["entry_text"]
+
+
+def test_parse_reference_entries_repairs_mojibake_punctuation():
+    entries = _parse_reference_entries(
+        """
+        69. Casasnovas RO, Daniele P, Tremblay G, et al. PCN325 Health utility in relapsed/refractory diffuse large B-cell lymphoma (RR-DLBCL) patientsâ€”results of a phase II trial with ORAL selinexor. Value Health. 2020;23(suppl 2):S479-80.
+        """
+    )
+
+    assert len(entries) == 1
+    assert "â€”" not in entries[0]["title"]
+    assert entries[0]["title"] == "PCN325 Health utility in relapsed/refractory diffuse large B-cell lymphoma (RR-DLBCL) patients-results of a phase II trial with ORAL selinexor"
+    assert entries[0]["journal"] == "Value Health"
+
+
+def test_parse_reference_entries_keeps_vs_titles_intact():
+    entries = _parse_reference_entries(
+        """
+        54. Li Y, et al. Cost-effectiveness analysis of axicabtagene ciloleucel vs. salvage chemotherapy for relapsed or refractory adult diffuse large B-cell lymphoma in China. Front Public Health. 2022;10:123.
+        """
+    )
+
+    assert len(entries) == 1
+    assert entries[0]["title"] == "Cost-effectiveness analysis of axicabtagene ciloleucel vs salvage chemotherapy for relapsed or refractory adult diffuse large B-cell lymphoma in China"
+    assert entries[0]["journal"] == "Front Public Health"
+
+
 def test_review_study_miner_scans_reference_list_for_keyword_matches():
     markdown = """
 # Meta-analysis of survivorship interventions

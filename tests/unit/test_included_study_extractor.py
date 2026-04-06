@@ -393,9 +393,28 @@ def test_scope_prompts_include_requested_study_filter():
     assert "Only include randomized controlled trials" in table_prompt
     assert "For economic or HTA tables, still return JSON" in economic_prompt
     assert "Table kind hint: economic" in economic_prompt
+    assert "Economic/HTA compact mode:" in economic_prompt
+    assert "Prefer short group labels like `China / CUA`" in economic_prompt
     assert "compact reference map only" in full_prompt.lower()
     assert '"resolved_title"' not in table_prompt
     assert "study_design" in detailed_prompt
+
+
+def test_single_table_prompt_truncates_economic_bibliography_more_aggressively():
+    refs = "".join(f"[{i}] REF{i} Example citation line\n" for i in range(1, 800))
+    prompt = _single_table_prompt(
+        "table 4",
+        "Overview of economic studies reporting health state utility values",
+        "economic",
+        "Review",
+        refs,
+        "rct_or_clinical",
+        "reference_map",
+    )
+
+    assert "...[truncated]" in prompt
+    assert "[1] REF1 Example citation line" in prompt
+    assert "[799] REF799 Example citation line" not in prompt
 
 
 def test_run_included_study_extractor_gemini_raises_quota_error(monkeypatch, tmp_path):

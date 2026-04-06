@@ -555,6 +555,8 @@ def _single_table_prompt(
     output_detail: str = _DEFAULT_OUTPUT_DETAIL,
 ) -> str:
     detailed = _is_detailed_output(output_detail)
+    kind_name = str(table_kind or "").strip().lower()
+    compact_economic = (not detailed) and kind_name in {"economic", "hta"}
     citation_detail = (
         '              "display": "",\n'
         '              "authors": "",\n'
@@ -589,8 +591,21 @@ def _single_table_prompt(
         '      "grouping_basis": "",\n'
     )
     compact_bibliography = str(bibliography_text or "").strip()
-    if len(compact_bibliography) > 18000:
-        compact_bibliography = compact_bibliography[:18000].rstrip() + "\n...[truncated]"
+    bibliography_limit = 18000
+    if compact_economic:
+        bibliography_limit = 8000
+    if len(compact_bibliography) > bibliography_limit:
+        compact_bibliography = compact_bibliography[:bibliography_limit].rstrip() + "\n...[truncated]"
+    compact_economic_rules = ""
+    if compact_economic:
+        compact_economic_rules = (
+            "Economic/HTA compact mode:\n"
+            "- Prefer short group labels like `China / CUA`, `US / CEA`, or `Included economic studies`.\n"
+            "- Keep `trial_label` blank unless the row explicitly names a trial.\n"
+            "- Keep `notes` extremely short; do not restate full treatments, populations, or model details unless essential.\n"
+            "- Do not repeat the same citation details in both `group_label` and `notes`.\n"
+            "- Favor one compact citation entry per cited paper/report.\n\n"
+        )
     return (
         "You are extracting one included-study table from a systematic review PDF.\n\n"
         "Return compact JSON only.\n"
@@ -604,6 +619,7 @@ def _single_table_prompt(
         "Do not emit long paper titles or journal names unless a very short title is the only way to disambiguate the citation.\n"
         "Prefer leaving optional resolved fields blank rather than filling them with long text.\n"
         "Keep notes brief and high-level; do not restate every numeric table value.\n\n"
+        f"{compact_economic_rules}"
         f"Review title: {review_title}\n"
         f"Table label: {table_label}\n\n"
         f"Table title: {table_title}\n"

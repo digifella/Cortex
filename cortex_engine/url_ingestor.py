@@ -5,10 +5,14 @@ URL ingestor for open-access PDF discovery/download with optional PDF->Markdown 
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -119,6 +123,7 @@ class URLIngestor:
                 "Accept": "text/html,application/pdf;q=0.9,*/*;q=0.8",
             }
         )
+        self.chrome_path = shutil.which("google-chrome") or shutil.which("google-chrome-stable") or shutil.which("chromium") or shutil.which("chromium-browser")
 
     @staticmethod
     def _is_pdf_content(content_type: str, url: str) -> bool:
@@ -156,6 +161,65 @@ class URLIngestor:
 
         deduped = list(dict.fromkeys(candidates))
         return title, deduped[:25]
+
+    @staticmethod
+    def _looks_like_block_page(title: str, html: str) -> bool:
+        title_low = str(title or "").strip().lower()
+        html_low = str(html or "")[:4000].lower()
+        markers = (
+            "just a moment",
+            "enable javascript and cookies",
+            "checking if the site connection is secure",
+            "attention required",
+            "cf-browser-verification",
+            "cloudflare",
+            "access denied",
+        )
+        return any(marker in title_low or marker in html_low for marker in markers)
+
+    @staticmethod
+    def _looks_like_thin_landing_page(title: str, html: str) -> bool:
+        title_low = str(title or "").strip().lower()
+        body = BeautifulSoup(html or "", "html.parser").get_text(" ", strip=True)
+        body_low = body.lower()
+        if title_low in {"redirecting", "just a moment...", "just a moment"}:
+            return True
+        return len(body_low) < 120
+
+    def _fetch_html_with_browser(self, url: str) -> str:
+        chrome = str(self.chrome_path or "").strip()
+        if not chrome:
+            return ""
+        try:
+            with tempfile.TemporaryDirectory(prefix="cortex_chrome_") as tmpdir:
+                cmd = [
+                    chrome,
+                    "--headless=new",
+                    "--disable-gpu",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-dev-shm-usage",
+                    f"--user-data-dir={tmpdir}",
+                    "--virtual-time-budget=12000",
+                    "--dump-dom",
+                    str(url),
+                ]
+                if os.path.exists("/.dockerenv"):
+                    cmd.insert(1, "--no-sandbox")
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=max(15, min(int(self.timeout), 45)),
+                    check=False,
+                )
+        except Exception as exc:
+            logger.debug("Browser fetch failed for %s: %s", url, exc)
+            return ""
+        if proc.returncode != 0 and not proc.stdout:
+            logger.debug("Browser fetch non-zero exit for %s: %s", url, proc.returncode)
+            return ""
+        return str(proc.stdout or "").strip()
 
     def _download_pdf(self, pdf_url: str, title_hint: str) -> Tuple[bool, str, str, str]:
         try:
@@ -323,15 +387,34 @@ class URLIngestor:
         ]
         return "\n".join(lines)
 
+    @staticmethod
+    def _extract_meta_description(html: str) -> str:
+        soup = BeautifulSoup(html or "", "html.parser")
+        for attrs in (
+            {"name": "description"},
+            {"property": "og:description"},
+            {"name": "twitter:description"},
+        ):
+            node = soup.find("meta", attrs=attrs)
+            content = str(node.get("content") or "").strip() if node else ""
+            if content:
+                return content
+        return ""
+
     def _convert_web_to_md(self, html: str, source_url: str, title_hint: str) -> Tuple[bool, str, str]:
         try:
             title = self._title_from_html(html, fallback=title_hint or "web_page")
             body = self._extract_web_text(html)
             if not body:
+                body = self._extract_meta_description(html)
+            if not body:
+                body = f"Captured web landing page from {source_url}."
+            if not body:
                 return False, "", "web_text_empty"
             preface = self._build_web_preface(title=title, url=source_url, text=body)
             md_content = f"{preface}# {title}\n\nSource: {source_url}\n\n{body}\n"
-            md_name = "scraped_" + safe_filename(title or source_url, ".md")
+            url_hash = hashlib.sha1(str(source_url or "").encode("utf-8")).hexdigest()[:10]
+            md_name = "scraped_" + safe_filename(f"{title or source_url}_{url_hash}", ".md")
             md_path = self.md_dir / md_name
             md_path.write_text(md_content, encoding="utf-8")
             return True, str(md_path), ""
@@ -367,7 +450,66 @@ class URLIngestor:
                 result.final_url = resp.url
                 result.http_code = str(resp.status_code)
                 _event(f"Response {resp.status_code} from {result.final_url}")
+                html = ""
                 if resp.status_code >= 400:
+                    html = resp.text or ""
+                    browser_html = ""
+                    if self._looks_like_block_page("", html):
+                        _event("HTTP error page looks browser-gated; trying headless Chrome fallback.")
+                        browser_html = self._fetch_html_with_browser(result.final_url or input_url)
+                        if browser_html:
+                            html = browser_html
+                            title_hint, pdf_candidates = self._extract_pdf_candidates(html, result.final_url or input_url)
+                            result.page_title = title_hint
+                            if pdf_candidates:
+                                _event(f"Browser fallback discovered {len(pdf_candidates)} PDF candidate link(s).")
+                                downloaded = False
+                                last_reason = "pdf_download_failed"
+                                for candidate in pdf_candidates:
+                                    _event(f"Trying browser-discovered PDF candidate: {candidate}")
+                                    ok, http_code, pdf_path, reason = self._download_pdf(candidate, title_hint or input_url)
+                                    if http_code:
+                                        result.http_code = http_code
+                                    if ok:
+                                        result.open_access_pdf_found = True
+                                        result.pdf_url = candidate
+                                        result.pdf_path = pdf_path
+                                        result.status = "downloaded"
+                                        downloaded = True
+                                        _event(f"Downloaded PDF: {Path(pdf_path).name}")
+                                        break
+                                    last_reason = reason or last_reason
+                                if downloaded:
+                                    if convert_to_md and result.pdf_path:
+                                        _event("Converting downloaded PDF to Markdown.")
+                                        ok, md_path, conv_reason = self._convert_pdf_to_md(
+                                            result.pdf_path,
+                                            use_vision=use_vision_for_md,
+                                            textify_options=textify_options,
+                                        )
+                                        if ok:
+                                            result.converted_to_md = True
+                                            result.md_path = md_path
+                                            _event(f"PDF->MD complete: {Path(md_path).name}")
+                                        else:
+                                            result.reason = f"md_conversion_failed: {conv_reason}"
+                                    results.append(result)
+                                    continue
+                    if capture_web_md_on_no_pdf and html:
+                        title_hint = self._title_from_html(html, fallback=input_url)
+                        result.page_title = title_hint
+                        _event("HTTP error page received; attempting web page Markdown fallback.")
+                        ok, md_path, conv_reason = self._convert_web_to_md(html, result.final_url or input_url, title_hint)
+                        if ok:
+                            result.status = "web_markdown"
+                            result.web_captured = True
+                            result.converted_to_md = True
+                            result.md_path = md_path
+                            result.reason = "web_page_captured_http_error"
+                            _event(f"Captured HTTP error page as markdown: {Path(md_path).name}")
+                            results.append(result)
+                            continue
+                        _event(f"Web markdown fallback failed: {conv_reason}")
                     result.status = "failed"
                     result.reason = "paywalled_or_forbidden" if resp.status_code in (401, 402, 403) else "http_error"
                     _event(f"Marked failed: {result.reason}")
@@ -387,6 +529,14 @@ class URLIngestor:
                     title_hint, pdf_candidates = self._extract_pdf_candidates(html, resp.url)
                     result.page_title = title_hint
                     _event(f"Extracted {len(pdf_candidates)} PDF candidate link(s) from page.")
+                    if not pdf_candidates and self._looks_like_thin_landing_page(title_hint, html):
+                        _event("Thin landing page detected; trying headless Chrome fallback.")
+                        browser_html = self._fetch_html_with_browser(result.final_url or input_url)
+                        if browser_html:
+                            html = browser_html
+                            title_hint, pdf_candidates = self._extract_pdf_candidates(html, result.final_url or input_url)
+                            result.page_title = title_hint or result.page_title
+                            _event(f"Browser fallback extracted {len(pdf_candidates)} PDF candidate link(s) from page.")
 
                 if not pdf_candidates:
                     if capture_web_md_on_no_pdf and html:

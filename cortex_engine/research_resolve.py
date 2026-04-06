@@ -6,6 +6,7 @@ import json
 import re
 import time
 import unicodedata
+import zipfile
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -16,6 +17,7 @@ from bs4 import BeautifulSoup
 
 from cortex_engine.journal_authority import classify_journal_authority
 from cortex_engine.preface_classification import classify_credibility_tier_with_reason
+from cortex_engine.url_ingestor import URLIngestor
 from cortex_engine.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -23,6 +25,10 @@ logger = get_logger(__name__)
 _DOI_RE = re.compile(r"10\.\d{4,9}/\S+", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 _PMID_RE = re.compile(r"^\d{1,8}$")
+_BIB_URLISH_RE = re.compile(
+    r"https?://(?:[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]|[\s\u00ad\u200b\u200c\u200d\u2060])+",
+    re.IGNORECASE,
+)
 _PREPRINT_MARKERS = (
     "preprint",
     "pre-print",
@@ -48,8 +54,53 @@ _RESEARCH_COLUMN_ALIASES = {
 }
 
 
+def _repair_common_mojibake(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+    repaired = value
+    explicit_replacements = {
+        "â€”": "-",
+        "â€“": "-",
+        "â€\"": "-",
+        "â€'": "'",
+        "â€œ": '"',
+        "â€�": '"',
+        "â€¦": "...",
+        "â‰¥": ">=",
+        "â‰¤": "<=",
+    }
+    for old, new in explicit_replacements.items():
+        repaired = repaired.replace(old, new)
+    if re.search(r"[ÃÂâ€â€™â€œâ€�â€“â€”â€¦â‰]", repaired):
+        for _ in range(2):
+            try:
+                candidate = repaired.encode("latin-1").decode("utf-8")
+            except UnicodeError:
+                break
+            if candidate == repaired:
+                break
+            repaired = candidate
+    repaired = (
+        repaired.replace("\u00a0", " ")
+        .replace("\u00ad", "")
+        .replace("\u200b", "")
+        .replace("\u200c", "")
+        .replace("\u200d", "")
+        .replace("\u2060", "")
+        .replace("\u2013", "-")
+        .replace("\u2014", "-")
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u2026", "...")
+    )
+    return repaired
+
+
 def _normalize_text(text: str) -> str:
-    base = unicodedata.normalize("NFKD", str(text or ""))
+    base = unicodedata.normalize("NFKD", _repair_common_mojibake(text))
     ascii_text = base.encode("ascii", "ignore").decode("ascii")
     lowered = ascii_text.lower()
     cleaned = re.sub(r"[^a-z0-9]+", " ", lowered).strip()
@@ -274,6 +325,76 @@ def build_research_preferred_url_list(resolved: List[Dict[str, Any]]) -> List[st
     return urls
 
 
+def _research_resolved_rows(resolved: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for item in resolved or []:
+        extra_fields = dict(item.get("extra_fields") or {})
+        oa = item.get("open_access") or {}
+        journal = item.get("journal") or {}
+        rows.append(
+            {
+                "row_id": item.get("row_id"),
+                "table_number": extra_fields.get("table_number", ""),
+                "table_title": extra_fields.get("table_title", ""),
+                "combined_group": extra_fields.get("combined_group") or extra_fields.get("group_label") or "",
+                "citation_display": extra_fields.get("citation_display", ""),
+                "reference_number": extra_fields.get("reference_number", ""),
+                "input_title": item.get("input_title", ""),
+                "matched_title": item.get("matched_title", ""),
+                "resolved_doi": item.get("resolved_doi", ""),
+                "resolved_url": item.get("resolved_url", ""),
+                "source_api": item.get("source_api", ""),
+                "resolution_method": item.get("resolution_method", ""),
+                "confidence": item.get("confidence", ""),
+                "publisher": item.get("publisher", ""),
+                "journal_name": journal.get("name", ""),
+                "open_access_pdf_url": oa.get("pdf_url", ""),
+            }
+        )
+    return rows
+
+
+def _research_unresolved_rows(unresolved: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for item in unresolved or []:
+        extra_fields = dict(item.get("extra_fields") or {})
+        best = ""
+        if item.get("best_candidates"):
+            first = item["best_candidates"][0]
+            best = f"{first.get('title', '')} ({first.get('similarity', 0)})"
+        rows.append(
+            {
+                "row_id": item.get("row_id"),
+                "table_number": extra_fields.get("table_number", ""),
+                "table_title": extra_fields.get("table_title", ""),
+                "combined_group": extra_fields.get("combined_group") or extra_fields.get("group_label") or "",
+                "citation_display": extra_fields.get("citation_display", ""),
+                "reference_number": extra_fields.get("reference_number", ""),
+                "input_title": item.get("input_title", ""),
+                "reason": item.get("reason", ""),
+                "best_candidate": best,
+            }
+        )
+    return rows
+
+
+def _write_csv_report(path: Path, rows: List[Dict[str, Any]]) -> None:
+    rows = list(rows or [])
+    headers = list(rows[0].keys()) if rows else []
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=headers)
+        if headers:
+            writer.writeheader()
+            writer.writerows(rows)
+
+
+def _add_tree_to_zip(zf: zipfile.ZipFile, root: Path, prefix: str) -> None:
+    for file_path in sorted(root.rglob("*")):
+        if file_path.is_file():
+            arcname = str(Path(prefix) / file_path.relative_to(root))
+            zf.write(file_path, arcname)
+
+
 def _title_similarity(left: str, right: str) -> float:
     a = _normalize_text(left)
     b = _normalize_text(right)
@@ -293,10 +414,44 @@ def _extract_first_author(authors: str) -> str:
     if not text:
         return ""
     first = re.split(r";|\band\b", text, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    first = re.sub(r"\s+et\s+al\.?\s*$", "", first, flags=re.IGNORECASE).strip(" .,;")
     if "," in first:
         return first.split(",", 1)[0].strip()
     parts = [part for part in re.split(r"\s+", first) if part]
+    if len(parts) >= 2 and re.fullmatch(r"[A-Z]{1,4}\.?", parts[-1]):
+        return parts[0]
     return parts[-1] if parts else ""
+
+
+def _citation_display_value(citation: Dict[str, Any]) -> str:
+    extra_fields = dict(citation.get("extra_fields") or {})
+    return str(extra_fields.get("citation_display") or citation.get("title") or "").strip()
+
+
+def _looks_like_citation_label(citation: Dict[str, Any]) -> bool:
+    label = _citation_display_value(citation)
+    if not label:
+        return False
+    normalized = re.sub(r"\[\d{1,3}\]", "", label).strip()
+    if re.search(r"\[\d{1,3}\]", label):
+        return True
+    if re.match(r"^[A-Z][A-Za-z'`-]+(?:\s+et\s+al\.?)?\s+(19|20)\d{2}$", normalized):
+        return True
+    if len(normalized.split()) <= 4 and _extract_year(normalized) and _extract_first_author(str(citation.get("authors") or "")):
+        return True
+    return False
+
+
+def _citation_search_query(citation: Dict[str, Any]) -> str:
+    extra_fields = dict(citation.get("extra_fields") or {})
+    trial_label = str(extra_fields.get("trial_label") or "").strip()
+    if _looks_like_citation_label(citation):
+        label = re.sub(r"\[\d{1,3}\]", "", _citation_display_value(citation)).strip()
+        parts = [re.sub(r"\s+", " ", label)]
+        if trial_label and _normalize_text(trial_label) not in _normalize_text(label):
+            parts.append(trial_label)
+        return re.sub(r"\s+", " ", " ".join(part for part in parts if part).strip())
+    return re.sub(r"\s+", " ", str(citation.get("title") or "").strip())
 
 
 def _normalize_doi(raw: str) -> str:
@@ -308,6 +463,91 @@ def _normalize_doi(raw: str) -> str:
     text = re.sub(r"^doi:\s*", "", text, flags=re.IGNORECASE)
     match = _DOI_RE.search(text)
     return match.group(0).rstrip(" .;,)") if match else text.strip().rstrip(" .;,)")
+
+
+def _normalize_bibliography_text(text: str) -> str:
+    value = _repair_common_mojibake(text)
+    if not value:
+        return ""
+    value = (
+        value.replace("\u00a0", " ")
+        .replace("\u00ad", "")
+        .replace("\u200b", "")
+        .replace("\u200c", "")
+        .replace("\u200d", "")
+        .replace("\u2060", "")
+    )
+    lines = [re.sub(r"\s+", " ", line.strip()) for line in value.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    merged = lines[0]
+    for line in lines[1:]:
+        if merged.endswith("-") and line:
+            merged = f"{merged}{line}" if line[0].isupper() else f"{merged[:-1]}{line}"
+        elif merged.endswith("/") and line:
+            merged = f"{merged}{line}"
+        else:
+            merged = f"{merged} {line}"
+    merged = re.sub(r"([A-Za-z])-\s+([a-z])", r"\1\2", merged)
+    merged = re.sub(r"([A-Za-z]{2,})-\s+([A-Z][a-z])", r"\1-\2", merged)
+    merged = re.sub(r"([A-Za-z])/\s+([A-Za-z])", r"\1/\2", merged)
+    merged = re.sub(r"\bvs\.\s+", "vs ", merged, flags=re.IGNORECASE)
+    merged = re.sub(r"\s+([,.;:])", r"\1", merged)
+    merged = re.sub(r"\(\s+", "(", merged)
+    merged = re.sub(r"\s+\)", ")", merged)
+    return re.sub(r"\s+", " ", merged).strip()
+
+
+def _bibliography_chunks(entry_text: str) -> List[str]:
+    cleaned = _normalize_bibliography_text(entry_text)
+    return [chunk.strip(" .;:") for chunk in re.split(r"\.\s+", cleaned) if chunk.strip(" .;:")]
+
+
+def _bibliography_title(entry_text: str) -> str:
+    chunks = _bibliography_chunks(entry_text)
+    if len(chunks) >= 2:
+        for chunk in chunks[1:4]:
+            if len(chunk.split()) >= 4:
+                return chunk
+        return chunks[1]
+    return _normalize_bibliography_text(entry_text)
+
+
+def _bibliography_journal(entry_text: str) -> str:
+    chunks = _bibliography_chunks(entry_text)
+    if len(chunks) >= 3:
+        for chunk in chunks[2:]:
+            lowered = chunk.lower()
+            if lowered.startswith(("http://", "https://", "accessed ")):
+                continue
+            if _extract_year(chunk):
+                continue
+            return chunk
+    return ""
+
+
+def _journal_similarity(left: str, right: str) -> float:
+    a = _normalize_text(left)
+    b = _normalize_text(right)
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    if a in b or b in a:
+        return 0.92
+    return SequenceMatcher(a=a, b=b).ratio()
+
+
+def _extract_bibliography_url(entry_text: str) -> str:
+    text = _normalize_bibliography_text(entry_text)
+    match = _BIB_URLISH_RE.search(text)
+    if not match:
+        return ""
+    candidate = match.group(0)
+    candidate = re.split(r"(?i)\baccessed\b", candidate, maxsplit=1)[0]
+    candidate = re.sub(r"[\s\u00ad\u200b\u200c\u200d\u2060]+", "", candidate)
+    candidate = candidate.rstrip(".,;)]}")
+    return candidate if candidate.lower().startswith(("http://", "https://")) else ""
 
 
 def _extract_year(raw: Any) -> str:
@@ -348,6 +588,16 @@ def _citation_source_metadata(citation: Dict[str, Any]) -> Dict[str, Any]:
     if source_doc_id:
         metadata["source_doc_id"] = source_doc_id
     return metadata
+
+
+def _bibliography_resolve_eligible(citation: Dict[str, Any]) -> bool:
+    extra_fields = dict(citation.get("extra_fields") or {})
+    reference_number = str(extra_fields.get("reference_number") or "").strip()
+    title = str(citation.get("title") or "").strip()
+    year = str(citation.get("year") or "").strip()
+    authors = str(citation.get("authors") or "").strip()
+    journal = str(citation.get("journal") or "").strip()
+    return bool(reference_number and title and year and (authors or journal))
 
 
 def _page_signals_open_access(page_text: str) -> bool:
@@ -391,6 +641,46 @@ def _extract_crossref_year(message: Dict[str, Any]) -> str:
             if _YEAR_RE.fullmatch(value):
                 return value
     return ""
+
+
+def _crossref_author_match(first_author: str, message: Dict[str, Any]) -> bool:
+    target = _normalize_text(first_author)
+    if not target:
+        return False
+    authors = message.get("author")
+    if not isinstance(authors, list):
+        return False
+    for item in authors:
+        if not isinstance(item, dict):
+            continue
+        family = _normalize_text(str(item.get("family") or ""))
+        given = _normalize_text(str(item.get("given") or ""))
+        combined = " ".join(part for part in [given, family] if part).strip()
+        if target and (target == family or target in combined.split()):
+            return True
+    return False
+
+
+def _citation_trial_label(citation: Dict[str, Any]) -> str:
+    extra_fields = dict(citation.get("extra_fields") or {})
+    return str(extra_fields.get("trial_label") or "").strip()
+
+
+def _crossref_trial_label_match(trial_label: str, message: Dict[str, Any]) -> bool:
+    target = _normalize_text(trial_label)
+    if not target:
+        return False
+    title = _normalize_text(_message_title_static(message))
+    if not title:
+        return False
+    return target in title
+
+
+def _message_title_static(message: Dict[str, Any]) -> str:
+    title = message.get("title")
+    if isinstance(title, list):
+        return str(title[0] or "").strip() if title else ""
+    return str(title or "").strip()
 
 
 def _extract_message_volume_issue(message: Dict[str, Any], citation: Dict[str, Any]) -> tuple[str, str]:
@@ -549,6 +839,10 @@ class ResearchResolver:
             if resolved:
                 return {"status": "resolved", "payload": resolved}
 
+        bibliography_resolved = self._resolve_from_bibliography(citation)
+        if bibliography_resolved:
+            return {"status": "resolved", "payload": bibliography_resolved}
+
         searched = self._resolve_by_search(citation)
         if searched:
             return {"status": "resolved", "payload": searched}
@@ -572,6 +866,92 @@ class ResearchResolver:
         frac = 0.0 if total <= 0 else min(1.0, max(0.0, done / float(total)))
         pct = 10 + int(frac * 85)
         self.progress_cb(pct, message, stage)
+
+    def _resolve_from_bibliography(self, citation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not _bibliography_resolve_eligible(citation):
+            return None
+
+        extra_fields = dict(citation.get("extra_fields") or {})
+        bibliography_entry_text = _normalize_bibliography_text(str(extra_fields.get("bibliography_entry_text") or "").strip())
+        title = _normalize_bibliography_text(str(citation.get("title") or "").strip())
+        journal_name = _normalize_bibliography_text(str(citation.get("journal") or "").strip())
+        if bibliography_entry_text:
+            extracted_title = _bibliography_title(bibliography_entry_text)
+            extracted_journal = _bibliography_journal(bibliography_entry_text)
+            if extracted_title:
+                title = extracted_title
+            if extracted_journal:
+                journal_name = extracted_journal
+        reference_number = str(extra_fields.get("reference_number") or "").strip()
+        match_method = str(extra_fields.get("bibliography_match_method") or "").strip() or "reference_number"
+
+        resolved_doi = _normalize_doi(str(citation.get("doi") or ""))
+        resolved_url = _extract_bibliography_url(bibliography_entry_text)
+        if not resolved_url and resolved_doi:
+            resolved_url = f"https://doi.org/{resolved_doi}"
+
+        journal_citation = dict(citation)
+        if journal_name:
+            journal_citation["journal"] = journal_name
+        journal = self._journal_info(journal_citation, {})
+        lower_bib = bibliography_entry_text.lower()
+        lower_authors = str(citation.get("authors") or "").lower()
+        title_type = "registry" if ("clinicaltrials.gov" in lower_authors or "clinicaltrials.gov" in lower_bib) else "bibliography-entry"
+        payload = {
+            "row_id": citation.get("row_id"),
+            "input_title": title,
+            "resolved_doi": resolved_doi,
+            "resolved_url": resolved_url,
+            "source_api": "review_bibliography",
+            "confidence": "high",
+            "open_access": _empty_open_access(),
+            "journal": journal,
+            "credibility_tier": self._credibility_tier({}, resolved_url, journal_name),
+            "resolution_method": f"bibliography_{match_method}",
+            "publisher": journal_name or str(citation.get("authors") or "").strip(),
+            "type": title_type,
+            "matched_title": title,
+            "title_similarity": 1.0,
+            "retraction": {"is_retracted": False, "source": "", "note": ""},
+        }
+        if reference_number:
+            payload["source_ref"] = reference_number
+        payload.update(_citation_source_metadata(citation))
+        if not resolved_doi and not resolved_url and title_type != "registry":
+            backfill_citation = dict(citation)
+            backfill_citation["title"] = title
+            if journal_name:
+                backfill_citation["journal"] = journal_name
+            backfill = self._resolve_by_search(backfill_citation)
+            if backfill:
+                candidate_type = str(backfill.get("type") or "").strip().lower()
+                candidate_journal = ""
+                if isinstance(backfill.get("journal"), dict):
+                    candidate_journal = str((backfill.get("journal") or {}).get("name") or "").strip()
+                journal_ok = not journal_name
+                if journal_name and candidate_journal:
+                    journal_ok = _journal_similarity(journal_name, candidate_journal) >= 0.58
+                type_ok = candidate_type in {"journal-article", "proceedings-article"}
+                if journal_ok and type_ok:
+                    payload["resolved_doi"] = str(backfill.get("resolved_doi") or "").strip()
+                    payload["resolved_url"] = str(backfill.get("resolved_url") or "").strip()
+                    if backfill.get("open_access"):
+                        payload["open_access"] = backfill.get("open_access")
+                    if isinstance(backfill.get("journal"), dict):
+                        payload["journal"] = backfill.get("journal")
+                    if str(backfill.get("publisher") or "").strip():
+                        payload["publisher"] = str(backfill.get("publisher") or "").strip()
+                    if str(backfill.get("type") or "").strip():
+                        payload["type"] = str(backfill.get("type") or "").strip()
+                    if str(backfill.get("credibility_tier") or "").strip():
+                        payload["credibility_tier"] = str(backfill.get("credibility_tier") or "").strip()
+                    backfill_method = str(backfill.get("resolution_method") or "").strip()
+                    backfill_source = str(backfill.get("source_api") or "").strip()
+                    if backfill_method:
+                        payload["resolution_method"] = f"{payload['resolution_method']}+{backfill_method}"
+                    if backfill_source:
+                        payload["backfill_source_api"] = backfill_source
+        return payload
 
     def _respect_crossref_delay(self) -> None:
         elapsed = time.monotonic() - self._last_crossref_at
@@ -690,10 +1070,26 @@ class ResearchResolver:
 
     def _resolve_by_search(self, citation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         first_author = _extract_first_author(citation.get("authors") or "")
-        params = {
-            "query.title": citation.get("title") or "",
-            "rows": 5,
-        }
+        year = _extract_year(citation.get("year"))
+        search_query = _citation_search_query(citation)
+        if _looks_like_citation_label(citation):
+            bibliographic_params: Dict[str, Any] = {"query.bibliographic": search_query, "rows": 5}
+            if first_author:
+                bibliographic_params["query.author"] = first_author
+            if year:
+                bibliographic_params["filter"] = f"from-pub-date:{year}-01-01,until-pub-date:{year}-12-31"
+            crossref = self._crossref_works(params=bibliographic_params)
+            items = crossref.get("items") if crossref else []
+            candidate = self._score_candidates(
+                citation,
+                items,
+                source_api="crossref_bibliographic",
+                resolution_method="author_year_search",
+            )
+            if candidate:
+                return candidate
+
+        params = {"query.title": str(citation.get("title") or ""), "rows": 5}
         if first_author:
             params["query.author"] = first_author
 
@@ -708,7 +1104,7 @@ class ResearchResolver:
         if candidate:
             return candidate
 
-        broader_params: Dict[str, Any] = {"query": citation.get("title") or "", "rows": 5}
+        broader_params: Dict[str, Any] = {"query": search_query, "rows": 5}
         year = _extract_year(citation.get("year"))
         if year:
             broader_params["filter"] = f"from-pub-date:{year}-01-01,until-pub-date:{year}-12-31"
@@ -722,7 +1118,7 @@ class ResearchResolver:
         )
 
     def _best_candidates_for_unresolved(self, citation: Dict[str, Any]) -> List[Dict[str, Any]]:
-        params: Dict[str, Any] = {"query": citation.get("title") or "", "rows": 3}
+        params: Dict[str, Any] = {"query": _citation_search_query(citation), "rows": 3}
         fallback = self._crossref_works(params=params)
         items = fallback.get("items") if fallback else []
         return self._candidate_summaries(citation, items)[:3]
@@ -758,6 +1154,9 @@ class ResearchResolver:
             return None
 
         target_year = _extract_year(citation.get("year"))
+        first_author = _extract_first_author(citation.get("authors") or "")
+        label_mode = _looks_like_citation_label(citation)
+        trial_label = _citation_trial_label(citation)
         best_item: Optional[Dict[str, Any]] = None
         best_similarity = 0.0
 
@@ -765,6 +1164,18 @@ class ResearchResolver:
             title = self._message_title(item)
             similarity = _title_similarity(citation.get("title") or "", title)
             item_year = _extract_crossref_year(item)
+            author_match = _crossref_author_match(first_author, item)
+            trial_match = _crossref_trial_label_match(trial_label, item)
+            if label_mode:
+                if author_match and not trial_label:
+                    similarity = max(similarity, 0.74)
+                if author_match and target_year and item_year and item_year == target_year:
+                    if trial_label:
+                        similarity = max(similarity, 0.93 if trial_match else 0.66)
+                    else:
+                        similarity = max(similarity, 0.93)
+                elif trial_label and trial_match:
+                    similarity = max(similarity, 0.72)
             if target_year and item_year and item_year == target_year:
                 similarity = min(1.0, similarity + 0.03)
             if similarity > best_similarity:
@@ -789,10 +1200,7 @@ class ResearchResolver:
         )
 
     def _message_title(self, message: Dict[str, Any]) -> str:
-        title = message.get("title")
-        if isinstance(title, list):
-            return str(title[0] or "").strip() if title else ""
-        return str(title or "").strip()
+        return _message_title_static(message)
 
     def _merge_open_access(self, primary: Dict[str, Any], fallback: Dict[str, Any]) -> Dict[str, Any]:
         merged = dict(primary or _empty_open_access())
@@ -1136,6 +1544,77 @@ def run_research_resolve(
         is_cancelled_cb=is_cancelled_cb,
     )
     output = resolver.resolve_all(list(payload.get("citations") or []))
-    out_path = Path(run_dir) / "research_resolve_result.json"
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    out_path = run_dir / "research_resolve_result.json"
+    resolved_rows = _research_resolved_rows(output.get("resolved") or [])
+    unresolved_rows = _research_unresolved_rows(output.get("unresolved") or [])
+    resolved_csv = run_dir / "resolved_citations.csv"
+    unresolved_csv = run_dir / "unresolved_citations.csv"
+    _write_csv_report(resolved_csv, resolved_rows)
+    _write_csv_report(unresolved_csv, unresolved_rows)
+
+    preferred_urls = build_research_preferred_url_list(list(output.get("resolved") or []))
+    preferred_urls_txt = run_dir / "preferred_urls.txt"
+    preferred_urls_txt.write_text("\n".join(preferred_urls), encoding="utf-8")
+    url_candidates_json = run_dir / "url_ingest_candidates.json"
+    url_candidates_json.write_text(json.dumps({"preferred_urls": preferred_urls}, ensure_ascii=True, indent=2), encoding="utf-8")
+
+    retrieval_options = dict(payload.get("retrieval_options") or {})
+    retrieval_summary: Dict[str, Any] = {
+        "preferred_url_count": len(preferred_urls),
+        "performed": False,
+        "results": [],
+        "report_csv": "",
+        "report_json": "",
+    }
+    retrieval_dir: Optional[Path] = None
+    if preferred_urls and bool(retrieval_options.get("retrieve_after_resolve")):
+        retrieval_dir = run_dir / "retrieval"
+        retrieval_dir.mkdir(parents=True, exist_ok=True)
+        ingestor = URLIngestor(retrieval_dir, timeout=int(retrieval_options.get("timeout_seconds") or 25))
+        ingest_options = dict(retrieval_options.get("ingest_options") or {})
+        textify_options = dict(retrieval_options.get("textify_options") or {})
+        url_results = ingestor.process_urls(
+            urls=preferred_urls,
+            convert_to_md=bool(ingest_options.get("convert_to_md", True)),
+            use_vision_for_md=bool(ingest_options.get("use_vision", False)),
+            textify_options=textify_options,
+            capture_web_md_on_no_pdf=bool(ingest_options.get("capture_web_md_on_no_pdf", True)),
+        )
+        csv_path, json_path = ingestor.build_reports(url_results)
+        retrieval_summary = {
+            "preferred_url_count": len(preferred_urls),
+            "performed": True,
+            "results": [item.to_dict() for item in url_results],
+            "report_csv": csv_path.name,
+            "report_json": json_path.name,
+            "downloaded_pdfs": sum(1 for item in url_results if item.status == "downloaded"),
+            "web_markdown_captured": sum(1 for item in url_results if item.web_captured),
+            "converted_to_md": sum(1 for item in url_results if item.converted_to_md),
+            "failed": sum(1 for item in url_results if item.status == "failed"),
+        }
+
+    output["preferred_urls"] = preferred_urls
+    bundle_path = run_dir / "research_resolve_bundle.zip"
+    output["artifacts"] = {
+        "result_json": out_path.name,
+        "resolved_csv": resolved_csv.name,
+        "unresolved_csv": unresolved_csv.name,
+        "preferred_urls_txt": preferred_urls_txt.name,
+        "url_ingest_candidates_json": url_candidates_json.name,
+        "bundle_zip": bundle_path.name,
+    }
+    output["retrieval"] = retrieval_summary
     out_path.write_text(json.dumps(output, ensure_ascii=True, indent=2), encoding="utf-8")
+
+    with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.write(out_path, "research_resolve_result.json")
+        zf.write(resolved_csv, "resolved_citations.csv")
+        zf.write(unresolved_csv, "unresolved_citations.csv")
+        zf.write(preferred_urls_txt, "preferred_urls.txt")
+        zf.write(url_candidates_json, "url_ingest_candidates.json")
+        if retrieval_dir and retrieval_dir.exists():
+            _add_tree_to_zip(zf, retrieval_dir, "retrieval")
+
     return output

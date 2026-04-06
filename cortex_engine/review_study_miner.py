@@ -5,7 +5,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from cortex_engine.research_resolve import _extract_year, _normalize_doi
+from cortex_engine.research_resolve import _extract_year, _normalize_doi, _repair_common_mojibake
 
 
 _SYSTEMATIC_REVIEW_SIGNALS: Tuple[Tuple[str, int], ...] = (
@@ -93,7 +93,7 @@ _NON_STUDY_ROW_LABELS = {
 
 
 def _normalize_text(text: str) -> str:
-    base = unicodedata.normalize("NFKD", str(text or ""))
+    base = unicodedata.normalize("NFKD", _repair_common_mojibake(text))
     ascii_text = base.encode("ascii", "ignore").decode("ascii")
     lowered = ascii_text.lower()
     cleaned = re.sub(r"[^a-z0-9]+", " ", lowered).strip()
@@ -246,6 +246,15 @@ def _extract_authors_and_year(blob: str) -> Tuple[str, str]:
 
 
 def _extract_journal(blob: str) -> str:
+    chunks = _reference_chunks(blob)
+    if len(chunks) >= 3:
+        for chunk in chunks[2:]:
+            lowered = chunk.lower()
+            if lowered.startswith(("http://", "https://", "accessed ")):
+                continue
+            if _extract_year(chunk):
+                continue
+            return chunk
     match = re.search(r"\.\s*([^.;]+?\b(?:journal|review|reports?|medicine|oncology|health)\b[^.;]*)", str(blob or ""), flags=re.IGNORECASE)
     return match.group(1).strip() if match else ""
 
@@ -271,9 +280,47 @@ def _clean_reference_prefix(entry: str) -> str:
     return text.strip()
 
 
+def _normalize_reference_entry_text(entry: str) -> str:
+    text = _repair_common_mojibake(entry)
+    if not text:
+        return ""
+    text = (
+        text.replace("\u00a0", " ")
+        .replace("\u00ad", "")
+        .replace("\u200b", "")
+        .replace("\u200c", "")
+        .replace("\u200d", "")
+        .replace("\u2060", "")
+    )
+    lines = [re.sub(r"\s+", " ", line.strip()) for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    merged = lines[0]
+    for line in lines[1:]:
+        if merged.endswith("-") and line:
+            merged = f"{merged}{line}" if line[0].isupper() else f"{merged[:-1]}{line}"
+        elif merged.endswith("/") and line:
+            merged = f"{merged}{line}"
+        else:
+            merged = f"{merged} {line}"
+    merged = re.sub(r"([A-Za-z])-\s+([a-z])", r"\1\2", merged)
+    merged = re.sub(r"([A-Za-z]{2,})-\s+([A-Z][a-z])", r"\1-\2", merged)
+    merged = re.sub(r"([A-Za-z])/\s+([A-Za-z])", r"\1/\2", merged)
+    merged = re.sub(r"\bvs\.\s+", "vs ", merged, flags=re.IGNORECASE)
+    merged = re.sub(r"\s+([,.;:])", r"\1", merged)
+    merged = re.sub(r"\(\s+", "(", merged)
+    merged = re.sub(r"\s+\)", ")", merged)
+    return re.sub(r"\s+", " ", merged).strip()
+
+
+def _reference_chunks(entry: str) -> List[str]:
+    cleaned = _clean_reference_prefix(_normalize_reference_entry_text(entry))
+    return [chunk.strip(" .;:") for chunk in re.split(r"\.\s+", cleaned) if chunk.strip(" .;:")]
+
+
 def _reference_title_from_entry(entry: str) -> str:
-    cleaned = _clean_reference_prefix(entry)
-    chunks = [chunk.strip(" .;:") for chunk in re.split(r"\.\s+", cleaned) if chunk.strip(" .;:")]
+    cleaned = _clean_reference_prefix(_normalize_reference_entry_text(entry))
+    chunks = _reference_chunks(cleaned)
     if len(chunks) >= 2:
         for chunk in chunks[1:4]:
             if len(chunk.split()) >= 4:
@@ -313,7 +360,7 @@ def _parse_reference_entries(text: str) -> List[Dict[str, Any]]:
     def _flush_current() -> None:
         if not current_lines:
             return
-        entry_text = " ".join(part.strip() for part in current_lines if part.strip()).strip()
+        entry_text = _normalize_reference_entry_text("\n".join(part.strip() for part in current_lines if part.strip()))
         if not entry_text:
             return
         cleaned = _clean_reference_prefix(entry_text)
@@ -360,12 +407,13 @@ def _parse_reference_entries(text: str) -> List[Dict[str, Any]]:
 
     fallback_entries: List[Dict[str, Any]] = []
     for entry in entries:
-        cleaned = _clean_reference_prefix(entry)
+        entry_text = _normalize_reference_entry_text(entry)
+        cleaned = _clean_reference_prefix(entry_text)
         authors, year = _extract_authors_and_year(cleaned)
         fallback_entries.append(
             {
                 "reference_number": "",
-                "entry_text": entry,
+                "entry_text": entry_text,
                 "cleaned_entry": cleaned,
                 "authors": authors,
                 "year": year,

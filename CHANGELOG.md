@@ -45,6 +45,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Included Study Extractor website handoffs now embed a queue-ready `research_resolve` job JSON with trace metadata, so the website can render grouped included-study tables and immediately enqueue citation resolution from the same export.
 - Included Study Extractor single-table prompts now receive the sliced table title and kind (`included_studies`, `economic`, `hta`), and economic/HTA tables under `RCT/clinical trials only` now stay in JSON mode with `needs_review` flags instead of drifting into prose-only refusals.
 - Added [docs/INCLUDED_STUDY_EXTRACT_QUEUE_CONTRACT.md](/home/longboardfella/cortex_suite/docs/INCLUDED_STUDY_EXTRACT_QUEUE_CONTRACT.md) to define the proposed `included_study_extract` queue job, expected input/output JSON, and ZIP artifact layout for website-first PDF upload workflows.
+- Added queue-worker support for `included_study_extract`, including a new worker handler that slices review PDFs, runs per-table included-study extraction, and returns both structured `output_data` and a ZIP bundle of per-table JSON/XLSX/handoff artifacts.
+- Included Study Extractor and reviewed-table resolver payloads now enrich citation rows from the review bibliography by `reference_number`, so downstream resolver jobs receive canonical titles/authors/journal/DOI metadata instead of bare `Author Year [n]` labels; reviewed CSV/XLSX uploads also now coerce `keep` strings like `TRUE` and `False` correctly.
+- Review bibliography parsing and bibliography-first resolver output now normalize PDF line-wrap artifacts like `qual- ity`, `axicabta- gene`, and `relapsed/ refractory`, and bibliography-backed resolver rows now lift explicit bibliography URLs (for example `ClinicalTrials.gov` links) into `resolved_url` where present.
+- Bibliography-first resolver output now performs a lightweight Crossref DOI/URL backfill when a bibliography-matched citation has no identifier or link of its own, while keeping the bibliography match as the primary resolution method.
+- Bibliography parsing and bibliography-first resolver output now repair common UTF-8/Windows-1252 mojibake sequences such as `â€”`, `â€“`, and `â‰¥` before titles, journals, and exported citation rows are built.
 
 ### ⚠️ Known Limitation
 - Rotated multi-page systematic-review tables are still not reconstructed reliably. The Claude rescue path now prefers the full source PDF, but very large PDFs can still fall back to extracted table evidence and the model can still struggle with ambiguous continuation pages.
@@ -1234,6 +1239,28 @@ Brief description of the release
 - All version information should reference cortex_engine/version_config.py
 - Breaking changes must be clearly documented
 - Include migration guides for major version changes
+
+## Unreleased
+
+### New Features
+- Added a local Streamlit `Review Retrieval Results` workflow in `pages/7_Document_Extract.py` so resolver bundles can be reviewed without the website, including row-level status management, manual PDF upload, and final researcher package assembly.
+- Added end-to-end included-study extraction and handoff support for queue/website workflows, including `included_study_extract`, per-table outputs, resolver payloads, and website handoff artifacts.
+
+### Improvements
+- Improved `research_resolve` so bibliography-enriched citations can carry DOI/URL information forward, backfill plausible DOI links, and emit retrieval-ready bundles with preferred URLs and retrieval artifacts.
+- Improved retrieval fallback behavior so blocked or thin publisher pages are preserved as markdown artifacts, with unique filenames and browser-assisted fallback for harder publisher sites.
+- Improved economic-study/reference-map extraction prompts so difficult included-study tables return compact structured JSON more reliably.
+
+### Bug Fixes
+- Fixed stale `research_resolve_result.json` contents inside resolver bundles by writing the final enriched output after preferred URLs and retrieval metadata are attached.
+- Fixed included-study extraction jobs so empty or review-only table slices no longer crash resolver payload generation.
+- Fixed per-table export/focus issues in included-study extraction so selected table downloads stay isolated instead of leaking cumulative session rows.
+
+### Docs
+- Added [docs/RETRIEVAL_REVIEW_STAGE_SPEC.md](docs/RETRIEVAL_REVIEW_STAGE_SPEC.md) describing the website-side human-in-the-loop retrieval review stage for resolved papers, manual PDF upload, row status tracking, and final researcher package assembly.
+- Added [docs/RESOLVE_REVIEWED_TABLES_SPEC.md](docs/RESOLVE_REVIEWED_TABLES_SPEC.md) describing website upload/merge of reviewed table CSV/XLSX/JSON files into one resolver job.
+- Added [docs/INCLUDED_STUDY_EXTRACT_QUEUE_CONTRACT.md](docs/INCLUDED_STUDY_EXTRACT_QUEUE_CONTRACT.md) documenting the new queue job contract for PDF-to-table extraction.
+
 ## v4.7.0 - 2025-09-02
 
 ### Search Stability & Docker Parity (Patch Addendum)

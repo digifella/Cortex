@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from cortex_engine.handoff_contract import (
+    validate_included_study_extract_input,
     validate_csv_profile_import_input,
     validate_cortex_sync_input,
     validate_intel_extract_input,
@@ -98,6 +99,28 @@ def test_url_ingest_coerces_booleans_timeout_and_textify():
     assert payload["textify_options"]["docling_timeout_seconds"] == 240.0
 
 
+def test_included_study_extract_normalizes_defaults():
+    payload = validate_included_study_extract_input(
+        {
+            "extraction_scope": "rct_or_clinical",
+            "resolver_defaults": {"check_open_access": "0", "enrich_sjr": "yes", "unpaywall_email": " person@example.com "},
+        }
+    )
+
+    assert payload["provider"] == "anthropic"
+    assert payload["model"] == "claude-sonnet-4-6"
+    assert payload["output_detail"] == "reference_map"
+    assert payload["download_formats"] == ["json", "xlsx"]
+    assert payload["resolver_defaults"]["check_open_access"] is False
+    assert payload["resolver_defaults"]["enrich_sjr"] is True
+    assert payload["resolver_defaults"]["unpaywall_email"] == "person@example.com"
+
+
+def test_included_study_extract_rejects_bad_scope():
+    with pytest.raises(ValueError, match="Invalid extraction_scope"):
+        validate_included_study_extract_input({"extraction_scope": "bad_mode"})
+
+
 def test_research_resolve_requires_citations():
     with pytest.raises(ValueError, match="requires input_data.citations"):
         validate_research_resolve_input({})
@@ -133,6 +156,34 @@ def test_research_resolve_normalizes_rows_and_options():
     assert payload["options"]["check_open_access"] is False
     assert payload["options"]["enrich_sjr"] is True
     assert payload["options"]["unpaywall_email"] == "paul@example.com"
+    assert payload["retrieval_options"]["retrieve_after_resolve"] is False
+
+
+def test_research_resolve_normalizes_retrieval_options():
+    payload = validate_research_resolve_input(
+        {
+            "citations": [{"title": "Example title"}],
+            "retrieval_options": {
+                "retrieve_after_resolve": "1",
+                "timeout_seconds": "40",
+                "ingest_options": {
+                    "convert_to_md": "yes",
+                    "use_vision": "0",
+                    "capture_web_md_on_no_pdf": "1",
+                },
+                "textify_options": {
+                    "pdf_strategy": "hybrid",
+                    "docling_timeout_seconds": "240",
+                },
+            },
+        }
+    )
+    assert payload["retrieval_options"]["retrieve_after_resolve"] is True
+    assert payload["retrieval_options"]["timeout_seconds"] == 40
+    assert payload["retrieval_options"]["ingest_options"]["convert_to_md"] is True
+    assert payload["retrieval_options"]["ingest_options"]["use_vision"] is False
+    assert payload["retrieval_options"]["ingest_options"]["capture_web_md_on_no_pdf"] is True
+    assert payload["retrieval_options"]["textify_options"]["pdf_strategy"] == "hybrid"
 
 
 def test_org_profile_refresh_requires_org_and_target():

@@ -9,6 +9,7 @@ Each handler must accept (input_path, input_data, job) and return
 from .pdf_anonymise import handle as pdf_anonymise_handle
 from .cortex_sync import handle as cortex_sync_handle
 from .pdf_textify import handle as pdf_textify_handle
+from .included_study_extract import handle as included_study_extract_handle
 from .url_ingest import handle as url_ingest_handle
 from .research_resolve import handle as research_resolve_handle
 from .org_profile_refresh import handle as org_profile_refresh_handle
@@ -26,6 +27,7 @@ HANDLERS = {
     'pdf_anonymise':   pdf_anonymise_handle,
     'cortex_sync':     cortex_sync_handle,
     'pdf_textify':     pdf_textify_handle,
+    'included_study_extract': included_study_extract_handle,
     'url_ingest':      url_ingest_handle,
     'research_resolve': research_resolve_handle,
     'org_profile_refresh': org_profile_refresh_handle,

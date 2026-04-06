@@ -12,6 +12,7 @@ DEFAULT_PROJECT_ID = "default"
 SUPPORTED_JOB_TYPES = [
     "pdf_anonymise",
     "pdf_textify",
+    "included_study_extract",
     "url_ingest",
     "research_resolve",
     "org_profile_refresh",
@@ -41,6 +42,10 @@ SUPPORTED_ANONYMIZER_OPTIONS = [
 
 SUPPORTED_TEXTIFY_STRATEGIES = {"docling", "qwen30b", "hybrid"}
 SUPPORTED_CLEANUP_PROVIDERS = {"ollama", "lmstudio"}
+SUPPORTED_INCLUDED_STUDY_PROVIDERS = {"anthropic", "gemini"}
+SUPPORTED_INCLUDED_STUDY_SCOPES = {"all_trials", "rct_or_clinical"}
+SUPPORTED_INCLUDED_STUDY_OUTPUT_DETAILS = {"reference_map", "detailed_fields"}
+SUPPORTED_INCLUDED_STUDY_DOWNLOAD_FORMATS = {"json", "xlsx", "csv"}
 SUPPORTED_TEXTIFY_OPTION_KEYS = {
     "use_vision",
     "pdf_strategy",
@@ -387,6 +392,89 @@ def validate_pdf_textify_input(input_data: Optional[Dict[str, Any]] = None) -> D
     return payload
 
 
+def validate_included_study_extract_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(input_data or {})
+
+    provider = str(payload.get("provider") or "anthropic").strip().lower() or "anthropic"
+    if provider not in SUPPORTED_INCLUDED_STUDY_PROVIDERS:
+        raise ValueError(
+            f"Invalid provider: {provider!r}. Expected one of {sorted(SUPPORTED_INCLUDED_STUDY_PROVIDERS)}"
+        )
+    payload["provider"] = provider
+
+    payload["model"] = str(
+        payload.get("model") or ("claude-sonnet-4-6" if provider == "anthropic" else "gemini-2.5-flash")
+    ).strip()
+
+    fallback_provider = str(payload.get("fallback_provider") or "").strip().lower()
+    if fallback_provider:
+        if fallback_provider not in SUPPORTED_INCLUDED_STUDY_PROVIDERS:
+            raise ValueError(
+                f"Invalid fallback_provider: {fallback_provider!r}. Expected one of {sorted(SUPPORTED_INCLUDED_STUDY_PROVIDERS)}"
+            )
+        payload["fallback_provider"] = fallback_provider
+        payload["fallback_model"] = str(payload.get("fallback_model") or "").strip()
+    else:
+        payload["fallback_provider"] = ""
+        payload["fallback_model"] = ""
+
+    extraction_scope = str(payload.get("extraction_scope") or "").strip().lower()
+    if not extraction_scope:
+        raise ValueError("included_study_extract requires input_data.extraction_scope")
+    if extraction_scope not in SUPPORTED_INCLUDED_STUDY_SCOPES:
+        raise ValueError(
+            f"Invalid extraction_scope: {extraction_scope!r}. Expected one of {sorted(SUPPORTED_INCLUDED_STUDY_SCOPES)}"
+        )
+    payload["extraction_scope"] = extraction_scope
+
+    output_detail = str(payload.get("output_detail") or "reference_map").strip().lower() or "reference_map"
+    if output_detail not in SUPPORTED_INCLUDED_STUDY_OUTPUT_DETAILS:
+        raise ValueError(
+            f"Invalid output_detail: {output_detail!r}. Expected one of {sorted(SUPPORTED_INCLUDED_STUDY_OUTPUT_DETAILS)}"
+        )
+    payload["output_detail"] = output_detail
+
+    payload["review_title"] = str(payload.get("review_title") or "").strip()
+    payload["include_low_value_tables"] = _coerce_bool(payload.get("include_low_value_tables"), False)
+
+    download_formats = payload.get("download_formats")
+    if download_formats is None:
+        normalized_formats = ["json", "xlsx"]
+    else:
+        if not isinstance(download_formats, list):
+            raise ValueError("included_study_extract input_data.download_formats must be an array")
+        normalized_formats = []
+        seen: set[str] = set()
+        for idx, item in enumerate(download_formats):
+            fmt = str(item or "").strip().lower()
+            if not fmt:
+                continue
+            if fmt not in SUPPORTED_INCLUDED_STUDY_DOWNLOAD_FORMATS:
+                raise ValueError(
+                    f"Invalid download_formats[{idx}]: {fmt!r}. Expected one of {sorted(SUPPORTED_INCLUDED_STUDY_DOWNLOAD_FORMATS)}"
+                )
+            if fmt in seen:
+                continue
+            seen.add(fmt)
+            normalized_formats.append(fmt)
+        if not normalized_formats:
+            normalized_formats = ["json", "xlsx"]
+    payload["download_formats"] = normalized_formats
+
+    resolver_defaults = payload.get("resolver_defaults")
+    if resolver_defaults is None:
+        resolver_defaults = {}
+    if not isinstance(resolver_defaults, dict):
+        raise ValueError("included_study_extract input_data.resolver_defaults must be an object")
+    payload["resolver_defaults"] = {
+        "check_open_access": _coerce_bool(resolver_defaults.get("check_open_access"), True),
+        "enrich_sjr": _coerce_bool(resolver_defaults.get("enrich_sjr"), True),
+        "unpaywall_email": str(resolver_defaults.get("unpaywall_email") or "").strip(),
+    }
+
+    return payload
+
+
 def validate_url_ingest_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     payload = dict(input_data or {})
 
@@ -483,6 +571,35 @@ def validate_research_resolve_input(input_data: Optional[Dict[str, Any]] = None)
         "check_open_access": _coerce_bool(options.get("check_open_access"), True),
         "enrich_sjr": _coerce_bool(options.get("enrich_sjr"), True),
         "unpaywall_email": str(options.get("unpaywall_email") or "").strip(),
+    }
+
+    retrieval_options = payload.get("retrieval_options")
+    if retrieval_options is None:
+        retrieval_options = {}
+    if not isinstance(retrieval_options, dict):
+        raise ValueError("research_resolve input_data.retrieval_options must be an object")
+
+    ingest_options = retrieval_options.get("ingest_options")
+    if ingest_options is None:
+        ingest_options = {}
+    if not isinstance(ingest_options, dict):
+        raise ValueError("research_resolve retrieval_options.ingest_options must be an object")
+
+    textify_options = retrieval_options.get("textify_options")
+    if textify_options is None:
+        textify_options = {}
+    if not isinstance(textify_options, dict):
+        raise ValueError("research_resolve retrieval_options.textify_options must be an object")
+
+    payload["retrieval_options"] = {
+        "retrieve_after_resolve": _coerce_bool(retrieval_options.get("retrieve_after_resolve"), False),
+        "timeout_seconds": _coerce_positive_int(retrieval_options.get("timeout_seconds"), 25, "retrieval_options.timeout_seconds"),
+        "ingest_options": {
+            "convert_to_md": _coerce_bool(ingest_options.get("convert_to_md"), True),
+            "use_vision": _coerce_bool(ingest_options.get("use_vision"), False),
+            "capture_web_md_on_no_pdf": _coerce_bool(ingest_options.get("capture_web_md_on_no_pdf"), True),
+        },
+        "textify_options": normalize_textify_options(textify_options),
     }
     return payload
 

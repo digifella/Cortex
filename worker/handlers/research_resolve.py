@@ -27,4 +27,5 @@ def handle(
         progress_cb=progress_cb,
         is_cancelled_cb=is_cancelled_cb,
     )
-    return {"output_data": output_data, "output_file": None}
+    bundle_path = run_dir / "research_resolve_bundle.zip"
+    return {"output_data": output_data, "output_file": bundle_path if bundle_path.exists() else None}
