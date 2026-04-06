@@ -1261,6 +1261,8 @@ Brief description of the release
 - Added [docs/RETRIEVAL_REVIEW_STAGE_SPEC.md](docs/RETRIEVAL_REVIEW_STAGE_SPEC.md) describing the website-side human-in-the-loop retrieval review stage for resolved papers, manual PDF upload, row status tracking, and final researcher package assembly.
 - Added [docs/RESOLVE_REVIEWED_TABLES_SPEC.md](docs/RESOLVE_REVIEWED_TABLES_SPEC.md) describing website upload/merge of reviewed table CSV/XLSX/JSON files into one resolver job.
 - Added [docs/INCLUDED_STUDY_EXTRACT_QUEUE_CONTRACT.md](docs/INCLUDED_STUDY_EXTRACT_QUEUE_CONTRACT.md) documenting the new queue job contract for PDF-to-table extraction.
+- Added [docs/MARKET_RADAR_ARCHITECTURE.md](docs/MARKET_RADAR_ARCHITECTURE.md) with a human-readable overview of Market Radar, mailbox intake, intel extraction, and note/document routing.
+- Added [docs/LAB_PAPER_HANDLING_ARCHITECTURE.md](docs/LAB_PAPER_HANDLING_ARCHITECTURE.md) with a human-readable overview of the systematic review table extraction, resolver, retrieval, and review workflow.
 
 ## v4.7.0 - 2025-09-02
 
