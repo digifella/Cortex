@@ -71,4 +71,12 @@ venv/bin/python worker/intel_mailbox_worker.py
   - `INTEL_IMAP_HOST`, `INTEL_IMAP_PORT`, `INTEL_IMAP_USERNAME`, `INTEL_IMAP_PASSWORD`
   - `INTEL_IMAP_FOLDER`, `INTEL_IMAP_ORG_NAME`, `INTEL_ALLOWED_SENDERS`
   - optional website callback: `INTEL_RESULTS_POST_URL`, `INTEL_RESULTS_POST_SECRET`
+- Intel mailbox routing syntax:
+  - plain market-intel note: subject can be plain text or `Note: <headline>`
+  - scoped note/document: `entity: <subscriber org> | <headline>`
+  - optional modifiers: `depth:detailed`, `force:yes`
+  - `INTEL: ...` triggers the direct `intel_extract` path rather than the structured note ingestion path
+- Trusted self-relay:
+  - messages sent from `intel.longboardfella@gmail.com` to itself are treated as authorized
+  - those messages are attributed as submitted by `paul@longboardfella.com.au` for now
 - If no callback URL is configured, processed mailbox extraction results are written to the external DB path under `intel_mailbox/outbox/`.

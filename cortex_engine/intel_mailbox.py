@@ -270,6 +270,8 @@ _FIT_TOKEN_EQUIVALENTS = {
     "health": {"health", "healthcare", "care"},
     "healthcare": {"healthcare", "health", "care"},
 }
+_TRUSTED_SELF_RELAY_MAILBOX = "intel.longboardfella@gmail.com"
+_TRUSTED_SELF_RELAY_SUBMITTER = "paul@longboardfella.com.au"
 
 
 def _utc_now_iso() -> str:
@@ -1301,8 +1303,11 @@ def parse_email_bytes(raw_bytes: bytes) -> Dict[str, Any]:
     message = BytesParser(policy=policy.default).parsebytes(raw_bytes)
     subject = _decode_header_value(message.get("Subject"))
     from_name, from_email = parseaddr(message.get("From", ""))
+    to_name, to_email = parseaddr(message.get("To", ""))
     from_name = _decode_header_value(from_name)
+    to_name = _decode_header_value(to_name)
     from_email = str(from_email or "").strip().lower()
+    to_email = str(to_email or "").strip().lower()
     message_id = str(message.get("Message-ID") or "").strip()
     if not message_id:
         message_id = f"<sha1-{hashlib.sha1(raw_bytes).hexdigest()[:24]}@cortex.local>"
@@ -1360,6 +1365,8 @@ def parse_email_bytes(raw_bytes: bytes) -> Dict[str, Any]:
         "subject": subject,
         "from_name": from_name,
         "from_email": from_email,
+        "to_name": to_name,
+        "to_email": to_email,
         "received_at": received_at,
         "raw_text": raw_text,
         "html_text": html_text,
@@ -1626,9 +1633,19 @@ class IntelMailboxPoller:
 
     def _allowed_sender(self, email_address: str) -> bool:
         sender = str(email_address or "").strip().lower()
+        if sender == _TRUSTED_SELF_RELAY_MAILBOX:
+            return True
         if not self.config.allowed_senders:
             return True
         return sender in self.config.allowed_senders
+
+    @staticmethod
+    def _effective_submitter_email(message: Dict[str, Any]) -> str:
+        sender = str(message.get("from_email") or "").strip().lower()
+        recipient = str(message.get("to_email") or "").strip().lower()
+        if sender == _TRUSTED_SELF_RELAY_MAILBOX and recipient in {"", _TRUSTED_SELF_RELAY_MAILBOX}:
+            return _TRUSTED_SELF_RELAY_SUBMITTER
+        return sender
 
     def _known_org_scopes(self) -> List[str]:
         names = {str(self.config.org_name or "").strip()}
@@ -1826,7 +1843,7 @@ class IntelMailboxPoller:
             "trace_id": trace_id,
             "signal_type": "email_intel",
             "original_subject": message.get("subject", ""),
-            "submitted_by": message.get("from_email", ""),
+            "submitted_by": self._effective_submitter_email(message),
             "message_id": message.get("message_id", ""),
             "received_at": message.get("received_at", ""),
             "subject": clean_subject,
@@ -3252,7 +3269,7 @@ class IntelMailboxPoller:
                 "title": note_title,
                 "content": note_content,
                 "original_text": self._build_note_original_text(message, email_triage, attachments_processed),
-                "submitted_by": str(message.get("from_email") or "").strip(),
+                "submitted_by": self._effective_submitter_email(message),
                 "note_date": note_date,
                 "attachments_processed": attachments_processed,
                 "attachment_fingerprints": attachment_fingerprints,
@@ -3368,7 +3385,7 @@ class IntelMailboxPoller:
             "trace_id": trace_id,
             "source_system": self.config.source_system,
             "signal_type": "email_intel",
-            "submitted_by": message.get("from_email", ""),
+            "submitted_by": self._effective_submitter_email(message),
             "message_id": message.get("message_id", ""),
             "received_at": message.get("received_at", ""),
             "subject": clean_subject or message.get("subject", ""),

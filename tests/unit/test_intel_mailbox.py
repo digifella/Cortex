@@ -133,6 +133,7 @@ def test_parse_email_bytes_extracts_bodies_and_attachments():
 
     assert parsed["message_id"] == "<msg-1@example.com>"
     assert parsed["from_email"] == "intel.longboardfella@gmail.com"
+    assert parsed["to_email"] == "intel.longboardfella@gmail.com"
     assert "Carolyn Bell" in parsed["raw_text"]
     assert "html" in parsed["html_text"].lower()
     assert parsed["attachments"][0]["kind"] == "image"
@@ -450,6 +451,70 @@ def test_mailbox_poller_uses_note_callback_url_for_structured_note_posts(tmp_pat
     assert result_client.calls
     assert result_client.calls[0]["callback_url_override"] == "https://example.com/lab/market_radar_api.php?action=ingest_intel_note"
     assert result_client.calls[0]["delivery_payload"]["action"] == "ingest_intel_note"
+
+
+def test_mailbox_poller_allows_trusted_self_relay_and_normalizes_submitter(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    result_client = _RecordingResultClient()
+
+    def _extractor(_payload):
+        out = tmp_path / "extract.md"
+        out.write_text("# Extract", encoding="utf-8")
+        return (
+            {
+                "status": "extracted",
+                "entity_count": 1,
+                "people": [{"canonical_name": "Carolyn Bell", "current_employer": "Silverchain"}],
+                "organisations": [{"canonical_name": "Silverchain Group"}],
+                "emails": [{"email": "cbell@example.com"}],
+                "target_update_suggestions": [],
+                "warnings": [],
+                "attachments": [],
+            },
+            out,
+        )
+
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=("someone.else@example.com",),
+        source_system="cortex_mailbox",
+        callback_url="https://example.com/admin/queue_worker_api.php?action=import_cortex_extract",
+        note_callback_url="https://example.com/lab/market_radar_api.php?action=ingest_intel_note",
+        callback_secret="secret",
+        callback_timeout=30,
+        profile_import_url="https://example.com/lab/market_radar_api.php?action=bulk_import_profiles",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=_extractor,
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+        result_client=result_client,
+    )
+
+    summary = poller.poll_once()
+
+    assert summary["processed"] == 1
+    assert result_client.calls
+    payload = result_client.calls[0]["delivery_payload"]
+    assert payload["note"]["submitted_by"] == "paul@longboardfella.com.au"
 
 
 def test_mailbox_routing_override_and_subject_org_hint_flow_into_note_payload(tmp_path):

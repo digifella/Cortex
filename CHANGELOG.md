@@ -1255,6 +1255,7 @@ Brief description of the release
 - Fixed stale `research_resolve_result.json` contents inside resolver bundles by writing the final enriched output after preferred URLs and retrieval metadata are attached.
 - Fixed included-study extraction jobs so empty or review-only table slices no longer crash resolver payload generation.
 - Fixed per-table export/focus issues in included-study extraction so selected table downloads stay isolated instead of leaking cumulative session rows.
+- Fixed Intel mailbox authorization for the Telegram/Gmail self-relay path so messages from `intel.longboardfella@gmail.com` to itself are accepted and attributed to `paul@longboardfella.com.au`.
 
 ### Docs
 - Added [docs/RETRIEVAL_REVIEW_STAGE_SPEC.md](docs/RETRIEVAL_REVIEW_STAGE_SPEC.md) describing the website-side human-in-the-loop retrieval review stage for resolved papers, manual PDF upload, row status tracking, and final researcher package assembly.
