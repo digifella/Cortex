@@ -77,6 +77,42 @@ def _intel_subject_message_bytes() -> bytes:
     return msg.as_bytes()
 
 
+def _cortex_processed_reply_message_bytes() -> bytes:
+    msg = EmailMessage()
+    msg["Subject"] = "Re: Re: NemoClaw Work on my ethics papers"
+    msg["From"] = "intel.longboardfella@gmail.com"
+    msg["To"] = "intel.longboardfella@gmail.com"
+    msg["Date"] = "Wed, 08 Apr 2026 19:56:56 +1000"
+    msg["Message-ID"] = "<msg-cortex-reply@example.com>"
+    msg.set_content(
+        "Cortex processed your submission for Longboardfella.\n\n"
+        "Depth: default\n"
+        "Primary entity: Longboardfella\n\n"
+        "Title: NemoClaw Work on my ethics papers\n\n"
+        "# Intel Extraction Result\n\n"
+        "Calendar entry created by NemoClaw for work on ethics papers.\n"
+    )
+    return msg.as_bytes()
+
+
+def _forwarding_confirmation_message_bytes() -> bytes:
+    msg = EmailMessage()
+    msg["Subject"] = "(Project 143 Forwarding confirmation - Receive mail from paul@project-143.com"
+    msg["From"] = "Paul Cooper <paul@project-143.com>"
+    msg["To"] = "intel.longboardfella@gmail.com"
+    msg["Date"] = "Wed, 08 Apr 2026 19:56:56 +1000"
+    msg["Message-ID"] = "<msg-forwarding-confirmation@example.com>"
+    msg.set_content(
+        "paul@project-143.com has requested to automatically forward mail to your email\n"
+        "address intel.longboardfella@gmail.com.\n\n"
+        "To allow paul@project-143.com to automatically forward mail to your address,\n"
+        "please click the link below to confirm the request.\n\n"
+        "paul@project-143.com cannot automatically forward messages to your email address\n"
+        "unless you confirm the request by clicking the link above.\n"
+    )
+    return msg.as_bytes()
+
+
 def _routed_document_message_bytes() -> bytes:
     msg = EmailMessage()
     msg["Subject"] = "entity: Escient | Barwon Water"
@@ -238,6 +274,28 @@ class _FakeCSVIMAP(_FakeIMAP):
 class _FakeIntelIMAP(_FakeIMAP):
     def fetch(self, _imap_id, _query):
         return "OK", [(b"1 (RFC822 {123})", _intel_subject_message_bytes())]
+
+
+class _FakeCortexProcessedReplyIMAP(_FakeIMAP):
+    instances = []
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.__class__.instances.append(self)
+
+    def fetch(self, _imap_id, _query):
+        return "OK", [(b"1 (RFC822 {123})", _cortex_processed_reply_message_bytes())]
+
+
+class _FakeForwardingConfirmationIMAP(_FakeIMAP):
+    instances = []
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.__class__.instances.append(self)
+
+    def fetch(self, _imap_id, _query):
+        return "OK", [(b"1 (RFC822 {123})", _forwarding_confirmation_message_bytes())]
 
 
 class _FakeRoutedDocumentIMAP(_FakeIMAP):
@@ -515,6 +573,150 @@ def test_mailbox_poller_allows_trusted_self_relay_and_normalizes_submitter(tmp_p
     assert result_client.calls
     payload = result_client.calls[0]["delivery_payload"]
     assert payload["note"]["submitted_by"] == "paul@longboardfella.com.au"
+
+
+def test_mailbox_poller_suppresses_cortex_processed_replies_and_marks_seen(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    _FakeCortexProcessedReplyIMAP.instances = []
+
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=True,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: (_ for _ in ()).throw(AssertionError(f"extractor should not run: {payload}")),
+        imap_factory=_FakeCortexProcessedReplyIMAP,
+        signal_store=_FakeSignalStore(),
+        reply_client=_FakeReplyClient(),
+    )
+
+    summary = poller.poll_once()
+
+    assert summary["processed"] == 0
+    assert summary["skipped"] == 1
+    assert summary["failures"] == 0
+    assert store.list_messages() == []
+    assert _FakeCortexProcessedReplyIMAP.instances[0].stored == [(b"1", "+FLAGS", "\\Seen")]
+
+
+def test_mailbox_poller_suppresses_forwarding_confirmation_and_marks_seen(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    _FakeForwardingConfirmationIMAP.instances = []
+
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=True,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: (_ for _ in ()).throw(AssertionError(f"extractor should not run: {payload}")),
+        imap_factory=_FakeForwardingConfirmationIMAP,
+        signal_store=_FakeSignalStore(),
+        reply_client=_FakeReplyClient(),
+    )
+
+    summary = poller.poll_once()
+
+    assert summary["processed"] == 0
+    assert summary["skipped"] == 1
+    assert summary["failures"] == 0
+    assert store.list_messages() == []
+    assert _FakeForwardingConfirmationIMAP.instances[0].stored == [(b"1", "+FLAGS", "\\Seen")]
+
+
+def test_mailbox_reply_to_trusted_self_relay_uses_effective_submitter(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=False,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: ({}, None),
+        imap_factory=_FakeIMAP,
+        signal_store=_FakeSignalStore(),
+        reply_client=_FakeReplyClient(),
+    )
+
+    delivery = poller._send_reply(
+        {
+            "from_email": "intel.longboardfella@gmail.com",
+            "to_email": "intel.longboardfella@gmail.com",
+            "message_id": "<msg-self@example.com>",
+        },
+        "Re: self relay",
+        "done",
+    )
+
+    assert delivery["status"] == "sent"
+    assert delivery["to_email"] == "paul@longboardfella.com.au"
 
 
 def test_mailbox_routing_override_and_subject_org_hint_flow_into_note_payload(tmp_path):

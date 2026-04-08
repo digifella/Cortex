@@ -272,6 +272,12 @@ _FIT_TOKEN_EQUIVALENTS = {
 }
 _TRUSTED_SELF_RELAY_MAILBOX = "intel.longboardfella@gmail.com"
 _TRUSTED_SELF_RELAY_SUBMITTER = "paul@longboardfella.com.au"
+_CORTEX_PROCESSED_REPLY_RE = re.compile(r"(?im)^\s*Cortex processed your submission for\b")
+_MAILBOX_FORWARDING_CONFIRMATION_MARKERS = (
+    "has requested to automatically forward mail to your email address",
+    "please click the link below to confirm the request",
+    "cannot automatically forward messages to your email address unless you confirm",
+)
 
 
 def _utc_now_iso() -> str:
@@ -317,6 +323,14 @@ def _extract_emails_from_text(text: str) -> List[str]:
 def _extract_urls_from_text(text: str) -> List[str]:
     found = {match.group(0).strip(".,;:()<>[]{}") for match in _URL_RE.finditer(text or "")}
     return sorted(item for item in found if item)
+
+
+def _combined_mailbox_text(message: Dict[str, Any]) -> str:
+    return "\n\n".join(
+        str(message.get(key) or "")
+        for key in ("raw_text", "html_text")
+        if str(message.get(key) or "").strip()
+    )
 
 
 def _looks_like_generic_document_name(value: str) -> bool:
@@ -1372,6 +1386,8 @@ def parse_email_bytes(raw_bytes: bytes) -> Dict[str, Any]:
         "html_text": html_text,
         "attachments": attachments,
         "extracted_emails": extracted_emails,
+        "auto_submitted": str(message.get("Auto-Submitted") or "").strip().lower(),
+        "x_cortex_mailbox_reply": str(message.get("X-Cortex-Mailbox-Reply") or "").strip().lower(),
     }
 
 
@@ -1445,6 +1461,9 @@ class IntelMailboxReplyClient:
         message["Subject"] = str(subject or "").strip()
         message["From"] = self.reply_from
         message["To"] = recipient
+        message["Auto-Submitted"] = "auto-replied"
+        message["X-Auto-Response-Suppress"] = "All"
+        message["X-Cortex-Mailbox-Reply"] = "1"
         if in_reply_to:
             message["In-Reply-To"] = in_reply_to
             message["References"] = in_reply_to
@@ -1646,6 +1665,49 @@ class IntelMailboxPoller:
         if sender == _TRUSTED_SELF_RELAY_MAILBOX and recipient in {"", _TRUSTED_SELF_RELAY_MAILBOX}:
             return _TRUSTED_SELF_RELAY_SUBMITTER
         return sender
+
+    def _reply_recipient(self, message: Dict[str, Any]) -> str:
+        recipient = str(message.get("from_email") or "").strip().lower()
+        mailbox_addresses = {
+            str(self.config.username or "").strip().lower(),
+            str(self.config.reply_from or "").strip().lower(),
+            _TRUSTED_SELF_RELAY_MAILBOX,
+        }
+        mailbox_addresses = {item for item in mailbox_addresses if item}
+        if recipient in mailbox_addresses:
+            submitter = self._effective_submitter_email(message)
+            if submitter and submitter not in mailbox_addresses:
+                return submitter
+            return ""
+        return recipient
+
+    @staticmethod
+    def _mailbox_suppression_reason(message: Dict[str, Any]) -> str:
+        subject = str(message.get("subject") or "").strip().lower()
+        body = _combined_mailbox_text(message)
+        body_lower = re.sub(r"\s+", " ", body.lower()).strip()
+        if str(message.get("x_cortex_mailbox_reply") or "").strip().lower() in {"1", "true", "yes"}:
+            return "cortex_processed_reply"
+        if (
+            _CORTEX_PROCESSED_REPLY_RE.search(body)
+            and re.search(r"(?im)^\s*Depth\s*:", body)
+            and re.search(r"(?im)^\s*Title\s*:", body)
+        ):
+            return "cortex_processed_reply"
+        if "forwarding confirmation" in subject and all(
+            marker in body_lower for marker in _MAILBOX_FORWARDING_CONFIRMATION_MARKERS[:2]
+        ):
+            return "mailbox_forwarding_confirmation"
+        if all(marker in body_lower for marker in _MAILBOX_FORWARDING_CONFIRMATION_MARKERS):
+            return "mailbox_forwarding_confirmation"
+        return ""
+
+    @staticmethod
+    def _mark_imap_seen(client: Any, imap_id: Any) -> None:
+        try:
+            client.store(imap_id, "+FLAGS", "\\Seen")
+        except Exception:
+            logger.warning("Failed to mark IMAP message %s as seen", imap_id)
 
     def _known_org_scopes(self) -> List[str]:
         names = {str(self.config.org_name or "").strip()}
@@ -3501,9 +3563,12 @@ class IntelMailboxPoller:
         subject: str,
         body: str,
     ) -> Dict[str, Any]:
+        recipient = self._reply_recipient(message)
+        if not recipient:
+            return {"status": "skipped", "reason": "self_recipient"}
         try:
             return self.reply_client.send(
-                to_email=message.get("from_email", ""),
+                to_email=recipient,
                 subject=subject,
                 body=body,
                 in_reply_to=message.get("message_id", ""),
@@ -3669,6 +3734,15 @@ class IntelMailboxPoller:
 
     def _process_message(self, raw_bytes: bytes) -> Optional[Dict[str, Any]]:
         message = parse_email_bytes(raw_bytes)
+        suppression_reason = self._mailbox_suppression_reason(message)
+        if suppression_reason:
+            logger.info(
+                "Skipping intel mailbox message suppressed as %s: from=%s subject=%s",
+                suppression_reason,
+                message.get("from_email", ""),
+                message.get("subject", ""),
+            )
+            return None
         if not self._allowed_sender(message.get("from_email", "")):
             logger.info("Skipping intel mailbox message from unapproved sender: %s", message.get("from_email", ""))
             return None
@@ -3928,8 +4002,22 @@ class IntelMailboxPoller:
                     failures += 1
                     continue
                 parsed = parse_email_bytes(raw_bytes)
+                suppression_reason = self._mailbox_suppression_reason(parsed)
+                if suppression_reason:
+                    skipped += 1
+                    logger.info(
+                        "Skipping intel mailbox message suppressed as %s: from=%s subject=%s",
+                        suppression_reason,
+                        parsed.get("from_email", ""),
+                        parsed.get("subject", ""),
+                    )
+                    if self.config.mark_seen_on_success:
+                        self._mark_imap_seen(client, imap_id)
+                    continue
                 if parsed.get("message_id") and self.store.has_processed_message(parsed["message_id"]):
                     skipped += 1
+                    if self.config.mark_seen_on_success:
+                        self._mark_imap_seen(client, imap_id)
                     continue
                 try:
                     result = self._process_message(raw_bytes)
@@ -3937,10 +4025,7 @@ class IntelMailboxPoller:
                         processed += 1
                         results.append(result)
                         if self.config.mark_seen_on_success:
-                            try:
-                                client.store(imap_id, "+FLAGS", "\\Seen")
-                            except Exception:
-                                logger.warning("Failed to mark IMAP message %s as seen", imap_id)
+                            self._mark_imap_seen(client, imap_id)
                     else:
                         skipped += 1
                 except Exception as exc:
