@@ -113,6 +113,17 @@ def _forwarding_confirmation_message_bytes() -> bytes:
     return msg.as_bytes()
 
 
+def _youtube_summariser_message_bytes() -> bytes:
+    msg = EmailMessage()
+    msg["Subject"] = "Fwd: YouTube Summariser | Weekly queue digest"
+    msg["From"] = "Paul Cooper <paul@example.com>"
+    msg["To"] = "intel.longboardfella@gmail.com"
+    msg["Date"] = "Thu, 09 Apr 2026 09:15:00 +1000"
+    msg["Message-ID"] = "<msg-youtube-summariser@example.com>"
+    msg.set_content("Nemoclaw should handle this, not Market Radar.")
+    return msg.as_bytes()
+
+
 def _routed_document_message_bytes() -> bytes:
     msg = EmailMessage()
     msg["Subject"] = "entity: Escient | Barwon Water"
@@ -296,6 +307,17 @@ class _FakeForwardingConfirmationIMAP(_FakeIMAP):
 
     def fetch(self, _imap_id, _query):
         return "OK", [(b"1 (RFC822 {123})", _forwarding_confirmation_message_bytes())]
+
+
+class _FakeYouTubeSummariserIMAP(_FakeIMAP):
+    instances = []
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.__class__.instances.append(self)
+
+    def fetch(self, _imap_id, _query):
+        return "OK", [(b"1 (RFC822 {123})", _youtube_summariser_message_bytes())]
 
 
 class _FakeRoutedDocumentIMAP(_FakeIMAP):
@@ -667,6 +689,53 @@ def test_mailbox_poller_suppresses_forwarding_confirmation_and_marks_seen(tmp_pa
     assert summary["failures"] == 0
     assert store.list_messages() == []
     assert _FakeForwardingConfirmationIMAP.instances[0].stored == [(b"1", "+FLAGS", "\\Seen")]
+
+
+def test_mailbox_poller_suppresses_youtube_summariser_subject_and_marks_seen(tmp_path):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    _FakeYouTubeSummariserIMAP.instances = []
+
+    cfg = IntelMailboxConfig(
+        host="imap.gmail.com",
+        port=993,
+        username="intel.longboardfella@gmail.com",
+        password="secret",
+        folder="INBOX",
+        org_name="Longboardfella",
+        poll_limit=5,
+        search_criteria="UNSEEN",
+        allowed_senders=(),
+        source_system="cortex_mailbox",
+        callback_url="",
+        note_callback_url="",
+        callback_secret="",
+        callback_timeout=30,
+        profile_import_url="",
+        profile_import_timeout=30,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_username="intel.longboardfella@gmail.com",
+        smtp_password="secret",
+        smtp_use_ssl=True,
+        reply_from="intel.longboardfella@gmail.com",
+        mark_seen_on_success=True,
+    )
+    poller = IntelMailboxPoller(
+        cfg,
+        store=store,
+        extractor=lambda payload: (_ for _ in ()).throw(AssertionError(f"extractor should not run: {payload}")),
+        imap_factory=_FakeYouTubeSummariserIMAP,
+        signal_store=_FakeSignalStore(),
+        reply_client=_FakeReplyClient(),
+    )
+
+    summary = poller.poll_once()
+
+    assert summary["processed"] == 0
+    assert summary["skipped"] == 1
+    assert summary["failures"] == 0
+    assert store.list_messages() == []
+    assert _FakeYouTubeSummariserIMAP.instances[0].stored == [(b"1", "+FLAGS", "\\Seen")]
 
 
 def test_mailbox_reply_to_trusted_self_relay_uses_effective_submitter(tmp_path):

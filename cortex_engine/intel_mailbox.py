@@ -273,6 +273,7 @@ _FIT_TOKEN_EQUIVALENTS = {
 _TRUSTED_SELF_RELAY_MAILBOX = "intel.longboardfella@gmail.com"
 _TRUSTED_SELF_RELAY_SUBMITTER = "paul@longboardfella.com.au"
 _CORTEX_PROCESSED_REPLY_RE = re.compile(r"(?im)^\s*Cortex processed your submission for\b")
+_YOUTUBE_SUMMARISER_SUBJECT_RE = re.compile(r"youtube\s+summariser", re.IGNORECASE)
 _MAILBOX_FORWARDING_CONFIRMATION_MARKERS = (
     "has requested to automatically forward mail to your email address",
     "please click the link below to confirm the request",
@@ -1686,6 +1687,8 @@ class IntelMailboxPoller:
         subject = str(message.get("subject") or "").strip().lower()
         body = _combined_mailbox_text(message)
         body_lower = re.sub(r"\s+", " ", body.lower()).strip()
+        if _YOUTUBE_SUMMARISER_SUBJECT_RE.search(subject):
+            return "youtube_summariser"
         if str(message.get("x_cortex_mailbox_reply") or "").strip().lower() in {"1", "true", "yes"}:
             return "cortex_processed_reply"
         if (
