@@ -21,6 +21,7 @@ input_data schema:
     push_to_kb    bool        Whether to also push output to KB (via QUEUE_SERVER_URL)
     kb_category   str         KB category for push_to_kb (optional)
     source_system str         Origin system (lab / admin)
+    language      str         Output language (optional, e.g. "Danish", "French"). Defaults to English.
 """
 
 import json
@@ -148,26 +149,28 @@ def _fallback_report_title(metadata: dict, index: int) -> str:
     )
 
 
-def _generate_report_title_gemini(url: str, model_name: str, metadata: dict, sections: dict) -> str:
+def _generate_report_title_gemini(url: str, model_name: str, metadata: dict, sections: dict, language: str = "") -> str:
     genai = _gemini_client()
     model_id = "gemini-2.5-pro" if model_name == "gemini-pro" else "gemini-2.5-flash"
     model = genai.GenerativeModel(model_id)
+    lang_note = f" Write the title in {language}." if language else ""
     prompt = (
         "Create a concise, professional title for a written summary report of this YouTube clip. "
         "Use the actual subject matter, not generic wording. Max 12 words. "
-        "Return title text only. No quotes. No markdown.\n\n"
+        f"Return title text only. No quotes. No markdown.{lang_note}\n\n"
         + _title_context(url, metadata, sections)
     )
     response = model.generate_content(prompt)
     return (response.text or "").strip()
 
 
-def _generate_report_title_claude(url: str, model_name: str, metadata: dict, sections: dict) -> str:
+def _generate_report_title_claude(url: str, model_name: str, metadata: dict, sections: dict, language: str = "") -> str:
     client = _anthropic_client()
     model_id = (
         "claude-sonnet-4-6" if model_name == "claude-sonnet"
         else "claude-haiku-4-5-20251001"
     )
+    lang_note = f" Write the title in {language}." if language else ""
     response = client.messages.create(
         model=model_id,
         max_tokens=64,
@@ -176,7 +179,7 @@ def _generate_report_title_claude(url: str, model_name: str, metadata: dict, sec
             "content": (
                 "Create a concise, professional title for a written summary report of this YouTube clip. "
                 "Use the actual subject matter, not generic wording. Max 12 words. "
-                "Return title text only. No quotes. No markdown.\n\n"
+                f"Return title text only. No quotes. No markdown.{lang_note}\n\n"
                 + _title_context(url, metadata, sections)
             ),
         }],
@@ -184,12 +187,12 @@ def _generate_report_title_claude(url: str, model_name: str, metadata: dict, sec
     return response.content[0].text.strip()
 
 
-def _generate_report_title(url: str, api_choice: str, metadata: dict, sections: dict, index: int) -> str:
+def _generate_report_title(url: str, api_choice: str, metadata: dict, sections: dict, index: int, language: str = "") -> str:
     try:
         if api_choice.startswith("gemini"):
-            title = _generate_report_title_gemini(url, api_choice, metadata, sections)
+            title = _generate_report_title_gemini(url, api_choice, metadata, sections, language)
         else:
-            title = _generate_report_title_claude(url, api_choice, metadata, sections)
+            title = _generate_report_title_claude(url, api_choice, metadata, sections, language)
         cleaned = " ".join((title or "").split()).strip().strip("#").strip()
         return cleaned or _fallback_report_title(metadata, index)
     except Exception as exc:
@@ -199,18 +202,20 @@ def _generate_report_title(url: str, api_choice: str, metadata: dict, sections: 
 
 # ── Gemini path ──
 
-def _summarise_gemini(url: str, model_name: str, output_modes: list[str]) -> dict:
+def _summarise_gemini(url: str, model_name: str, output_modes: list[str], language: str = "") -> dict:
     """Use Gemini's native YouTube URL understanding."""
     genai = _gemini_client()
 
     model_id = "gemini-2.5-pro" if model_name == "gemini-pro" else "gemini-2.5-flash"
     model = genai.GenerativeModel(model_id)
 
+    lang_instruction = f"\n\nIMPORTANT: Write your entire response in {language}." if language else ""
+
     sections = {}
     for mode in output_modes:
         prompt = MODE_PROMPTS.get(mode, f"Provide {mode} for this video.")
         full_prompt = (
-            f"{prompt}\n\nVideo: {url}"
+            f"{prompt}{lang_instruction}\n\nVideo: {url}"
         )
         try:
             response = model.generate_content([
@@ -265,7 +270,7 @@ def _extract_transcript(url: str) -> str:
 
 # ── Claude path ──
 
-def _summarise_claude(transcript: str, url: str, model_name: str, output_modes: list[str]) -> dict:
+def _summarise_claude(transcript: str, url: str, model_name: str, output_modes: list[str], language: str = "") -> dict:
     """Summarise using Claude with an extracted transcript."""
     client = _anthropic_client()
 
@@ -279,13 +284,15 @@ def _summarise_claude(transcript: str, url: str, model_name: str, output_modes: 
     if len(transcript) > 90_000:
         transcript_excerpt += "\n\n[Transcript truncated due to length]"
 
+    lang_instruction = f"\n\nIMPORTANT: Write your entire response in {language}." if language else ""
+
     sections = {}
     for mode in output_modes:
         prompt = MODE_PROMPTS.get(mode, f"Provide {mode} for this video.")
         user_message = (
             f"Here is the transcript of a YouTube video ({url}):\n\n"
             f"---\n{transcript_excerpt}\n---\n\n"
-            f"Task: {prompt}"
+            f"Task: {prompt}{lang_instruction}"
         )
         try:
             response = client.messages.create(
@@ -312,7 +319,7 @@ MODE_LABELS = {
 }
 
 
-def _build_report(results: list[dict], output_modes: list[str], api_choice: str) -> str:
+def _build_report(results: list[dict], output_modes: list[str], api_choice: str, language: str = "") -> str:
     today = date.today().isoformat()
     mode_labels = ", ".join(MODE_LABELS.get(m, m) for m in output_modes)
     model_info = _model_details(api_choice)
@@ -330,6 +337,10 @@ def _build_report(results: list[dict], output_modes: list[str], api_choice: str)
         f"provider: {model_info['provider']}",
         f"api: {api_label}",
         f"modes: {mode_labels}",
+    ]
+    if language:
+        lines.append(f"language: {language}")
+    lines += [
         "---",
         "",
         f"# {report_title}",
@@ -410,6 +421,7 @@ def handle(input_path, input_data: dict, job: dict):
     output_modes = input_data.get("output_modes", ["summary"])
     push_to_kb   = input_data.get("push_to_kb", False)
     kb_category  = input_data.get("kb_category", "")
+    language     = input_data.get("language", "")
 
     if not urls:
         raise ValueError("No YouTube URLs provided in input_data")
@@ -423,11 +435,11 @@ def handle(input_path, input_data: dict, job: dict):
         metadata = _fetch_youtube_metadata(url)
         try:
             if use_gemini:
-                sections = _summarise_gemini(url, api_choice, output_modes)
+                sections = _summarise_gemini(url, api_choice, output_modes, language)
             else:
                 transcript = _extract_transcript(url)
-                sections   = _summarise_claude(transcript, url, api_choice, output_modes)
-            report_title = _generate_report_title(url, api_choice, metadata, sections, len(results) + 1)
+                sections   = _summarise_claude(transcript, url, api_choice, output_modes, language)
+            report_title = _generate_report_title(url, api_choice, metadata, sections, len(results) + 1, language)
             results.append({
                 "url": url,
                 "sections": sections,
@@ -449,7 +461,7 @@ def handle(input_path, input_data: dict, job: dict):
             })
 
     # Build output markdown
-    report_md = _build_report(results, output_modes, api_choice)
+    report_md = _build_report(results, output_modes, api_choice, language)
 
     # Write to temp file
     suffix = f"_yt_summary_{date.today().isoformat()}.md"
@@ -468,6 +480,7 @@ def handle(input_path, input_data: dict, job: dict):
         "provider": model_info["provider"],
         "model": model_info["label"],
         "modes": output_modes,
+        "language": language or "English",
         "report_title": results[0].get("report_title", "YouTube Summary Report") if len(results) == 1 else f"YouTube Summary Report - {len(results)} Videos",
         "videos": [
             {
