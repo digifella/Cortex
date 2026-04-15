@@ -517,7 +517,11 @@ def _read_attachment_text(attachment: Dict[str, Any], textifier: Optional[Docume
             if textifier is None:
                 text = ""
             else:
-                text = textifier.textify_file(str(path_obj))
+                try:
+                    text = textifier.textify_file(str(path_obj))
+                except Exception as tex_exc:
+                    logger.warning("textify_file failed for %s: %s", filename, tex_exc)
+                    text = ""
             if suffix == ".pdf" and (
                 _is_weak_document_text(text)
                 or _should_force_pdf_ocr_fallback(filename, text)
