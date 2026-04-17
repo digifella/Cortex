@@ -5,6 +5,22 @@ All notable changes to the Cortex Suite project will be documented in this file.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## v6.0.9 - 2026-04-18
+
+### Photo Batch Recovery
+
+Adds disk-backed recovery for the Photo Processor so completed batches survive Streamlit session resets (file-watcher rerun, WebSocket drop, PC sleep).
+
+### ✨ New Features
+- Photo Processor writes a /tmp/cortex_photokw/_last_batch.json manifest incrementally during processing
+- A 'Recover last batch' banner appears on the Photo Processor tab when session state is empty but a manifest is on disk
+- Recovery re-populates the Results panel and download buttons without re-processing photos
+
+### 🚀 Improvements
+- Manifest write is atomic (.json.tmp + os.replace) so a crash mid-write cannot corrupt recovery data
+- Entries for files that have been deleted are filtered out of the recovery view with a warning
+
 ### 📚 Research Resolver + Document Extract Workflow
 
 ### ✨ New Features

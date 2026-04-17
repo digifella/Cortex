@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.0.8"
+CORTEX_VERSION = "6.0.9"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 0,
-    "patch": 8,
+    "patch": 9,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,18 +24,18 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-02-13",
-    "release_name": "URL PDF Ingestor",
-    "description": "Adds URL-list open-access PDF ingestion with optional single-pass PDF-to-Markdown conversion and download status reporting.",
+    "release_date": "2026-04-18",
+    "release_name": "Photo Batch Recovery",
+    "description": "Adds disk-backed recovery for the Photo Processor so completed batches survive Streamlit session resets (file-watcher rerun, WebSocket drop, PC sleep).",
     "breaking_changes": [],
     "new_features": [
-        "New URL PDF Ingestor page accepts URL lists, discovers open-access PDF links, and downloads accessible PDFs",
-        "Optional single-pass flow converts downloaded PDFs to Markdown using existing textifier pipeline",
-        "Run outputs include CSV/JSON status reports and one-click ZIP download of PDFs + Markdown + reports"
+        "Photo Processor writes a /tmp/cortex_photokw/_last_batch.json manifest incrementally during processing",
+        "A 'Recover last batch' banner appears on the Photo Processor tab when session state is empty but a manifest is on disk",
+        "Recovery re-populates the Results panel and download buttons without re-processing photos"
     ],
     "improvements": [
-        "URL ingest artifacts are stored under the configured external database root (`url_ingest/<timestamp>`)",
-        "Status tracking now explicitly flags download failures such as paywalled/forbidden, not-found, and no-open-access-pdf"
+        "Manifest write is atomic (.json.tmp + os.replace) so a crash mid-write cannot corrupt recovery data",
+        "Entries for files that have been deleted are filtered out of the recovery view with a warning"
     ],
     "bug_fixes": [
         "N/A"

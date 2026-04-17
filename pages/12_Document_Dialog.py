@@ -1,5 +1,5 @@
 # ## File: pages/12_Document_Dialog.py
-# Version: v5.6.0
+# Version: v6.0.9
 # Date: 2026-01-26
 # Purpose: Conversational Q&A interface for document collections.
 #          Enables multi-turn conversations with ingested documents
