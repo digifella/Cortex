@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import email
+import base64
 import hashlib
 import imaplib
 import json
@@ -270,7 +271,12 @@ _FIT_TOKEN_EQUIVALENTS = {
     "health": {"health", "healthcare", "care"},
     "healthcare": {"healthcare", "health", "care"},
 }
-_TRUSTED_SELF_RELAY_MAILBOX = "intel.longboardfella@gmail.com"
+_PRIMARY_INTEL_MAILBOX = "intel@longboardfella.com.au"
+_LEGACY_INTEL_MAILBOX = "intel.longboardfella@gmail.com"
+_TRUSTED_SELF_RELAY_MAILBOXES = {
+    _PRIMARY_INTEL_MAILBOX,
+    _LEGACY_INTEL_MAILBOX,
+}
 _TRUSTED_SELF_RELAY_SUBMITTER = "paul@longboardfella.com.au"
 _CORTEX_PROCESSED_REPLY_RE = re.compile(r"(?im)^\s*Cortex processed your submission for\b")
 _YOUTUBE_SUMMARISER_SUBJECT_RE = re.compile(r"youtube\s+summariser", re.IGNORECASE)
@@ -284,6 +290,23 @@ _MAILBOX_FORWARDING_CONFIRMATION_MARKERS = (
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _mailbox_identity_aliases(config: Optional["IntelMailboxConfig"] = None) -> set[str]:
+    aliases = set(_TRUSTED_SELF_RELAY_MAILBOXES)
+    if config is not None:
+        aliases.update(
+            {
+                str(config.username or "").strip().lower(),
+                str(config.reply_from or "").strip().lower(),
+            }
+        )
+    return {item for item in aliases if item}
+
+
+def _callback_expects_normalized_message(callback_url: str) -> bool:
+    url = str(callback_url or "").strip().lower()
+    return url.endswith("/admin/email_intel_webhook.php") or url.endswith("/admin/email_job_webhook.php")
 
 
 def _safe_db_root() -> Path:
@@ -1137,7 +1160,7 @@ class IntelMailboxConfig:
                 "/lab/market_radar_api.php?action=ingest_intel_note",
             )
         return cls(
-            host=get("INTEL_IMAP_HOST", "imap.gmail.com"),
+            host=get("INTEL_IMAP_HOST"),
             port=int(get("INTEL_IMAP_PORT", "993") or "993"),
             username=get("INTEL_IMAP_USERNAME"),
             password=get("INTEL_IMAP_PASSWORD"),
@@ -1153,7 +1176,7 @@ class IntelMailboxConfig:
             callback_timeout=max(5, int(get("INTEL_RESULTS_POST_TIMEOUT", "30") or "30")),
             profile_import_url=get("INTEL_PROFILE_IMPORT_URL"),
             profile_import_timeout=max(5, int(get("INTEL_PROFILE_IMPORT_TIMEOUT", "45") or "45")),
-            smtp_host=get("INTEL_SMTP_HOST", "smtp.gmail.com"),
+            smtp_host=get("INTEL_SMTP_HOST"),
             smtp_port=int(get("INTEL_SMTP_PORT", "465") or "465"),
             smtp_username=get("INTEL_SMTP_USERNAME", get("INTEL_IMAP_USERNAME")),
             smtp_password=get("INTEL_SMTP_PASSWORD", get("INTEL_IMAP_PASSWORD")),
@@ -1415,7 +1438,16 @@ class IntelMailboxResultClient:
         headers = {"Content-Type": "application/json"}
         if self.callback_secret:
             headers["X-Queue-Key"] = self.callback_secret
-        response = requests.post(effective_url, headers=headers, json=delivery_payload or payload, timeout=self.timeout)
+            headers["X-Longboardfella-Webhook-Secret"] = self.callback_secret
+        _sent_body = delivery_payload or payload
+        response = requests.post(effective_url, headers=headers, json=_sent_body, timeout=self.timeout)
+        if response.status_code >= 400:
+            _sent_keys = sorted(list(_sent_body.keys())) if isinstance(_sent_body, dict) else []
+            _resp_text = (response.text or "").strip()[:500]
+            logger.error(
+                "Webhook delivery failed: status=%s url=%s sent_keys=%s response=%s",
+                response.status_code, effective_url, _sent_keys, _resp_text,
+            )
         response.raise_for_status()
         delivery: Dict[str, Any] = {"status": "posted", "http_status": response.status_code}
         try:
@@ -1654,28 +1686,23 @@ class IntelMailboxPoller:
 
     def _allowed_sender(self, email_address: str) -> bool:
         sender = str(email_address or "").strip().lower()
-        if sender == _TRUSTED_SELF_RELAY_MAILBOX:
+        if sender in _mailbox_identity_aliases(self.config):
             return True
         if not self.config.allowed_senders:
             return True
         return sender in self.config.allowed_senders
 
-    @staticmethod
-    def _effective_submitter_email(message: Dict[str, Any]) -> str:
+    def _effective_submitter_email(self, message: Dict[str, Any]) -> str:
         sender = str(message.get("from_email") or "").strip().lower()
         recipient = str(message.get("to_email") or "").strip().lower()
-        if sender == _TRUSTED_SELF_RELAY_MAILBOX and recipient in {"", _TRUSTED_SELF_RELAY_MAILBOX}:
+        mailbox_aliases = _mailbox_identity_aliases(self.config)
+        if sender in mailbox_aliases and recipient in mailbox_aliases.union({""}):
             return _TRUSTED_SELF_RELAY_SUBMITTER
         return sender
 
     def _reply_recipient(self, message: Dict[str, Any]) -> str:
         recipient = str(message.get("from_email") or "").strip().lower()
-        mailbox_addresses = {
-            str(self.config.username or "").strip().lower(),
-            str(self.config.reply_from or "").strip().lower(),
-            _TRUSTED_SELF_RELAY_MAILBOX,
-        }
-        mailbox_addresses = {item for item in mailbox_addresses if item}
+        mailbox_addresses = _mailbox_identity_aliases(self.config)
         if recipient in mailbox_addresses:
             submitter = self._effective_submitter_email(message)
             if submitter and submitter not in mailbox_addresses:
@@ -3436,6 +3463,47 @@ class IntelMailboxPoller:
             },
         }
 
+    def _build_normalized_webhook_message_payload(
+        self,
+        message: Dict[str, Any],
+        persisted: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        attachments_payload: List[Dict[str, Any]] = []
+        for item in list(persisted.get("attachments") or []):
+            stored_path = str(item.get("stored_path") or "").strip()
+            content_base64 = ""
+            if stored_path and Path(stored_path).exists():
+                try:
+                    content_base64 = base64.b64encode(Path(stored_path).read_bytes()).decode("ascii")
+                except Exception:
+                    content_base64 = ""
+            attachments_payload.append(
+                {
+                    "filename": str(item.get("filename") or "").strip(),
+                    "mime_type": str(item.get("mime_type") or "").strip(),
+                    "size_bytes": int(item.get("size_bytes") or 0),
+                    "content_base64": content_base64,
+                    "is_inline": bool(item.get("is_inline")),
+                }
+            )
+
+        return {
+            "message_id": str(message.get("message_id") or "").strip(),
+            "from_email": str(message.get("from_email") or "").strip(),
+            "from_name": str(message.get("from_name") or "").strip(),
+            "to_email": str(message.get("to_email") or "").strip(),
+            "to_name": str(message.get("to_name") or "").strip(),
+            "subject": str(message.get("subject") or "").strip(),
+            "received_at": str(message.get("received_at") or "").strip(),
+            "text_body": str(message.get("raw_text") or "").strip(),
+            "html_body": str(message.get("html_text") or "").strip(),
+            "attachments": attachments_payload,
+            "transport_meta": {
+                "source_system": str(self.config.source_system or "").strip(),
+                "mailbox_org_name": str(self.config.org_name or "").strip(),
+            },
+        }
+
     def _ingest_signal(
         self,
         message: Dict[str, Any],
@@ -3929,11 +3997,17 @@ class IntelMailboxPoller:
                 )
                 result_payload["website_payload"] = self._build_website_payload(delivery_payload, output_data)
                 result_payload["document_meta"] = delivery_payload.get("document_meta") or {}
+                note_callback_url = self.config.note_callback_url or self.config.callback_url
+                callback_payload = (
+                    self._build_normalized_webhook_message_payload(message, persisted)
+                    if _callback_expects_normalized_message(note_callback_url)
+                    else delivery_payload
+                )
                 delivery = self.result_client.deliver(
                     persisted["message_key"],
                     result_payload,
-                    delivery_payload=delivery_payload,
-                    callback_url_override=self.config.note_callback_url or self.config.callback_url,
+                    delivery_payload=callback_payload,
+                    callback_url_override=note_callback_url,
                 )
                 response = dict(delivery.get("response") or {})
                 if response.get("intel_id"):

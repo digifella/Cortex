@@ -7,6 +7,7 @@ from cortex_engine.intel_deduplicator import find_duplicate_note
 from cortex_engine.intel_mailbox import (
     IntelMailboxConfig,
     IntelMailboxPoller,
+    IntelMailboxResultClient,
     IntelMailboxStore,
     _compact_strategy_snippet,
     _clean_note_signal_snippet,
@@ -362,6 +363,19 @@ class _RecordingResultClient:
         return {"status": "posted", "http_status": 200, "response": {"ok": True, "intel_id": "intel_note_1"}}
 
 
+class _FakeHttpResponse:
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self._payload = payload if payload is not None else {"ok": True}
+        self.text = json.dumps(self._payload)
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
 class _RoutingSignalStore(_FakeSignalStore):
     def list_profiles(self, org_name=""):
         profiles = [
@@ -412,7 +426,7 @@ def test_mailbox_poller_processes_message_and_writes_outbox(tmp_path):
     cfg = IntelMailboxConfig(
         host="imap.gmail.com",
         port=993,
-        username="intel.longboardfella@gmail.com",
+        username="intel@longboardfella.com.au",
         password="secret",
         folder="INBOX",
         org_name="Longboardfella",
@@ -428,10 +442,10 @@ def test_mailbox_poller_processes_message_and_writes_outbox(tmp_path):
         profile_import_timeout=30,
         smtp_host="smtp.gmail.com",
         smtp_port=465,
-        smtp_username="intel.longboardfella@gmail.com",
+        smtp_username="intel@longboardfella.com.au",
         smtp_password="secret",
         smtp_use_ssl=True,
-        reply_from="intel.longboardfella@gmail.com",
+        reply_from="intel@longboardfella.com.au",
         mark_seen_on_success=False,
     )
 
@@ -493,7 +507,7 @@ def test_mailbox_poller_uses_note_callback_url_for_structured_note_posts(tmp_pat
     cfg = IntelMailboxConfig(
         host="imap.gmail.com",
         port=993,
-        username="intel.longboardfella@gmail.com",
+        username="intel@longboardfella.com.au",
         password="secret",
         folder="INBOX",
         org_name="Longboardfella",
@@ -827,10 +841,10 @@ def test_mailbox_reply_to_trusted_self_relay_uses_effective_submitter(tmp_path):
         profile_import_timeout=30,
         smtp_host="smtp.gmail.com",
         smtp_port=465,
-        smtp_username="intel.longboardfella@gmail.com",
+        smtp_username="intel@longboardfella.com.au",
         smtp_password="secret",
         smtp_use_ssl=True,
-        reply_from="intel.longboardfella@gmail.com",
+        reply_from="intel@longboardfella.com.au",
         mark_seen_on_success=False,
     )
     poller = IntelMailboxPoller(
@@ -844,8 +858,8 @@ def test_mailbox_reply_to_trusted_self_relay_uses_effective_submitter(tmp_path):
 
     delivery = poller._send_reply(
         {
-            "from_email": "intel.longboardfella@gmail.com",
-            "to_email": "intel.longboardfella@gmail.com",
+            "from_email": "intel@longboardfella.com.au",
+            "to_email": "intel@longboardfella.com.au",
             "message_id": "<msg-self@example.com>",
         },
         "Re: self relay",
@@ -854,6 +868,39 @@ def test_mailbox_reply_to_trusted_self_relay_uses_effective_submitter(tmp_path):
 
     assert delivery["status"] == "sent"
     assert delivery["to_email"] == "paul@longboardfella.com.au"
+
+
+def test_result_client_sends_queue_and_webhook_secret_headers(tmp_path, monkeypatch):
+    store = IntelMailboxStore(base_path=tmp_path / "intel_mailbox")
+    client = IntelMailboxResultClient(
+        store=store,
+        callback_url="https://longboardfella.com.au/admin/email_intel_webhook.php",
+        callback_secret="secret-123",
+        timeout=30,
+    )
+
+    recorded = {}
+
+    def _fake_post(url, headers=None, json=None, timeout=None):
+        recorded["url"] = url
+        recorded["headers"] = dict(headers or {})
+        recorded["json"] = json
+        recorded["timeout"] = timeout
+        return _FakeHttpResponse(payload={"ok": True, "intel_id": "intel_note_42"})
+
+    monkeypatch.setattr("cortex_engine.intel_mailbox.requests.post", _fake_post)
+
+    delivery = client.deliver(
+        "msg-1",
+        {"foo": "bar"},
+        delivery_payload={"action": "ingest_intel_note"},
+    )
+
+    assert recorded["url"] == "https://longboardfella.com.au/admin/email_intel_webhook.php"
+    assert recorded["headers"]["X-Queue-Key"] == "secret-123"
+    assert recorded["headers"]["X-Longboardfella-Webhook-Secret"] == "secret-123"
+    assert recorded["json"] == {"action": "ingest_intel_note"}
+    assert delivery["response"]["intel_id"] == "intel_note_42"
 
 
 def test_mailbox_routing_override_and_subject_org_hint_flow_into_note_payload(tmp_path):

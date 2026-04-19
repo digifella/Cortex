@@ -52,16 +52,18 @@ _PUBLIC_COMPLEX_DOC_TYPES = {"annual_report", "strategic_plan", "org_chart"}
 _ANTHROPIC_HAIKU_MODEL = os.environ.get("CORTEX_INTEL_ANTHROPIC_DEFAULT_MODEL", "").strip() or "claude-haiku-4-5-20251001"
 _ANTHROPIC_DOCUMENT_MODEL = os.environ.get("CORTEX_INTEL_ANTHROPIC_DOCUMENT_MODEL", "").strip() or "claude-sonnet-4-6"
 _LOCAL_INTEL_MODEL_CANDIDATES = (
-    "qwen3:30b",
+    "qwen2.5:14b-instruct-q4_K_M",
+    "qwen3.5:9b",
+    "qwen3.5:9b-q8_0",
     "mistral-small3.2:latest",
     "nemotron-3-nano:latest",
+    "mistral-small:latest",
+    "llama3.1:8b-instruct-q8_0",
+    "llama3.2:3b-instruct-q8_0",
+    "qwen3:30b",
     "qwen2.5:72b-instruct-q4_K_M",
     "llama3.3:70b-instruct-q4_K_M",
     "nemotron:70b-instruct-q4_K_M",
-    "mistral-small:latest",
-    "qwen2.5:14b-instruct-q4_K_M",
-    "llama3.1:8b-instruct-q8_0",
-    "llama3.2:3b-instruct-q8_0",
 )
 
 
@@ -617,8 +619,8 @@ def _preferred_local_extract_models(requested_model: str = "") -> List[str]:
         requested_model,
         os.environ.get("CORTEX_INTEL_LOCAL_MODEL", ""),
         os.environ.get("INTEL_LOCAL_MODEL", ""),
-        *_LOCAL_INTEL_MODEL_CANDIDATES,
         os.environ.get("LOCAL_LLM_SYNTHESIS_MODEL", ""),
+        *_LOCAL_INTEL_MODEL_CANDIDATES,
     ):
         name = str(candidate or "").strip()
         if name and name not in candidates:

@@ -220,8 +220,9 @@ Current behaviour:
 - if no allowlist is configured, mailbox submissions are accepted
 - if an allowlist is configured, sender matching is normally by `from_email`
 - trusted self-relay is explicitly allowed:
-  - mail from `intel.longboardfella@gmail.com` to itself is treated as authorised
+  - mail from `intel@longboardfella.com.au` to itself is treated as authorised
   - these messages are currently attributed as coming from `paul@longboardfella.com.au`
+  - the legacy `intel.longboardfella@gmail.com` relay remains accepted during migration
 
 This is the temporary Telegram relay rule now in place.
 

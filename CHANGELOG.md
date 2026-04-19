@@ -6,6 +6,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🚀 Improvements
+- Cortex Intel mailbox config no longer assumes Gmail host defaults; IMAP/SMTP provider endpoints must now be set explicitly in worker config.
+- Cortex Intel mailbox now treats `intel@longboardfella.com.au` as the canonical trusted self-relay address while preserving the legacy `intel.longboardfella@gmail.com` alias during migration.
+- Worker docs/examples now point to the `longboardfella.com.au` mailbox identity instead of the Gmail workaround.
+- Cortex mailbox webhook delivery now sends both the legacy queue secret header and the website email-webhook secret header so the new `email_intel_webhook.php` endpoint can authenticate requests without a custom shim.
+
 ## v6.0.9 - 2026-04-18
 
 ### Photo Batch Recovery
