@@ -2,6 +2,10 @@
 
 Objective: introduce `notes@longboardfella.com.au` as a dedicated Cortex note mailbox and remove note-stash behavior from the Market Radar intel mailbox.
 
+Operational runbook:
+
+- `docs/operations/NOTES_MAILBOX_RUNBOOK.md`
+
 ## Phase 1: Mailbox Split Policy
 
 - confirm `notes@longboardfella.com.au` exists in Microsoft 365
@@ -34,6 +38,19 @@ Recommended files:
 - choose M365 transport approach for `notes@...`
 - do not rely on an implicit Gmail/basic-auth swap
 - preferred: Microsoft Graph polling or subscription/webhook delivery
+- current implementation supports Graph polling with:
+  - `NOTES_TRANSPORT_MODE=graph`
+  - `NOTES_GRAPH_TENANT_ID`
+  - `NOTES_GRAPH_CLIENT_ID`
+  - `NOTES_GRAPH_CLIENT_SECRET`
+  - `NOTES_GRAPH_MAILBOX=notes@longboardfella.com.au`
+- the Microsoft app must be scoped in Exchange Online to only `notes@longboardfella.com.au`
+- keep the Graph app on `Mail.Read` unless server-side mailbox mutation is required
+- if Microsoft Graph rejects mark-as-read with 403, the worker still de-duplicates locally using `tmp/notes_mailbox_state.json`
+- notes are persisted as markdown when `NOTES_WRITE_VAULT_MARKDOWN=1`:
+  - public notes -> `NOTES_PUBLIC_VAULT_DIR`
+  - private notes -> `NOTES_PRIVATE_VAULT_DIR`
+  - JSON outbox files remain as an audit/debug trail
 
 ## Phase 5: Validation
 

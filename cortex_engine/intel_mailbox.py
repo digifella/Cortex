@@ -38,6 +38,7 @@ from cortex_engine.email_handlers import (
 from cortex_engine.industry_classifier import classify_entity_industry
 from cortex_engine.intel_extractor import extract_intel
 from cortex_engine.intel_note_classifier import classify_mailbox_message
+from cortex_engine.notes_mailbox import classify_notes_mailbox_route
 from cortex_engine.intel_note_processor import IntelNoteProcessor
 from cortex_engine.org_chart_extractor import looks_like_org_chart_attachment
 from cortex_engine.strategic_doc_analyser import clean_strategic_role_label
@@ -280,7 +281,7 @@ _TRUSTED_SELF_RELAY_MAILBOXES = {
 _TRUSTED_SELF_RELAY_SUBMITTER = "paul@longboardfella.com.au"
 _CORTEX_PROCESSED_REPLY_RE = re.compile(r"(?im)^\s*Cortex processed your submission for\b")
 _YOUTUBE_SUMMARISER_SUBJECT_RE = re.compile(r"youtube\s+summariser", re.IGNORECASE)
-_NEMOCLAW_SUBJECT_PREFIX_RE = re.compile(r"^\s*(?:vault|memo|private|test)\s*:", re.IGNORECASE)
+_NOTES_ROUTED_SUBJECT_PREFIX_RE = re.compile(r"^\s*(?:vault|memo|private|test)\s*:", re.IGNORECASE)
 _MAILBOX_FORWARDING_CONFIRMATION_MARKERS = (
     "has requested to automatically forward mail to your email address",
     "please click the link below to confirm the request",
@@ -1717,8 +1718,11 @@ class IntelMailboxPoller:
         body_lower = re.sub(r"\s+", " ", body.lower()).strip()
         if _YOUTUBE_SUMMARISER_SUBJECT_RE.search(subject):
             return "youtube_summariser"
-        if _NEMOCLAW_SUBJECT_PREFIX_RE.search(subject):
-            return "nemoclaw_routed"
+        if _NOTES_ROUTED_SUBJECT_PREFIX_RE.search(subject):
+            return "notes_mailbox_routed"
+        notes_route = classify_notes_mailbox_route(subject, body_lower)
+        if notes_route.get("route") in {"public_stash", "private_vault"} and notes_route.get("reason") != "default_public_note":
+            return "notes_mailbox_routed"
         if str(message.get("x_cortex_mailbox_reply") or "").strip().lower() in {"1", "true", "yes"}:
             return "cortex_processed_reply"
         if (

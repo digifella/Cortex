@@ -5,6 +5,7 @@ This folder contains the local/offline queue worker for the website work queue A
 ## Files
 - `worker.py`: Main polling worker loop.
 - `intel_mailbox_worker.py`: Direct IMAP poller for Cortex-owned intelligence inboxes.
+- `notes_mailbox_worker.py`: Dedicated Microsoft Graph worker for the separate `notes@longboardfella.com.au` note-stash mailbox.
 - `config.env`: Worker configuration for queue API and polling.
 - `handlers/__init__.py`: Job-type handler registry.
 - `handlers/pdf_anonymise.py`: `pdf_anonymise` handler (reuses `cortex_engine.anonymizer`).
@@ -36,6 +37,11 @@ venv/bin/python worker/worker.py
 Direct Cortex-owned intel mailbox intake:
 ```bash
 venv/bin/python worker/intel_mailbox_worker.py
+```
+
+Notes mailbox worker:
+```bash
+venv/bin/python worker/notes_mailbox_worker.py
 ```
 
 ## How It Works
@@ -84,4 +90,13 @@ venv/bin/python worker/intel_mailbox_worker.py
 - Mailbox scope:
   - `intel@longboardfella.com.au` is the Market Radar / website-intel mailbox
   - `notes@longboardfella.com.au` should be treated as a separate note-stash mailbox rather than routed through the intel webhook path
+  - note-shaped subjects accidentally sent to `intel@...` are now suppressed as notes-mailbox traffic instead of being mixed into Market Radar delivery
+- `notes_mailbox_worker.py` provides:
+  - the dedicated config contract for `notes@...`
+  - note route classification (`public_stash`, `private_vault`, `unsupported_market_intel`)
+  - Microsoft Graph polling via app-only client credentials when `NOTES_TRANSPORT_MODE=graph`
+  - local JSON outbox persistence for audit/debug
+  - direct Obsidian markdown writes to `NOTES_PUBLIC_VAULT_DIR` and `NOTES_PRIVATE_VAULT_DIR` when `NOTES_WRITE_VAULT_MARKDOWN=1`
+  - Graph access should be mailbox-scoped in Exchange Online so the app can read only `notes@longboardfella.com.au`
+  - with least-privilege `Mail.Read`, Graph may reject mark-as-read calls; the worker keeps a local processed-message state file to avoid duplicate local processing
 - If no callback URL is configured, processed mailbox extraction results are written to the external DB path under `intel_mailbox/outbox/`.
