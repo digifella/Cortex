@@ -46,3 +46,4 @@ docker/Screenshot*.png
 
 # Local Windows-path mirror artifacts (must stay outside repo)
 F:\\ai_databases/
+.worktrees/
