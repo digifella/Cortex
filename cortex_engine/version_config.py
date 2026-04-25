@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.0.9"
+CORTEX_VERSION = "6.0.10"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 0,
-    "patch": 9,
+    "patch": 10,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,18 +24,16 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-04-18",
-    "release_name": "Photo Batch Recovery",
-    "description": "Adds disk-backed recovery for the Photo Processor so completed batches survive Streamlit session resets (file-watcher rerun, WebSocket drop, PC sleep).",
+    "release_date": "2026-04-25",
+    "release_name": "Photo & Metadata Tools",
+    "description": "Adds dedicated Photo & Metadata Tools page (page 20) with Photo Processor and LLM Metadata Sync tabs; removes Photo Processor from Document Extract.",
     "breaking_changes": [],
     "new_features": [
-        "Photo Processor writes a /tmp/cortex_photokw/_last_batch.json manifest incrementally during processing",
-        "A 'Recover last batch' banner appears on the Photo Processor tab when session state is empty but a manifest is on disk",
-        "Recovery re-populates the Results panel and download buttons without re-processing photos"
+        "Photo & Metadata Tools page (page 20) with Photo Processor and LLM Metadata Sync tabs",
+        "LLM Metadata Sync: propagates JPG keywords/descriptions to RAW XMP sidecars and embedded TIF/PSD/DNG via ExifTool",
     ],
     "improvements": [
-        "Manifest write is atomic (.json.tmp + os.replace) so a crash mid-write cannot corrupt recovery data",
-        "Entries for files that have been deleted are filtered out of the recovery view with a warning"
+        "Document Extract page simplified to 7 tabs by moving Photo Processor to its own dedicated page",
     ],
     "bug_fixes": [
         "N/A"

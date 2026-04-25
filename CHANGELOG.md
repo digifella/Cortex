@@ -6,6 +6,20 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+
+## v6.0.10 - 2026-04-25
+
+### Photo & Metadata Tools
+
+Adds dedicated Photo & Metadata Tools page (page 20) with Photo Processor and LLM Metadata Sync tabs; removes Photo Processor from Document Extract.
+
+### ✨ New Features
+- Photo & Metadata Tools page (page 20) with Photo Processor and LLM Metadata Sync tabs
+- LLM Metadata Sync: propagates JPG keywords/descriptions to RAW XMP sidecars and embedded TIF/PSD/DNG via ExifTool
+
+### 🚀 Improvements
+- Document Extract page simplified to 7 tabs by moving Photo Processor to its own dedicated page
+
 ### 🚀 Improvements
 - Cortex Intel mailbox config no longer assumes Gmail host defaults; IMAP/SMTP provider endpoints must now be set explicitly in worker config.
 - Cortex Intel mailbox now treats `intel@longboardfella.com.au` as the canonical trusted self-relay address while preserving the legacy `intel.longboardfella@gmail.com` alias during migration.

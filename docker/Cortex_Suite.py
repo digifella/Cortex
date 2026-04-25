@@ -1,5 +1,5 @@
 # ## File: Cortex_Suite.py
-# Version: v5.6.0
+# Version: v6.0.10
 # Date: 2025-08-30
 # Purpose: Main entry point for the Cortex Suite application
 
