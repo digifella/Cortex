@@ -54,9 +54,16 @@ def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]
             elif ext in embed_exts:
                 m = deriv_re.search(stem)
                 if m:
+                    # Derivative (e.g. shot-Edit.tif) → write embedded into the file
                     base_stem = stem[: m.start()]
                     key = base_stem.lower()
                     index.setdefault(key, []).append(path)
+                else:
+                    # Standalone embed-format file (e.g. plain shot.psd, shot.tif)
+                    # → write to an XMP sidecar alongside it
+                    key = stem.lower()
+                    sidecar = dir_path / f"{stem}.xmp"
+                    index.setdefault(key, []).append(sidecar)
 
     return index
 

@@ -53,6 +53,7 @@ class SyncConfig:
     raw_extensions: tuple[str, ...] = (
         "RAF", "NEF", "CR2", "CR3", "ARW", "DNG",
         "RW2", "ORF", "PEF", "SRW", "IIQ", "3FR",
+        "PNG",   # PNG files → XMP sidecar alongside the file
     )
     embed_extensions: tuple[str, ...] = ("tif", "tiff", "psd", "psb", "dng")
     deriv_patterns: tuple[str, ...] = (
