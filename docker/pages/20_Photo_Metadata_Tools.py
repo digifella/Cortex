@@ -1653,6 +1653,8 @@ def _render_lms_tab() -> None:
                         parts.append(f"{result.keywords_written} kw")
                     if result.description_written:
                         parts.append("description")
+                    if result.location_written:
+                        parts.append(f"{result.location_written} location field(s)")
                     line = " — ".join(parts)
                 else:
                     error_count += 1

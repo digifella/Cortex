@@ -56,6 +56,64 @@ def read_jpg_metadata(jpg: Path) -> tuple[list[str], str]:
     return keywords, description
 
 
+def read_location(path: Path) -> dict[str, str]:
+    """Read location fields from any file via exiftool.
+
+    Returns dict with keys city, state, country, gps_lat, gps_lon (empty string if absent).
+    Works on JPGs, XMP sidecars, and embedded TIF/PSD/DNG files.
+    """
+    if not path.exists():
+        return {"city": "", "state": "", "country": "", "gps_lat": "", "gps_lon": ""}
+    exiftool = shutil.which("exiftool")
+    if not exiftool:
+        return {"city": "", "state": "", "country": "", "gps_lat": "", "gps_lon": ""}
+    result = subprocess.run(
+        [
+            exiftool, "-json", "-s",
+            "-XMP-photoshop:City", "-IPTC:City",
+            "-XMP-photoshop:State", "-IPTC:Province-State",
+            "-XMP-photoshop:Country", "-IPTC:Country-PrimaryLocationName",
+            "-GPSLatitude", "-GPSLongitude",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return {"city": "", "state": "", "country": "", "gps_lat": "", "gps_lon": ""}
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"city": "", "state": "", "country": "", "gps_lat": "", "gps_lon": ""}
+    if not payload:
+        return {"city": "", "state": "", "country": "", "gps_lat": "", "gps_lon": ""}
+    row = payload[0]
+    city = (row.get("City") or "").strip()
+    state = (row.get("State") or row.get("Province-State") or "").strip()
+    country = (row.get("Country") or row.get("Country-PrimaryLocationName") or "").strip()
+    gps_lat = str(row.get("GPSLatitude") or "").strip()
+    gps_lon = str(row.get("GPSLongitude") or "").strip()
+    return {"city": city, "state": state, "country": country, "gps_lat": gps_lat, "gps_lon": gps_lon}
+
+
+def build_location_update(jpg_location: dict[str, str], existing_location: dict[str, str]) -> set[str]:
+    """Return set of location field names present in jpg but absent in target.
+
+    Field names returned: "city", "state", "country", "gps".
+    A field is only included when the JPG has it AND the target is missing it.
+    """
+    update: set[str] = set()
+    for field in ("city", "state", "country"):
+        if jpg_location.get(field) and not existing_location.get(field):
+            update.add(field)
+    jpg_has_gps = bool(jpg_location.get("gps_lat") and jpg_location.get("gps_lon"))
+    target_has_gps = bool(existing_location.get("gps_lat") and existing_location.get("gps_lon"))
+    if jpg_has_gps and not target_has_gps:
+        update.add("gps")
+    return update
+
+
 def read_existing_keywords(target: Path) -> list[str]:
     """Read XMP-dc:Subject keywords from a target file via exiftool.
 

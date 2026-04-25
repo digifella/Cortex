@@ -91,35 +91,61 @@ def write_metadata(
     keywords: list[str],
     description: str,
     keep_backups: bool,
+    location_fields: set[str] = frozenset(),
 ) -> RunResult:
-    """Step 2 of two-step write: populate keywords and/or description.
+    """Step 2 of two-step write: populate keywords, description, and/or location.
 
-    SIDECAR: writes to xmp-dc namespace only.
-    EMBEDDED: writes to both xmp-dc and iptc namespaces (kept in sync).
-    Description copied from JPG's iptc:Caption-Abstract via -tagsfromfile.
+    SIDECAR: writes to xmp-dc / xmp-photoshop namespaces.
+    EMBEDDED: writes to both xmp and iptc namespaces (kept in sync).
+    Description and location copied from JPG via -tagsfromfile.
+    location_fields: subset of {"city", "state", "country", "gps"} to copy.
     """
     et = exiftool_path()
     backup = _backup_flag(keep_backups)
     args = [et, backup]
 
+    # Direct keyword writes
     if target_type == TargetType.SIDECAR:
         for kw in keywords:
             args.append(f"-xmp-dc:subject+={kw}")
-        if description:
-            args += [
-                "-tagsfromfile", str(jpg),
-                "-xmp-dc:description<iptc:Caption-Abstract",
-            ]
-    else:  # EMBEDDED
+    else:
         for kw in keywords:
             args.append(f"-xmp-dc:subject+={kw}")
             args.append(f"-iptc:Keywords+={kw}")
-        if description:
-            args += [
-                "-tagsfromfile", str(jpg),
-                "-xmp-dc:description<iptc:Caption-Abstract",
-                "-iptc:Caption-Abstract<iptc:Caption-Abstract",
-            ]
+
+    # Build -tagsfromfile copy tags for description and location
+    copy_tags: list[str] = []
+
+    if description:
+        copy_tags.append("-xmp-dc:description<iptc:Caption-Abstract")
+        if target_type == TargetType.EMBEDDED:
+            copy_tags.append("-iptc:Caption-Abstract<iptc:Caption-Abstract")
+
+    if "city" in location_fields:
+        copy_tags.append("-XMP-photoshop:City<XMP-photoshop:City")
+        if target_type == TargetType.EMBEDDED:
+            copy_tags.append("-IPTC:City<XMP-photoshop:City")
+
+    if "state" in location_fields:
+        copy_tags.append("-XMP-photoshop:State<XMP-photoshop:State")
+        if target_type == TargetType.EMBEDDED:
+            copy_tags.append("-IPTC:Province-State<XMP-photoshop:State")
+
+    if "country" in location_fields:
+        copy_tags.append("-XMP-photoshop:Country<XMP-photoshop:Country")
+        if target_type == TargetType.EMBEDDED:
+            copy_tags.append("-IPTC:Country-PrimaryLocationName<XMP-photoshop:Country")
+
+    if "gps" in location_fields:
+        copy_tags += [
+            "-GPSLatitude<GPSLatitude",
+            "-GPSLongitude<GPSLongitude",
+            "-GPSLatitudeRef<GPSLatitudeRef",
+            "-GPSLongitudeRef<GPSLongitudeRef",
+        ]
+
+    if copy_tags:
+        args += ["-tagsfromfile", str(jpg)] + copy_tags
 
     args.append(str(target))
     return _run(args)

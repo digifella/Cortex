@@ -5,7 +5,13 @@ from typing import Generator
 
 from . import exiftool_runner
 from .matcher import build_raw_index, resolve_jpg
-from .merger import build_keyword_union, read_existing_keywords, read_jpg_metadata
+from .merger import (
+    build_keyword_union,
+    build_location_update,
+    read_existing_keywords,
+    read_jpg_metadata,
+    read_location,
+)
 from .models import SyncAction, SyncConfig, SyncResult, TargetType
 
 
@@ -29,13 +35,19 @@ def run_sync(config: SyncConfig) -> Generator[SyncResult, None, None]:
 def _process_action(action: SyncAction, config: SyncConfig) -> SyncResult:
     try:
         jpg_keywords, description = read_jpg_metadata(action.jpg_path)
+        jpg_location = read_location(action.jpg_path)
 
-        if not jpg_keywords and not description:
+        # Determine location fields to copy before deciding whether to skip
+        existing_location = read_location(action.target_path)
+        location_fields = build_location_update(jpg_location, existing_location)
+
+        if not jpg_keywords and not description and not location_fields:
             return SyncResult(
                 action=action,
                 success=True,
                 keywords_written=0,
                 description_written=False,
+                location_written=0,
                 error=None,
             )
 
@@ -50,10 +62,11 @@ def _process_action(action: SyncAction, config: SyncConfig) -> SyncResult:
                 success=True,
                 keywords_written=len(merged_keywords),
                 description_written=bool(description),
+                location_written=len(location_fields),
                 error=None,
             )
 
-        # Step 1: clear (only if target already exists)
+        # Step 1: clear keyword lists (only if target already exists)
         if action.target_path.exists():
             clear_result = exiftool_runner.clear_keyword_lists(
                 action.target_path, action.target_type, config.keep_backups
@@ -64,10 +77,11 @@ def _process_action(action: SyncAction, config: SyncConfig) -> SyncResult:
                     success=False,
                     keywords_written=0,
                     description_written=False,
+                    location_written=0,
                     error=clear_result.filtered_stderr or "exiftool clear failed",
                 )
 
-        # Step 2: write
+        # Step 2: write keywords, description, and any missing location fields
         write_result = exiftool_runner.write_metadata(
             action.jpg_path,
             action.target_path,
@@ -75,6 +89,7 @@ def _process_action(action: SyncAction, config: SyncConfig) -> SyncResult:
             merged_keywords,
             description,
             config.keep_backups,
+            location_fields,
         )
         if not write_result.ok:
             return SyncResult(
@@ -82,6 +97,7 @@ def _process_action(action: SyncAction, config: SyncConfig) -> SyncResult:
                 success=False,
                 keywords_written=0,
                 description_written=False,
+                location_written=0,
                 error=write_result.filtered_stderr or "exiftool write failed",
             )
 
@@ -90,6 +106,7 @@ def _process_action(action: SyncAction, config: SyncConfig) -> SyncResult:
             success=True,
             keywords_written=len(merged_keywords),
             description_written=bool(description),
+            location_written=len(location_fields),
             error=None,
         )
 
@@ -99,5 +116,6 @@ def _process_action(action: SyncAction, config: SyncConfig) -> SyncResult:
             success=False,
             keywords_written=0,
             description_written=False,
+            location_written=0,
             error=str(exc),
         )

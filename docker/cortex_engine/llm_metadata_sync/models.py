@@ -31,6 +31,7 @@ class SyncResult:
     success: bool
     keywords_written: int
     description_written: bool
+    location_written: int = 0   # number of location fields copied (city/state/country/gps)
     error: str | None = None
 
 
