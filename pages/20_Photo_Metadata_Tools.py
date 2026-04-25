@@ -1419,8 +1419,235 @@ def _render_photo_keywords_tab():
 
 # ── LLM Metadata Sync tab ────────────────────────────────────────────────────
 
+def _lms_validate_path(p: str) -> Optional[str]:
+    """Return error string if path is invalid, else None."""
+    if not p.strip():
+        return "Path is required."
+    path = Path(p.strip())
+    if not path.exists():
+        return f"Directory does not exist: {path}"
+    if not path.is_dir():
+        return f"Not a directory: {path}"
+    return None
+
+
 def _render_lms_tab() -> None:
-    st.info("LLM Metadata Sync — coming soon.")
+    st.markdown(
+        "Propagate LLM-generated keywords and descriptions from a flat folder of "
+        "tagged JPGs back into matching RAW source files and embedded derivatives "
+        "(TIF/PSD/DNG) in your RAW library. Uses ExifTool to write XMP sidecars and "
+        "embedded IPTC/XMP metadata."
+    )
+
+    st.info(
+        "**Before running:** In Lightroom Classic, select the affected photos → "
+        "**Metadata → Save Metadata to File** (Ctrl+S) to flush pending catalog-only "
+        "edits to disk before this tool overwrites them."
+    )
+
+    # ExifTool check — bail early if not available
+    if not exiftool_runner.is_available():
+        st.error("**ExifTool not found on PATH.** Install with:")
+        st.code("sudo apt install libimage-exiftool-perl", language="bash")
+        return
+
+    # Path inputs
+    raw_root_str = st.text_input(
+        "RAW root directory",
+        placeholder="/mnt/f/Photos/RAW",
+        key="lms_raw_root",
+    )
+    jpg_dir_str = st.text_input(
+        "JPG source directory (flat, LLM-tagged JPGs)",
+        placeholder="/mnt/f/Photos/Export/LLM-Tagged",
+        key="lms_jpg_dir",
+    )
+
+    raw_err = _lms_validate_path(raw_root_str) if raw_root_str else None
+    jpg_err = _lms_validate_path(jpg_dir_str) if jpg_dir_str else None
+    if raw_err:
+        st.error(raw_err)
+    if jpg_err:
+        st.error(jpg_err)
+    paths_valid = bool(raw_root_str and jpg_dir_str and not raw_err and not jpg_err)
+
+    # Advanced options
+    with st.expander("Advanced options", expanded=False):
+        filter_kw_str = st.text_area(
+            "Filter keywords (comma-separated, case-insensitive)",
+            value="nogps",
+            key="lms_filter_kw",
+        )
+        keep_backups = st.toggle(
+            "Keep ExifTool backups (_original files)", value=True, key="lms_keep_backups"
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            rating_lo = st.number_input(
+                "Rating suffix min", value=1, min_value=1, max_value=9, key="lms_rating_lo"
+            )
+        with col2:
+            rating_hi = st.number_input(
+                "Rating suffix max", value=5, min_value=1, max_value=9, key="lms_rating_hi"
+            )
+        deriv_patterns_str = st.text_area(
+            "Derivative suffix patterns (one per line, regex)",
+            value="-Edit\n-Edit-\\d+\n-Enhanced\n-Enhanced-NR\n-HDR\n-HDR-\\d+\n-Pano\n-Pano-\\d+",
+            key="lms_deriv_patterns",
+        )
+
+    def _build_config(dry_run: bool = False) -> SyncConfig:
+        filter_kws = [k.strip() for k in filter_kw_str.split(",") if k.strip()]
+        patterns = tuple(p.strip() for p in deriv_patterns_str.splitlines() if p.strip())
+        return SyncConfig(
+            raw_root=Path(raw_root_str.strip()),
+            jpg_dir=Path(jpg_dir_str.strip()),
+            filter_keywords=filter_kws,
+            keep_backups=keep_backups,
+            rating_suffix_range=(int(rating_lo), int(rating_hi)),
+            deriv_patterns=patterns,
+            dry_run=dry_run,
+        )
+
+    # Scan button
+    if st.button("Scan", disabled=not paths_valid, type="secondary"):
+        cfg = _build_config()
+        with st.spinner("Building index and scanning JPGs…"):
+            index = build_raw_index(cfg.raw_root, cfg)
+            jpgs = sorted(
+                list(cfg.jpg_dir.glob("*.jpg")) + list(cfg.jpg_dir.glob("*.JPG"))
+            )
+            all_actions: list = []
+            orphaned: list = []
+            for jpg in jpgs:
+                actions = resolve_jpg(jpg, index, cfg)
+                if actions:
+                    all_actions.extend(actions)
+                else:
+                    orphaned.append(jpg)
+        report = SyncReport(actions=all_actions, results=[], orphaned_jpgs=orphaned)
+        st.session_state["lms_report"] = report
+        st.session_state["lms_config_snapshot"] = cfg
+        st.session_state["lms_scan_clean"] = True
+
+    report: Optional[SyncReport] = st.session_state.get("lms_report")
+
+    # Warn if paths changed since last scan
+    config_changed = False
+    if report and paths_valid:
+        snap: Optional[SyncConfig] = st.session_state.get("lms_config_snapshot")
+        if snap and paths_valid:
+            current_cfg = _build_config()
+            if current_cfg.raw_root != snap.raw_root or current_cfg.jpg_dir != snap.jpg_dir:
+                config_changed = True
+                st.warning("⚠️ Paths changed since last scan — please re-scan before applying.")
+
+    # Scan results display
+    if report is not None:
+        st.markdown("---")
+        matched_jpgs = len({a.jpg_path for a in report.actions})
+        total_jpgs = matched_jpgs + len(report.orphaned_jpgs)
+        st.markdown(
+            f"**Scan results:** {len(report.actions)} action(s) across "
+            f"{matched_jpgs} matched JPG(s)"
+        )
+
+        if report.actions:
+            import pandas as pd
+            rows = [
+                {
+                    "JPG": a.jpg_path.name,
+                    "Target": a.target_path.name,
+                    "Type": a.target_type.value,
+                    "Sidecar action": a.sidecar_action.value,
+                }
+                for a in report.actions
+            ]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        st.caption(
+            f"Total JPGs: {total_jpgs} | Matched: {matched_jpgs} | "
+            f"Orphaned: {len(report.orphaned_jpgs)}"
+        )
+
+        if report.orphaned_jpgs:
+            with st.expander(f"Show orphaned JPGs ({len(report.orphaned_jpgs)})"):
+                for p in report.orphaned_jpgs:
+                    st.text(p.name)
+
+        if not report.actions:
+            st.info("No matches found. Check that paths are correct and filenames align.")
+
+    # Dry/Live toggle — default Live run (index 0)
+    run_mode = st.radio(
+        "Run mode",
+        ["Live run", "Dry run"],
+        index=0,
+        horizontal=True,
+        key="lms_run_mode",
+    )
+    dry_run = run_mode == "Dry run"
+
+    apply_disabled = not report or not report.actions or config_changed
+    if st.button("Apply", disabled=apply_disabled, type="primary"):
+        snap = st.session_state.get("lms_config_snapshot")
+        if not snap:
+            st.error("No scan found — please scan first.")
+            st.stop()
+
+        apply_cfg = _build_config(dry_run=dry_run)
+
+        log_lines: list[str] = []
+        success_count = error_count = 0
+        t_start = time.time()
+        total = len(report.actions)  # type: ignore[union-attr]
+
+        with st.status("Applying…", expanded=True) as status_widget:
+            progress_bar = st.progress(0)
+            log_placeholder = st.empty()
+
+            for idx, result in enumerate(run_sync(apply_cfg), start=1):
+                progress_bar.progress(idx / total)
+                if result.success:
+                    success_count += 1
+                    parts = [f"✓ {result.action.target_path.name}"]
+                    if result.keywords_written:
+                        parts.append(f"{result.keywords_written} kw")
+                    if result.description_written:
+                        parts.append("description")
+                    line = " — ".join(parts)
+                else:
+                    error_count += 1
+                    line = f"✗ {result.action.target_path.name} — {result.error}"
+                log_lines.append(line)
+                log_placeholder.text_area(
+                    "Progress log",
+                    "\n".join(log_lines[-50:]),
+                    height=250,
+                    key=f"lms_log_{idx}",
+                )
+
+            elapsed = time.time() - t_start
+            label = f"Done — {success_count} succeeded, {error_count} failed ({elapsed:.1f}s)"
+            state = "complete" if error_count == 0 else "error"
+            status_widget.update(label=label, state=state)
+
+        full_log = "\n".join(log_lines)
+        st.download_button(
+            "Download full log",
+            full_log,
+            file_name="lms_sync_log.txt",
+            mime="text/plain",
+        )
+
+        if not dry_run:
+            st.success(
+                "**After running:** In Lightroom Classic, select the affected photos → "
+                "**Metadata → Read Metadata from File**. This pulls the merged keywords "
+                "and descriptions into the catalog. New keywords appear flat — drag them "
+                "into your hierarchy if needed. LRC does not auto-detect external XMP "
+                "changes; this step is required."
+            )
 
 
 # ── Page footer ──────────────────────────────────────────────────────────────
