@@ -1496,6 +1496,10 @@ def _render_lms_tab() -> None:
         )
         if uploaded_jpgs:
             _lms_upload_tmp_dir = Path(tempfile.gettempdir()) / "cortex_lms_jpgs"
+            # Clear any leftover files from previous uploads before writing new ones
+            if _lms_upload_tmp_dir.exists():
+                for _old in _lms_upload_tmp_dir.iterdir():
+                    _old.unlink(missing_ok=True)
             _lms_upload_tmp_dir.mkdir(exist_ok=True)
             for uf in uploaded_jpgs:
                 dest = _lms_upload_tmp_dir / uf.name
@@ -1676,6 +1680,16 @@ def _render_lms_tab() -> None:
         st.session_state.pop("lms_report", None)
         st.session_state.pop("lms_config_snapshot", None)
         st.session_state.pop("lms_scan_clean", None)
+
+        # Clean up uploaded JPG temp dir if it was used
+        _tmp = Path(tempfile.gettempdir()) / "cortex_lms_jpgs"
+        if _tmp.exists():
+            for _f in _tmp.iterdir():
+                _f.unlink(missing_ok=True)
+            try:
+                _tmp.rmdir()
+            except OSError:
+                pass
 
         full_log = "\n".join(log_lines)
         st.download_button(
