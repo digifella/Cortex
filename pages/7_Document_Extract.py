@@ -4463,11 +4463,6 @@ def _render_pdf_image_extract_tab():
                 )
 
 
-# ======================================================================
-# Photo Processor tab
-# ======================================================================
-
-
 def _render_included_study_extractor_tab():
     st.markdown(
         "Use a large multimodal model to extract only the included-study tables from a review PDF, keep the grouped trial/table structure, "

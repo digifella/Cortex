@@ -77,6 +77,30 @@ def test_notes_mailbox_processor_rejects_market_intel_shape(tmp_path):
     assert result["route"] == "unsupported_market_intel"
 
 
+def test_notes_mailbox_processor_rejects_lab_result_generation_error(tmp_path):
+    cfg = _notes_config(tmp_path)
+    processor = NotesMailboxProcessor(cfg)
+
+    result = processor.process_message(
+        {
+            "subject": "Fwd: YouTube Summariser job #1468 is complete",
+            "text_body": (
+                "YouTube Summariser job #1468 is complete.\n\n"
+                "---\nsource_type: youtube_summary\n---\n\n"
+                "### Summary\n"
+                "[Error generating summary: 400 Request contains an invalid argument.]\n\n"
+                "The Lab · Longboardfella"
+            ),
+            "from_email": "paul@example.com",
+        }
+    )
+
+    assert result["status"] == "rejected"
+    assert result["route"] == "rejected_lab_result_error"
+    assert not list((tmp_path / "vault_public").rglob("*.md"))
+    assert not list((tmp_path / "vault_private").rglob("*.md"))
+
+
 def test_notes_mailbox_processor_tracks_processed_graph_ids(tmp_path):
     cfg = _notes_config(tmp_path)
     processor = NotesMailboxProcessor(cfg)

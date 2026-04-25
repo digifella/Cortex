@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import tempfile
+from datetime import date
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from cortex_engine.handoff_contract import validate_url_ingest_input
-from cortex_engine.url_ingestor import URLIngestor, normalize_url_list
+from cortex_engine.url_ingestor import URLIngestor, URLIngestResult, normalize_url_list
 
 
 TEXTIFY_OPTION_KEYS = {
@@ -41,6 +42,70 @@ def _extract_textify_options(input_data: dict) -> Dict[str, object]:
         if k in nested and k not in opts:
             opts[k] = nested[k]
     return opts
+
+
+def _build_markdown_report(results: List[URLIngestResult], output_data: dict) -> str:
+    """Build a combined markdown report from URL ingest results for inline result display."""
+    today = date.today().isoformat()
+    total = output_data.get("total_urls", len(results))
+    downloaded = output_data.get("downloaded_pdfs", 0)
+    web_captured = output_data.get("web_markdown_captured", 0)
+    converted = output_data.get("converted_to_md", 0)
+    failed = output_data.get("failed", 0)
+
+    lines = [
+        "---",
+        "title: URL Ingest Summary",
+        f"date: {today}",
+        "source_type: url_ingest",
+        "---",
+        "",
+        "# URL Ingest Summary",
+        f"Generated: {today}",
+        "",
+        "## Overview",
+        f"- **Total URLs processed:** {total}",
+        f"- **Web pages captured:** {web_captured}",
+        f"- **PDFs downloaded:** {downloaded}",
+        f"- **Converted to Markdown:** {converted}",
+        f"- **Failed:** {failed}",
+        "",
+    ]
+
+    for r in results:
+        url = r.input_url
+        page_title = r.page_title or ""
+        status = r.status
+        reason = r.reason or ""
+
+        lines.append("---")
+        lines.append("")
+        heading = page_title if page_title else url
+        lines.append(f"## {heading}")
+        lines.append(f"**URL:** {url}")
+        lines.append(f"**Status:** {status}")
+        if reason:
+            lines.append(f"**Note:** {reason}")
+        lines.append("")
+
+        if r.md_path and Path(r.md_path).exists():
+            try:
+                md_content = Path(r.md_path).read_text(encoding="utf-8", errors="replace").strip()
+                if md_content:
+                    lines.append(md_content)
+            except Exception:
+                lines.append("*[Could not read captured content]*")
+        elif r.pdf_path and Path(r.pdf_path).exists():
+            lines.append(
+                f"*PDF downloaded: {Path(r.pdf_path).name}"
+                " — enable 'Convert to Markdown' to see content inline.*"
+            )
+        elif status == "failed":
+            lines.append(f"*Processing failed: {reason}*")
+
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def handle(
@@ -108,11 +173,6 @@ def handle(
     if is_cancelled_cb and is_cancelled_cb():
         raise RuntimeError("Cancelled after URL ingest processing")
 
-    csv_path, json_path = ingestor.build_reports(results)
-    zip_bytes = ingestor.build_zip_bytes(results, csv_path, json_path)
-    output_path = run_dir / "url_ingest_bundle.zip"
-    output_path.write_bytes(zip_bytes)
-
     total = len(results)
     downloaded = sum(1 for r in results if r.status == "downloaded")
     web_captured = sum(1 for r in results if r.web_captured)
@@ -131,8 +191,6 @@ def handle(
         "capture_web_md_on_no_pdf": capture_web_md_on_no_pdf,
         "timeout_seconds": timeout_seconds,
         "textify_options": textify_options,
-        "report_csv": csv_path.name,
-        "report_json": json_path.name,
         "results": [r.to_dict() for r in results],
     }
     if progress_cb:
@@ -140,4 +198,12 @@ def handle(
 
     # Keep output_data JSON-safe for queue transport.
     json.loads(json.dumps(output_data))
-    return {"output_data": output_data, "output_file": output_path}
+
+    # Build a combined markdown report (inline-viewable on the result page).
+    report_md = _build_markdown_report(results, output_data)
+    md_suffix = f"_url_ingest_{date.today().isoformat()}.md"
+    with tempfile.NamedTemporaryFile(mode="w", suffix=md_suffix, delete=False, encoding="utf-8") as mf:
+        mf.write(report_md)
+        md_output_path = Path(mf.name)
+
+    return {"output_data": output_data, "output_file": md_output_path}

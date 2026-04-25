@@ -379,6 +379,8 @@ class IntelNoteProcessor:
         output_data, output_file = self.extractor(payload)
         attachments = list(output_data.get("attachments") or [])
         analysis: Dict[str, Any] = {"message_kind": message_kind}
+        extraction_depth = str(payload.get("extraction_depth") or "default").strip().lower() or "default"
+        analysis["extraction_depth"] = extraction_depth
         if isinstance(output_data.get("email_triage"), dict):
             analysis["email_triage"] = dict(output_data.get("email_triage") or {})
         if message_kind == "document_analysis":
@@ -388,6 +390,7 @@ class IntelNoteProcessor:
                 str(output_data.get("summary") or ""),
                 subject=str(payload.get("subject") or ""),
                 raw_text=str(payload.get("raw_text") or ""),
+                extraction_depth=extraction_depth,
             )
             _merge_strategic_leadership_entities(output_data, analysis)
             _filter_strategic_document_entities(output_data, analysis)

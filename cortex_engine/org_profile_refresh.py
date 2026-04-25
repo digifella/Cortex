@@ -10,8 +10,9 @@ from urllib.parse import unquote, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from cortex_engine.document_registry import build_content_fingerprint, build_document_meta
 from cortex_engine.org_chart_extractor import extract_org_chart_structured
-from cortex_engine.stakeholder_signal_store import orgs_compatible
+from cortex_engine.stakeholder_signal_store import StakeholderSignalStore, orgs_compatible
 from cortex_engine.stakeholder_signal_matcher import normalize_lookup
 from cortex_engine.strategic_doc_analyser import analyse_strategic_documents
 from cortex_engine.url_ingestor import URLIngestor
@@ -541,7 +542,9 @@ def run_org_profile_refresh(
     run_dir: Path,
     progress_cb: Optional[Callable[[float, str, Optional[str]], None]] = None,
     is_cancelled_cb: Optional[Callable[[], bool]] = None,
+    signal_store: Optional[StakeholderSignalStore] = None,
 ) -> Dict[str, Any]:
+    signal_store = signal_store or StakeholderSignalStore()
     target_org_name = str(payload.get("target_org_name") or "").strip()
     snapshot = dict(payload.get("current_profile_snapshot") or {})
     requested_docs = list(payload.get("requested_docs") or [])
@@ -685,6 +688,28 @@ def run_org_profile_refresh(
             "status": result.status,
             "md_path": result.md_path,
             "pdf_path": result.pdf_path,
+            "content_fingerprint": build_content_fingerprint(
+                text=md_text,
+                source_url=str(result.final_url or result.input_url or ""),
+            ),
+        }
+        document_meta = build_document_meta(
+            doc_type=str(source.get("type") or ""),
+            target_org_name=target_org_name,
+            title=str(source.get("title") or ""),
+            period_label=str(source.get("year") or ""),
+            published_at="",
+            content_fingerprint=str(processed_source.get("content_fingerprint") or ""),
+            source_url=str(source.get("url") or ""),
+            source_label=str(source.get("source_label") or ""),
+        )
+        document_meta = signal_store.classify_document_meta(str(payload.get("org_name") or "").strip(), document_meta)
+        signal_store.register_document_meta(
+            str(payload.get("org_name") or "").strip(),
+            {key: value for key, value in document_meta.items() if key != "existing_record"},
+        )
+        processed_source["document_meta"] = {
+            key: value for key, value in document_meta.items() if key != "existing_record"
         }
         processed_sources.append(processed_source)
         debug_info["processed_sources"].append(
@@ -694,6 +719,7 @@ def run_org_profile_refresh(
                 "resolved_url": str(processed_source.get("resolved_url") or ""),
                 "status": str(processed_source.get("status") or ""),
                 "filename": filename,
+                "document_status": str(processed_source.get("document_meta", {}).get("status") or ""),
             }
         )
         if str(source.get("type") or "") == "org_chart":
@@ -926,6 +952,7 @@ def run_org_profile_refresh(
                 "url": str(item.get("url") or ""),
                 "year": str(item.get("year") or ""),
                 "source_label": str(item.get("source_label") or ""),
+                "document_meta": dict(item.get("document_meta") or {}),
             }
             for item in processed_sources or discovered_sources
         ],

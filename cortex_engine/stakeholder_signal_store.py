@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 import networkx as nx
 
 from cortex_engine.config_manager import ConfigManager
+from cortex_engine.document_registry import build_document_meta, classify_document, ingest_recommendation
 from cortex_engine.graph_manager import EnhancedGraphManager
 from cortex_engine.stakeholder_signal_matcher import match_signal_to_profiles, normalize_lookup
 from cortex_engine.target_update_detector import detect_profile_change_artifacts
@@ -714,6 +715,7 @@ class StakeholderSignalStore:
             "observed_facts": [],
             "update_suggestions": [],
             "intel_notes": [],
+            "document_registry": [],
             "org_contexts": {},
         }
 
@@ -728,6 +730,7 @@ class StakeholderSignalStore:
             payload.setdefault("observed_facts", [])
             payload.setdefault("update_suggestions", [])
             payload.setdefault("intel_notes", [])
+            payload.setdefault("document_registry", [])
             payload.setdefault("org_contexts", {})
             payload.setdefault("updated_at", _utc_now_iso())
             return payload
@@ -792,6 +795,92 @@ class StakeholderSignalStore:
         if org_name:
             facts = [item for item in facts if orgs_compatible(item.get("org_name", ""), org_name)]
         return sorted(facts, key=lambda item: item.get("created_at", ""), reverse=True)[:limit]
+
+    def list_document_records(
+        self,
+        org_name: str = "",
+        target_org_name: str = "",
+        doc_type: str = "",
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        state = self._read_state()
+        records = list(state.get("document_registry") or [])
+        if org_name:
+            records = [item for item in records if orgs_compatible(item.get("org_name", ""), org_name)]
+        if target_org_name:
+            records = [item for item in records if orgs_compatible(item.get("target_org_name", ""), target_org_name)]
+        if doc_type:
+            wanted_doc_type = str(doc_type or "").strip().lower()
+            records = [item for item in records if str(item.get("doc_type") or "").strip().lower() == wanted_doc_type]
+        records = sorted(records, key=lambda item: item.get("last_seen_at", ""), reverse=True)
+        return records[:limit]
+
+    def get_document_record(self, org_name: str, canonical_doc_key: str) -> Optional[Dict[str, Any]]:
+        wanted_key = str(canonical_doc_key or "").strip()
+        if not wanted_key:
+            return None
+        for item in self.list_document_records(org_name=org_name, limit=5000):
+            if str(item.get("canonical_doc_key") or "").strip() == wanted_key:
+                return dict(item)
+        return None
+
+    def classify_document_meta(self, org_name: str, document_meta: Dict[str, Any]) -> Dict[str, Any]:
+        meta = build_document_meta(
+            doc_type=document_meta.get("doc_type"),
+            target_org_name=document_meta.get("target_org_name"),
+            title=document_meta.get("title"),
+            period_label=document_meta.get("period_label"),
+            published_at=document_meta.get("published_at"),
+            content_fingerprint=document_meta.get("content_fingerprint"),
+            source_url=document_meta.get("source_url"),
+            source_label=document_meta.get("source_label"),
+            status=document_meta.get("status"),
+        )
+        existing = self.get_document_record(org_name, meta["canonical_doc_key"])
+        meta["status"] = classify_document(existing, meta)
+        meta["ingest_recommendation"] = ingest_recommendation(meta["status"], meta["ingest_policy"])
+        meta["existing_record"] = existing or {}
+        return meta
+
+    def register_document_meta(
+        self,
+        org_name: str,
+        document_meta: Dict[str, Any],
+        *,
+        latest_trace_id: str = "",
+        latest_intel_id: str = "",
+    ) -> Dict[str, Any]:
+        meta = self.classify_document_meta(org_name, document_meta)
+        state = self._read_state()
+        records = list(state.get("document_registry") or [])
+        updated_at = _utc_now_iso()
+        existing = dict(meta.get("existing_record") or {})
+        canonical_doc_key = str(meta.get("canonical_doc_key") or "").strip()
+        filtered_records = [
+            item
+            for item in records
+            if not (
+                orgs_compatible(item.get("org_name", ""), org_name)
+                and str(item.get("canonical_doc_key") or "").strip() == canonical_doc_key
+            )
+        ]
+        record = {
+            **existing,
+            **{key: value for key, value in meta.items() if key != "existing_record"},
+            "org_name": str(org_name or "").strip(),
+            "first_seen_at": str(existing.get("first_seen_at") or updated_at),
+            "last_seen_at": updated_at,
+            "latest_trace_id": str(latest_trace_id or existing.get("latest_trace_id") or "").strip(),
+            "latest_intel_id": str(latest_intel_id or existing.get("latest_intel_id") or "").strip(),
+            "updated_at": updated_at,
+        }
+        filtered_records.append(record)
+        state["document_registry"] = sorted(
+            filtered_records,
+            key=lambda item: (item.get("org_name", ""), item.get("target_org_name", ""), item.get("canonical_doc_key", "")),
+        )
+        self._write_state(state)
+        return record
 
     def get_profile(self, profile_key: str) -> Optional[Dict[str, Any]]:
         wanted = str(profile_key).strip()

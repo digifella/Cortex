@@ -6,6 +6,7 @@ from typing import Callable, Optional
 
 from cortex_engine.handoff_contract import validate_org_profile_refresh_input
 from cortex_engine.org_profile_refresh import run_org_profile_refresh
+from cortex_engine.stakeholder_signal_store import StakeholderSignalStore
 
 
 def handle(
@@ -26,5 +27,6 @@ def handle(
         run_dir=run_dir,
         progress_cb=progress_cb,
         is_cancelled_cb=is_cancelled_cb,
+        signal_store=StakeholderSignalStore(),
     )
     return {"output_data": output_data, "output_file": None}

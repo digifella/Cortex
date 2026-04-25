@@ -108,10 +108,40 @@ def handle(
     slice_result = slice_review_pdf(str(input_path), work_dir=str(work_dir / "slices"))
 
     table_slices = list(slice_result.get("table_slices") or [])
+    dropped_hta = 0
     if not bool(payload.get("include_low_value_tables", False)):
+        before = len(table_slices)
         table_slices = [item for item in table_slices if str(item.get("kind") or "").strip().lower() != "hta"]
+        dropped_hta = before - len(table_slices)
     if not table_slices:
-        raise RuntimeError("No included-study table slices were detected in the review PDF")
+        diag = slice_result.get("diagnostics") or {}
+        parts = ["No included-study table slices were detected in the review PDF."]
+        parts.append(
+            f"PDF pages={diag.get('total_pages', '?')}, text_chars={diag.get('text_layer_chars', '?')}, "
+            f"bibliography_start_page={diag.get('bibliography_start_page') or 'not detected'}."
+        )
+        headings = diag.get("headings_detected") or []
+        if headings:
+            preview = "; ".join(
+                f"p{h['page']} Table {h['table_number']} "
+                f"({'cont' if h.get('continued') else 'start'}) {(h.get('title') or '')[:60]!r}"
+                for h in headings[:10]
+            )
+            suffix = f" (+{len(headings) - 10} more)" if len(headings) > 10 else ""
+            parts.append(f"Detected {len(headings)} heading(s): {preview}{suffix}.")
+        else:
+            parts.append("No 'Table N' headings detected at the top of any page (check whether PDF has a text layer).")
+        classified = diag.get("classified_slices") or []
+        if classified:
+            summary = ", ".join(
+                f"Table {c.get('table_number')}={c.get('kind')!r}" for c in classified
+            )
+            parts.append(f"Built {len(classified)} candidate slice(s) but all were dropped: {summary}.")
+        if dropped_hta:
+            parts.append(
+                f"{dropped_hta} HTA-kind slice(s) filtered out because include_low_value_tables=false."
+            )
+        raise RuntimeError(" ".join(parts))
 
     artifacts_root = work_dir / "artifacts"
     tables_root = artifacts_root / "tables"

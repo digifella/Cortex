@@ -27,7 +27,9 @@ input_data schema:
 import json
 import logging
 import os
+import re
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date
@@ -94,6 +96,18 @@ MODEL_DETAILS = {
     "claude-sonnet": {"provider": "Anthropic", "label": "Claude Sonnet"},
 }
 
+LONG_VIDEO_LOWRES_SECONDS = int(os.environ.get("YOUTUBE_LOWRES_THRESHOLD_SECONDS", str(25 * 60)))
+GEMINI_LOWRES_VALUE = "MEDIA_RESOLUTION_LOW"
+
+
+def _is_gemini_timeout_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return (
+        "504" in text
+        or "timed out" in text
+        or "timeout" in text
+    )
+
 
 def _model_details(api_choice: str) -> dict:
     details = MODEL_DETAILS.get(api_choice)
@@ -124,6 +138,88 @@ def _fetch_youtube_metadata(url: str) -> dict:
             "author_url": "",
             "provider": "YouTube",
         }
+
+
+def _youtube_video_id(url: str) -> str:
+    parsed = urllib.parse.urlparse(str(url or "").strip())
+    host = parsed.netloc.lower().removeprefix("www.")
+
+    if host == "youtu.be":
+        return parsed.path.strip("/").split("/", 1)[0]
+    if host in {"youtube.com", "m.youtube.com", "music.youtube.com"}:
+        if parsed.path == "/watch":
+            return urllib.parse.parse_qs(parsed.query).get("v", [""])[0]
+        if parsed.path.startswith("/shorts/"):
+            return parsed.path.split("/shorts/", 1)[1].split("/", 1)[0]
+        if parsed.path.startswith("/embed/"):
+            return parsed.path.split("/embed/", 1)[1].split("/", 1)[0]
+    return ""
+
+
+def _parse_iso8601_duration(value: str) -> int | None:
+    """Parse YouTube ISO-8601 durations such as PT1H3M12S into seconds."""
+    match = re.fullmatch(
+        r"P(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?"
+        r"(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?",
+        str(value or "").strip(),
+    )
+    if not match:
+        return None
+    hours, minutes, seconds = (int(part or 0) for part in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _fetch_youtube_duration_seconds(url: str) -> int | None:
+    """Best-effort duration lookup via YouTube Data API when a key is configured."""
+    video_id = _youtube_video_id(url)
+    api_key = os.environ.get("YOUTUBE_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
+    if not video_id:
+        return None
+
+    if api_key:
+        api_url = "https://www.googleapis.com/youtube/v3/videos?" + urllib.parse.urlencode(
+            {"id": video_id, "part": "contentDetails", "key": api_key}
+        )
+        try:
+            with urllib.request.urlopen(api_url, timeout=15) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            items = payload.get("items") or []
+            if items:
+                parsed = _parse_iso8601_duration(items[0].get("contentDetails", {}).get("duration", ""))
+                if parsed is not None:
+                    return parsed
+        except Exception as exc:
+            logger.info("YouTube Data API duration lookup failed for %s: %s", url, exc)
+
+    return _fetch_youtube_duration_seconds_from_watch_page(video_id)
+
+
+def _fetch_youtube_duration_seconds_from_watch_page(video_id: str) -> int | None:
+    """Extract public lengthSeconds from the watch page when YouTube Data API is unavailable."""
+    watch_url = f"https://www.youtube.com/watch?v={video_id}"
+    req = urllib.request.Request(watch_url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            text = resp.read(2_000_000).decode("utf-8", errors="ignore")
+    except Exception as exc:
+        logger.info("YouTube watch page duration lookup failed for %s: %s", watch_url, exc)
+        return None
+
+    match = re.search(r'"lengthSeconds"\s*:\s*"(\d+)"', text)
+    if match:
+        return int(match.group(1))
+    match = re.search(r'"approxDurationMs"\s*:\s*"(\d+)"', text)
+    if match:
+        return max(1, round(int(match.group(1)) / 1000))
+    return None
+
+
+def _canonical_youtube_url(url: str) -> str:
+    """Return a clean watch URL for Gemini native YouTube input."""
+    video_id = _youtube_video_id(url)
+    if not video_id:
+        return str(url or "").strip()
+    return f"https://www.youtube.com/watch?v={video_id}"
 
 
 def _title_context(url: str, metadata: dict, sections: dict) -> str:
@@ -200,7 +296,105 @@ def _generate_report_title(url: str, api_choice: str, metadata: dict, sections: 
         return _fallback_report_title(metadata, index)
 
 
+SPONSOR_PARAGRAPH_PATTERNS = [
+    re.compile(r"\bsponsor(?:ed|ship)?\b", re.IGNORECASE),
+    re.compile(r"\bthis video (?:is|was) sponsored by\b", re.IGNORECASE),
+    re.compile(r"\b(?:today'?s|this) sponsor\b", re.IGNORECASE),
+    re.compile(r"\bbrought to you by\b", re.IGNORECASE),
+    re.compile(r"\bpartner(?:ed)? with\b", re.IGNORECASE),
+    re.compile(r"\bpaid promotion\b", re.IGNORECASE),
+    re.compile(r"\bpromo code\b", re.IGNORECASE),
+    re.compile(r"\baffiliate link\b", re.IGNORECASE),
+    re.compile(r"\bdiscount code\b", re.IGNORECASE),
+    re.compile(r"\buse code\b", re.IGNORECASE),
+]
+
+
+def _looks_like_sponsor_paragraph(paragraph: str) -> bool:
+    text = " ".join((paragraph or "").split())
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in SPONSOR_PARAGRAPH_PATTERNS)
+
+
+def _remove_sponsor_paragraphs(text: str) -> str:
+    """Drop sponsor/ad-read paragraphs from model-written notes and summaries."""
+    if not text or not text.strip():
+        return text
+
+    blocks = re.split(r"\n\s*\n", text.strip())
+    kept_blocks = [block for block in blocks if not _looks_like_sponsor_paragraph(block)]
+    cleaned = "\n\n".join(kept_blocks).strip()
+    return cleaned or text.strip()
+
+
+def _sanitize_sections(sections: dict) -> dict:
+    cleaned = {}
+    for mode, content in (sections or {}).items():
+        if mode in {"summary", "meeting_notes", "action_items"}:
+            cleaned[mode] = _remove_sponsor_paragraphs(content or "")
+        else:
+            cleaned[mode] = content
+    return cleaned
+
+
 # ── Gemini path ──
+
+def _gemini_response_text(payload: dict) -> str:
+    parts = []
+    for candidate in payload.get("candidates") or []:
+        for part in candidate.get("content", {}).get("parts", []) or []:
+            text = part.get("text", "")
+            if text:
+                parts.append(text)
+    return "\n".join(parts).strip()
+
+
+def _generate_gemini_rest(
+    model_id: str,
+    prompt: str,
+    youtube_url: str,
+    *,
+    media_resolution: str = "",
+    timeout: int = 120,
+) -> str:
+    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY not set in config.env")
+
+    body = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {"file_data": {"file_uri": youtube_url}},
+            ],
+        }],
+    }
+    if media_resolution:
+        body["generation_config"] = {"media_resolution": media_resolution}
+
+    endpoint = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model_id}:generateContent?key={urllib.parse.quote(api_key)}"
+    )
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Gemini REST error {exc.code}: {detail[:500]}") from exc
+
+    text = _gemini_response_text(payload)
+    if not text:
+        raise RuntimeError(f"Gemini REST returned no text: {json.dumps(payload)[:500]}")
+    return text
+
 
 def _summarise_gemini(url: str, model_name: str, output_modes: list[str], language: str = "") -> dict:
     """Use Gemini's native YouTube URL understanding."""
@@ -208,6 +402,15 @@ def _summarise_gemini(url: str, model_name: str, output_modes: list[str], langua
 
     model_id = "gemini-2.5-pro" if model_name == "gemini-pro" else "gemini-2.5-flash"
     model = genai.GenerativeModel(model_id)
+    gemini_url = _canonical_youtube_url(url)
+    duration_seconds = _fetch_youtube_duration_seconds(gemini_url)
+    use_lowres = bool(duration_seconds and duration_seconds >= LONG_VIDEO_LOWRES_SECONDS)
+    if use_lowres:
+        logger.info(
+            "Using Gemini low media resolution for long YouTube video duration=%ss url=%s",
+            duration_seconds,
+            gemini_url,
+        )
 
     lang_instruction = f"\n\nIMPORTANT: Write your entire response in {language}." if language else ""
 
@@ -215,17 +418,69 @@ def _summarise_gemini(url: str, model_name: str, output_modes: list[str], langua
     for mode in output_modes:
         prompt = MODE_PROMPTS.get(mode, f"Provide {mode} for this video.")
         full_prompt = (
-            f"{prompt}{lang_instruction}\n\nVideo: {url}"
+            f"{prompt}{lang_instruction}\n\nVideo: {gemini_url}"
         )
+        native_error = None
         try:
-            response = model.generate_content([
-                {"text": full_prompt},
-                {"file_data": {"mime_type": "video/youtube", "file_uri": url}},
-            ])
-            sections[mode] = response.text.strip()
+            if use_lowres:
+                sections[mode] = _generate_gemini_rest(
+                    model_id,
+                    full_prompt,
+                    gemini_url,
+                    media_resolution=GEMINI_LOWRES_VALUE,
+                    timeout=180,
+                )
+            else:
+                response = model.generate_content([
+                    {"text": full_prompt},
+                    {"file_data": {"mime_type": "video/youtube", "file_uri": gemini_url}},
+                ], request_options={"timeout": 90})
+                sections[mode] = response.text.strip()
         except Exception as e:
-            logger.warning(f"Gemini mode '{mode}' failed for {url}: {e}")
-            sections[mode] = f"[Error generating {mode}: {e}]"
+            native_error = e
+            logger.warning(f"Gemini native YouTube mode '{mode}' failed for {gemini_url}: {e}")
+            if not use_lowres and _is_gemini_timeout_error(e):
+                try:
+                    logger.info(
+                        "Retrying Gemini low media resolution after timeout for url=%s mode=%s",
+                        gemini_url,
+                        mode,
+                    )
+                    sections[mode] = _generate_gemini_rest(
+                        model_id,
+                        full_prompt,
+                        gemini_url,
+                        media_resolution=GEMINI_LOWRES_VALUE,
+                        timeout=180,
+                    )
+                    logger.info(
+                        "Gemini low media resolution retry succeeded for mode '%s' url=%s",
+                        mode,
+                        gemini_url,
+                    )
+                    continue
+                except Exception as lowres_error:
+                    logger.warning(
+                        "Gemini low media resolution retry failed for %s: %s",
+                        gemini_url,
+                        lowres_error,
+                    )
+            try:
+                transcript = _extract_transcript(gemini_url)
+                transcript_excerpt = transcript[:90_000]
+                if len(transcript) > 90_000:
+                    transcript_excerpt += "\n\n[Transcript truncated due to length]"
+                fallback_prompt = (
+                    f"Here is the transcript of a YouTube video ({gemini_url}):\n\n"
+                    f"---\n{transcript_excerpt}\n---\n\n"
+                    f"Task: {prompt}{lang_instruction}"
+                )
+                response = model.generate_content(fallback_prompt, request_options={"timeout": 90})
+                sections[mode] = response.text.strip()
+                logger.info(f"Gemini transcript fallback succeeded for mode '{mode}' url={gemini_url}")
+            except Exception as fallback_error:
+                logger.warning(f"Gemini transcript fallback failed for {gemini_url}: {fallback_error}")
+                sections[mode] = f"[Error generating {mode}: {native_error}]"
 
     return sections
 
@@ -439,6 +694,7 @@ def handle(input_path, input_data: dict, job: dict):
             else:
                 transcript = _extract_transcript(url)
                 sections   = _summarise_claude(transcript, url, api_choice, output_modes, language)
+            sections = _sanitize_sections(sections)
             report_title = _generate_report_title(url, api_choice, metadata, sections, len(results) + 1, language)
             results.append({
                 "url": url,

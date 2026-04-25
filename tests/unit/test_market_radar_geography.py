@@ -126,6 +126,26 @@ def test_weekly_report_does_not_treat_submitter_as_document_subject():
     assert "Entity: Paul Cooper / Longboardfella Consulting" not in section
 
 
+def test_weekly_report_suppresses_known_submitter_identity_in_provenance():
+    section = wr._format_submitted_intel_section(
+        [
+            {
+                "primary_entity_name": "Goulburn Valley Water",
+                "title": "Strategy 2035",
+                "intel_date": "2026-03-24",
+                "submitted_by_name": "Paul Cooper",
+                "submitted_by": "paul@longboardfella.com.au",
+                "text_note": "Long-term strategy document for GVW.",
+                "source_type": "mailbox_document",
+            }
+        ]
+    )
+
+    assert "Paul Cooper" not in section
+    assert "Longboardfella" not in section
+    assert "Provenance: Submitted by External contributor; 2026-03-24" in section
+
+
 def test_weekly_report_formats_web_intel_with_source_reference():
     section = wr._format_web_intel_section(
         [
@@ -212,6 +232,7 @@ def test_weekly_report_stakeholder_guidance_mentions_submitter_account_signals()
 
     assert "relationship or account signals" in instruction
     assert "submitters as provenance" in instruction
+    assert "Do not surface suppressed submitter identities by name" in instruction
 
 
 def test_weekly_report_selects_installed_ollama_model():

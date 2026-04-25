@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from cortex_engine.included_study_filter import build_prompt_filter_hint
 from cortex_engine.research_resolve import _extract_year, _normalize_doi
 from cortex_engine.review_study_miner import _extract_authors_and_year
 
@@ -431,6 +432,18 @@ def _finalize_included_study_result(
 def _scope_instruction(extraction_scope: str, table_kind: str = "") -> str:
     scope_name = str(extraction_scope or _DEFAULT_EXTRACTION_SCOPE).strip().lower()
     kind_name = str(table_kind or "").strip().lower()
+    if kind_name == "excluded_studies":
+        if scope_name == "rct_or_clinical":
+            return (
+                "This is a Cochrane excluded-studies table. Return only rows that still look like randomized or controlled "
+                "clinical trials and set needs_review=true with the exclusion reason in notes. Do not return rows excluded solely "
+                "because they are not RCTs."
+            )
+        return (
+            "This is a Cochrane excluded-studies table. Include clinically relevant rows that may be reconsidered under broader "
+            "non-RCT eligibility, especially rows excluded solely because they were not RCTs. Preserve the exclusion reason in notes "
+            "and set needs_review=true."
+        )
     if scope_name == "rct_or_clinical":
         if kind_name in {"economic", "hta"}:
             return (
@@ -466,6 +479,7 @@ def _included_study_prompt(
     review_title: str = "",
     extraction_scope: str = _DEFAULT_EXTRACTION_SCOPE,
     output_detail: str = _DEFAULT_OUTPUT_DETAIL,
+    paper_filters: Dict[str, Any] | None = None,
 ) -> str:
     detailed = _is_detailed_output(output_detail)
     citation_detail = (
@@ -501,12 +515,15 @@ def _included_study_prompt(
         else
         '      "grouping_basis": "",\n'
     )
+    filter_hint = build_prompt_filter_hint(paper_filters)
+    filter_clause = f"{filter_hint}\n\n" if filter_hint else ""
     return (
         "You are extracting included-study tables from a systematic review PDF.\n\n"
         "Return only the tables that list included studies, health state utility studies, or HTA reports included in the review.\n"
         "Ignore eligibility tables, search strategy tables, risk-of-bias tables, and narrative text that does not list included studies.\n\n"
         f"Study selection scope: {_scope_instruction(extraction_scope)}\n\n"
         f"Output detail: {_output_detail_instruction(output_detail)}\n\n"
+        f"{filter_clause}"
         "Return compact JSON only. Keep the output short.\n\n"
         "For each included-study table:\n"
         "1. Return the table number as digits only, for example `2`, not `Table 2`.\n"
@@ -553,6 +570,7 @@ def _single_table_prompt(
     bibliography_text: str = "",
     extraction_scope: str = _DEFAULT_EXTRACTION_SCOPE,
     output_detail: str = _DEFAULT_OUTPUT_DETAIL,
+    paper_filters: Dict[str, Any] | None = None,
 ) -> str:
     detailed = _is_detailed_output(output_detail)
     kind_name = str(table_kind or "").strip().lower()
@@ -606,13 +624,18 @@ def _single_table_prompt(
             "- Do not repeat the same citation details in both `group_label` and `notes`.\n"
             "- Favor one compact citation entry per cited paper/report.\n\n"
         )
+    filter_hint = build_prompt_filter_hint(paper_filters)
+    filter_clause = f"{filter_hint}\n" if filter_hint else ""
     return (
         "You are extracting one included-study table from a systematic review PDF.\n\n"
         "Return compact JSON only.\n"
         "This PDF contains one table snippet, not the whole review.\n"
         f"Study selection scope: {_scope_instruction(extraction_scope, table_kind)}\n"
         f"Output detail: {_output_detail_instruction(output_detail)}\n"
+        f"{filter_clause}"
         "Use the supplied bibliography text only to reconcile reference numbers and short author/year labels when possible.\n"
+        "For Cochrane `Characteristics of included studies` snippets, extract the study ID row(s) such as `Cohen 2004` as the citation/trial group even when the PDF has no numbered table caption.\n"
+        "For Cochrane `Characteristics of excluded studies` snippets, extract rows as reconsideration candidates only when the study-selection scope allows them, and carry the exclusion reason in notes.\n"
         "Even if the table is mostly economic-model or HTA evidence, still return the best structured JSON you can for the rows shown instead of returning prose-only commentary.\n"
         "Keep the output short.\n"
         "Do not emit full author lists.\n"
@@ -693,10 +716,11 @@ def run_included_study_extractor(
     review_title: str = "",
     extraction_scope: str = _DEFAULT_EXTRACTION_SCOPE,
     output_detail: str = _DEFAULT_OUTPUT_DETAIL,
+    paper_filters: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     pdf_b64, _size_bytes = _build_pdf_inline_data(pdf_path)
     provider_name = str(provider or "gemini").strip().lower()
-    prompt = _included_study_prompt(review_title, extraction_scope, output_detail)
+    prompt = _included_study_prompt(review_title, extraction_scope, output_detail, paper_filters)
 
     if provider_name == "anthropic":
         client = _anthropic_client()
@@ -791,6 +815,7 @@ def run_included_study_table_extractor(
     table_kind: str = "",
     extraction_scope: str = _DEFAULT_EXTRACTION_SCOPE,
     output_detail: str = _DEFAULT_OUTPUT_DETAIL,
+    paper_filters: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     pdf_b64, _size_bytes = _build_pdf_inline_data(pdf_path)
     provider_name = str(provider or "gemini").strip().lower()
@@ -802,6 +827,7 @@ def run_included_study_table_extractor(
         bibliography_text=bibliography_text,
         extraction_scope=extraction_scope,
         output_detail=output_detail,
+        paper_filters=paper_filters,
     )
 
     if provider_name == "anthropic":
@@ -896,18 +922,22 @@ def run_included_study_extractor_with_fallback(
     output_detail: str = _DEFAULT_OUTPUT_DETAIL,
     fallback_provider: str = "",
     fallback_model: str = "",
+    paper_filters: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     primary_provider = str(provider or "gemini").strip().lower() or "gemini"
     primary_model = str(model or "").strip()
+    primary_kwargs = {
+        "pdf_path": pdf_path,
+        "provider": primary_provider,
+        "model": primary_model,
+        "review_title": review_title,
+        "extraction_scope": extraction_scope,
+        "output_detail": output_detail,
+    }
+    if paper_filters is not None:
+        primary_kwargs["paper_filters"] = paper_filters
     try:
-        result = run_included_study_extractor(
-            pdf_path=pdf_path,
-            provider=primary_provider,
-            model=primary_model,
-            review_title=review_title,
-            extraction_scope=extraction_scope,
-            output_detail=output_detail,
-        )
+        result = run_included_study_extractor(**primary_kwargs)
         result["requested_provider"] = primary_provider
         result["requested_model"] = primary_model or result.get("model") or ""
         return result
@@ -915,14 +945,10 @@ def run_included_study_extractor_with_fallback(
         fallback_name = str(fallback_provider or "").strip().lower()
         if primary_provider != "gemini" or fallback_name != "anthropic" or not included_study_extractor_available("anthropic"):
             raise
-        fallback_result = run_included_study_extractor(
-            pdf_path=pdf_path,
-            provider="anthropic",
-            model=fallback_model,
-            review_title=review_title,
-            extraction_scope=extraction_scope,
-            output_detail=output_detail,
-        )
+        fallback_kwargs = dict(primary_kwargs)
+        fallback_kwargs["provider"] = "anthropic"
+        fallback_kwargs["model"] = fallback_model
+        fallback_result = run_included_study_extractor(**fallback_kwargs)
         warnings = [str(item).strip() for item in list(fallback_result.get("warnings") or []) if str(item).strip()]
         fallback_model_name = str(fallback_result.get("model") or fallback_model or _DEFAULT_ANTHROPIC_MODEL).strip()
         warnings.insert(

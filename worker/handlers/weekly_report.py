@@ -22,7 +22,7 @@ _OLLAMA_URL = "http://localhost:11434/api/chat"
 _OLLAMA_MODEL = "qwen2.5:14b"
 _OLLAMA_TIMEOUT = 600  # 10 minutes for large reports
 _ANTHROPIC_FALLBACK_MODEL = "claude-haiku-4-5-20251001"
-_ANTHROPIC_WEB_MODEL = os.environ.get("CORTEX_WEEKLY_ANTHROPIC_WEB_MODEL", "").strip() or "claude-sonnet-4-20250514"
+_ANTHROPIC_WEB_MODEL = os.environ.get("CORTEX_WEEKLY_ANTHROPIC_WEB_MODEL", "").strip() or "claude-sonnet-4-6"
 _OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
 _DEFAULT_SUPPRESSED_SUBMITTER_ALIASES = (
     "paul cooper",

@@ -3,7 +3,37 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from cortex_engine.document_registry import build_document_meta
 from cortex_engine.org_profile_refresh import OfficialSourceDiscoverer, _limit_relevant_sources, run_org_profile_refresh
+
+
+class _FakeDocumentSignalStore:
+    def __init__(self):
+        self.document_records = {}
+
+    def get_document_record(self, org_name, canonical_doc_key):
+        return dict(self.document_records.get((org_name.lower(), str(canonical_doc_key or "").strip()), {})) or None
+
+    def classify_document_meta(self, org_name, document_meta):
+        meta = dict(document_meta or {})
+        existing = self.get_document_record(org_name, meta.get("canonical_doc_key"))
+        if existing:
+            meta["status"] = "known_same" if str(existing.get("content_fingerprint") or "") == str(meta.get("content_fingerprint") or "") else "changed_document"
+            meta["ingest_recommendation"] = "skip" if meta["status"] == "known_same" and str(meta.get("ingest_policy") or "") == "strict" else "ingest"
+            meta["existing_record"] = existing
+        else:
+            meta["status"] = "new_document"
+            meta["ingest_recommendation"] = "ingest"
+            meta["existing_record"] = {}
+        return meta
+
+    def register_document_meta(self, org_name, document_meta, latest_trace_id="", latest_intel_id=""):
+        meta = dict(document_meta or {})
+        meta["org_name"] = org_name
+        meta["latest_trace_id"] = latest_trace_id
+        meta["latest_intel_id"] = latest_intel_id
+        self.document_records[(org_name.lower(), str(meta.get("canonical_doc_key") or "").strip())] = meta
+        return meta
 
 
 def test_official_source_discoverer_uses_sitemap_links(monkeypatch):
@@ -126,6 +156,7 @@ def test_org_profile_refresh_builds_structured_output(monkeypatch, tmp_path):
             "discovery_mode": "official_sources_first",
         },
         run_dir=Path(tmp_path),
+        signal_store=_FakeDocumentSignalStore(),
     )
 
     assert output["status"] == "refreshed"
@@ -181,6 +212,7 @@ def test_org_profile_refresh_returns_manual_document_prompt_when_sources_blocked
             "discovery_mode": "official_sources_first",
         },
         run_dir=Path(tmp_path),
+        signal_store=_FakeDocumentSignalStore(),
     )
 
     assert output["requires_manual_documents"] is True
@@ -302,8 +334,75 @@ def test_org_profile_refresh_prefers_current_target_sources_over_predecessor_rep
             "discovery_mode": "official_sources_first",
         },
         run_dir=Path(tmp_path),
+        signal_store=_FakeDocumentSignalStore(),
     )
 
     discovered_urls = [item["url"] for item in output["discovered_sources"]]
     assert any("GWW_Annual_Report_2024-25.pdf" in url for url in discovered_urls)
     assert output["discovery_debug"]["processed_sources"][0]["filename"].startswith("Greater Western Water Annual Report 2024-25")
+
+
+def test_org_profile_refresh_marks_known_same_documents_on_second_run(monkeypatch, tmp_path):
+    annual_md = tmp_path / "barwon-annual-report.md"
+    annual_md.write_text(
+        "\n".join(
+            [
+                "Barwon Water Annual Report 2025",
+                "Revenue for the year increased to $344.2 million, up from $292.8 million.",
+                "Shaun Cumming",
+                "Managing Director",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class _FakeDiscoverer:
+        def __init__(self, timeout: int = 25):
+            self.timeout = timeout
+
+        def discover_sources(self, website_url: str, requested_docs: list[str], target_org_name: str = "", max_sources: int = 6):
+            return [
+                {
+                    "type": "annual_report",
+                    "title": "Barwon Water Annual Report 2025",
+                    "url": "https://barwonwater.vic.gov.au/reports/annual-report-2025.pdf",
+                    "year": "2025",
+                    "source_label": "Annual Report 2025",
+                }
+            ]
+
+    def _fake_process_urls(self, urls, convert_to_md, use_vision_for_md, textify_options, capture_web_md_on_no_pdf):
+        return [
+            SimpleNamespace(
+                input_url="https://barwonwater.vic.gov.au/reports/annual-report-2025.pdf",
+                final_url="https://barwonwater.vic.gov.au/reports/annual-report-2025.pdf",
+                md_path=str(annual_md),
+                pdf_path="",
+                status="downloaded",
+            )
+        ]
+
+    signal_store = _FakeDocumentSignalStore()
+    monkeypatch.setattr("cortex_engine.org_profile_refresh.OfficialSourceDiscoverer", _FakeDiscoverer)
+    monkeypatch.setattr("cortex_engine.org_profile_refresh.URLIngestor.process_urls", _fake_process_urls)
+
+    payload = {
+        "profile_id": "123",
+        "org_name": "Escient",
+        "target_org_name": "Barwon Water",
+        "website_url": "https://barwonwater.vic.gov.au",
+        "current_profile_snapshot": {"website_url": ""},
+        "requested_docs": ["annual_report"],
+        "max_sources": 2,
+        "timeout_seconds": 10,
+        "use_vision": True,
+        "discovery_mode": "official_sources_first",
+    }
+
+    first = run_org_profile_refresh(payload=payload, run_dir=Path(tmp_path / "run1"), signal_store=signal_store)
+    second = run_org_profile_refresh(payload=payload, run_dir=Path(tmp_path / "run2"), signal_store=signal_store)
+
+    assert first["discovered_sources"][0]["document_meta"]["status"] == "new_document"
+    assert first["discovered_sources"][0]["document_meta"]["ingest_recommendation"] == "ingest"
+    assert second["discovered_sources"][0]["document_meta"]["status"] == "known_same"
+    assert second["discovered_sources"][0]["document_meta"]["ingest_recommendation"] == "skip"

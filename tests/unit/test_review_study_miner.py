@@ -91,6 +91,97 @@ def test_parse_reference_entries_accepts_bare_reference_excerpt():
     assert entries[1]["year"] == "2021"
 
 
+def test_parse_reference_entries_handles_bracket_tab_format_with_bare_number_page_fragments():
+    """Format used by e.g. Leukemia & Lymphoma (48938.pdf): ``[N]\\tauthors...``
+    where the bracket sits alone on its own line and the authors wrap onto the
+    next. Split page ranges like ``567-\\n76. https://...`` must NOT be parsed
+    as a new entry when bracket format dominates."""
+    bib = (
+        "References\n"
+        "[1]\t\nAlaggio R, Amador C, et al. WHO classification. Leukemia. 2022;36:1720-48. https://doi.org/10.1038/s41375-022-01620-2\n"
+        "[2]\t\nSung H, Ferlay J, et al. Global cancer statistics 2020. CA Cancer J Clin. 2021;71:209-49. https://doi.org/10.3322/caac.21660\n"
+        "[3]\t\nGo SI, Park MJ, et al. Prognostic impact of sarcopenia in DLBCL. J Cachexia Sarcopenia Muscle. 2016;7(5):567-\n"
+        "76. https://doi.org/10.1002/jcsm.12115\n"
+        "[4]\t\nNakamura N, Hara T, et al. Sarcopenia in DLBCL. Ann Hematol. 2015;94:2043-53.\n"
+    )
+    entries = _parse_reference_entries(bib)
+    numbers = [e["reference_number"] for e in entries]
+    assert numbers == ["1", "2", "3", "4"]
+    # The split page range must be absorbed into entry 3, not spawn entry 76
+    assert "76" not in numbers
+    assert "jcsm.12115" in entries[2]["entry_text"]
+
+
+def test_parse_reference_entries_handles_cochrane_study_reference_sections():
+    entries = _parse_reference_entries(
+        """
+        R E F E R E N C E S
+
+        References to studies included in this review
+        Cohen 2004 {published data only}
+        * Cohen L, Warneke C, Fouladi RT, Rodriguez MA, Chaoul-Reich A. Psychological adjustment and sleep quality in a
+        randomized trial of the effects of a Tibetan yoga intervention in patients with lymphoma. Cancer 2004;100(10):2253-60.
+
+        References to studies excluded from this review
+        Adamsen 2006 {published data only}
+        Adamsen L, Quist M, Midtgaard J, Andersen C, Moller T, Knutsen L, et al. The effect of a multidimensional exercise
+        intervention on physical capacity, well-being and quality of life in cancer patients undergoing chemotherapy.
+        Supportive Care in Cancer 2006;14(2):116-27.
+        Buﬀart 2012 {published data only}
+        Buﬀart LM, van Uﬀelen JG, Riphagen II, Brug J, van Mechelen W, Brown WJ, et al. Physical and psychosocial benefits
+        of yoga in cancer patients and survivors. BMC Cancer 2012;12:559.
+        van Haren 2013 {published data only}
+        van Haren IE, Timmerman H, Potting CM, Blijlevens NM, Staal JB, Nijhuis-van der Sanden MW. Physical exercise
+        for patients undergoing hematopoietic stem cell transplantation. Physical Therapy 2013;93(4):514-28.
+        """
+    )
+
+    authors_years = {(entry["authors"], entry["year"]) for entry in entries}
+    assert ("Cohen", "2004") in authors_years
+    assert ("Adamsen", "2006") in authors_years
+    assert ("Buffart", "2012") in authors_years
+    assert any(entry["year"] == "2013" and "van haren" in entry["match_key"] for entry in entries)
+    assert not any(entry["reference_number"] == "10" for entry in entries)
+    sections = {(entry["authors"], entry.get("reference_section")) for entry in entries}
+    assert ("Cohen", "included") in sections
+    assert ("Adamsen", "excluded") in sections
+
+
+def test_parse_reference_entries_prefers_cochrane_entries_over_doi_number_fragment():
+    entries = _parse_reference_entries(
+        """
+        R E F E R E N C E S
+
+        References to studies included in this review
+        Cohen 2004 {published data only}
+        * Cohen L, Warneke C, Fouladi RT, Rodriguez MA, Chaoul-Reich A. Psychological adjustment and sleep quality in a
+        randomized trial of the effects of a Tibetan yoga intervention in patients with lymphoma. Cancer 2004;100(10):2253-60.
+
+        References to studies excluded from this review
+        Basen-Engquist 2006 {published data only}
+        Basen-Engquist K, Taylor CL, Rosenblum C, Smith MA, Shinn EH, Greisinger A, et al. Randomized pilot test of a
+        lifestyle physical activity intervention for breast cancer survivors. Patient Education and Counseling 2006;64(1-3):225-34.
+
+        Additional references
+        Mishra 2010
+        Mishra SI, Scherer RW, Aziz NM, Gotay CC, Baquet CR, Berlanstein DR, et al. Exercise interventions on health related
+        quality of life for people with cancer during active treatment (Protocol). Cochrane Database of Systematic Reviews
+        2010, Issue 4. [DOI: 10.1002/14651858.CD008465]
+        Moher 2009
+        Moher D, Liberati A, Tetzlaff J, Altman DG, The PRISMA Group. Preferred reporting items for systematic reviews
+        and meta-analyses: the PRISMA statement. PLoS Medicine 2009;6(7):e1000097.
+        """
+    )
+
+    authors_years = {(entry["authors"], entry["year"]) for entry in entries}
+    assert ("Cohen", "2004") in authors_years
+    assert ("Basen-Engquist", "2006") in authors_years
+    assert ("Mishra", "2010") in authors_years
+    assert ("Moher", "2009") in authors_years
+    assert len(entries) == 4
+    assert not any(entry["authors"] == "DOI" for entry in entries)
+
+
 def test_parse_reference_entries_normalizes_wrapped_words_and_urls():
     entries = _parse_reference_entries(
         """

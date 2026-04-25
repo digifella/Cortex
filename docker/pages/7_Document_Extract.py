@@ -1,5 +1,5 @@
 # ## File: pages/7_Document_Extract.py
-# Version: v6.0.9
+# Version: v6.0.10
 # Date: 2026-01-29
 # Purpose: Document extraction tools — Textifier (document to Markdown) and Anonymizer.
 
@@ -4461,11 +4461,6 @@ def _render_pdf_image_extract_tab():
                     "No images met the current thresholds. Lower the size or coverage filters "
                     "if this PDF contains smaller photos."
                 )
-
-
-# ======================================================================
-# Photo Processor tab
-# ======================================================================
 
 
 def _render_included_study_extractor_tab():

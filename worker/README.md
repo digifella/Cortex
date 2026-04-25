@@ -34,6 +34,13 @@ pip install requests pymupdf
 venv/bin/python worker/worker.py
 ```
 
+Persistent user service:
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now cortex-queue-worker.service
+systemctl --user status cortex-queue-worker.service
+```
+
 Direct Cortex-owned intel mailbox intake:
 ```bash
 venv/bin/python worker/intel_mailbox_worker.py
@@ -70,6 +77,12 @@ venv/bin/python worker/notes_mailbox_worker.py
 - `cortex_sync` path remap:
   - If website submits cPanel-style paths like `/home/<user>/public_html/...`, handler auto-remaps to local mirror root.
   - Override local mirror root with `CORTEX_SYNC_SITE_ROOT` (default: `~/longboardfella_website/site`).
+- `youtube_summarise` long-video handling:
+  - YouTube URLs are canonicalized before Gemini calls, stripping tracking query strings such as `?si=...`.
+  - Videos longer than `YOUTUBE_LOWRES_THRESHOLD_SECONDS` default `1500`, i.e. 25 minutes, are sent to Gemini with low media resolution.
+  - Duration is read via YouTube Data API when available, then falls back to public watch-page metadata.
+  - The fallback matters because the Gemini API key may work for Gemini while returning 403 for YouTube Data API.
+  - This was verified against job `1503`, a 54m45s video, which completed via low-resolution Gemini Flash.
 - The `pdf_anonymise` worker handler intentionally calls the existing Cortex engine anonymizer:
   - `cortex_engine.anonymizer.DocumentAnonymizer`
 - This avoids duplicate anonymization logic between the admin queue worker path and Document Extract UI.

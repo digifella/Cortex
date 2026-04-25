@@ -65,7 +65,14 @@ _OUTCOME_EXPANSIONS = {
 
 _REFERENCE_ENTRY_RE = re.compile(r"(?m)^\s*(?:\[\d+\]|\d+[.)]|[A-Z][A-Za-z' -]+(?:,|\s+et al\.)).+?(?:19|20)\d{2}.*$")
 _DOI_RE = re.compile(r"10\.\d{4,9}/\S+", re.IGNORECASE)
-_NUMBERED_REFERENCE_START_RE = re.compile(r"^\s*(?:\[(\d{1,3})\]|(\d{1,3})[.)])\s*(.+?)\s*$")
+_NUMBERED_REFERENCE_START_RE = re.compile(r"^\s*(?:\[(\d{1,3})\]\s*|(\d{1,3})[.)](?:\s+|$))(.*?)\s*$")
+_COCHRANE_REFERENCE_KEY_RE = re.compile(
+    r"^\s*([A-Za-z][A-Za-z' \-]{1,80}\s+(?:19|20)\d{2}[a-z]?)\s*(?:\{[^}]*\})?\s*$"
+)
+_REFERENCE_SECTION_HEADING_RE = re.compile(
+    r"^\s*(?:references|bibliography|references\s+to\s+studies\s+(?:included|excluded)\s+(?:in|from)\s+this\s+review|references\s+to\s+studies\s+awaiting\s+assessment|references\s+to\s+ongoing\s+studies|additional\s+references|other\s+published\s+versions)\s*$",
+    re.IGNORECASE,
+)
 _REFERENCE_POINTER_RE = re.compile(
     r"(?:\[(\d{1,3})\]|\(\s*(\d{1,3})\s*\)|\bref(?:erence)?(?:s)?\s*(\d{1,3})(?!\d)|\brefs?\.\s*(\d{1,3})(?!\d))",
     re.IGNORECASE,
@@ -240,7 +247,10 @@ def _pick_citation_cell(header: Sequence[str], row: Sequence[str]) -> str:
 def _extract_authors_and_year(blob: str) -> Tuple[str, str]:
     text = str(blob or "").strip()
     year = _extract_year(text)
-    author_match = re.search(r"([A-Z][A-Za-z' -]+(?:\s+et al\.)?)", text)
+    author_match = re.search(
+        r"((?:van|von|de|del|der|den|ter)\s+[A-Z][A-Za-z' -]+|[A-Z][A-Za-z' -]+(?:\s+et al\.)?)",
+        text,
+    )
     authors = author_match.group(1).strip() if author_match else ""
     return authors, year
 
@@ -353,8 +363,10 @@ def _parse_reference_entries(text: str) -> List[Dict[str, Any]]:
         return []
 
     lines = [line.rstrip() for line in section.splitlines()]
+
     numbered_entries: List[Dict[str, Any]] = []
     current_number = ""
+    current_is_bracket = False
     current_lines: List[str] = []
 
     def _flush_current() -> None:
@@ -385,10 +397,18 @@ def _parse_reference_entries(text: str) -> List[Dict[str, Any]]:
             continue
         start_match = _NUMBERED_REFERENCE_START_RE.match(line)
         if start_match:
+            is_bracket = start_match.group(1) is not None
+            # Reject format switches mid-entry: when a bracket-format entry is
+            # being built, a bare "N." line is almost always a split page
+            # range (e.g., "567-\n76. https://...") rather than a new entry.
+            if current_lines and current_is_bracket and not is_bracket:
+                current_lines.append(line)
+                continue
             if current_lines:
                 _flush_current()
                 current_lines = []
             current_number = str(int(start_match.group(1) or start_match.group(2) or "0"))
+            current_is_bracket = is_bracket
             current_lines.append(start_match.group(3) or "")
             continue
         if current_lines:
@@ -396,6 +416,12 @@ def _parse_reference_entries(text: str) -> List[Dict[str, Any]]:
 
     if current_lines:
         _flush_current()
+
+    cochrane_entries = _parse_cochrane_reference_entries(section)
+    if cochrane_entries:
+        if numbered_entries and len(numbered_entries) >= len(cochrane_entries):
+            return numbered_entries
+        return cochrane_entries
 
     if numbered_entries:
         return numbered_entries
@@ -426,6 +452,76 @@ def _parse_reference_entries(text: str) -> List[Dict[str, Any]]:
     return fallback_entries
 
 
+def _parse_cochrane_reference_entries(section: str) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    current_key = ""
+    current_section = ""
+    current_lines: List[str] = []
+
+    def _flush_current() -> None:
+        if not current_key or not current_lines:
+            return
+        entry_text = _normalize_reference_entry_text("\n".join(current_lines))
+        if not entry_text:
+            return
+        cleaned = _clean_reference_prefix(entry_text)
+        authors, year = _extract_authors_and_year(current_key)
+        if not authors or not year:
+            authors, year = _extract_authors_and_year(cleaned)
+        entries.append(
+            {
+                "reference_number": "",
+                "entry_text": entry_text,
+                "cleaned_entry": cleaned,
+                "authors": authors,
+                "year": year,
+                "doi": _normalize_doi(_DOI_RE.search(cleaned).group(0)) if _DOI_RE.search(cleaned) else "",
+                "journal": _extract_journal(cleaned),
+                "title": _reference_title_from_entry(cleaned),
+                "match_key": _reference_match_key(" ".join([current_key, cleaned])),
+                "reference_section": current_section,
+            }
+        )
+
+    for raw_line in str(section or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        ascii_line = unicodedata.normalize("NFKD", _repair_common_mojibake(line)).encode("ascii", "ignore").decode("ascii").strip()
+        normalized = _normalize_text(line)
+        compact = re.sub(r"[^a-z]+", "", line.lower())
+        if _REFERENCE_SECTION_HEADING_RE.match(line) or compact in {"references", "bibliography"}:
+            if current_lines:
+                _flush_current()
+                current_lines = []
+            if normalized.startswith("references to studies included"):
+                current_section = "included"
+            elif normalized.startswith("references to studies excluded"):
+                current_section = "excluded"
+            elif normalized.startswith("references to studies awaiting assessment"):
+                current_section = "awaiting_assessment"
+            elif normalized.startswith("references to ongoing studies"):
+                current_section = "ongoing"
+            elif normalized == "additional references":
+                current_section = "additional"
+            elif normalized == "other published versions":
+                current_section = "other_published_versions"
+            continue
+        key_match = _COCHRANE_REFERENCE_KEY_RE.match(ascii_line or line)
+        if key_match:
+            if current_lines:
+                _flush_current()
+            current_key = str(key_match.group(1) or "").strip()
+            current_lines = [line]
+            continue
+        if current_lines:
+            current_lines.append(line)
+
+    if current_lines:
+        _flush_current()
+    return entries
+
+
 def _score_review_document(text: str, title: str = "") -> Dict[str, Any]:
     haystack = "\n".join([str(title or ""), str(text or "")[:50000]])
     matched: List[str] = []
@@ -448,8 +544,16 @@ def _score_review_document(text: str, title: str = "") -> Dict[str, Any]:
 
 
 def _references_section(text: str) -> str:
-    match = re.search(r"(?is)\n(?:references|bibliography)\s*\n(.+)$", "\n" + str(text or ""))
-    return match.group(1).strip() if match else ""
+    lines = str(text or "").splitlines()
+    for idx, raw_line in enumerate(lines):
+        line = raw_line.strip()
+        normalized = _normalize_text(line)
+        compact = re.sub(r"[^a-z]+", "", line.lower())
+        if normalized in {"references", "bibliography"} or compact in {"references", "bibliography"}:
+            return "\n".join(lines[idx + 1 :]).strip()
+        if normalized.startswith("references to studies "):
+            return "\n".join(lines[idx:]).strip()
+    return ""
 
 
 def _extract_reference_entries(text: str) -> List[str]:

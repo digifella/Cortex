@@ -1006,6 +1006,138 @@ def test_build_included_study_research_queue_job_wraps_resolver_payload():
     assert payload["input_data"]["options"]["unpaywall_email"] == "person@example.com"
 
 
+def test_parse_included_study_handoff_bundle_loads_resolver_payload():
+    module = _load_document_extract_module()
+    payload = {
+        "citations": [
+            {
+                "row_id": 1,
+                "title": "Example trial",
+                "authors": "Example",
+                "year": "2024",
+                "doi": "10.1000/example",
+            }
+        ],
+        "options": {"check_open_access": True, "enrich_sjr": False},
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("research_resolver_payload.json", json.dumps(payload))
+
+    parsed = module._parse_included_study_handoff_bundle(buf.getvalue(), bundle_name="handoff.zip")
+
+    assert parsed["source_name"] == "handoff.zip"
+    assert parsed["citations"][0]["title"] == "Example trial"
+    assert parsed["source_payload"]["options"]["check_open_access"] is True
+
+
+def test_build_included_study_handoff_bundle_includes_reference_list_exports():
+    module = _load_document_extract_module()
+    editor_rows = [
+        {
+            "keep": True,
+            "row_id": 1,
+            "title": "Example trial",
+            "authors": "Example",
+            "year": "2024",
+            "doi": "10.1000/example",
+            "journal": "Example Journal",
+        }
+    ]
+    resolver_payload = module._build_included_study_research_payload(
+        editor_rows,
+        check_open_access=True,
+        enrich_sjr=False,
+        unpaywall_email="person@example.com",
+        extraction_scope="all_trials",
+        output_detail="reference_map",
+    )
+
+    bundle = module._build_included_study_handoff_bundle_bytes(
+        editor_rows,
+        extraction_scope="all_trials",
+        output_detail="reference_map",
+        resolver_payload=resolver_payload,
+        bibliography_entries=[
+            {
+                "authors": "Cohen",
+                "year": "2004",
+                "title": "Psychological adjustment and sleep quality",
+                "journal": "Cancer",
+                "reference_section": "included",
+                "entry_text": "Cohen 2004...",
+            }
+        ],
+    )
+
+    with zipfile.ZipFile(io.BytesIO(bundle)) as zf:
+        names = set(zf.namelist())
+        csv_text = zf.read("bibliography.csv").decode("utf-8")
+
+    assert "bibliography.csv" in names
+    assert "bibliography.xlsx" in names
+    assert "reference_section" in csv_text
+    assert "Cohen" in csv_text
+
+
+def test_build_study_miner_handoff_bundle_loads_in_research_resolver():
+    module = _load_document_extract_module()
+    candidates = [
+        {
+            "row_id": 1,
+            "title": "Example mined trial",
+            "authors": "Miner",
+            "year": "2022",
+            "doi": "10.1000/mined",
+            "journal": "Example Journal",
+            "reference_number": "12",
+            "source_section": "table",
+            "extra_fields": {
+                "table_index": 2,
+                "table_label": "table 2",
+                "reference_number": "12",
+            },
+        }
+    ]
+    editor_rows = [
+        {
+            "keep": True,
+            "row_id": 1,
+            "title": "Example mined trial",
+            "authors": "Miner",
+            "year": "2022",
+            "doi": "10.1000/mined",
+            "journal": "Example Journal",
+            "source_review_title": "Example review",
+            "table_index": 2,
+            "table_label": "table 2",
+            "reference_number": "12",
+        }
+    ]
+
+    bundle = module._build_study_miner_handoff_bundle_bytes(
+        editor_rows,
+        candidates,
+        check_open_access=True,
+        enrich_sjr=False,
+        unpaywall_email="person@example.com",
+    )
+
+    with zipfile.ZipFile(io.BytesIO(bundle)) as zf:
+        names = set(zf.namelist())
+        payload = json.loads(zf.read("research_resolver_payload.json").decode("utf-8"))
+        manifest = json.loads(zf.read("study_miner_handoff.json").decode("utf-8"))
+
+    parsed = module._parse_included_study_handoff_bundle(bundle, bundle_name="study_miner.zip")
+
+    assert "study_miner_selected_rows.csv" in names
+    assert payload["citations"][0]["title"] == "Example mined trial"
+    assert payload["options"]["unpaywall_email"] == "person@example.com"
+    assert manifest["source_workflow"] == "study_miner"
+    assert parsed["source_name"] == "study_miner.zip"
+    assert parsed["citations"][0]["doi"] == "10.1000/mined"
+
+
 def test_run_included_study_table_slice_retries_multiple_quota_waits_before_success():
     module = _load_document_extract_module()
     waits = []
@@ -1119,6 +1251,44 @@ def test_included_study_slice_run_is_completed_for_warning_only_extraction():
     ) is True
 
     assert module._included_study_slice_run_is_completed({"label": "table 3"}) is False
+
+
+def test_clear_included_study_extractor_state_removes_derived_outputs(tmp_path, monkeypatch):
+    module = _load_document_extract_module()
+    monkeypatch.setattr(module.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    work_dir = tmp_path / "included_study_slices_case"
+    work_dir.mkdir()
+    (work_dir / "table_901.pdf").write_bytes(b"pdf")
+    upload_dir = tmp_path / "cortex_included_study"
+    upload_dir.mkdir()
+    uploaded = upload_dir / "upload_123_review.pdf"
+    uploaded.write_bytes(b"pdf")
+
+    module.st.session_state.clear()
+    module.st.session_state["included_study_provider"] = "anthropic"
+    module.st.session_state["included_study_model"] = "claude-sonnet-4-6"
+    module.st.session_state["included_study_upload_version"] = 2
+    module.st.session_state["included_study_upload_v2"] = object()
+    module.st.session_state["included_study_slice_result"] = {"work_dir": str(work_dir)}
+    module.st.session_state["included_study_slice_runs"] = [{"label": "Cochrane included studies"}]
+    module.st.session_state["included_study_result"] = {"tables": []}
+    module.st.session_state["included_study_editor_rows"] = [{"row_id": 1}]
+    module.st.session_state["research_parse_result"] = {"source_name": "Included Study Extractor"}
+    module.st.session_state["research_editor_rows"] = [{"row_id": 1}]
+    module.st.session_state["url_ingestor_zip_bytes"] = b"zip"
+
+    module._clear_included_study_extractor_state()
+
+    assert not work_dir.exists()
+    assert not uploaded.exists()
+    assert module.st.session_state["included_study_upload_version"] == 3
+    assert module.st.session_state["included_study_provider"] == "anthropic"
+    assert module.st.session_state["included_study_model"] == "claude-sonnet-4-6"
+    assert "included_study_slice_result" not in module.st.session_state
+    assert "included_study_upload_v2" not in module.st.session_state
+    assert "research_parse_result" not in module.st.session_state
+    assert "url_ingestor_zip_bytes" not in module.st.session_state
 
 
 def test_included_study_defaults_prefer_anthropic_when_available():

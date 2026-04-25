@@ -193,7 +193,7 @@ class NotesMailboxProcessor:
 
     def process_message(self, message: dict[str, str]) -> dict[str, str]:
         route = classify_notes_mailbox_route(message.get("subject", ""), message.get("text_body", ""))
-        if route["route"] == "unsupported_market_intel":
+        if route["route"] in {"unsupported_market_intel", "rejected_lab_result_error"}:
             return {
                 "status": "rejected",
                 "route": route["route"],

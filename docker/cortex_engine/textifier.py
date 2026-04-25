@@ -28,7 +28,16 @@ class DocumentTextifier:
     """Converts documents to Markdown with optional VLM image descriptions."""
 
     # Preferred vision models in order of priority
-    VISION_MODELS = ["qwen3-vl:8b", "qwen3-vl:4b", "qwen3-vl"]
+    VISION_MODELS = [
+        "qwen3-vl:8b",
+        "qwen3-vl:4b",
+        "qwen3-vl",
+        "qwen2.5vl:7b",
+        "qwen2.5vl:3b",
+        "qwen2.5vl:latest",
+        "qwen2.5vl",
+    ]
+    VISION_FALLBACK_MODELS = ["llava:7b", "llava:latest", "llava"]
 
     def __init__(
         self,
@@ -67,6 +76,7 @@ class DocumentTextifier:
         self._vlm_crash_skip_models: set[str] = set()
         self._last_vlm_http_meta: Dict[str, Any] = {}
         self._last_cleanup_applied = False
+        self._available_ollama_models: Optional[set[str]] = None
 
     @classmethod
     def from_options(
@@ -161,6 +171,16 @@ class DocumentTextifier:
         normalized = "\n".join(out_lines).strip()
         return normalized + "\n" if normalized else ""
 
+    @staticmethod
+    def _docling_text_is_substantive(markdown_text: str) -> bool:
+        text = str(markdown_text or "")
+        if not text.strip():
+            return False
+        stripped = text.replace("<!-- image -->", " ")
+        alpha_count = len(re.findall(r"[A-Za-z]", stripped))
+        line_count = len([line for line in stripped.splitlines() if line.strip()])
+        return alpha_count >= 1200 or line_count >= 40
+
     def _init_vlm(self):
         """Lazy-init the Ollama VLM client, preferring Qwen3-VL models."""
         if self._vlm_client is not None:
@@ -172,24 +192,135 @@ class DocumentTextifier:
             # Try preferred Qwen3-VL models first
             for model in self.VISION_MODELS:
                 try:
-                    client.show(model)
+                    resolved_model = self._resolve_ollama_model_name(client, model)
+                    if not resolved_model:
+                        continue
                     self._vlm_client = client
-                    self._vlm_model = model
-                    logger.info(f"Textifier using vision model: {model}")
+                    self._vlm_model = resolved_model
+                    logger.info(f"Textifier using vision model: {resolved_model}")
                     return
                 except Exception:
                     continue
 
-            # Fall back to configured VLM_MODEL (e.g. llava:7b)
+            # Fall back to configured/default VLM names if Qwen3-VL is unavailable.
             from cortex_engine.config import VLM_MODEL
-            client.show(VLM_MODEL)
-            self._vlm_client = client
-            self._vlm_model = VLM_MODEL
-            logger.info(f"Textifier falling back to VLM_MODEL: {VLM_MODEL}")
+            fallback_candidates: List[str] = []
+            for model in [VLM_MODEL, *self.VISION_FALLBACK_MODELS]:
+                name = str(model or "").strip()
+                if name and name not in fallback_candidates:
+                    fallback_candidates.append(name)
+            for model in fallback_candidates:
+                resolved_model = self._resolve_ollama_model_name(client, model)
+                if not resolved_model:
+                    continue
+                self._vlm_client = client
+                self._vlm_model = resolved_model
+                logger.info(f"Textifier falling back to vision model: {resolved_model}")
+                return
+            all_candidates: List[str] = []
+            for model in [*self.VISION_MODELS, *fallback_candidates]:
+                name = str(model or "").strip()
+                if name and name not in all_candidates:
+                    all_candidates.append(name)
+            installed = sorted(self._available_ollama_models or [])
+            installed_suffix = f"; installed models: {', '.join(installed)}" if installed else ""
+            raise RuntimeError(
+                f"no supported local Ollama vision model installed (tried: {', '.join(all_candidates)})"
+                f"{installed_suffix}"
+            )
         except Exception as e:
-            logger.warning(f"No vision model available: {e}")
+            logger.info(f"Local Ollama vision model unavailable: {e}")
             self._vlm_client = None
             self._vlm_model = None
+
+    def _refresh_ollama_models(self, client) -> set[str]:
+        try:
+            listing = client.list()
+        except Exception:
+            self._available_ollama_models = None
+            raise
+        names: set[str] = set()
+        models = []
+        if isinstance(listing, dict):
+            models = listing.get("models") or []
+        else:
+            models = getattr(listing, "models", []) or []
+        for item in models:
+            if isinstance(item, dict):
+                name = str(item.get("model") or item.get("name") or "").strip()
+            else:
+                name = str(getattr(item, "model", "") or getattr(item, "name", "") or "").strip()
+            if name:
+                names.add(name)
+        self._available_ollama_models = names
+        return names
+
+    def _ollama_model_available(self, client, model: str) -> bool:
+        return bool(self._resolve_ollama_model_name(client, model))
+
+    @staticmethod
+    def _vision_model_family(model: str) -> str:
+        name = str(model or "").strip()
+        if not name:
+            return ""
+        lowered = name.lower()
+        if "qwen" in lowered and "vl" in lowered:
+            return "qwen_vl"
+        if "llava" in lowered:
+            return "llava"
+        return lowered.split(":", 1)[0]
+
+    def _resolve_ollama_model_name(self, client, model: str) -> str:
+        name = str(model or "").strip()
+        if not name:
+            return ""
+        if self._available_ollama_models is None:
+            try:
+                self._refresh_ollama_models(client)
+            except Exception:
+                pass
+        if self._available_ollama_models is not None:
+            name_lower = name.lower()
+            exact_or_qualified_matches = [
+                candidate
+                for candidate in sorted(self._available_ollama_models)
+                if candidate == name
+                or candidate.lower() == name_lower
+                or candidate.lower().endswith(f"/{name_lower}")
+            ]
+            if exact_or_qualified_matches:
+                return exact_or_qualified_matches[0]
+            requested_family = self._vision_model_family(name)
+            requested_tag = name.split(":", 1)[1] if ":" in name else ""
+            family_matches = [
+                candidate
+                for candidate in sorted(self._available_ollama_models)
+                if self._vision_model_family(candidate) == requested_family
+            ]
+            if requested_tag:
+                for candidate in family_matches:
+                    if candidate.lower().endswith(f":{requested_tag.lower()}"):
+                        return candidate
+            if family_matches:
+                return family_matches[0]
+            requested_base = name.split(":", 1)[0]
+            prefix_matches = [
+                candidate
+                for candidate in sorted(self._available_ollama_models)
+                if candidate == requested_base
+                or candidate.lower() == requested_base.lower()
+                or candidate.lower().startswith(f"{requested_base.lower()}:")
+                or candidate.lower().endswith(f"/{requested_base.lower()}")
+                or candidate.lower().endswith(f"/{requested_base.lower()}:latest")
+            ]
+            if prefix_matches:
+                return prefix_matches[0]
+            return ""
+        try:
+            client.show(name)
+            return name
+        except Exception:
+            return ""
 
     def _vlm_model_candidates(self, include_current: bool = True) -> List[str]:
         """Return a de-duplicated ordered list of Qwen VLM model names to try."""
@@ -592,15 +723,24 @@ class DocumentTextifier:
             prepared_bytes = self._prepare_vlm_image_bytes(image_bytes)
             encoded = base64.b64encode(prepared_bytes).decode("utf-8")
             models_tried: List[str] = []
-            for idx, model in enumerate(self._vlm_model_candidates(include_current=True)):
+            for idx, requested_model in enumerate(self._vlm_model_candidates(include_current=True)):
+                model = requested_model
                 try:
                     if idx > 0:
-                        self._vlm_client.show(model)
+                        resolved_model = self._resolve_ollama_model_name(self._vlm_client, requested_model)
+                        if not resolved_model:
+                            self._vlm_skip_models.add(requested_model)
+                            continue
+                        model = resolved_model
+                    elif self._vlm_model:
+                        model = str(self._vlm_model).strip()
+                    if not model:
+                        continue
                     result = self._describe_with_model(model, encoded, simple_prompt=True)
                 except Exception as model_error:
                     err_text = str(model_error)
                     if "status code: 404" in err_text:
-                        self._vlm_skip_models.add(model)
+                        self._vlm_skip_models.add(requested_model)
                     if "unexpectedly stopped" in err_text and model == self._vlm_model:
                         self._reset_vlm_session(f"{model} runner stopped unexpectedly")
                     logger.warning(f"VLM describe failed for model {model}: {model_error}")
@@ -1455,17 +1595,14 @@ class DocumentTextifier:
             return []
         try:
             import ollama
-            client = ollama.Client(timeout=30)
+            client = ollama.Client(timeout=180)
 
             # Find an available text model
             text_model = None
             for model in self.TEXT_MODELS:
-                try:
-                    client.show(model)
+                if self._ollama_model_available(client, model):
                     text_model = model
                     break
-                except Exception:
-                    continue
 
             if not text_model:
                 logger.warning("No text model available for keyword extraction")
@@ -1592,7 +1729,8 @@ class DocumentTextifier:
             if not model:
                 continue
             try:
-                client.show(model)
+                if not self._ollama_model_available(client, model):
+                    continue
                 cleanup_model = model
                 break
             except Exception:
@@ -1724,6 +1862,13 @@ class DocumentTextifier:
         if not self.use_vision:
             return text.replace(marker, "> **[Image]**: [Image: vision model disabled]")
 
+        if self._docling_text_is_substantive(text):
+            logger.info(
+                "Skipping Docling image marker enrichment for %s because extracted text is already substantive",
+                Path(file_path).name,
+            )
+            return text.replace(marker, "")
+
         figures = figures or []
         descriptions: List[str] = []
         try:
@@ -1758,6 +1903,8 @@ class DocumentTextifier:
 
                     page_raw = figure.get("page")
                     bbox = figure.get("bbox")
+                    # Fallback path when Docling doesn't expose figure-level metadata:
+                    # estimate image context from page index aligned to marker order.
                     if page_raw is None:
                         if marker_count > 1:
                             ratio = i / float(marker_count - 1)
@@ -1871,6 +2018,21 @@ class DocumentTextifier:
             return []
 
     @staticmethod
+    def _sanitize_for_exif(text: str) -> str:
+        """Sanitize a string for safe EXIF/IPTC writing and SQLite storage.
+
+        Removes null bytes and control characters (except tab/newline/CR) that
+        can corrupt IPTC fields or cause SQLite truncation. Ensures valid UTF-8.
+        """
+        if not text:
+            return text
+        # Ensure valid UTF-8 (replace any bad byte sequences)
+        text = text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+        # Remove null bytes and C0/C1 control characters (keep \t \n \r)
+        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", text)
+        return text.strip()
+
+    @staticmethod
     def write_exif_keywords(file_path: str, keywords: List[str],
                             description: str = "") -> Dict[str, any]:
         """Write keywords and description to image EXIF/XMP using exiftool.
@@ -1896,20 +2058,23 @@ class DocumentTextifier:
 
         cmd = [exiftool_path, "-overwrite_original"]
 
-        # Use += to ADD to existing keywords rather than replacing them.
+        # Sanitize and write keywords — Use += to ADD to existing keywords.
         # XMP-dc:Subject is the keyword list that Lightroom Classic,
         # Bridge, Capture One, and other DAMs read as "Keywords".
         # IPTC:Keywords provides legacy compatibility.
         for kw in keywords:
-            cmd.append(f"-XMP-dc:Subject+={kw}")
-            cmd.append(f"-IPTC:Keywords+={kw}")
+            clean_kw = DocumentTextifier._sanitize_for_exif(kw)
+            if not clean_kw:
+                continue
+            cmd.append(f"-XMP-dc:Subject+={clean_kw}")
+            cmd.append(f"-IPTC:Keywords+={clean_kw}")
 
         # Write description/caption to the correct fields:
         # - XMP-dc:Description → LRC "Caption" in metadata panel
         # - IPTC:Caption-Abstract → legacy caption
         # - EXIF:ImageDescription → EXIF-level caption
         if description:
-            caption = description[:2000]
+            caption = DocumentTextifier._sanitize_for_exif(description)[:2000]
             cmd.append(f"-XMP-dc:Description={caption}")
             cmd.append(f"-IPTC:Caption-Abstract={caption}")
             cmd.append(f"-EXIF:ImageDescription={caption}")
@@ -2432,6 +2597,273 @@ class DocumentTextifier:
         }
 
     @staticmethod
+    def _copy_image_metadata_from_source(source_path: str, target_path: str) -> bool:
+        import shutil
+
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            logger.warning("exiftool not found; metadata copy skipped")
+            return False
+        try:
+            copy_result = subprocess.run(
+                [
+                    exiftool_path,
+                    "-overwrite_original",
+                    "-TagsFromFile",
+                    source_path,
+                    "-all:all",
+                    target_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if copy_result.returncode != 0:
+                logger.warning(
+                    f"Metadata copy failed for {Path(target_path).name}: {copy_result.stderr}"
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.warning(f"Metadata copy failed for {Path(target_path).name}: {e}")
+            return False
+
+    @staticmethod
+    def _interpolate_value(start: float, end: float, amount: float) -> float:
+        amount = max(0.0, min(1.0, float(amount)))
+        return float(start) + (float(end) - float(start)) * amount
+
+    @staticmethod
+    def _resolve_halftone_strength(
+        preset: str = "medium",
+        strength: Optional[float] = None,
+    ) -> Tuple[float, str]:
+        preset_name = str(preset or "medium").strip().lower() or "medium"
+        preset_strengths = {
+            "light": 28.0,
+            "medium": 48.0,
+            "strong": 72.0,
+        }
+        if strength is None:
+            strength_value = preset_strengths.get(preset_name, preset_strengths["medium"])
+        else:
+            strength_value = max(0.0, min(100.0, float(strength)))
+
+        if strength_value < 34:
+            derived_preset = "light"
+        elif strength_value < 67:
+            derived_preset = "medium"
+        else:
+            derived_preset = "strong"
+        return strength_value, derived_preset
+
+    @classmethod
+    def _build_halftone_repair_config(cls, strength_value: float) -> Dict[str, float]:
+        # Flatten the low end heavily so 0-15 stays genuinely subtle.
+        linear_strength = max(0.0, min(1.0, float(strength_value) / 100.0))
+        strength_norm = linear_strength ** 2.2
+
+        def odd_between(start: int, end: int) -> int:
+            candidate = int(round(cls._interpolate_value(start, end, strength_norm)))
+            if candidate % 2 == 0:
+                candidate += 1
+            return max(1, candidate)
+
+        return {
+            "scale": cls._interpolate_value(0.995, 0.74, strength_norm),
+            "median": odd_between(1, 7),
+            "gaussian": odd_between(1, 7),
+            "sigma": cls._interpolate_value(0.0, 0.95, strength_norm),
+            "denoise": cls._interpolate_value(0.0, 6.0, strength_norm),
+            "contrast_alpha": cls._interpolate_value(1.0, 1.04, strength_norm),
+            "contrast_beta": cls._interpolate_value(0.0, 1.5, strength_norm),
+            "sharpen_sigma": cls._interpolate_value(0.0, 1.0, strength_norm),
+            "sharpen_amount": cls._interpolate_value(0.0, 0.28, strength_norm),
+        }
+
+    @staticmethod
+    def _repair_halftone_image_preserving_metadata(
+        file_path: str,
+        preset: str = "medium",
+        strength: Optional[float] = None,
+        preserve_color: bool = True,
+        convert_to_jpg: bool = False,
+        jpg_quality: int = 92,
+    ) -> Dict[str, Any]:
+        """Reduce halftone/moire artefacts with a simple descreen pipeline."""
+        from PIL import Image
+        import shutil
+        import cv2
+        import numpy as np
+
+        strength_value, preset_name = DocumentTextifier._resolve_halftone_strength(
+            preset=preset,
+            strength=strength,
+        )
+        config = DocumentTextifier._build_halftone_repair_config(strength_value)
+
+        suffix = Path(file_path).suffix.lower()
+        original_copy = None
+        output_path = file_path
+        metadata_preserved = False
+
+        try:
+            with Image.open(file_path) as img:
+                original_width, original_height = img.size
+                if img.mode not in {"RGB", "RGBA", "L"}:
+                    img = img.convert("RGB")
+                elif img.mode == "RGBA":
+                    img = img.convert("RGB")
+                elif img.mode == "L" and preserve_color:
+                    img = img.convert("RGB")
+                original_rgb = np.array(img)
+
+            should_convert_to_jpg = bool(convert_to_jpg and suffix not in {".jpg", ".jpeg"})
+            if should_convert_to_jpg:
+                output_path = str(Path(file_path).with_suffix(".jpg"))
+
+            original_copy = tempfile.NamedTemporaryFile(delete=False, suffix=suffix or ".img").name
+            shutil.copy2(file_path, original_copy)
+
+            original_bgr = cv2.cvtColor(original_rgb, cv2.COLOR_RGB2BGR) if original_rgb.ndim == 3 else original_rgb.copy()
+            target_width = max(64, int(round(original_width * config["scale"])))
+            target_height = max(64, int(round(original_height * config["scale"])))
+            working = cv2.resize(original_bgr, (target_width, target_height), interpolation=cv2.INTER_AREA)
+
+            if preserve_color and working.ndim == 3:
+                lab = cv2.cvtColor(working, cv2.COLOR_BGR2LAB)
+                lightness, channel_a, channel_b = cv2.split(lab)
+                if int(config["median"]) >= 3:
+                    lightness = cv2.medianBlur(lightness, int(config["median"]))
+                if int(config["gaussian"]) >= 3 and float(config["sigma"]) > 0:
+                    lightness = cv2.GaussianBlur(
+                        lightness,
+                        (int(config["gaussian"]), int(config["gaussian"])),
+                        config["sigma"],
+                    )
+                if float(config["denoise"]) >= 0.5:
+                    lightness = cv2.fastNlMeansDenoising(lightness, None, h=float(config["denoise"]))
+                repaired_small = cv2.cvtColor(
+                    cv2.merge([lightness, channel_a, channel_b]),
+                    cv2.COLOR_LAB2BGR,
+                )
+            else:
+                gray = working if working.ndim == 2 else cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
+                if int(config["median"]) >= 3:
+                    gray = cv2.medianBlur(gray, int(config["median"]))
+                if int(config["gaussian"]) >= 3 and float(config["sigma"]) > 0:
+                    gray = cv2.GaussianBlur(
+                        gray,
+                        (int(config["gaussian"]), int(config["gaussian"])),
+                        config["sigma"],
+                    )
+                if float(config["denoise"]) >= 0.5:
+                    gray = cv2.fastNlMeansDenoising(gray, None, h=float(config["denoise"]))
+                repaired_small = gray if not preserve_color else cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+            repaired_full = cv2.resize(
+                repaired_small,
+                (original_width, original_height),
+                interpolation=cv2.INTER_CUBIC,
+            )
+            if float(config["contrast_alpha"]) != 1.0 or float(config["contrast_beta"]) != 0.0:
+                repaired_full = cv2.convertScaleAbs(
+                    repaired_full,
+                    alpha=float(config["contrast_alpha"]),
+                    beta=float(config["contrast_beta"]),
+                )
+            if float(config["sharpen_amount"]) >= 0.02 and float(config["sharpen_sigma"]) > 0:
+                blur_for_sharpen = cv2.GaussianBlur(repaired_full, (0, 0), float(config["sharpen_sigma"]))
+                repaired_full = cv2.addWeighted(
+                    repaired_full,
+                    1.0 + float(config["sharpen_amount"]),
+                    blur_for_sharpen,
+                    -float(config["sharpen_amount"]),
+                    0,
+                )
+
+            if preserve_color:
+                repaired_rgb = cv2.cvtColor(repaired_full, cv2.COLOR_BGR2RGB)
+                save_image = Image.fromarray(repaired_rgb)
+            else:
+                repaired_gray = repaired_full if repaired_full.ndim == 2 else cv2.cvtColor(repaired_full, cv2.COLOR_BGR2GRAY)
+                save_image = Image.fromarray(repaired_gray)
+
+            save_kwargs: Dict[str, Any] = {}
+            if output_path.lower().endswith((".jpg", ".jpeg")):
+                save_kwargs["quality"] = int(jpg_quality)
+                save_kwargs["optimize"] = True
+            save_image.save(output_path, **save_kwargs)
+
+            metadata_preserved = DocumentTextifier._copy_image_metadata_from_source(original_copy, output_path)
+
+            return {
+                "repaired": True,
+                "preset": preset_name,
+                "strength": round(strength_value, 1),
+                "preserve_color": bool(preserve_color),
+                "metadata_preserved": metadata_preserved,
+                "converted_to_jpg": should_convert_to_jpg,
+                "original_width": original_width,
+                "original_height": original_height,
+                "output_path": output_path,
+            }
+        except Exception as e:
+            logger.warning(f"Halftone repair failed for {Path(file_path).name}: {e}")
+            if original_copy and Path(original_copy).exists():
+                try:
+                    shutil.copy2(original_copy, file_path)
+                except Exception as restore_err:
+                    logger.warning(f"Could not restore original image after halftone repair failure: {restore_err}")
+            if output_path != file_path and Path(output_path).exists():
+                try:
+                    os.remove(output_path)
+                except Exception:
+                    pass
+            return {
+                "repaired": False,
+                "preset": preset_name,
+                "strength": round(strength_value, 1),
+                "preserve_color": bool(preserve_color),
+                "metadata_preserved": False,
+                "converted_to_jpg": False,
+                "output_path": file_path,
+                "error": str(e),
+            }
+        finally:
+            if original_copy and Path(original_copy).exists():
+                try:
+                    os.remove(original_copy)
+                except Exception:
+                    pass
+
+    def repair_halftone_image(
+        self,
+        file_path: str,
+        preset: str = "medium",
+        strength: Optional[float] = None,
+        preserve_color: bool = True,
+        convert_to_jpg: bool = False,
+        jpg_quality: int = 92,
+    ) -> Dict[str, Any]:
+        self._report(0.0, "Analysing halftone artefacts...")
+        repair_info = self._repair_halftone_image_preserving_metadata(
+            file_path,
+            preset=preset,
+            strength=strength,
+            preserve_color=preserve_color,
+            convert_to_jpg=convert_to_jpg,
+            jpg_quality=jpg_quality,
+        )
+        self._report(1.0, "Done")
+        output_path = str(repair_info.get("output_path") or file_path)
+        return {
+            "file_name": Path(output_path).name,
+            "output_path": output_path,
+            "halftone_repair_info": repair_info,
+        }
+
+    @staticmethod
     def _filter_sensitive_keywords(
         keywords: List[str], blocked_keywords: Optional[List[str]] = None
     ) -> Tuple[List[str], List[str]]:
@@ -2461,16 +2893,13 @@ class DocumentTextifier:
             return []
         try:
             import ollama
-            client = ollama.Client(timeout=30)
+            client = ollama.Client(timeout=180)
 
             text_model = None
             for model in self.TEXT_MODELS:
-                try:
-                    client.show(model)
+                if self._ollama_model_available(client, model):
                     text_model = model
                     break
-                except Exception:
-                    continue
 
             if not text_model:
                 logger.warning("No text model available for keyword anonymization; using deterministic filtering only")
