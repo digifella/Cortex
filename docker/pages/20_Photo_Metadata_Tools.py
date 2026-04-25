@@ -1451,25 +1451,58 @@ def _render_lms_tab() -> None:
         st.code("sudo apt install libimage-exiftool-perl", language="bash")
         return
 
-    # Path inputs
+    # RAW root — always a directory path
     raw_root_str = st.text_input(
         "RAW root directory",
         placeholder="/mnt/f/Photos/RAW",
         key="lms_raw_root",
     )
-    jpg_dir_str = st.text_input(
-        "JPG source directory (flat, LLM-tagged JPGs)",
-        placeholder="/mnt/f/Photos/Export/LLM-Tagged",
-        key="lms_jpg_dir",
-    )
-
     raw_err = _lms_validate_path(raw_root_str) if raw_root_str else None
-    jpg_err = _lms_validate_path(jpg_dir_str) if jpg_dir_str else None
     if raw_err:
         st.error(raw_err)
-    if jpg_err:
-        st.error(jpg_err)
-    paths_valid = bool(raw_root_str and jpg_dir_str and not raw_err and not jpg_err)
+
+    # JPG source — directory path OR drag-and-drop upload
+    jpg_input_mode = st.radio(
+        "JPG source input method",
+        ["Directory path", "Upload JPG files"],
+        horizontal=True,
+        key="lms_jpg_input_mode",
+    )
+
+    jpg_dir_str = ""
+    jpg_err: Optional[str] = None
+    _lms_upload_tmp_dir: Optional[Path] = None
+
+    if jpg_input_mode == "Directory path":
+        jpg_dir_str = st.text_input(
+            "JPG source directory (flat, LLM-tagged JPGs)",
+            placeholder="/mnt/f/Photos/Export/LLM-Tagged",
+            key="lms_jpg_dir",
+        )
+        jpg_err = _lms_validate_path(jpg_dir_str) if jpg_dir_str else None
+        if jpg_err:
+            st.error(jpg_err)
+    else:
+        uploaded_jpgs = st.file_uploader(
+            "Drop LLM-tagged JPGs here",
+            type=["jpg", "jpeg"],
+            accept_multiple_files=True,
+            key="lms_jpg_upload",
+        )
+        if uploaded_jpgs:
+            _lms_upload_tmp_dir = Path(tempfile.gettempdir()) / "cortex_lms_jpgs"
+            _lms_upload_tmp_dir.mkdir(exist_ok=True)
+            for uf in uploaded_jpgs:
+                dest = _lms_upload_tmp_dir / uf.name
+                dest.write_bytes(uf.getvalue())
+            jpg_dir_str = str(_lms_upload_tmp_dir)
+            st.caption(f"{len(uploaded_jpgs)} JPG(s) ready in temp folder.")
+        else:
+            jpg_err = "Upload at least one JPG file."
+
+    paths_valid = bool(
+        raw_root_str and not raw_err and jpg_dir_str and not jpg_err
+    )
 
     # Advanced options
     with st.expander("Advanced options", expanded=False):
