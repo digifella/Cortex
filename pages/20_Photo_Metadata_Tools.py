@@ -1670,6 +1670,11 @@ def _render_lms_tab() -> None:
             state = "complete" if error_count == 0 else "error"
             status_widget.update(label=label, state=state)
 
+        # Clear scan so Apply can't be pressed again without a fresh scan
+        st.session_state.pop("lms_report", None)
+        st.session_state.pop("lms_config_snapshot", None)
+        st.session_state.pop("lms_scan_clean", None)
+
         full_log = "\n".join(log_lines)
         st.download_button(
             "Download full log",
