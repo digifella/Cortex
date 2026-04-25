@@ -1419,11 +1419,16 @@ def _render_photo_keywords_tab():
 
 # ── LLM Metadata Sync tab ────────────────────────────────────────────────────
 
+def _lms_resolve_path(p: str) -> Path:
+    """Convert a Windows or WSL path string to a resolved Path."""
+    return Path(convert_windows_to_wsl_path(p.strip()))
+
+
 def _lms_validate_path(p: str) -> Optional[str]:
-    """Return error string if path is invalid, else None."""
+    """Return error string if path is invalid, else None. Accepts Windows paths."""
     if not p.strip():
         return "Path is required."
-    path = Path(p.strip())
+    path = _lms_resolve_path(p)
     if not path.exists():
         return f"Directory does not exist: {path}"
     if not path.is_dir():
@@ -1533,8 +1538,8 @@ def _render_lms_tab() -> None:
         filter_kws = [k.strip() for k in filter_kw_str.split(",") if k.strip()]
         patterns = tuple(p.strip() for p in deriv_patterns_str.splitlines() if p.strip())
         return SyncConfig(
-            raw_root=Path(raw_root_str.strip()),
-            jpg_dir=Path(jpg_dir_str.strip()),
+            raw_root=_lms_resolve_path(raw_root_str),
+            jpg_dir=_lms_resolve_path(jpg_dir_str) if jpg_input_mode == "Directory path" else Path(jpg_dir_str),
             filter_keywords=filter_kws,
             keep_backups=keep_backups,
             rating_suffix_range=(int(rating_lo), int(rating_hi)),
