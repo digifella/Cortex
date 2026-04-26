@@ -47,3 +47,24 @@ docker/Screenshot*.png
 # Local Windows-path mirror artifacts (must stay outside repo)
 F:\\ai_databases/
 .worktrees/
+
+# Root-level working/temp files that should never be committed
+tmp/
+*.pdf
+*.PDF
+image.png
+test.py
+test.pdf
+pdf.pdf
+scan0002.pdf
+resolved_citations.csv
+*.Zone.Identifier
+Tom_E_1970.jpg
+included_study_extract_bundle*/
+2026-*.json
+CORTEX_DIGEST_SPEC.md
+CORTEX_INTELLIGENCE_SPEC.md
+.codex
+*.jpg
+!docker/**/*.jpg
+!docs/**/*.jpg
