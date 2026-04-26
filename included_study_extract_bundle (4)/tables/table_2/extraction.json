@@ -1,0 +1,519 @@
+{
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-6",
+  "tables": [
+    {
+      "table_number": "2",
+      "table_title": "Overview of included studies on HRQOL measures",
+      "grouping_basis": "Assessment method / instrument",
+      "included_study_count": "",
+      "included_rct_count": "",
+      "groups": [
+        {
+          "group_label": "FACT-G",
+          "trial_label": "JULIET",
+          "notes": "Phase 2 single-arm; tisagenlecleucel; R/R DLBCL 2+ prior lines; Global",
+          "citations": [
+            {
+              "display": "Maziarz 2020 [19]",
+              "authors": "Maziarz et al.",
+              "year": "2020",
+              "reference_number": "19",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2020",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Tam 2019 [67]",
+              "authors": "Tam et al.",
+              "year": "2019",
+              "reference_number": "67",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2019",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Maziarz 2017 [68]",
+              "authors": "Maziarz et al.",
+              "year": "2017",
+              "reference_number": "68",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2017",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "FACT-G",
+          "trial_label": "ORCHARRD",
+          "notes": "Phase 3 RCT; ofatumumab+DHAP vs R-DHAP; R/R DLBCL; Global",
+          "citations": [
+            {
+              "display": "ClinicalTrials.gov [39]",
+              "authors": "ClinicalTrials.gov",
+              "year": "2009",
+              "reference_number": "39",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2009",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "NCT01014208",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "FACT-G",
+          "trial_label": "SADAL",
+          "notes": "Phase 2b single-arm; selinexor; R/R DLBCL 2+ prior lines; Global",
+          "citations": [
+            {
+              "display": "Shah 2021 [38]",
+              "authors": "Shah et al.",
+              "year": "2021",
+              "reference_number": "38",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2021",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Casasnovas 2020 [69]",
+              "authors": "Casasnovas et al.",
+              "year": "2020",
+              "reference_number": "69",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2020",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "FACT-G",
+          "trial_label": "NCT00667615",
+          "notes": "Phase 1/2 single-arm; R-CVEP; R/R DLBCL aged 60+; US",
+          "citations": [
+            {
+              "display": "Straus 2015 [40]",
+              "authors": "Straus et al.",
+              "year": "2015",
+              "reference_number": "40",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2015",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "FACT-Lym",
+          "trial_label": "JULIET",
+          "notes": "Phase 2 single-arm; tisagenlecleucel; FACT-Lym TS, TOI, subscale; Global",
+          "citations": [
+            {
+              "display": "Maziarz 2020 [19]",
+              "authors": "Maziarz et al.",
+              "year": "2020",
+              "reference_number": "19",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2020",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Tam 2019 [67]",
+              "authors": "Tam et al.",
+              "year": "2019",
+              "reference_number": "67",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2019",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Maziarz 2017 [68]",
+              "authors": "Maziarz et al.",
+              "year": "2017",
+              "reference_number": "68",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2017",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "FACT-Lym",
+          "trial_label": "ORCHARRD",
+          "notes": "Phase 3 RCT; ofatumumab+DHAP vs R-DHAP; FACT-Lym TOI; Global",
+          "citations": [
+            {
+              "display": "ClinicalTrials.gov [39]",
+              "authors": "ClinicalTrials.gov",
+              "year": "2009",
+              "reference_number": "39",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2009",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "NCT01014208",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "FACT-Lym",
+          "trial_label": "SADAL",
+          "notes": "Phase 2b single-arm; selinexor; FACT-Lym TS and TOI; Global",
+          "citations": [
+            {
+              "display": "Shah 2021 [38]",
+              "authors": "Shah et al.",
+              "year": "2021",
+              "reference_number": "38",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2021",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Casasnovas 2020 [69]",
+              "authors": "Casasnovas et al.",
+              "year": "2020",
+              "reference_number": "69",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2020",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "FACT-Lym",
+          "trial_label": "NCT00667615",
+          "notes": "Phase 1/2 single-arm; R-CVEP; FACT-Lym TS and TOI; US",
+          "citations": [
+            {
+              "display": "Straus 2015 [40]",
+              "authors": "Straus et al.",
+              "year": "2015",
+              "reference_number": "40",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2015",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "FACT-Lym",
+          "trial_label": "TRANSFORM",
+          "notes": "Phase 3 RCT; liso-cel vs SOC; FACT-Lym subscale; NR region",
+          "citations": [
+            {
+              "display": "Abramson 2021 [18]",
+              "authors": "Abramson et al.",
+              "year": "2021",
+              "reference_number": "18",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2021",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "EORTC QLQ-C30",
+          "trial_label": "Ma 2021 survey",
+          "notes": "Point-in-time survey; adult DLBCL 2L/3L+; not a clinical trial \u2014 excluded from trial scope",
+          "citations": [
+            {
+              "display": "Ma 2021 [41]",
+              "authors": "Ma et al.",
+              "year": "2021",
+              "reference_number": "41",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2021",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "observational survey; excluded from trial-only scope",
+              "needs_review": true,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "EORTC QLQ-C30",
+          "trial_label": "TRANSCEND NHL 001",
+          "notes": "Phase 1 single-arm; liso-cel; R/R DLBCL 2+ prior lines; US",
+          "citations": [
+            {
+              "display": "Patrick 2021 [17]",
+              "authors": "Patrick et al.",
+              "year": "2021",
+              "reference_number": "17",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2021",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Patrick 2020 [37]",
+              "authors": "Patrick et al.",
+              "year": "2020",
+              "reference_number": "37",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2020",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Patrick 2019 [35]",
+              "authors": "Patrick et al.",
+              "year": "2019",
+              "reference_number": "35",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2019",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Patrick 2019 [36]",
+              "authors": "Patrick et al.",
+              "year": "2019",
+              "reference_number": "36",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2019",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "EORTC QLQ-C30",
+          "trial_label": "TRANSFORM",
+          "notes": "Phase 3 RCT; liso-cel vs SOC; NR region",
+          "citations": [
+            {
+              "display": "Abramson 2021 [18]",
+              "authors": "Abramson et al.",
+              "year": "2021",
+              "reference_number": "18",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2021",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "SF-36",
+          "trial_label": "JULIET",
+          "notes": "Phase 2 single-arm; tisagenlecleucel; SF-36 PCS and MCS; Global",
+          "citations": [
+            {
+              "display": "Maziarz 2020 [19]",
+              "authors": "Maziarz et al.",
+              "year": "2020",
+              "reference_number": "19",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2020",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Tam 2019 [67]",
+              "authors": "Tam et al.",
+              "year": "2019",
+              "reference_number": "67",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2019",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Maziarz 2017 [68]",
+              "authors": "Maziarz et al.",
+              "year": "2017",
+              "reference_number": "68",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2017",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "warnings": [
+    "Ma 2021 [41] is a point-in-time survey (observational), not a clinical trial; flagged needs_review=true.",
+    "Table 2 spans 4 PDF pages; all visible rows have been consolidated by trial/instrument group."
+  ],
+  "raw_response": "```json\n{\n  \"tables\": [\n    {\n      \"table_number\": \"2\",\n      \"table_title\": \"Overview of included studies on HRQOL measures\",\n      \"grouping_basis\": \"Assessment method / instrument\",\n      \"groups\": [\n        {\n          \"group_label\": \"FACT-G\",\n          \"trial_label\": \"JULIET\",\n          \"notes\": \"Phase 2 single-arm; tisagenlecleucel; R/R DLBCL 2+ prior lines; Global\",\n          \"citations\": [\n            {\"display\": \"Maziarz 2020 [19]\", \"authors\": \"Maziarz et al.\", \"year\": \"2020\", \"reference_number\": \"19\", \"notes\": \"\", \"needs_review\": false},\n            {\"display\": \"Tam 2019 [67]\", \"authors\": \"Tam et al.\", \"year\": \"2019\", \"reference_number\": \"67\", \"notes\": \"\", \"needs_review\": false},\n            {\"display\": \"Maziarz 2017 [68]\", \"authors\": \"Maziarz et al.\", \"year\": \"2017\", \"reference_number\": \"68\", \"notes\": \"\", \"needs_review\": false}\n          ]\n        },\n        {\n          \"group_label\": \"FACT-G\",\n          \"trial_label\": \"ORCHARRD\",\n          \"notes\": \"Phase 3 RCT; ofatumumab+DHAP vs R-DHAP; R/R DLBCL; Global\",\n          \"citations\": [\n            {\"display\": \"ClinicalTrials.gov [39]\", \"authors\": \"ClinicalTrials.gov\", \"year\": \"2009\", \"reference_number\": \"39\", \"notes\": \"NCT01014208\", \"needs_review\": false}\n          ]\n        },\n        {\n          \"group_label\": \"FACT-G\",\n          \"trial_label\": \"SADAL\",\n          \"notes\": \"Phase 2b single-arm; selinexor; R/R DLBCL 2+ prior lines; Global\",\n          \"citations\": [\n            {\"display\": \"Shah 2021 [38]\", \"authors\": \"Shah et al.\", \"year\": \"2021\", \"reference_number\": \"38\", \"notes\": \"\", \"needs_review\": false},\n            {\"display\": \"Casasnovas 2020 [69]\", \"authors\": \"Casasnovas et al.\", \"year\": \"2020\", \"reference_number\": \"69\", \"notes\": \"\", \"needs_review\": false}\n          ]\n        },\n        {\n          \"group_label\": \"FACT-G\",\n          \"trial_label\": \"NCT00667615\",\n          \"notes\": \"Phase 1/2 single-arm; R-CVEP; R/R DLBCL aged 60+; US\",\n          \"citations\": [\n            {\"display\": \"Straus 2015 [40]\", \"authors\": \"Straus et al.\", \"year\": \"2015\", \"reference_number\": \"40\", \"notes\": \"\", \"needs_review\": false}\n          ]\n        },\n        {\n          \"group_label\": \"FACT-Lym\",\n          \"trial_label\": \"JULIET\",\n          \"notes\": \"Phase 2 single-arm; tisagenlecleucel; FACT-Lym TS, TOI, subscale; Global\",\n          \"citations\": [\n            {\"display\": \"Maziarz 2020 [19]\", \"authors\": \"Maziarz et al.\", \"year\": \"2020\", \"reference_number\": \"19\", \"notes\": \"\", \"needs_review\": false},\n            {\"display\": \"Tam 2019 [67]\", \"authors\": \"Tam et al.\", \"year\": \"2019\", \"reference_number\": \"67\", \"notes\": \"\", \"needs_review\": false},\n            {\"display\": \"Maziarz 2017 [68]\", \"authors\": \"Maziarz et al.\", \"year\": \"2017\", \"reference_number\": \"68\", \"notes\": \"\", \"needs_review\": false}\n          ]\n        },\n        {\n          \"group_label\": \"FACT-Lym\",\n          \"trial_label\": \"ORCHARRD\",\n          \"notes\": \"Phase 3 RCT; ofatumumab+DHAP vs R-DHAP; FACT-Lym TOI; Global\",\n          \"citations\": [\n            {\"display\": \"ClinicalTrials.gov [39]\", \"authors\": \"ClinicalTrials.gov\", \"year\": \"2009\", \"reference_number\": \"39\", \"notes\": \"NCT01014208\", \"needs_review\": false}\n          ]\n        },\n        {\n          \"group_label\": \"FACT-Lym\",\n          \"trial_label\": \"SADAL\",\n          \"notes\": \"Phase 2b single-arm; selinexor; FACT-Lym TS and TOI; Global\",\n          \"citations\": [\n            {\"display\": \"Shah 2021 [38]\", \"authors\": \"Shah et al.\", \"year\": \"2021\", \"reference_number\": \"38\", \"notes\": \"\", \"needs_review\": false},\n            {\"display\": \"Casasnovas 2020 [69]\", \"authors\": \"Casasnovas et al.\", \"year\": \"2020\", \"reference_number\": \"69\", \"notes\": \"\", \"needs_review\": false}\n          ]\n        },\n        {\n          \"group_label\": \"FACT-Lym\",\n          \"trial_label\": \"NCT00667615\",\n          \"notes\": \"Phase 1/2 single-arm; R-CVEP; FACT-Lym TS and TOI; US\",\n          \"citations\": [\n            {\"display\": \"Straus 2015 [40]\", \"authors\": \"Straus et al.\", \"year\": \"2015\", \"reference_number\": \"40\", \"notes\": \"\", \"needs_review\": false}\n          ]\n        },\n        {\n          \"group_label\": \"FACT-Lym\",\n          \"trial_label\": \"TRANSFORM\",\n          \"notes\": \"Phase 3 RCT; liso-cel vs SOC; FACT-Lym subscale; NR region\",\n          \"citations\": [\n            {\"display\": \"Abramson 2021 [18]\", \"authors\": \"Abramson et al.\", \"year\": \"2021\", \"reference_number\": \"18\", \"notes\": \"\", \"needs_review\": false}\n          ]\n        },\n        {\n          \"group_label\": \"EORTC QLQ-C30\",\n          \"trial_label\": \"Ma 2021 survey\",\n          \"notes\": \"Point-in-time survey; adult DLBCL 2L/3L+; not a clinical trial \u2014 excluded from trial scope\",\n          \"citations\": [\n            {\"display\": \"Ma 2021 [41]\", \"authors\": \"Ma et al.\", \"year\": \"2021\", \"reference_number\": \"41\", \"notes\": \"observational survey; excluded from trial-only scope\", \"needs_review\": true}\n          ]\n        },\n        {\n          \"group_label\": \"EORTC QLQ-C30\",\n          \"trial_label\": \"TRANSCEND NHL 001\",\n          \"notes\": \"Phase 1 single-arm; liso-cel; R/R DLBCL 2+ prior lines; US\",\n          \"citations\": [\n            {\"display\": \"Patrick 2021 [17]\", \"authors\": \"Patrick et al.\", \"year\": \"2021\", \"reference_number\": \"17\", \"notes\": \"\", \"needs_review\": false},\n            {\"display\": \"Patrick 2020 [37]\", \"authors\": \"Patrick et al.\", \"year\": \"2020\", \"reference_number\": \"37\", \"notes\": \"\", \"needs_review\": false},\n            {\"display\": \"Patrick 2019 [35]\", \"authors\": \"Patrick et al.\", \"year\": \"2019\", \"reference_number\": \"35\", \"notes\": \"\", \"needs_review\": false},\n            {\"display\": \"Patrick 2019 [36]\", \"authors\": \"Patrick et al.\", \"year\": \"2019\", \"reference_number\": \"36\", \"notes\": \"\", \"needs_review\": false}\n          ]\n        },\n        {\n          \"group_label\": \"EORTC QLQ-C30\",\n          \"trial_label\": \"TRANSFORM\",\n          \"notes\": \"Phase 3 RCT; liso-cel vs SOC; NR region\",\n          \"citations\": [\n            {\"display\": \"Abramson 2021 [18]\", \"authors\": \"Abramson et al.\", \"year\": \"2021\", \"reference_number\": \"18\", \"notes\": \"\", \"needs_review\": false}\n          ]\n        },\n        {\n          \"group_label\": \"SF-36\",\n          \"trial_label\": \"JULIET\",\n          \"notes\": \"Phase 2 single-arm; tisagenlecleucel; SF-36 PCS and MCS; Global\",\n          \"citations\": [\n            {\"display\": \"Maziarz 2020 [19]\", \"authors\": \"Maziarz et al.\", \"year\": \"2020\", \"reference_number\": \"19\", \"notes\": \"\", \"needs_review\": false},\n            {\"display\": \"Tam 2019 [67]\", \"authors\": \"Tam et al.\", \"year\": \"2019\", \"reference_number\": \"67\", \"notes\": \"\", \"needs_review\": false},\n            {\"display\": \"Maziarz 2017 [68]\", \"authors\": \"Maziarz et al.\", \"year\": \"2017\", \"reference_number\": \"68\", \"notes\": \"\", \"needs_review\": false}\n          ]\n        }\n      ]\n    }\n  ],\n  \"warnings\": [\n    \"Ma 2021 [41] is a point-in-time survey (observational), not a clinical trial; flagged needs_review=true.\",\n    \"Table 2 spans 4 PDF pages; all visible rows have been consolidated by trial/instrument group.\"\n  ]\n}\n```"
+}

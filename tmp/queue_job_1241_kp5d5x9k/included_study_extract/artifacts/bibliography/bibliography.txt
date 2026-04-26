@@ -1,0 +1,351 @@
+188
+	
+F. F. Liu et al.
+	 3.	 Gandhi S, Kallab AM, Hernandez-Ilizaliturri FJ. Diffuse large 
+B-cell lymphoma (DLBCL) guidelines. 18 Nov 2022. https://​
+emedi​cine.​medsc​ape.​com/​artic​le/​202969-​guide​lines. Accessed 
+25 Oct 2021.
+	 4.	 Tilly H, Gomes da Silva M, Vitolo U, et al., on behalf of the 
+ESMO Guidelines Committee. Diffuse large B-cell lymphoma 
+(DLBCL): ESMO Clinical Practice Guidelines for diagnosis, 
+treatment and follow-up. Ann Oncol. 2015;26(suppl 5):v116–v25.
+	 5.	 Maurer MJ, Ghesquières H, Jais JP, et al. Event-free survival at 
+24 months is a robust end point for disease-related outcome in 
+diffuse large B-cell lymphoma treated with immunochemotherapy. 
+J Clin Oncol. 2014;32(10):1066–73.
+	 6.	 Kamdar M, Solomon SR, Arnason J, et al., for the TRANSFORM 
+Investigators. Lisocabtagene maraleucel versus standard of care 
+with salvage chemotherapy followed by autologous stem cell 
+transplantation as second-line treatment in patients with relapsed 
+or refractory large B-cell lymphoma (TRANSFORM): results 
+from an interim analysis of an open-label, randomised, phase 3 
+trial. Lancet. 2022;399(10343):2294‒308.
+	 7.	 Locke FL, Miklos DB, Jacobson CA, et al., for all ZUMA-7 Inves-
+tigators and Contributing Kite Members. Axicabtagene ciloleucel 
+as second-line therapy for large B-cell lymphoma. N Engl J Med. 
+2022;386(7):640‒54.
+	 8.	 Gisselbrecht C, Glass B, Mounier N, et al. Salvage regimens with 
+autologous transplantation for relapsed large B-cell lymphoma in 
+the rituximab era. J Clin Oncol. 2010;28(27):4184–90.
+	 9.	 Nagle SJ, Woo K, Schuster SJ, et al. Outcomes of patients with 
+relapsed/refractory diffuse large B-cell lymphoma with progres-
+sion of lymphoma after autologous stem cell transplantation in the 
+rituximab era. Am J Hematol. 2013;88(10):890–4.
+	10.	 Tholstrup D, Brown Pde N, Jurlander J, Bekker Jeppesen P, 
+Groenvold M. Quality of life in patients with diffuse large B-cell 
+lymphoma treated with dose-dense chemotherapy is only affected 
+temporarily. Leuk Lymphoma. 2011;52(3):400–8.
+	11.	 Oerlemans S, Issa DE, van den Broek EC, et al. Health-related 
+quality of life and persistent symptoms in relation to (R-)CHOP14, 
+(R-)CHOP21, and other therapies among patients with diffuse 
+large B-cell lymphoma: results of the population-based PHAROS-
+registry. Ann Hematol. 2014;93(10):1705–15.
+	12.	 Oerlemans S, Nijziel MR, van de Poll-Franse LV. Age-related dif-
+ferences in quality of life among patients with diffuse large B-cell 
+lymphoma. Cancer. 2015;121(16):2857–8.
+	13.	 Williams JN, Rai A, Flowers CR. Reply to age-related differences 
+in quality of life among patients with diffuse large B-cell lym-
+phoma. Cancer. 2015;121(16):2858–9.
+	14.	 Miyazaki K. Treatment of diffuse large B-cell lymphoma. J Clin 
+Exp Hematop. 2016;56(2):79–88.
+	15.	 Heutte N, Haioun C, Feugier P, et al. Quality of life in 269 patients 
+with poor-risk diffuse large B-cell lymphoma treated with rituxi-
+mab versus observation after autologous stem cell transplant. 
+Leuk Lymphoma. 2011;52(7):1239–48.
+	16.	 Chakraborty R, Sidana S, Shah GL, Scordo M, Hamilton BK, 
+Majhail NS. Patient-reported outcomes with chimeric antigen 
+receptor T cell therapy: challenges and opportunities. Biol Blood 
+Marrow Transplant. 2019;25(5):e155–62.
+	17.	 Patrick DL, Powers A, Jun MP, et al. Effect of lisocabtagene 
+maraleucel on HRQoL and symptom severity in relapsed/refrac-
+tory large B-cell lymphoma. Blood Adv. 2021;5(8):2245–55.
+	18.	 Abramson JS, Solomon SR, Arnason JE, et al. Improved quality 
+of life (QOL) with lisocabtagene maraleucel (liso-cel), a CD19-
+directed chimeric antigen receptor (CAR) T cell therapy, com-
+pared with standard of care (SOC) as second-line (2L) treatment 
+in patients (pts) with relapsed or refractory (R/R) large B-cell 
+lymphoma (LBCL): results from the phase 3 Transform study. 
+Blood. 2021;138(suppl 1):3845.
+	19.	 Maziarz RT, Waller EK, Jaeger U, et al. Patient-reported long-
+term quality of life after tisagenlecleucel in relapsed/refractory 
+diffuse large B-cell lymphoma. Blood Adv. 2020;4(4):629–37.
+	20.	 Ernst M, Oeser A, Besiroglu B, et al. Chimeric antigen recep-
+tor (CAR) T-cell therapy for people with relapsed or refractory 
+diffuse large B-cell lymphoma. Cochrane Database Syst Rev. 
+2021;9(9):CD013365.
+	21.	 Hao Y, Wolfram V, Cook J. A structured review of health util-
+ity measures and elicitation in advanced/metastatic breast cancer. 
+Clinicoecon Outcomes Res. 2016;8293–303.
+	22.	 Abramson JS, Solomon SR, Arnason J, et al. Lisocabtagene 
+maraleucel as second-line therapy for large B-cell lymphoma: 
+primary analysis of the phase 3 TRANSFORM study. Blood. 
+2023;141(14):1675–84.
+	23.	 Cai Q, Chen Y, Zou D, et al. Clinical outcomes of a novel combi-
+nation of lenalidomide and rituximab followed by stem cell trans-
+plantation for relapsed/refractory aggressive B-cell non-Hodgkin 
+lymphoma. Oncotarget. 2014;5(17):7368–80.
+	24.	 Dickinson MJ, Carlo-Stella C, Morschhauser F, et al. Glofitamab 
+for relapsed or refractory diffuse large B-cell lymphoma. N Engl 
+J Med. 2022;387(24):2220–31.
+	25.	 Kalakonda N, Maerevoet M, Cavallo F, et al. Selinexor in patients 
+with relapsed or refractory diffuse large B-cell lymphoma 
+(SADAL): a single-arm, multinational, multicentre, open-label, 
+phase 2 trial. Haematologica. 2020;2020(7):e511–22.
+	26.	 Locke FL, Miklos DB, Jacobson C, et al. Primary analysis of 
+ZUMA-7: a phase 3 randomized trial of axicabtagene ciloleucel 
+(axi-cel) versus standard-of-care therapy in patients with relapsed/
+refractory large B-cell lymphoma. Blood. 2021;138(suppl 1):2.
+	27.	 Schuster SJ, Bishop MR, Tam CS, et al., for the JULIET Investiga-
+tors. Tisagenlecleucel in adult relapsed or refractory diffuse large 
+B-cell lymphoma. N Engl J Med. 2019;380(1):45‒56.
+	28.	 Sehn LH, Herrera AF, Flowers CR, et al. Polatuzumab vedotin 
+in relapsed or refractory diffuse large B-cell lymphoma. J Clin 
+Oncol. 2020;38(2):155–65.
+	29.	 Spiegel JY, Patel S, Muffly L, et al. CAR T cells with dual 
+targeting of CD19 and CD22 in adult patients with recurrent 
+or refractory B cell malignancies: a phase 1 trial. Nat Med. 
+2021;27(8):1419–31.
+	30.	 Higgins JPT, Green S. Cochrane Handbook for Systematic 
+Reviews of Interventions, Version 5.1.0. Chichester: John Wiley 
+& Sons; 2011.
+	31.	 Moher D, Liberati A, Tetzlaff J, Altman DG, The PRISMA Group. 
+Preferred reporting items for systematic reviews and meta-analy-
+ses: the PRISMA statement. PLoS Med. 2009;6(7):e1000097.
+	32.	 Amir-Behghadami M, Janati A. Population, Intervention, Com-
+parison, Outcomes and Study (PICOS) design as a framework to 
+formulate eligibility criteria in systematic reviews. Emerg Med J. 
+2020;37(6):387.
+	33.	 McGowan J, Sampson M, Salzwedel DM, Cogo E, Foerster V, 
+Lefebvre C. PRESS peer review of electronic search strategies: 
+2015 guideline statement. J Clin Epidemiol. 2016;7540‒6.
+	34.	 Centre for Reviews and Dissemination. Systematic reviews: 
+CRD’s guidance for undertaking reviews in health care. Jan 
+2009. https://​www.​york.​ac.​uk/​media/​crd/​Syste​matic_​Revie​ws.​
+pdf. Accessed 13 Dec 2022.
+	35.	 Patrick D, Matza L, Kim Y, Garcia J, Dehner C, Chung KC. 
+PCN262 preference-weighted health status in patients with 
+relapsed/refractory diffuse large B-cell lymphoma (R/R DLBCL) 
+treated with lisocabtagene maraleucel (liso-cel; JCAR017) in 
+the ongoing, multicenter, phase 1 TRANSCEND NHL 001 trial. 
+Value Health. 2019;22(suppl 2):S106.
+	36.	 Patrick DL, Powers A, Parisi M, et al. Impact of lisocabtagene 
+maraleucel (liso-cel) treatment on health-related quality of life 
+and health utility in patients (pts) with relapsed/refractory (R/R) 
+
+
+189
+A Review of HRQOL and Utilities in R/R LBCL
+aggressive B cell non-Hodgkin lymphoma (NHL): Transcend 
+NHL 001. Blood. 2019;134(suppl 1):66.
+	37.	 Patrick D, Powers A, Parisi Jun M, et al. Impact of lisocabta-
+gene maraleucel (liso-cel) treatment on health-related quality of 
+life and health utility in patients with relapsed/refractory aggres-
+sive B-cell non-Hodgkin lymphoma: TRANSCEND NHL 001 
+(NCT02631044). Br J Haematol. 2020;189(suppl 1):220–1.
+	38.	 Shah J, Shacham S, Kauffman M, et al. Health-related qual-
+ity of life and utility outcomes with selinexor in relapsed/
+refractory diffuse large B-cell lymphoma. Future Oncol. 
+2021;17(11):1295–310.
+	39.	 ClinicalTrials.gov. Ofatumumab versus rituximab salvage 
+chemoimmunotherapy followed by autologous stem cell trans-
+plant in relapsed or refractory diffuse large B cell lymphoma 
+(ORCHARRD) (NCT01014208). 2009. https://​clini​caltr​ials.​gov/​
+ct2/​show/​NCT01​014208. Accessed 13 Dec 2022.
+	40.	 Straus DJ, Hamlin PA, Matasar MJ, et al. Phase I/II trial of 
+vorinostat with rituximab, cyclophosphamide, etoposide and 
+prednisone as palliative treatment for elderly patients with 
+relapsed or refractory diffuse large B-cell lymphoma not eli-
+gible for autologous stem cell transplantation. Br J Haematol. 
+2015;168(5):663–70.
+	41.	 Ma Q, Bailey A, Milloy N, Butcher J, Quek RGW, Johnson PC. 
+Real-world health-related quality of life in patients with diffuse 
+large B-cell lymphoma: comparisons with reference populations 
+and by line of therapy. Blood. 2021;138(suppl 1):4111.
+	42.	 Lin VW, Jiang Y, Chuang LH, Navale L, Cheng P, Purdum A. 
+P889 Health utilities for patients with relapsed or refractory large 
+B-cell lymphoma (R/R-LBCL): ad hoc analysis from an axicabta-
+gene ciloleucel (axi-cel) safety management study. Bone Marrow 
+Transplant. 2019;53(suppl 1):879.
+	43.	 Howell TA, Matza LS, Jun MP, Garcia J, Powers A, Maloney DG. 
+PCN90 Assessment of utilities for adverse events (AEs) associ-
+ated with chimeric antigen receptor (CAR) T cell therapy in large 
+B-cell lymphoma (LBCL). Value Health. 2020;23(suppl 1):S39.
+	44.	 Howell TA, Matza LS, Jun MP, Garcia J, Powers A, Maloney DG. 
+Health state utilities for adverse events associated with chimeric 
+antigen receptor T-cell therapy in large B-cell lymphoma. Phar-
+macoecon Open. 2022;6(3):367–76.
+	45.	 Zinzani PL, Santoro A, Gritti G, et al. Nivolumab combined with 
+brentuximab vedotin for relapsed/refractory primary mediasti-
+nal large B-cell lymphoma: efficacy and safety from the phase II 
+CheckMate 436 study. J Clin Oncol. 2019;37(33):3081–9.
+	46.	 Orfanos P, Peipert J, Cella D, et al. POSC370 Health-related qual-
+ity of life of naratuximab emtasine + rituximab (N+R) in sec-
+ond line and heavily pre-treated patients with relapsed/refractory 
+(R/R) diffuse large B-cell lymphoma (DLBCL): an analysis of the 
+Functional Assessment of Cancer Therapy Lymphoma (FACT-
+LYM) measure and mapped EQ-5D values from a phase II trial. 
+Value Health. 2022;25(1 suppl):S245.
+	47.	 Bastos-Oreiro M, Presa M, Heras ADL, et al. Cost-effectiveness 
+analysis of axicabtagene ciloleucel vs tisagenlecleucel for the 
+management of diffuse large b-cell lymphoma in Spain. Hemas-
+phere. 2021;5(suppl 2):561.
+	48.	 Oluwole OO, Liu R, Diakite I, et al. Cost-effectiveness of axi-
+cabtagene ciloleucel versus lisocabtagene maraleucel for adult 
+patients with relapsed or refractory large B-cell lymphoma after 
+two or more lines of systemic therapy in the US. J Med Econ. 
+2022;25(1):541–51.
+	49.	 Parker C, Liu FF, Deger K, et al. Cost-effectiveness of lisocabta-
+gene maraleucel (liso-cel) versus axicabtagene ciloleucel (axi-cel) 
+for treatment of relapsed or refractory (R/R) large B-cell lym-
+phoma (LBCL). Blood. 2021;138(suppl 1):3003.
+	50.	 Lin J, Muffly LS, Spinner MA, Barnes JI, Owens DK, Goldhaber-
+Fiebert JD. Cost-effectiveness of chimeric antigen receptor T-cell 
+therapy in multiply relapsed or refractory adult large B-cell lym-
+phoma. J Clin Oncol. 2019;37(suppl 15):7561.
+	51.	 Roth JA, Sullivan SD, Lin VW, et al. Cost-effectiveness of axi-
+cabtagene ciloleucel for adult patients with relapsed or refrac-
+tory large B-cell lymphoma in the United States. J Med Econ. 
+2018;21(12):1238–45.
+	52.	 Alderuccio JP, Kuker RA, Barreto-Coelho P, et al. Prognostic 
+value of presalvage metabolic tumor volume in patients with 
+relapsed/refractory diffuse large B-cell lymphoma. Leuk Lym-
+phoma. 2022;63(1):43–53.
+	53.	 Cher BP, Gan KY, Aziz MIA, et al. Cost utility analysis of tisa-
+genlecleucel vs salvage chemotherapy in the treatment of relapsed/
+refractory diffuse large B-cell lymphoma from Singapore’s health-
+care system perspective. J Med Econ. 2020;23(11):1321–9.
+	54.	 Li N, Zheng B, Cai H, et al. Cost-effectiveness analysis of axi-
+cabtagene ciloleucel vs. salvage chemotherapy for relapsed or 
+refractory adult diffuse large B-cell lymphoma in China. Support 
+Care Cancer. 2022;30(7):6113–21.
+	55.	 Wakase S, Teshima T, Zhang J, et al. Cost effectiveness analysis 
+of tisagenlecleucel for the treatment of adult patients with relapsed 
+or refractory diffuse large B cell lymphoma in Japan. Transplant 
+Cell Ther. 2021;27(6):506.e1‒.e10.
+	56.	 Whittington MD, McQueen RB, Ollendorf DA, et al. Long-term 
+survival and cost-effectiveness associated with axicabtagene cilo-
+leucel vs chemotherapy for treatment of B-cell lymphoma. JAMA 
+Netw Open. 2019;2(2): e190035.
+	57.	 Qi CZ, Bollu V, Yang H, Dalal A, Zhang S, Zhang J. 
+Cost-effectiveness analysis of tisagenlecleucel for the treatment of 
+patients with relapsed or refractory diffuse large B-cell lymphoma 
+in the United States. Clin Ther. 2021;43(8):1300–19.e8.
+	58.	 Wang XJ, Wang YH, Li SCT, et al. Cost-effectiveness and 
+budget impact analyses of tisagenlecleucel in adult patients 
+with relapsed or refractory diffuse large B-cell lymphoma from 
+Singapore’s private insurance payer’s perspective. J Med Econ. 
+2021;24(1):637–53.
+	59.	 Calamia M, McBride A, Abraham I. Economic evaluation 
+of polatuzumab-bendamustine-rituximab vs. tafasitamab- 
+lenalidomide in transplant-ineligible R/R DLBCL. J Med Econ. 
+2021;24(suppl 1):14–24.
+	60.	 Patel KK, Isufi I, Kothari S, Foss F, Huntington S. Cost- 
+effectiveness of polatuzumab vedotin in relapsed or refrac-
+tory diffuse large B-cell lymphoma. Leuk Lymphoma. 
+2020;61(14):3387–94.
+	61.	 Betts KA, Thuresson PO, Felizzi F, et al. US cost-effectiveness 
+of polatuzumab vedotin, bendamustine and rituximab in diffuse 
+large B-cell lymphoma. J Comp Eff Res. 2020;9(14):1003–15.
+	62.	 Muszbek N, Kadambi A, Lanitis T, et al. The cost-effectiveness 
+of pixantrone for third/fourth-line treatment of aggressive non-
+Hodgkin’s lymphoma. Clin Ther. 2016;38(3):503–15.
+	63.	 Coiffier B, Lepage E, Briere J, et al. CHOP chemotherapy plus 
+rituximab compared with CHOP alone in elderly patients with dif-
+fuse large-B-cell lymphoma. N Engl J Med. 2002;346(4):235–42.
+	64.	 Swerdlow SH, Campo E, Pileri SA, Harris NL, Stein H, Siebert R. 
+The 2016 revision of the World Health Organization classification 
+of lymphoid neoplasms. Blood. 2016;127(20):2375–90.
+	65.	 Campo E, Swerdlow SH, Harris NL, Pileri SA, Stein H, Jaffe 
+ES. The 2008 WHO classification of lymphoid neoplasms and 
+beyond: evolving concepts and practical applications. Blood. 
+2011;117(19):5019–32.
+	66.	 Abramson JS, Palomba ML, Gordon LI, et al. Lisocabtagene 
+maraleucel for patients with relapsed or refractory large B-cell 
+lymphomas (TRANSCEND NHL 001): a multicentre seamless 
+design study. Lancet. 2020;396(10254):839–52.
+	67.	 Tam CS, Waller EK, Jaeger U, et al. Prolonged improvement in 
+patient reported quality of life (QoL) following tisagenlecleucel 
+infusion in adult patients (pts) with relapsed/refractory (r/r) diffuse 
+
+
+190
+	
+F. F. Liu et al.
+large B-cell lymphoma (DLBCL): 19-month follow-up (FU) of the 
+Juliet study. Biol Blood Marrow Transplant. 2019;25(3):S181–2.
+	68.	 Maziarz RT, Bishop MR, Tam CS, et al. Patient-reported qual-
+ity of life (QoL) following CTL019 infusion in adult patients 
+(pts) with relapsed/refractory (r/r) diffuse large B-cell lymphoma 
+(DLBCL). Blood. 2017;130(suppl 1):5215.
+	69.	 Casasnovas RO, Daniele P, Tremblay G, et al. PCN325 Health 
+utility in relapsed/refractory diffuse large B-cell lymphoma 
+(RR-DLBCL) patients—results of a phase II trial with ORAL 
+selinexor. Value Health. 2020;23(suppl 2):S479–80.
+	70.	 ClinicalTrials.gov. Study evaluating the safety and efficacy of 
+KTE-C19 in adult participants with refractory aggressive non-
+Hodgkin lymphoma (ZUMA-1 (NCT02348216). 2015. https://​
+clini​caltr​ials.​gov/​ct2/​show/​NCT02​348216. Accessed 13 Dec 
+2022.
+	71.	 Bastos-Oreiro M, de Las Heras A, Presa M, et  al. Cost-­
+effectiveness analysis of axicabtagene ciloleucel vs. tisagenle-
+cleucel for the management of relapsed/refractory diffuse large 
+B-cell lymphoma in Spain. Cancers (Basel). 2022;14(3):538.
+	72.	 Betts KA, Felizzi F, Dieye I, et al. Cost-effectiveness of polatu-
+zumab vedotin plus bendamustine-rituximab for transplant-­
+ineligible relapsed/refractory diffuse large B-cell lymphoma in 
+the United States. Blood. 2020;136(suppl 1):3.
+	73.	 Pharmaceutical Benefits Advisory Committee. Pembrolizumab, 
+solution concentrate for I.V. infusion 100 mg in 4 mL, ­Keytruda®, 
+Merck Sharp & Dohme (Australia) Pty Limited. Nov 2018. https://​
+www.​pbs.​gov.​au/​indus​try/​listi​ng/​eleme​nts/​pbac-​meeti​ngs/​psd/​
+2018-​11/​files/​pembr​olizu​mab-​pmbcl-​psd-​novem​ber-​2018.​pdf. 
+Accessed 13 Dec 2022.
+	74.	 Pharmaceutical Benefits Advisory Committee. Polatuzumab vedo-
+tin, powder for injection, 140 mg vial, ­Polivy®, Roche Products 
+Pty Limited. Nov 2019. https://​www.​pbs.​gov.​au/​indus​try/​listi​ng/​
+eleme​nts/​pbac-​meeti​ngs/​psd/​2019-​11/​files/​polat​uzumab-​vedot​in-​
+psd-​novem​ber-​2019.​docx.​pdf. Accessed 13 Dec 2022.
+	75.	 Canadian Agency for Drugs and Technologies in Health. Tisa-
+genlecleucel for acute lymphoblastic leukemia and diffuse large 
+B-cell lymphoma: recommendations. Ottawa: CADTH; 2019 Jan. 
+(CADTH optimal use report, vol.8, no.3g).
+	76.	 Crump M, Neelapu SS, Farooq U, et al. Outcomes in refractory 
+diffuse large B-cell lymphoma: results from the international 
+SCHOLAR-1 study. Blood. 2017;130(16):1800–8.
+	77.	 National Institute for Health and Care Excellence. Final appraisal 
+document: Polatuzumab vedotin with rituximab and bendamustine 
+for treating relapsed or refractory diffuse large B-cell lymphoma. 
+Aug 2020. https://​www.​nice.​org.​uk/​guida​nce/​ta649/​docum​ents/​
+final-​appra​isal-​deter​minat​ion-​docum​ent. Accessed 13 Dec 2022.
+	78.	 National Institute for Health and Care Excellence. Tisagenlecleu-
+cel for treating relapsed or refractory diffuse large B-cell lym-
+phoma after 2 or more systemic therapies. Technology appraisal 
+guidance. 13 Mar 2019. https://​www.​nice.​org.​uk/​guida​nce/​ta567/​
+resou​rces/​tisag​enlec​leucel-​for-​treat​ing-​relap​sed-​or-​refra​ctory-​
+diffu​se-​large-​bcell-​lymph​oma-​after-2-​or-​more-​syste​mic-​thera​
+pies-​pdf-​82607​08737​7861. Accessed 13 Dec 2022.
+	79.	 National Institute for Health and Care Excellence. Axicabtagene 
+ciloleucel for treating diffuse large B-cell lymphoma and primary 
+mediastinal large B-cell lymphoma after 2 or more systemic thera-
+pies. Technology appraisal guidance. 23 Jan 2019. https://​www.​
+nice.​org.​uk/​guida​nce/​ta559/​resou​rces/​axica​btage​ne-​cilol​eucel-​
+for-​treat​ing-​diffu​se-​large-​bcell-​lymph​oma-​and-​prima​ry-​media​
+stinal-​large-​bcell-​lymph​oma-​after-2-​or-​more-​syste​mic-​thera​pies-​
+pdf-​82607​03027​0917. Accessed 13 Dec 2022.
+	80.	 National Institute for Health and Care Excellence. Pixantrone 
+monotherapy for treating multiply relapsed or refractory aggres-
+sive non-Hodgkin’s B-cell lymphoma. Technology appraisal guid-
+ance. 26 Feb 2014. https://​www.​nice.​org.​uk/​guida​nce/​ta306/​resou​
+rces/​pixan​trone-​monot​herapy-​for-​treat​ing-​multi​ply-​relap​sed-​or-​
+refra​ctory-​aggre​ssive-​nonho​dgkins-​bcell-​lymph​oma-​pdf-​82602​
+36933​6517. Accessed 13 Dec 2022.
+Authors and Affiliations
+Fei Fei Liu1 · Meaghan Bartlett2 · Samantha Craigie2
+ *	 Fei Fei Liu 
+	
+feifei.liu@bms.com
+1	
+Bristol Myers Squibb, 3401 Princeton Pike, Lawrence 
+Township, Princeton, NJ 08648, USA
+2	
+EVERSANA, Burlington, ON, Canada

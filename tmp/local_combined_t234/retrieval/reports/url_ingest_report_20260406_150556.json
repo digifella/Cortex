@@ -1,0 +1,32 @@
+[
+  {
+    "input_url": "https://clinicaltrials.gov/ct2/show/NCT01014208",
+    "final_url": "",
+    "page_title": "",
+    "status": "failed",
+    "reason": "exception: HTTPSConnectionPool(host='clinicaltrials.gov', port=443): Max retries exceeded with url: /ct2/show/NCT01014208 (Caused by NameResolutionError(\"HTTPSConnection(host='clinicaltrials.gov', port=443): Failed to resolve 'clinicaltrials.gov' ([Errno -2] Name or service not known)\"))",
+    "http_code": "",
+    "open_access_pdf_found": false,
+    "pdf_url": "",
+    "pdf_path": "",
+    "md_path": "",
+    "converted_to_md": false,
+    "web_captured": false,
+    "elapsed_seconds": 0.0
+  },
+  {
+    "input_url": "https://clinicaltrials.gov/ct2/show/NCT02348216",
+    "final_url": "",
+    "page_title": "",
+    "status": "failed",
+    "reason": "exception: HTTPSConnectionPool(host='clinicaltrials.gov', port=443): Max retries exceeded with url: /ct2/show/NCT02348216 (Caused by NameResolutionError(\"HTTPSConnection(host='clinicaltrials.gov', port=443): Failed to resolve 'clinicaltrials.gov' ([Errno -2] Name or service not known)\"))",
+    "http_code": "",
+    "open_access_pdf_found": false,
+    "pdf_url": "",
+    "pdf_path": "",
+    "md_path": "",
+    "converted_to_md": false,
+    "web_captured": false,
+    "elapsed_seconds": 0.0
+  }
+]

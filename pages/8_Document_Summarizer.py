@@ -1,5 +1,5 @@
 # ## File: pages/14_Document_Summarizer.py
-# Version: v6.0.10
+# Version: v6.0.11
 # Date: 2026-01-26
 # Purpose: Advanced Document Summarizer with multiple detail levels.
 #          Leverages Docling, LLM infrastructure, and intelligent chunking.

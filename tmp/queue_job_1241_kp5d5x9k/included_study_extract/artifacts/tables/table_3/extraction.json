@@ -1,0 +1,307 @@
+{
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-6",
+  "tables": [
+    {
+      "table_number": "3",
+      "table_title": "Overview of included studies on health statue utility values",
+      "grouping_basis": "Utility assessment method and region",
+      "included_study_count": "",
+      "included_rct_count": "",
+      "groups": [
+        {
+          "group_label": "EQ-5D / Global",
+          "trial_label": "CheckMate 436",
+          "notes": "Phase 1/2 single-arm; R/R PMBCL; nivolumab + brentuximab vedotin; EQ-5D-3L",
+          "citations": [
+            {
+              "display": "Zinzani 2019 [45]",
+              "authors": "Zinzani et al.",
+              "year": "2019",
+              "reference_number": "45",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2019",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "EQ-5D / Global",
+          "trial_label": "SADAL",
+          "notes": "Phase 2b single-arm; R/R DLBCL 2+ prior lines; selinexor; EQ-5D-5L health index",
+          "citations": [
+            {
+              "display": "Shah 2021 [38]",
+              "authors": "Shah et al.",
+              "year": "2021",
+              "reference_number": "38",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2021",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Casasnovas 2020 [69]",
+              "authors": "Casasnovas et al.",
+              "year": "2020",
+              "reference_number": "69",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2020",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "EQ-5D / Global",
+          "trial_label": "ZUMA-1",
+          "notes": "Phase 2 single-arm; 3L+ DLBCL (Cohorts 3-6) and safety management study; axi-cel; EQ-5D-5L VAS and health index",
+          "citations": [
+            {
+              "display": "Lin 2019 [42]",
+              "authors": "Lin et al.",
+              "year": "2019",
+              "reference_number": "42",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2019",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "ClinicalTrials.gov [70]",
+              "authors": "ClinicalTrials.gov",
+              "year": "2015",
+              "reference_number": "70",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2015",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "NCT02348216",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "EQ-5D / US",
+          "trial_label": "TRANSCEND NHL 001",
+          "notes": "Phase 1 single-arm; R/R DLBCL 2+ prior lines; liso-cel; EQ-5D-5L health index and VAS",
+          "citations": [
+            {
+              "display": "Patrick 2021 [17]",
+              "authors": "Patrick et al.",
+              "year": "2021",
+              "reference_number": "17",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2021",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Patrick 2020 [37]",
+              "authors": "Patrick et al.",
+              "year": "2020",
+              "reference_number": "37",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2020",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Patrick 2019 [35]",
+              "authors": "Patrick et al.",
+              "year": "2019",
+              "reference_number": "35",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2019",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Patrick 2019 [36]",
+              "authors": "Patrick et al.",
+              "year": "2019",
+              "reference_number": "36",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2019",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "EQ-5D / NR (region not reported)",
+          "trial_label": "Naratuximab emtansine + rituximab phase 2",
+          "notes": "Phase 2 single-arm; 2L and heavily pre-treated R/R DLBCL; naratuximab emtansine + rituximab; EQ-5D unspecified",
+          "citations": [
+            {
+              "display": "Orfanos 2022 [46]",
+              "authors": "Orfanos et al.",
+              "year": "2022",
+              "reference_number": "46",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2022",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": false,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "EQ-5D / UK",
+          "trial_label": "Vignette-based (hypothetical CAR T pathway)",
+          "notes": "Vignette-based study; general adult population UK; EQ-5D-5L health index and VAS; not a clinical trial",
+          "citations": [
+            {
+              "display": "Howell 2022 [44]",
+              "authors": "Howell et al.",
+              "year": "2022",
+              "reference_number": "44",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2022",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": true,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Howell 2020 [43]",
+              "authors": "Howell et al.",
+              "year": "2020",
+              "reference_number": "43",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2020",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": true,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        },
+        {
+          "group_label": "TTO / UK",
+          "trial_label": "Vignette-based (hypothetical CAR T pathway)",
+          "notes": "Vignette-based study; general adult population UK; TTO 1-year horizon; disutilities for CRS and NE AEs; not a clinical trial",
+          "citations": [
+            {
+              "display": "Howell 2022 [44]",
+              "authors": "Howell et al.",
+              "year": "2022",
+              "reference_number": "44",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2022",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": true,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            },
+            {
+              "display": "Howell 2020 [43]",
+              "authors": "Howell et al.",
+              "year": "2020",
+              "reference_number": "43",
+              "resolved_title": "",
+              "resolved_authors": "",
+              "resolved_year": "2020",
+              "resolved_journal": "",
+              "resolved_doi": "",
+              "notes": "",
+              "needs_review": true,
+              "study_design": "",
+              "sample_size": "",
+              "outcome_measure": "",
+              "outcome_result": ""
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "warnings": [
+    "Howell 2022 [44] and Howell 2020 [43] are vignette-based studies using a general population sample, not clinical trials; flagged needs_review=true per inclusion criteria.",
+    "ZUMA-1 safety management study cohort (ClinicalTrials.gov [70]) is a separate sub-population row from the main ZUMA-1 Cohorts 3-6 row but shares the same trial; consolidated under one group."
+  ],
+  "raw_response": "```json\n{\n  \"tables\": [\n    {\n      \"table_number\": \"3\",\n      \"table_title\": \"Overview of included studies on health statue utility values\",\n      \"grouping_basis\": \"Utility assessment method and region\",\n      \"groups\": [\n        {\n          \"group_label\": \"EQ-5D / Global\",\n          \"trial_label\": \"CheckMate 436\",\n          \"notes\": \"Phase 1/2 single-arm; R/R PMBCL; nivolumab + brentuximab vedotin; EQ-5D-3L\",\n          \"citations\": [\n            {\n              \"display\": \"Zinzani 2019 [45]\",\n              \"authors\": \"Zinzani et al.\",\n              \"year\": \"2019\",\n              \"reference_number\": \"45\",\n              \"notes\": \"\",\n              \"needs_review\": false\n            }\n          ]\n        },\n        {\n          \"group_label\": \"EQ-5D / Global\",\n          \"trial_label\": \"SADAL\",\n          \"notes\": \"Phase 2b single-arm; R/R DLBCL 2+ prior lines; selinexor; EQ-5D-5L health index\",\n          \"citations\": [\n            {\n              \"display\": \"Shah 2021 [38]\",\n              \"authors\": \"Shah et al.\",\n              \"year\": \"2021\",\n              \"reference_number\": \"38\",\n              \"notes\": \"\",\n              \"needs_review\": false\n            },\n            {\n              \"display\": \"Casasnovas 2020 [69]\",\n              \"authors\": \"Casasnovas et al.\",\n              \"year\": \"2020\",\n              \"reference_number\": \"69\",\n              \"notes\": \"\",\n              \"needs_review\": false\n            }\n          ]\n        },\n        {\n          \"group_label\": \"EQ-5D / Global\",\n          \"trial_label\": \"ZUMA-1\",\n          \"notes\": \"Phase 2 single-arm; 3L+ DLBCL (Cohorts 3-6) and safety management study; axi-cel; EQ-5D-5L VAS and health index\",\n          \"citations\": [\n            {\n              \"display\": \"Lin 2019 [42]\",\n              \"authors\": \"Lin et al.\",\n              \"year\": \"2019\",\n              \"reference_number\": \"42\",\n              \"notes\": \"\",\n              \"needs_review\": false\n            },\n            {\n              \"display\": \"ClinicalTrials.gov [70]\",\n              \"authors\": \"ClinicalTrials.gov\",\n              \"year\": \"2015\",\n              \"reference_number\": \"70\",\n              \"notes\": \"NCT02348216\",\n              \"needs_review\": false\n            }\n          ]\n        },\n        {\n          \"group_label\": \"EQ-5D / US\",\n          \"trial_label\": \"TRANSCEND NHL 001\",\n          \"notes\": \"Phase 1 single-arm; R/R DLBCL 2+ prior lines; liso-cel; EQ-5D-5L health index and VAS\",\n          \"citations\": [\n            {\n              \"display\": \"Patrick 2021 [17]\",\n              \"authors\": \"Patrick et al.\",\n              \"year\": \"2021\",\n              \"reference_number\": \"17\",\n              \"notes\": \"\",\n              \"needs_review\": false\n            },\n            {\n              \"display\": \"Patrick 2020 [37]\",\n              \"authors\": \"Patrick et al.\",\n              \"year\": \"2020\",\n              \"reference_number\": \"37\",\n              \"notes\": \"\",\n              \"needs_review\": false\n            },\n            {\n              \"display\": \"Patrick 2019 [35]\",\n              \"authors\": \"Patrick et al.\",\n              \"year\": \"2019\",\n              \"reference_number\": \"35\",\n              \"notes\": \"\",\n              \"needs_review\": false\n            },\n            {\n              \"display\": \"Patrick 2019 [36]\",\n              \"authors\": \"Patrick et al.\",\n              \"year\": \"2019\",\n              \"reference_number\": \"36\",\n              \"notes\": \"\",\n              \"needs_review\": false\n            }\n          ]\n        },\n        {\n          \"group_label\": \"EQ-5D / NR (region not reported)\",\n          \"trial_label\": \"Naratuximab emtansine + rituximab phase 2\",\n          \"notes\": \"Phase 2 single-arm; 2L and heavily pre-treated R/R DLBCL; naratuximab emtansine + rituximab; EQ-5D unspecified\",\n          \"citations\": [\n            {\n              \"display\": \"Orfanos 2022 [46]\",\n              \"authors\": \"Orfanos et al.\",\n              \"year\": \"2022\",\n              \"reference_number\": \"46\",\n              \"notes\": \"\",\n              \"needs_review\": false\n            }\n          ]\n        },\n        {\n          \"group_label\": \"EQ-5D / UK\",\n          \"trial_label\": \"Vignette-based (hypothetical CAR T pathway)\",\n          \"notes\": \"Vignette-based study; general adult population UK; EQ-5D-5L health index and VAS; not a clinical trial\",\n          \"citations\": [\n            {\n              \"display\": \"Howell 2022 [44]\",\n              \"authors\": \"Howell et al.\",\n              \"year\": \"2022\",\n              \"reference_number\": \"44\",\n              \"notes\": \"\",\n              \"needs_review\": true\n            },\n            {\n              \"display\": \"Howell 2020 [43]\",\n              \"authors\": \"Howell et al.\",\n              \"year\": \"2020\",\n              \"reference_number\": \"43\",\n              \"notes\": \"\",\n              \"needs_review\": true\n            }\n          ]\n        },\n        {\n          \"group_label\": \"TTO / UK\",\n          \"trial_label\": \"Vignette-based (hypothetical CAR T pathway)\",\n          \"notes\": \"Vignette-based study; general adult population UK; TTO 1-year horizon; disutilities for CRS and NE AEs; not a clinical trial\",\n          \"citations\": [\n            {\n              \"display\": \"Howell 2022 [44]\",\n              \"authors\": \"Howell et al.\",\n              \"year\": \"2022\",\n              \"reference_number\": \"44\",\n              \"notes\": \"\",\n              \"needs_review\": true\n            },\n            {\n              \"display\": \"Howell 2020 [43]\",\n              \"authors\": \"Howell et al.\",\n              \"year\": \"2020\",\n              \"reference_number\": \"43\",\n              \"notes\": \"\",\n              \"needs_review\": true\n            }\n          ]\n        }\n      ]\n    }\n  ],\n  \"warnings\": [\n    \"Howell 2022 [44] and Howell 2020 [43] are vignette-based studies using a general population sample, not clinical trials; flagged needs_review=true per inclusion criteria.\",\n    \"ZUMA-1 safety management study cohort (ClinicalTrials.gov [70]) is a separate sub-population row from the main ZUMA-1 Cohorts 3-6 row but shares the same trial; consolidated under one group.\"\n  ]\n}\n```"
+}

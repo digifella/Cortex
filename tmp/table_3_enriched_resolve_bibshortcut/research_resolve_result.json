@@ -1,0 +1,494 @@
+{
+  "status": "completed",
+  "resolved": [
+    {
+      "row_id": 1,
+      "input_title": "Nivolumab combined with brentuximab vedotin for relapsed/refractory primary mediasti- nal large B-cell lymphoma: efficacy and safety from the phase II CheckMate 436 study",
+      "resolved_doi": "",
+      "resolved_url": "",
+      "source_api": "review_bibliography",
+      "confidence": "high",
+      "open_access": {
+        "is_oa": null,
+        "oa_status": "unknown",
+        "pdf_url": "",
+        "oa_source": ""
+      },
+      "journal": {
+        "name": "",
+        "issn": "",
+        "sjr_quartile": "",
+        "sjr_score": 0.0,
+        "sjr_rank": 0
+      },
+      "credibility_tier": "commentary",
+      "resolution_method": "bibliography_reference_number",
+      "publisher": "Zinzani PL",
+      "type": "bibliography-entry",
+      "matched_title": "Nivolumab combined with brentuximab vedotin for relapsed/refractory primary mediasti- nal large B-cell lymphoma: efficacy and safety from the phase II CheckMate 436 study",
+      "title_similarity": 1.0,
+      "retraction": {
+        "is_retracted": false,
+        "source": "",
+        "note": ""
+      },
+      "source_ref": "45",
+      "extra_fields": {
+        "table_number": "3",
+        "table_title": "Overview of included studies on health statue utility values",
+        "grouping_basis": "Utility assessment method and region",
+        "group_label": "EQ-5D / Global",
+        "trial_label": "CheckMate 436",
+        "combined_group": "EQ-5D / Global / CheckMate 436",
+        "reference_number": "45",
+        "citation_display": "Zinzani 2019 [45]",
+        "needs_review": "",
+        "study_design": "",
+        "sample_size": "",
+        "outcome_measure": "",
+        "outcome_result": ""
+      }
+    },
+    {
+      "row_id": 2,
+      "input_title": "Health-related qual- ity of life and utility outcomes with selinexor in relapsed/ refractory diffuse large B-cell lymphoma",
+      "resolved_doi": "",
+      "resolved_url": "",
+      "source_api": "review_bibliography",
+      "confidence": "high",
+      "open_access": {
+        "is_oa": null,
+        "oa_status": "unknown",
+        "pdf_url": "",
+        "oa_source": ""
+      },
+      "journal": {
+        "name": "Health-related qual- ity of life and utility outcomes with selinexor in relapsed/ refractory diffuse large B-cell lymphoma",
+        "issn": "",
+        "sjr_quartile": "",
+        "sjr_score": 0.0,
+        "sjr_rank": 0
+      },
+      "credibility_tier": "commentary",
+      "resolution_method": "bibliography_reference_number",
+      "publisher": "Health-related qual- ity of life and utility outcomes with selinexor in relapsed/ refractory diffuse large B-cell lymphoma",
+      "type": "bibliography-entry",
+      "matched_title": "Health-related qual- ity of life and utility outcomes with selinexor in relapsed/ refractory diffuse large B-cell lymphoma",
+      "title_similarity": 1.0,
+      "retraction": {
+        "is_retracted": false,
+        "source": "",
+        "note": ""
+      },
+      "source_ref": "38",
+      "extra_fields": {
+        "table_number": "3",
+        "table_title": "Overview of included studies on health statue utility values",
+        "grouping_basis": "Utility assessment method and region",
+        "group_label": "EQ-5D / Global",
+        "trial_label": "SADAL",
+        "combined_group": "EQ-5D / Global / SADAL",
+        "reference_number": "38",
+        "citation_display": "Shah 2021 [38]",
+        "needs_review": "",
+        "study_design": "",
+        "sample_size": "",
+        "outcome_measure": "",
+        "outcome_result": ""
+      }
+    },
+    {
+      "row_id": 3,
+      "input_title": "PCN325 Health utility in relapsed/refractory diffuse large B-cell lymphoma (RR-DLBCL) patients\u2014results of a phase II trial with ORAL selinexor",
+      "resolved_doi": "",
+      "resolved_url": "",
+      "source_api": "review_bibliography",
+      "confidence": "high",
+      "open_access": {
+        "is_oa": null,
+        "oa_status": "unknown",
+        "pdf_url": "",
+        "oa_source": ""
+      },
+      "journal": {
+        "name": "PCN325 Health utility in relapsed/refractory diffuse large B-cell lymphoma (RR-DLBCL) patients\u2014results of a phase II trial with ORAL selinexor",
+        "issn": "",
+        "sjr_quartile": "",
+        "sjr_score": 0.0,
+        "sjr_rank": 0
+      },
+      "credibility_tier": "commentary",
+      "resolution_method": "bibliography_reference_number",
+      "publisher": "PCN325 Health utility in relapsed/refractory diffuse large B-cell lymphoma (RR-DLBCL) patients\u2014results of a phase II trial with ORAL selinexor",
+      "type": "bibliography-entry",
+      "matched_title": "PCN325 Health utility in relapsed/refractory diffuse large B-cell lymphoma (RR-DLBCL) patients\u2014results of a phase II trial with ORAL selinexor",
+      "title_similarity": 1.0,
+      "retraction": {
+        "is_retracted": false,
+        "source": "",
+        "note": ""
+      },
+      "source_ref": "69",
+      "extra_fields": {
+        "table_number": "3",
+        "table_title": "Overview of included studies on health statue utility values",
+        "grouping_basis": "Utility assessment method and region",
+        "group_label": "EQ-5D / Global",
+        "trial_label": "SADAL",
+        "combined_group": "EQ-5D / Global / SADAL",
+        "reference_number": "69",
+        "citation_display": "Casasnovas 2020 [69]",
+        "needs_review": "",
+        "study_design": "",
+        "sample_size": "",
+        "outcome_measure": "",
+        "outcome_result": ""
+      }
+    },
+    {
+      "row_id": 4,
+      "input_title": "P889 Health utilities for patients with relapsed or refractory large B-cell lymphoma (R/R-LBCL): ad hoc analysis from an axicabta- gene ciloleucel (axi-cel) safety management study",
+      "resolved_doi": "",
+      "resolved_url": "",
+      "source_api": "review_bibliography",
+      "confidence": "high",
+      "open_access": {
+        "is_oa": null,
+        "oa_status": "unknown",
+        "pdf_url": "",
+        "oa_source": ""
+      },
+      "journal": {
+        "name": "P889 Health utilities for patients with relapsed or refractory large B-cell lymphoma (R/R-LBCL): ad hoc analysis from an axicabta- gene ciloleucel (axi-cel) safety management study",
+        "issn": "",
+        "sjr_quartile": "",
+        "sjr_score": 0.0,
+        "sjr_rank": 0
+      },
+      "credibility_tier": "commentary",
+      "resolution_method": "bibliography_reference_number",
+      "publisher": "P889 Health utilities for patients with relapsed or refractory large B-cell lymphoma (R/R-LBCL): ad hoc analysis from an axicabta- gene ciloleucel (axi-cel) safety management study",
+      "type": "bibliography-entry",
+      "matched_title": "P889 Health utilities for patients with relapsed or refractory large B-cell lymphoma (R/R-LBCL): ad hoc analysis from an axicabta- gene ciloleucel (axi-cel) safety management study",
+      "title_similarity": 1.0,
+      "retraction": {
+        "is_retracted": false,
+        "source": "",
+        "note": ""
+      },
+      "source_ref": "42",
+      "extra_fields": {
+        "table_number": "3",
+        "table_title": "Overview of included studies on health statue utility values",
+        "grouping_basis": "Utility assessment method and region",
+        "group_label": "EQ-5D / Global",
+        "trial_label": "ZUMA-1",
+        "combined_group": "EQ-5D / Global / ZUMA-1",
+        "reference_number": "42",
+        "citation_display": "Lin 2019 [42]",
+        "needs_review": "",
+        "study_design": "",
+        "sample_size": "",
+        "outcome_measure": "",
+        "outcome_result": ""
+      }
+    },
+    {
+      "row_id": 5,
+      "input_title": "Study evaluating the safety and efficacy of KTE-C19 in adult participants with refractory aggressive non- Hodgkin lymphoma (ZUMA-1 (NCT02348216)",
+      "resolved_doi": "",
+      "resolved_url": "",
+      "source_api": "review_bibliography",
+      "confidence": "high",
+      "open_access": {
+        "is_oa": null,
+        "oa_status": "unknown",
+        "pdf_url": "",
+        "oa_source": ""
+      },
+      "journal": {
+        "name": "",
+        "issn": "",
+        "sjr_quartile": "",
+        "sjr_score": 0.0,
+        "sjr_rank": 0
+      },
+      "credibility_tier": "commentary",
+      "resolution_method": "bibliography_reference_number",
+      "publisher": "ClinicalTrials",
+      "type": "bibliography-entry",
+      "matched_title": "Study evaluating the safety and efficacy of KTE-C19 in adult participants with refractory aggressive non- Hodgkin lymphoma (ZUMA-1 (NCT02348216)",
+      "title_similarity": 1.0,
+      "retraction": {
+        "is_retracted": false,
+        "source": "",
+        "note": ""
+      },
+      "source_ref": "70",
+      "extra_fields": {
+        "table_number": "3",
+        "table_title": "Overview of included studies on health statue utility values",
+        "grouping_basis": "Utility assessment method and region",
+        "group_label": "EQ-5D / Global",
+        "trial_label": "ZUMA-1",
+        "combined_group": "EQ-5D / Global / ZUMA-1",
+        "reference_number": "70",
+        "citation_display": "ClinicalTrials.gov [70]",
+        "needs_review": "",
+        "study_design": "",
+        "sample_size": "",
+        "outcome_measure": "",
+        "outcome_result": ""
+      }
+    },
+    {
+      "row_id": 6,
+      "input_title": "Effect of lisocabtagene maraleucel on HRQoL and symptom severity in relapsed/refrac- tory large B-cell lymphoma",
+      "resolved_doi": "",
+      "resolved_url": "",
+      "source_api": "review_bibliography",
+      "confidence": "high",
+      "open_access": {
+        "is_oa": null,
+        "oa_status": "unknown",
+        "pdf_url": "",
+        "oa_source": ""
+      },
+      "journal": {
+        "name": "",
+        "issn": "",
+        "sjr_quartile": "",
+        "sjr_score": 0.0,
+        "sjr_rank": 0
+      },
+      "credibility_tier": "commentary",
+      "resolution_method": "bibliography_reference_number",
+      "publisher": "Patrick DL",
+      "type": "bibliography-entry",
+      "matched_title": "Effect of lisocabtagene maraleucel on HRQoL and symptom severity in relapsed/refrac- tory large B-cell lymphoma",
+      "title_similarity": 1.0,
+      "retraction": {
+        "is_retracted": false,
+        "source": "",
+        "note": ""
+      },
+      "source_ref": "17",
+      "extra_fields": {
+        "table_number": "3",
+        "table_title": "Overview of included studies on health statue utility values",
+        "grouping_basis": "Utility assessment method and region",
+        "group_label": "EQ-5D / US",
+        "trial_label": "TRANSCEND NHL 001",
+        "combined_group": "EQ-5D / US / TRANSCEND NHL 001",
+        "reference_number": "17",
+        "citation_display": "Patrick 2021 [17]",
+        "needs_review": "",
+        "study_design": "",
+        "sample_size": "",
+        "outcome_measure": "",
+        "outcome_result": ""
+      }
+    },
+    {
+      "row_id": 7,
+      "input_title": "Impact of lisocabta- gene maraleucel (liso-cel) treatment on health-related quality of life and health utility in patients with relapsed/refractory aggres- sive B-cell non-Hodgkin lymphoma: TRANSCEND NHL 001 (NCT02631044)",
+      "resolved_doi": "",
+      "resolved_url": "",
+      "source_api": "review_bibliography",
+      "confidence": "high",
+      "open_access": {
+        "is_oa": null,
+        "oa_status": "unknown",
+        "pdf_url": "",
+        "oa_source": ""
+      },
+      "journal": {
+        "name": "Impact of lisocabta- gene maraleucel (liso-cel) treatment on health-related quality of life and health utility in patients with relapsed/refractory aggres- sive B-cell non-Hodgkin lymphoma: TRANSCEND NHL 001 (NCT02631044)",
+        "issn": "",
+        "sjr_quartile": "",
+        "sjr_score": 0.0,
+        "sjr_rank": 0
+      },
+      "credibility_tier": "commentary",
+      "resolution_method": "bibliography_reference_number",
+      "publisher": "Impact of lisocabta- gene maraleucel (liso-cel) treatment on health-related quality of life and health utility in patients with relapsed/refractory aggres- sive B-cell non-Hodgkin lymphoma: TRANSCEND NHL 001 (NCT02631044)",
+      "type": "bibliography-entry",
+      "matched_title": "Impact of lisocabta- gene maraleucel (liso-cel) treatment on health-related quality of life and health utility in patients with relapsed/refractory aggres- sive B-cell non-Hodgkin lymphoma: TRANSCEND NHL 001 (NCT02631044)",
+      "title_similarity": 1.0,
+      "retraction": {
+        "is_retracted": false,
+        "source": "",
+        "note": ""
+      },
+      "source_ref": "37",
+      "extra_fields": {
+        "table_number": "3",
+        "table_title": "Overview of included studies on health statue utility values",
+        "grouping_basis": "Utility assessment method and region",
+        "group_label": "EQ-5D / US",
+        "trial_label": "TRANSCEND NHL 001",
+        "combined_group": "EQ-5D / US / TRANSCEND NHL 001",
+        "reference_number": "37",
+        "citation_display": "Patrick 2020 [37]",
+        "needs_review": "",
+        "study_design": "",
+        "sample_size": "",
+        "outcome_measure": "",
+        "outcome_result": ""
+      }
+    },
+    {
+      "row_id": 8,
+      "input_title": "PCN262 preference-weighted health status in patients with relapsed/refractory diffuse large B-cell lymphoma (R/R DLBCL) treated with lisocabtagene maraleucel (liso-cel; JCAR017) in the ongoing, multicenter, phase 1 TRANSCEND NHL 001 trial",
+      "resolved_doi": "",
+      "resolved_url": "",
+      "source_api": "review_bibliography",
+      "confidence": "high",
+      "open_access": {
+        "is_oa": null,
+        "oa_status": "unknown",
+        "pdf_url": "",
+        "oa_source": ""
+      },
+      "journal": {
+        "name": "PCN262 preference-weighted health status in patients with relapsed/refractory diffuse large B-cell lymphoma (R/R DLBCL) treated with lisocabtagene maraleucel (liso-cel",
+        "issn": "",
+        "sjr_quartile": "",
+        "sjr_score": 0.0,
+        "sjr_rank": 0
+      },
+      "credibility_tier": "commentary",
+      "resolution_method": "bibliography_reference_number",
+      "publisher": "PCN262 preference-weighted health status in patients with relapsed/refractory diffuse large B-cell lymphoma (R/R DLBCL) treated with lisocabtagene maraleucel (liso-cel",
+      "type": "bibliography-entry",
+      "matched_title": "PCN262 preference-weighted health status in patients with relapsed/refractory diffuse large B-cell lymphoma (R/R DLBCL) treated with lisocabtagene maraleucel (liso-cel; JCAR017) in the ongoing, multicenter, phase 1 TRANSCEND NHL 001 trial",
+      "title_similarity": 1.0,
+      "retraction": {
+        "is_retracted": false,
+        "source": "",
+        "note": ""
+      },
+      "source_ref": "35",
+      "extra_fields": {
+        "table_number": "3",
+        "table_title": "Overview of included studies on health statue utility values",
+        "grouping_basis": "Utility assessment method and region",
+        "group_label": "EQ-5D / US",
+        "trial_label": "TRANSCEND NHL 001",
+        "combined_group": "EQ-5D / US / TRANSCEND NHL 001",
+        "reference_number": "35",
+        "citation_display": "Patrick 2019 [35]",
+        "needs_review": "",
+        "study_design": "",
+        "sample_size": "",
+        "outcome_measure": "",
+        "outcome_result": ""
+      }
+    },
+    {
+      "row_id": 9,
+      "input_title": "Impact of lisocabtagene maraleucel (liso-cel) treatment on health-related quality of life and health utility in patients (pts) with relapsed/refractory (R/R) 189 A Review of HRQOL and Utilities in R/R LBCL aggressive B cell non-Hodgkin lymphoma (NHL): Transcend NHL 001",
+      "resolved_doi": "",
+      "resolved_url": "",
+      "source_api": "review_bibliography",
+      "confidence": "high",
+      "open_access": {
+        "is_oa": null,
+        "oa_status": "unknown",
+        "pdf_url": "",
+        "oa_source": ""
+      },
+      "journal": {
+        "name": "Impact of lisocabtagene maraleucel (liso-cel) treatment on health-related quality of life and health utility in patients (pts) with relapsed/refractory (R/R) 189 A Review of HRQOL and Utilities in R/R LBCL aggressive B cell non-Hodgkin lymphoma (NHL): Transcend NHL 001",
+        "issn": "",
+        "sjr_quartile": "",
+        "sjr_score": 0.0,
+        "sjr_rank": 0
+      },
+      "credibility_tier": "commentary",
+      "resolution_method": "bibliography_reference_number",
+      "publisher": "Impact of lisocabtagene maraleucel (liso-cel) treatment on health-related quality of life and health utility in patients (pts) with relapsed/refractory (R/R) 189 A Review of HRQOL and Utilities in R/R LBCL aggressive B cell non-Hodgkin lymphoma (NHL): Transcend NHL 001",
+      "type": "bibliography-entry",
+      "matched_title": "Impact of lisocabtagene maraleucel (liso-cel) treatment on health-related quality of life and health utility in patients (pts) with relapsed/refractory (R/R) 189 A Review of HRQOL and Utilities in R/R LBCL aggressive B cell non-Hodgkin lymphoma (NHL): Transcend NHL 001",
+      "title_similarity": 1.0,
+      "retraction": {
+        "is_retracted": false,
+        "source": "",
+        "note": ""
+      },
+      "source_ref": "36",
+      "extra_fields": {
+        "table_number": "3",
+        "table_title": "Overview of included studies on health statue utility values",
+        "grouping_basis": "Utility assessment method and region",
+        "group_label": "EQ-5D / US",
+        "trial_label": "TRANSCEND NHL 001",
+        "combined_group": "EQ-5D / US / TRANSCEND NHL 001",
+        "reference_number": "36",
+        "citation_display": "Patrick 2019 [36]",
+        "needs_review": "",
+        "study_design": "",
+        "sample_size": "",
+        "outcome_measure": "",
+        "outcome_result": ""
+      }
+    },
+    {
+      "row_id": 10,
+      "input_title": "POSC370 Health-related qual- ity of life of naratuximab emtasine\u00a0+\u00a0rituximab (N+R) in sec- ond line and heavily pre-treated patients with relapsed/refractory (R/R) diffuse large B-cell lymphoma (DLBCL): an analysis of the Functional Assessment of Cancer Therapy Lymphoma (FACT- LYM) measure and mapped EQ-5D values from a phase II trial",
+      "resolved_doi": "",
+      "resolved_url": "",
+      "source_api": "review_bibliography",
+      "confidence": "high",
+      "open_access": {
+        "is_oa": null,
+        "oa_status": "unknown",
+        "pdf_url": "",
+        "oa_source": ""
+      },
+      "journal": {
+        "name": "POSC370 Health-related qual- ity of life of naratuximab emtasine\u00a0+\u00a0rituximab (N+R) in sec- ond line and heavily pre-treated patients with relapsed/refractory (R/R) diffuse large B-cell lymphoma (DLBCL): an analysis of the Functional Assessment of Cancer Therapy Lymphoma (FACT- LYM) measure and mapped EQ-5D values from a phase II trial",
+        "issn": "",
+        "sjr_quartile": "",
+        "sjr_score": 0.0,
+        "sjr_rank": 0
+      },
+      "credibility_tier": "commentary",
+      "resolution_method": "bibliography_reference_number",
+      "publisher": "POSC370 Health-related qual- ity of life of naratuximab emtasine\u00a0+\u00a0rituximab (N+R) in sec- ond line and heavily pre-treated patients with relapsed/refractory (R/R) diffuse large B-cell lymphoma (DLBCL): an analysis of the Functional Assessment of Cancer Therapy Lymphoma (FACT- LYM) measure and mapped EQ-5D values from a phase II trial",
+      "type": "bibliography-entry",
+      "matched_title": "POSC370 Health-related qual- ity of life of naratuximab emtasine\u00a0+\u00a0rituximab (N+R) in sec- ond line and heavily pre-treated patients with relapsed/refractory (R/R) diffuse large B-cell lymphoma (DLBCL): an analysis of the Functional Assessment of Cancer Therapy Lymphoma (FACT- LYM) measure and mapped EQ-5D values from a phase II trial",
+      "title_similarity": 1.0,
+      "retraction": {
+        "is_retracted": false,
+        "source": "",
+        "note": ""
+      },
+      "source_ref": "46",
+      "extra_fields": {
+        "table_number": "3",
+        "table_title": "Overview of included studies on health statue utility values",
+        "grouping_basis": "Utility assessment method and region",
+        "group_label": "EQ-5D / NR (region not reported)",
+        "trial_label": "Phase 2 naratuximab emtansine + rituximab trial",
+        "combined_group": "EQ-5D / NR (region not reported) / Phase 2 naratuximab emtansine + rituximab trial",
+        "reference_number": "46",
+        "citation_display": "Orfanos 2022 [46]",
+        "needs_review": "",
+        "study_design": "",
+        "sample_size": "",
+        "outcome_measure": "",
+        "outcome_result": ""
+      }
+    }
+  ],
+  "unresolved": [],
+  "stats": {
+    "total": 10,
+    "resolved_high": 10,
+    "resolved_low": 0,
+    "unresolved": 0,
+    "open_access": 0,
+    "closed_access": 0
+  }
+}

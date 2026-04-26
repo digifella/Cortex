@@ -32,10 +32,13 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from html import unescape
 from datetime import date
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+VAULT_LAB_NOTES_DIR = Path(os.environ.get("NEMOCLAW_LAB_NOTES_DIR", "/mnt/c/Users/paul/Documents/AI-Vault/lab-notes"))
+VAULT_NOTE_FILENAME_MAX = int(os.environ.get("NEMOCLAW_NOTE_FILENAME_MAX", "56"))
 
 # ── API clients (lazy import) ──
 
@@ -192,6 +195,167 @@ def _fetch_youtube_duration_seconds(url: str) -> int | None:
             logger.info("YouTube Data API duration lookup failed for %s: %s", url, exc)
 
     return _fetch_youtube_duration_seconds_from_watch_page(video_id)
+
+
+def _youtube_api_key() -> str:
+    return os.environ.get("YOUTUBE_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
+
+
+def _youtube_api_get(path: str, params: dict, timeout: int = 15) -> dict:
+    api_key = _youtube_api_key()
+    if not api_key:
+        return {}
+    params = dict(params)
+    params["key"] = api_key
+    api_url = f"https://www.googleapis.com/youtube/v3/{path}?" + urllib.parse.urlencode(params)
+    try:
+        with urllib.request.urlopen(api_url, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        logger.info("YouTube Data API lookup failed for %s: %s", path, exc)
+        return {}
+
+
+def _strip_html(value: str) -> str:
+    text = re.sub(r"<br\s*/?>", "\n", str(value or ""), flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    return unescape(text).strip()
+
+
+def _extract_urls(text: str) -> list[str]:
+    urls = []
+    seen = set()
+    for match in re.finditer(r"https?://[^\s<>)\]]+", text or ""):
+        url = match.group(0).rstrip(".,;:")
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def _extract_js_object(text: str, marker: str) -> dict:
+    start = text.find(marker)
+    if start < 0:
+        return {}
+    start = text.find("{", start)
+    if start < 0:
+        return {}
+
+    depth = 0
+    in_string = False
+    escape = False
+    quote = ""
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == quote:
+                in_string = False
+            continue
+        if char in {'"', "'"}:
+            in_string = True
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start:index + 1])
+                except Exception as exc:
+                    logger.info("YouTube watch page JSON parse failed: %s", exc)
+                    return {}
+    return {}
+
+
+def _fetch_youtube_watch_page_context(video_id: str) -> dict:
+    watch_url = f"https://www.youtube.com/watch?v={video_id}"
+    req = urllib.request.Request(watch_url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            text = resp.read(4_000_000).decode("utf-8", errors="ignore")
+    except Exception as exc:
+        logger.info("YouTube watch page context lookup failed for %s: %s", watch_url, exc)
+        return {"description": "", "tags": []}
+
+    player = _extract_js_object(text, "ytInitialPlayerResponse")
+    video_details = player.get("videoDetails") or {}
+    description = (video_details.get("shortDescription") or "").strip()
+    tags = [str(tag).strip() for tag in (video_details.get("keywords") or []) if str(tag).strip()]
+
+    if not description:
+        microformat = player.get("microformat", {}).get("playerMicroformatRenderer", {})
+        description_obj = microformat.get("description") or {}
+        description = (
+            description_obj.get("simpleText")
+            or "".join(run.get("text", "") for run in description_obj.get("runs", []) or [])
+        ).strip()
+
+    return {"description": description, "tags": tags}
+
+
+def _fetch_youtube_extra_context(url: str) -> dict:
+    """Fetch description, tags, links, playlist links, and top comments when API access exists."""
+    video_id = _youtube_video_id(url)
+    if not video_id:
+        return {"description": "", "tags": [], "urls": [], "playlist_urls": [], "comments": []}
+
+    video_payload = _youtube_api_get("videos", {"id": video_id, "part": "snippet"}) if _youtube_api_key() else {}
+    snippet = ((video_payload.get("items") or [{}])[0].get("snippet") or {}) if video_payload else {}
+    description = (snippet.get("description") or "").strip()
+    tags = [str(tag).strip() for tag in (snippet.get("tags") or []) if str(tag).strip()]
+    if not description and not tags:
+        watch_context = _fetch_youtube_watch_page_context(video_id)
+        description = watch_context.get("description", "")
+        tags = watch_context.get("tags", [])
+    urls = _extract_urls(description)
+    playlist_urls = [
+        item for item in urls
+        if "youtube.com" in urllib.parse.urlparse(item).netloc.lower()
+        and urllib.parse.parse_qs(urllib.parse.urlparse(item).query).get("list")
+    ]
+
+    comments = []
+    comments_payload = (
+        _youtube_api_get(
+            "commentThreads",
+            {
+                "videoId": video_id,
+                "part": "snippet",
+                "maxResults": 3,
+                "order": "relevance",
+                "textFormat": "html",
+            },
+        )
+        if _youtube_api_key()
+        else {}
+    )
+    for item in comments_payload.get("items") or []:
+        top_comment = (
+            item.get("snippet", {})
+            .get("topLevelComment", {})
+            .get("snippet", {})
+        )
+        text = _strip_html(top_comment.get("textDisplay", ""))
+        if not text:
+            continue
+        comments.append({
+            "author": (top_comment.get("authorDisplayName") or "").strip(),
+            "text": text,
+            "like_count": top_comment.get("likeCount"),
+            "published_at": (top_comment.get("publishedAt") or "").strip(),
+        })
+
+    return {
+        "description": description,
+        "tags": tags,
+        "urls": urls,
+        "playlist_urls": playlist_urls,
+        "comments": comments,
+    }
 
 
 def _fetch_youtube_duration_seconds_from_watch_page(video_id: str) -> int | None:
@@ -625,6 +789,47 @@ def _build_report(results: list[dict], output_modes: list[str], api_choice: str,
             lines.append(content)
             lines.append("")
 
+        extra_context = result.get("extra_context") or {}
+        description = (extra_context.get("description") or "").strip()
+        tags = extra_context.get("tags") or []
+        urls = extra_context.get("urls") or []
+        playlist_urls = extra_context.get("playlist_urls") or []
+        comments = extra_context.get("comments") or []
+
+        if description or tags or urls:
+            lines.append("### Video Description & Links")
+            if description:
+                lines.append("#### Description")
+                lines.append(description)
+                lines.append("")
+            if tags:
+                lines.append("#### Tags")
+                lines.append(", ".join(f"`{tag}`" for tag in tags))
+                lines.append("")
+            if urls:
+                lines.append("#### URLs")
+                for item in urls:
+                    lines.append(f"- {item}")
+                lines.append("")
+            if playlist_urls:
+                lines.append("#### YouTube Playlist URLs")
+                for item in playlist_urls:
+                    lines.append(f"- {item}")
+                lines.append("")
+
+        if comments:
+            lines.append("### Top Comments")
+            for index, comment in enumerate(comments[:3], 1):
+                author = comment.get("author") or "YouTube commenter"
+                like_count = comment.get("like_count")
+                like_suffix = f" · {like_count} like(s)" if like_count is not None else ""
+                published = comment.get("published_at")
+                published_suffix = f" · {published}" if published else ""
+                lines.append(f"{index}. **{author}**{like_suffix}{published_suffix}")
+                lines.append("")
+                lines.append(comment.get("text", "").strip())
+                lines.append("")
+
     return "\n".join(lines)
 
 
@@ -662,6 +867,27 @@ def _push_to_kb(content: str, kb_category: str, job: dict) -> None:
         logger.warning(f"push_to_kb failed: {e}")
 
 
+def _safe_filename(value: str) -> str:
+    value = re.sub(r"[^\w\s.-]+", "", str(value or ""), flags=re.UNICODE).strip()
+    value = re.sub(r"\s+", "-", value)
+    return value[:VAULT_NOTE_FILENAME_MAX].strip(".-") or "youtube-summary"
+
+
+def _write_vault_lab_note(content: str, title: str, job: dict) -> None:
+    """Persist email-origin YouTube summaries where the wiki ingest can see them."""
+    try:
+        today = date.today().isoformat()
+        VAULT_LAB_NOTES_DIR.mkdir(parents=True, exist_ok=True)
+        path = VAULT_LAB_NOTES_DIR / f"{today}-{_safe_filename(title)}.md"
+        if path.exists():
+            logger.info("vault lab note already exists: %s", path)
+            return
+        path.write_text(content.rstrip() + "\n", encoding="utf-8")
+        logger.info("wrote vault lab note for job %s: %s", job.get("id", "job"), path)
+    except Exception as e:
+        logger.warning("write vault lab note failed: %s", e)
+
+
 # ── Main handler ──
 
 def handle(input_path, input_data: dict, job: dict):
@@ -688,6 +914,7 @@ def handle(input_path, input_data: dict, job: dict):
     for url in urls:
         logger.info(f"Processing: {url} via {api_choice}")
         metadata = _fetch_youtube_metadata(url)
+        extra_context = _fetch_youtube_extra_context(url)
         try:
             if use_gemini:
                 sections = _summarise_gemini(url, api_choice, output_modes, language)
@@ -703,6 +930,7 @@ def handle(input_path, input_data: dict, job: dict):
                 "author": metadata.get("author", ""),
                 "author_url": metadata.get("author_url", ""),
                 "report_title": report_title,
+                "extra_context": extra_context,
             })
         except Exception as e:
             logger.error(f"Failed to process {url}: {e}")
@@ -714,6 +942,7 @@ def handle(input_path, input_data: dict, job: dict):
                 "author": metadata.get("author", ""),
                 "author_url": metadata.get("author_url", ""),
                 "report_title": _fallback_report_title(metadata, len(results) + 1),
+                "extra_context": extra_context,
             })
 
     # Build output markdown
@@ -744,6 +973,8 @@ def handle(input_path, input_data: dict, job: dict):
                 "clip_title": item.get("video_title", ""),
                 "author": item.get("author", ""),
                 "report_title": item.get("report_title", ""),
+                "description_available": bool((item.get("extra_context") or {}).get("description")),
+                "top_comment_count": len((item.get("extra_context") or {}).get("comments") or []),
             }
             for item in results
         ],
@@ -752,5 +983,7 @@ def handle(input_path, input_data: dict, job: dict):
 
     if push_to_kb:
         _push_to_kb(report_md, kb_category, job)
+    if str(input_data.get("source_system", "")).lower() == "email":
+        _write_vault_lab_note(report_md, output_data["report_title"], job)
 
     return {"output_data": output_data, "output_file": output_path}

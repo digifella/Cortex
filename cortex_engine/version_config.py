@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.0.10"
+CORTEX_VERSION = "6.0.11"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 0,
-    "patch": 10,
+    "patch": 11,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,19 +24,27 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-04-25",
-    "release_name": "Photo & Metadata Tools",
-    "description": "Adds dedicated Photo & Metadata Tools page (page 20) with Photo Processor and LLM Metadata Sync tabs; removes Photo Processor from Document Extract.",
+    "release_date": "2026-04-26",
+    "release_name": "LLM Metadata Sync Refinements",
+    "description": "Refinements to the LLM Metadata Sync tool: location metadata propagation, Windows path support, drag-and-drop JPG upload, PNG/PSD matching, temp file cleanup, and UX improvements.",
     "breaking_changes": [],
     "new_features": [
         "Photo & Metadata Tools page (page 20) with Photo Processor and LLM Metadata Sync tabs",
-        "LLM Metadata Sync: propagates JPG keywords/descriptions to RAW XMP sidecars and embedded TIF/PSD/DNG via ExifTool",
+        "LLM Metadata Sync: propagates JPG keywords, descriptions, and location metadata (city/state/country/GPS) to RAW XMP sidecars and embedded TIF/PSD/DNG via ExifTool",
+        "LLM Metadata Sync: drag-and-drop JPG upload as alternative to directory path input",
+        "LLM Metadata Sync: PNG files now matched and given XMP sidecars alongside RAW files",
+        "LLM Metadata Sync: standalone PSD/TIF files (without derivative suffix) now matched and given XMP sidecars",
     ],
     "improvements": [
         "Document Extract page simplified to 7 tabs by moving Photo Processor to its own dedicated page",
+        "LLM Metadata Sync: accepts Windows-style paths (e.g. L:\\Photos\\RAW) via WSL path conversion",
+        "LLM Metadata Sync: scan state cleared after Apply to prevent accidental re-runs",
+        "LLM Metadata Sync: upload temp dir wiped before each new upload and deleted after Apply",
+        "LLM Metadata Sync: location fields (city/state/country/GPS) copied from JPG only when absent in target",
+        "Streamlit file watcher switched to poll mode to suppress torch.classes warnings",
     ],
     "bug_fixes": [
-        "N/A"
+        "Document Extract photo tab removal correctly applied after stash conflict during merge",
     ],
     "performance": []
 }

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -18,6 +20,9 @@ TEXTIFY_OPTION_KEYS = {
     "image_description_timeout_seconds",
     "image_enrich_max_seconds",
 }
+
+VAULT_LAB_NOTES_DIR = Path(os.environ.get("NEMOCLAW_LAB_NOTES_DIR", "/mnt/c/Users/paul/Documents/AI-Vault/lab-notes"))
+VAULT_NOTE_FILENAME_MAX = int(os.environ.get("NEMOCLAW_NOTE_FILENAME_MAX", "56"))
 
 
 def _extract_urls(input_data: dict) -> List[str]:
@@ -106,6 +111,32 @@ def _build_markdown_report(results: List[URLIngestResult], output_data: dict) ->
         lines.append("")
 
     return "\n".join(lines)
+
+
+def _safe_filename(value: str) -> str:
+    value = re.sub(r"[^\w\s.-]+", "", str(value or ""), flags=re.UNICODE).strip()
+    value = re.sub(r"\s+", "-", value)
+    return value[:VAULT_NOTE_FILENAME_MAX].strip(".-") or "url-ingest-summary"
+
+
+def _report_title(results: List[URLIngestResult]) -> str:
+    if len(results) == 1:
+        result = results[0]
+        return result.page_title or result.input_url or "URL Ingest Summary"
+    return f"URL Ingest Summary - {len(results)} URLs"
+
+
+def _write_vault_lab_note(content: str, title: str, job: dict) -> None:
+    try:
+        today = date.today().isoformat()
+        VAULT_LAB_NOTES_DIR.mkdir(parents=True, exist_ok=True)
+        path = VAULT_LAB_NOTES_DIR / f"{today}-{_safe_filename(title)}.md"
+        if path.exists():
+            return
+        path.write_text(content.rstrip() + "\n", encoding="utf-8")
+    except Exception:
+        # Queue completion should not fail solely because the vault write failed.
+        return
 
 
 def handle(
@@ -201,6 +232,9 @@ def handle(
 
     # Build a combined markdown report (inline-viewable on the result page).
     report_md = _build_markdown_report(results, output_data)
+    if str(input_data.get("source_system", "")).lower() == "email":
+        _write_vault_lab_note(report_md, _report_title(results), job)
+
     md_suffix = f"_url_ingest_{date.today().isoformat()}.md"
     with tempfile.NamedTemporaryFile(mode="w", suffix=md_suffix, delete=False, encoding="utf-8") as mf:
         mf.write(report_md)

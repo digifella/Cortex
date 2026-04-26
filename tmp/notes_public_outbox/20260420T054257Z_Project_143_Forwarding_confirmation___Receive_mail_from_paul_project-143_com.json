@@ -1,0 +1,20 @@
+{
+  "mailbox_identity": "notes@longboardfella.com.au",
+  "source_system": "notes_mailbox",
+  "received_at": "2026-04-20T05:42:57+00:00",
+  "route": "public_stash",
+  "reason": "default_public_note",
+  "vault_path": "/mnt/c/Users/paul/Documents/AI-Vault/Inbox/2026-04-20-Project-143-Forwarding-confirmation-_-Receive-mail-from-paul_project-143_com-c568898a.md",
+  "message": {
+    "message_id": "<CAOi-md01SBCWcQ2qEe0hhFYkvUPV2gbhFAG2r8dUHcQsFxFD6Q@mail.gmail.com>",
+    "graph_message_id": "AQMkADRjMDVmZgBjMy1hMmMxLTQwOTctOTdhMC0xM2NlMjVkZjI3NDAARgAAAzTsvnjJK6hFrb1SKT_xDYkHAJXKb-sEcmJDgV-JN7RGRwMAAAIBDAAAAJXKb-sEcmJDgV-JN7RGRwMAAAIBeAAAAA==",
+    "from_name": "Project 143 Team",
+    "from_email": "forwarding-noreply@google.com",
+    "to_name": "Notes Queue",
+    "to_email": "notes@longboardfella.com.au",
+    "subject": "(Project 143 Forwarding confirmation \u2013 Receive mail from paul@project-143.com",
+    "received_at": "2026-04-20T05:42:08Z",
+    "text_body": "paul@project-143.com has requested to automatically forward mail to your email\r\naddress notes@longboardfella.com.au.\r\n\r\nTo allow paul@project-143.com to automatically forward mail to your address,\r\nplease click the link below to confirm the request:\r\n\r\nhttps://mail.google.com/mail/vf-%5BANGjdJ8j_2OfQKG_y9m7E7PK7o-aLIy4EjHHh5gmeUgJi1PHNa4gFQDUzzwjFcO6sLQm5aTcBtCEwCddq8DX5oWqTl3pVFBt_-XJbjXIeQ%5D-yXYAtpz6kDl_HbhFPmoJDckE3oI\r\n\r\nIf you click the link and it appears to be broken, please copy and paste it\r\ninto a new browser window.\r\n\r\nThanks for using Project 143.\r\n\r\nSincerely,\r\n\r\nThe Project 143 team\r\n\r\nIf you do not approve of this request, no further action is required.\r\npaul@project-143.com cannot automatically forward messages to your email address\r\nunless you confirm the request by clicking the link above. If you accidentally\r\nclicked the link, but you do not want to allow paul@project-143.com to\r\nautomatically forward messages to your address, click this link to cancel this\r\nverification:\r\nhttps://mail.google.com/mail/uf-%5BANGjdJ--LuXW6eJp_MmQ3UHYAgLa2LhcBvj2zWsE_CzREN_At0TWw5ve_tkE-iW0bp6rDZRXm4d48vCC2tCmY_0MQNKdZJi87CMZpMvzpA%5D-yXYAtpz6kDl_HbhFPmoJDckE3oI\r\n\r\nTo learn more about why you might have received this message, please\r\nvisit: http://support.google.com/mail/bin/answer.py?answer=184973.\r\n\r\nPlease do not respond to this message. If you'd like to contact the\r\nGoogle.com team, please log in to your account and click 'Help' at\r\nthe top of any page. Then, click 'Contact us' along the bottom of the\r\nHelp Centre.",
+    "html_body": ""
+  }
+}

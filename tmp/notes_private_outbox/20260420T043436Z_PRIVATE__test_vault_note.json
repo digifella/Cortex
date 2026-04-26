@@ -1,0 +1,19 @@
+{
+  "mailbox_identity": "notes@longboardfella.com.au",
+  "source_system": "notes_mailbox",
+  "received_at": "2026-04-20T04:34:36+00:00",
+  "route": "private_vault",
+  "reason": "subject_marked_private",
+  "message": {
+    "message_id": "<CAOi-md2e1qffD11-O5rJRj3p62nBJgADCNZpZzxEkEduQz56yA@mail.gmail.com>",
+    "graph_message_id": "AQMkADRjMDVmZgBjMy1hMmMxLTQwOTctOTdhMC0xM2NlMjVkZjI3NDAARgAAAzTsvnjJK6hFrb1SKT_xDYkHAJXKb-sEcmJDgV-JN7RGRwMAAAIBDAAAAJXKb-sEcmJDgV-JN7RGRwMAAAIBcgAAAA==",
+    "from_name": "Paul Cooper",
+    "from_email": "paul@project-143.com",
+    "to_name": "Notes Queue",
+    "to_email": "notes@longboardfella.com.au",
+    "subject": "PRIVATE: test vault note",
+    "received_at": "2026-04-20T04:33:35Z",
+    "text_body": "PRIVATE: test vault note",
+    "html_body": "<html><head>\r\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\"></head><body><div dir=\"ltr\">PRIVATE: test vault note</div></body></html>"
+  }
+}

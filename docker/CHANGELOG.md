@@ -6,6 +6,42 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+
+
+## v6.0.11 - 2026-04-26
+
+### LLM Metadata Sync Refinements
+
+Refinements to the LLM Metadata Sync tool: location metadata propagation, Windows path support, drag-and-drop JPG upload, PNG/PSD matching, temp file cleanup, and UX improvements.
+
+### ✨ New Features
+- Photo & Metadata Tools page (page 20) with Photo Processor and LLM Metadata Sync tabs
+- LLM Metadata Sync: propagates JPG keywords, descriptions, and location metadata (city/state/country/GPS) to RAW XMP sidecars and embedded TIF/PSD/DNG via ExifTool
+- LLM Metadata Sync: drag-and-drop JPG upload as alternative to directory path input
+- LLM Metadata Sync: PNG files now matched and given XMP sidecars alongside RAW files
+- LLM Metadata Sync: standalone PSD/TIF files (without derivative suffix) now matched and given XMP sidecars
+
+### 🚀 Improvements
+- Document Extract page simplified to 7 tabs by moving Photo Processor to its own dedicated page
+- LLM Metadata Sync: accepts Windows-style paths (e.g. L:\Photos\RAW) via WSL path conversion
+- LLM Metadata Sync: scan state cleared after Apply to prevent accidental re-runs
+- LLM Metadata Sync: upload temp dir wiped before each new upload and deleted after Apply
+- LLM Metadata Sync: location fields (city/state/country/GPS) copied from JPG only when absent in target
+- Streamlit file watcher switched to poll mode to suppress torch.classes warnings
+
+## v6.0.10 - 2026-04-25
+
+### Photo & Metadata Tools
+
+Adds dedicated Photo & Metadata Tools page (page 20) with Photo Processor and LLM Metadata Sync tabs; removes Photo Processor from Document Extract.
+
+### ✨ New Features
+- Photo & Metadata Tools page (page 20) with Photo Processor and LLM Metadata Sync tabs
+- LLM Metadata Sync: propagates JPG keywords/descriptions to RAW XMP sidecars and embedded TIF/PSD/DNG via ExifTool
+
+### 🚀 Improvements
+- Document Extract page simplified to 7 tabs by moving Photo Processor to its own dedicated page
+
 ### 🚀 Improvements
 - Cortex Intel mailbox config no longer assumes Gmail host defaults; IMAP/SMTP provider endpoints must now be set explicitly in worker config.
 - Cortex Intel mailbox now treats `intel@longboardfella.com.au` as the canonical trusted self-relay address while preserving the legacy `intel.longboardfella@gmail.com` alias during migration.

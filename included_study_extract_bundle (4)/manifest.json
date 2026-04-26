@@ -1,0 +1,100 @@
+{
+  "review_title": "1257_a_systematic_literature_review_of_health-related_quality_of_life_outcomes_and_associated_utility_values_in_relapsed_and_",
+  "input_filename": "1257_a_systematic_literature_review_of_health-related_quality_of_life_outcomes_and_associated_utility_values_in_relapsed_and_.pdf",
+  "extraction_scope": "rct_or_clinical",
+  "output_detail": "reference_map",
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-6",
+  "table_count": 3,
+  "warnings": [
+    "table 2: Ma 2021 [41] is a point-in-time survey (observational), not a clinical trial; flagged needs_review=true.",
+    "table 2: Table 2 spans 4 PDF pages; all visible rows have been consolidated by trial/instrument group.",
+    "table 3: Vignette-based studies (Howell 2022/2020) are not clinical trials; included as they appear as distinct rows in the table.",
+    "table 3: ClinicalTrials.gov [70] is a registry record, not a trial publication; included as cited in the ZUMA-1 row.",
+    "table 4: All rows are economic model-based (CUA/CEA) and flagged needs_review=true; no primary RCT data reported directly in this table.",
+    "table 4: References 48\u201362, 71\u201372 not fully resolved from supplied bibliography excerpt.",
+    "table 4: extracted citations were all marked needs_review; skipped resolver payload generation"
+  ],
+  "tables": [
+    {
+      "table_label": "table 2",
+      "table_number": "2",
+      "table_title": "Overview of included studies on HRQOL measures",
+      "kind": "included_studies",
+      "group_count": 13,
+      "citation_count": 24,
+      "selected_citation_count": 23,
+      "needs_review_count": 1,
+      "page_numbers": [
+        6,
+        7,
+        8,
+        9
+      ],
+      "warnings": [
+        "Ma 2021 [41] is a point-in-time survey (observational), not a clinical trial; flagged needs_review=true.",
+        "Table 2 spans 4 PDF pages; all visible rows have been consolidated by trial/instrument group."
+      ],
+      "artifacts": {
+        "table_pdf": "tables/table_2/table_2.pdf",
+        "raw_output_txt": "tables/table_2/extraction_raw_output.txt",
+        "selection_csv": "tables/table_2/included_study_selection.csv",
+        "selection_xlsx": "tables/table_2/included_study_selection.xlsx",
+        "resolver_payload_json": "tables/table_2/research_resolver_payload.json",
+        "resolver_queue_job_json": "tables/table_2/research_resolver_queue_job.json",
+        "website_handoff_json": "tables/table_2/included_study_website_handoff.json"
+      }
+    },
+    {
+      "table_label": "table 3",
+      "table_number": "3",
+      "table_title": "Overview of included studies on health statue utility values",
+      "kind": "included_studies",
+      "group_count": 7,
+      "citation_count": 14,
+      "selected_citation_count": 14,
+      "needs_review_count": 0,
+      "page_numbers": [
+        11,
+        12
+      ],
+      "warnings": [
+        "Vignette-based studies (Howell 2022/2020) are not clinical trials; included as they appear as distinct rows in the table.",
+        "ClinicalTrials.gov [70] is a registry record, not a trial publication; included as cited in the ZUMA-1 row."
+      ],
+      "artifacts": {
+        "table_pdf": "tables/table_3/table_3.pdf",
+        "raw_output_txt": "tables/table_3/extraction_raw_output.txt",
+        "selection_csv": "tables/table_3/included_study_selection.csv",
+        "selection_xlsx": "tables/table_3/included_study_selection.xlsx",
+        "resolver_payload_json": "tables/table_3/research_resolver_payload.json",
+        "resolver_queue_job_json": "tables/table_3/research_resolver_queue_job.json",
+        "website_handoff_json": "tables/table_3/included_study_website_handoff.json"
+      }
+    },
+    {
+      "table_label": "table 4",
+      "table_number": "4",
+      "table_title": "Overview of economic studies reporting health state utility values",
+      "kind": "economic",
+      "group_count": 7,
+      "citation_count": 16,
+      "selected_citation_count": 0,
+      "needs_review_count": 16,
+      "page_numbers": [
+        13,
+        14
+      ],
+      "warnings": [
+        "All rows are economic model-based (CUA/CEA) and flagged needs_review=true; no primary RCT data reported directly in this table.",
+        "References 48\u201362, 71\u201372 not fully resolved from supplied bibliography excerpt."
+      ],
+      "artifacts": {
+        "table_pdf": "tables/table_4/table_4.pdf",
+        "raw_output_txt": "tables/table_4/extraction_raw_output.txt",
+        "selection_csv": "tables/table_4/included_study_selection.csv",
+        "selection_xlsx": "tables/table_4/included_study_selection.xlsx"
+      }
+    }
+  ]
+}

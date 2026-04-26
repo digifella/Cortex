@@ -143,7 +143,8 @@
       "Bash(awk -F: '$1 >= 5078 && $1 <= 6084')",
       "Bash(awk -F: '$1 >= 3000 && $1 <= 3275')",
       "Bash(git worktree *)",
-      "Bash(git merge *)"
+      "Bash(git merge *)",
+      "Bash(git branch *)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits",

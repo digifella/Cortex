@@ -1,0 +1,20 @@
+{
+  "mailbox_identity": "notes@longboardfella.com.au",
+  "source_system": "notes_mailbox",
+  "received_at": "2026-04-20T04:46:51+00:00",
+  "route": "public_stash",
+  "reason": "default_public_note",
+  "vault_path": "/mnt/c/Users/paul/Documents/AI-Vault/Inbox/2026-04-20-TEST-PUBLIC-NOTE.md",
+  "message": {
+    "message_id": "<CAOi-md0q4L_CpZAdDd7pWBJbDfO_2gP1ggZD8SgJAD6nbjiTAw@mail.gmail.com>",
+    "graph_message_id": "AQMkADRjMDVmZgBjMy1hMmMxLTQwOTctOTdhMC0xM2NlMjVkZjI3NDAARgAAAzTsvnjJK6hFrb1SKT_xDYkHAJXKb-sEcmJDgV-JN7RGRwMAAAIBDAAAAJXKb-sEcmJDgV-JN7RGRwMAAAIBcwAAAA==",
+    "from_name": "Paul Cooper",
+    "from_email": "paul@project-143.com",
+    "to_name": "Notes Queue",
+    "to_email": "notes@longboardfella.com.au",
+    "subject": "TEST PUBLIC NOTE",
+    "received_at": "2026-04-20T04:46:23Z",
+    "text_body": "TEST OF PUBLIC NOTE 2:45PM 20 APR 2026",
+    "html_body": "<html><head>\r\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\"></head><body><div dir=\"ltr\"><div class=\"gmail_quote gmail_quote_container\"><div dir=\"ltr\" class=\"gmail_attr\">TEST OF PUBLIC NOTE 2:45PM 20 APR 2026</div></div></div></body></html>"
+  }
+}
