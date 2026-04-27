@@ -1,5 +1,5 @@
 # ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
-# Version: v6.0.11
+# Version: v6.0.12
 # Date: 2026-01-27
 # Purpose: GUI for knowledge base ingestion.
 #          - FEATURE (v5.7.0): When navigating to a directory with no subdirectories,

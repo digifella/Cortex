@@ -1,5 +1,5 @@
 # ## File: pages/14_URL_Ingestor.py
-# Version: v6.0.11
+# Version: v6.0.12
 # Date: 2026-04-02
 # Purpose: Legacy wrapper page for the shared URL PDF ingestor UI.
 

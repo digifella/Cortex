@@ -1,6 +1,6 @@
 # **`README.md`**
 
-**Version:** v6.0.7 (Docker Alignment Refresh)
+**Version:** v6.0.12 (Photo Batch Pause/Resume + EXIF & LMS Fixes)
 **Date:** 2026-02-12
 
 ---

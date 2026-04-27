@@ -8,6 +8,21 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v6.0.12 - 2026-04-28
+
+### Photo Batch Pause/Resume + EXIF & LMS Fixes
+
+Photo Processor: full pause/resume for batch jobs (surviving tab close), EXIF time-of-day fix for cameras storing UTC without a timezone offset, and LMS compound derivative suffix matching.
+
+### ✨ New Features
+- Photo Processor: pause/resume for batch keyword/resize/halftone jobs — progress survives tab close and page refresh
+- Photo Processor: Pause button during run, Resume/Cancel when paused, recovery banner distinguishes paused vs completed batches
+
+### 🚀 Improvements
+- Photo Processor: batch now processes one photo per Streamlit rerun (manifest-driven) instead of a blocking for-loop
+- Photo Processor: cooldown delay written as a resume_after timestamp so it survives tab close
+
 ## v6.0.11 - 2026-04-26
 
 ### LLM Metadata Sync Refinements

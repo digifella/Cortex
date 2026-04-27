@@ -1,5 +1,5 @@
 # ## File: pages/3_Knowledge_Search.py
-# Version: v6.0.11
+# Version: v6.0.12
 # Date: 2026-01-28
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
 #          - FEATURE (v5.7.0): Added "Strict Mode" search requiring ALL terms to be present.
