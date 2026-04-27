@@ -1657,7 +1657,7 @@ def _render_lms_tab() -> None:
             )
         deriv_patterns_str = st.text_area(
             "Derivative suffix patterns (one per line, regex)",
-            value="\n".join(SyncConfig().deriv_patterns),
+            value="\n".join(SyncConfig.__dataclass_fields__["deriv_patterns"].default),
             key="lms_deriv_patterns_v2",
         )
 
