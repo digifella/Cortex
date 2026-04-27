@@ -8,6 +8,7 @@ import io
 import os
 import re
 import base64
+import datetime
 import json
 import subprocess
 import tempfile
@@ -22,6 +23,44 @@ from urllib.request import Request, urlopen
 from cortex_engine.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
+
+
+# Filename capture-time patterns used when EXIF DateTimeOriginal is absent.
+# Order matters: earlier entries win. Each pattern must capture year, month,
+# day, hour, minute, and optionally second.
+_FILENAME_CAPTURE_DATETIME_PATTERNS: Tuple[Tuple[re.Pattern, str], ...] = (
+    # 2026-04-05T16-27, 2026-04-05T16:27:03, 2026-04-05_16-27-03
+    (
+        re.compile(
+            r"(?<!\d)(\d{4})-(\d{2})-(\d{2})[T_ ](\d{2})[-:.](\d{2})(?:[-:.](\d{2}))?(?!\d)"
+        ),
+        "iso-dashes",
+    ),
+    # IMG_20260405_061423, PXL_20260405_061423123, VID_20260405_061423
+    (
+        re.compile(
+            r"(?:IMG|PXL|VID|MVIMG|DSC|DCIM|PHOTO)[_-]?(\d{4})(\d{2})(\d{2})[_-]?(\d{2})(\d{2})(\d{2})",
+            re.IGNORECASE,
+        ),
+        "phone-prefix",
+    ),
+    # Screenshot_20260405-061423, Screenshot_20260405_061423
+    (
+        re.compile(
+            r"Screenshot[_-](\d{4})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})",
+            re.IGNORECASE,
+        ),
+        "screenshot",
+    ),
+    # Compact: 20260405_061423 (must be bounded so it doesn't eat longer digit runs)
+    (
+        re.compile(r"(?<!\d)(\d{4})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})(?!\d)"),
+        "compact",
+    ),
+)
+
+_EXIF_DATETIME_RE = re.compile(r"^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})")
+_EXIF_TZ_OFFSET_RE = re.compile(r"^([+-])(\d{2}):?(\d{2})$")
 
 
 class DocumentTextifier:
@@ -404,6 +443,15 @@ class DocumentTextifier:
             flags=re.IGNORECASE,
         ).strip()
         cleaned = re.sub(
+            r"^(?:let'?s break this down|let me break this down|breaking this down"
+            r"|based on the tags?|looking at the tags?|tags? (?:suggest|include|like)"
+            r"|the tags?|known subjects|context is (?:sunset|sunrise|evening|morning|night)"
+            r"|the photographer(?:'s)? (?:has )?tagged this)[^.!?]*[.!?]\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        cleaned = re.sub(
             r"^(?:the photo|this photo|the image|this image)\s+(shows?|depicts?)\s+",
             "",
             cleaned,
@@ -429,6 +477,29 @@ class DocumentTextifier:
             "user wants",
             "the user asked",
             "user asked",
+            # reasoning/analysis preambles triggered by tag hints
+            "let's break this down",
+            "let me break this down",
+            "breaking this down",
+            "based on the tags",
+            "looking at the tags",
+            "tags suggest",
+            "tags include",
+            "tags like",
+            "the tags",
+            "known subjects",
+            "the photographer tagged",
+            "the photographer has tagged",
+            "the photographer's tags",
+            "main subject and setting",
+            "specifically from the tags",
+            "using these as",
+            "using the tags",
+            "use these facts",
+            "context is sunset",
+            "context is sunrise",
+            "context is evening",
+            "context is morning",
         )
         filler_only = {
             "let's see",
@@ -455,6 +526,12 @@ class DocumentTextifier:
             s = re.sub(r"^(?:answer|description)\s*:\s*", "", s, flags=re.IGNORECASE).strip()
             s = re.sub(r"^(?:the user wants|user wants|the user asked|user asked)\s+", "", s, flags=re.IGNORECASE).strip()
             if not s:
+                continue
+            # Strip inline rhetorical questions like "right?" or ", right?"
+            s = re.sub(r",?\s*right\?\s*$", ".", s, flags=re.IGNORECASE).strip()
+            s = re.sub(r",?\s*correct\?\s*$", ".", s, flags=re.IGNORECASE).strip()
+            # Drop entire sentences that are questions
+            if s.endswith("?"):
                 continue
             slow = s.lower()
             normalized_stub = re.sub(r"[^a-z]+", " ", slow).strip()
@@ -536,15 +613,24 @@ class DocumentTextifier:
             self._last_vlm_http_meta["error"] = str(e)
             raise
 
-    def _describe_with_model(self, model: str, encoded_image: str, simple_prompt: bool = False) -> str:
+    def _describe_with_model(
+        self,
+        model: str,
+        encoded_image: str,
+        simple_prompt: bool = False,
+        context_hint: str = "",
+    ) -> str:
         """Call a specific VLM model and normalize the returned text."""
         prompt = (
-            "Describe this photograph very briefly in 1-2 short plain sentences (max 35 words total). "
+            "Describe this photograph in 1-2 short plain declarative sentences (max 35 words total). "
             "Identify only the main subject and setting. "
+            "Write statements only — do not ask questions or use question marks. "
             "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
             "return exactly: [Image: logo/icon omitted]. "
             "Do not use markdown, headings, or bullet points."
         )
+        if context_hint:
+            prompt += " " + context_hint.strip()
         if not simple_prompt:
             prompt += " /no_think"
         started = time.monotonic()
@@ -625,7 +711,7 @@ class DocumentTextifier:
                 "error": str(e),
             }
 
-    def _retry_current_qwen_model(self, encoded_image: str) -> str:
+    def _retry_current_qwen_model(self, encoded_image: str, context_hint: str = "") -> str:
         """Retry the active Qwen model with a fresh client."""
         model = str(self._vlm_model or "").strip()
         if not model.startswith("qwen3-vl"):
@@ -637,7 +723,9 @@ class DocumentTextifier:
             return ""
 
         try:
-            fresh_retry = self._describe_with_model(model, encoded_image, simple_prompt=True)
+            fresh_retry = self._describe_with_model(
+                model, encoded_image, simple_prompt=True, context_hint=context_hint
+            )
         except Exception as retry_error:
             logger.warning(f"Fresh-client simple-prompt retry failed for model {model}: {retry_error}")
             fresh_retry = ""
@@ -712,8 +800,13 @@ class DocumentTextifier:
         visual_hits = sum(1 for m in visual_markers if m in t)
         return (marker_hits >= 1 and visual_hits >= 1) or marker_hits >= 2
 
-    def describe_image(self, image_bytes: bytes) -> str:
-        """Describe an image using the VLM. Returns placeholder on failure."""
+    def describe_image(self, image_bytes: bytes, *, context_hint: str = "") -> str:
+        """Describe an image using the VLM. Returns placeholder on failure.
+
+        ``context_hint`` is an optional sentence appended to the prompt — used
+        by the photo pipeline to pass local-time / sun-phase context so the
+        VLM can distinguish dawn from dusk and sunrise from sunset.
+        """
         if not self.use_vision:
             return "[Image: vision model disabled]"
         self._init_vlm()
@@ -736,7 +829,9 @@ class DocumentTextifier:
                         model = str(self._vlm_model).strip()
                     if not model:
                         continue
-                    result = self._describe_with_model(model, encoded, simple_prompt=True)
+                    result = self._describe_with_model(
+                        model, encoded, simple_prompt=False, context_hint=context_hint
+                    )
                 except Exception as model_error:
                     err_text = str(model_error)
                     if "status code: 404" in err_text:
@@ -750,7 +845,7 @@ class DocumentTextifier:
                 if not result:
                     logger.warning(f"VLM returned empty description (model: {model})")
                     if model == self._vlm_model and model.startswith("qwen3-vl"):
-                        retry_result = self._retry_current_qwen_model(encoded)
+                        retry_result = self._retry_current_qwen_model(encoded, context_hint=context_hint)
                         if retry_result:
                             if self._looks_like_logo_icon_description(retry_result):
                                 return "[Image: logo/icon omitted]"
@@ -769,13 +864,13 @@ class DocumentTextifier:
             logger.warning(f"VLM describe failed: {e}")
             return "[Image: could not be described — vision model error]"
 
-    def _describe_image_with_timeout(self, image_bytes: bytes) -> str:
+    def _describe_image_with_timeout(self, image_bytes: bytes, *, context_hint: str = "") -> str:
         """Run image description with a hard timeout so long VLM calls don't stall conversion."""
         timeout_s = self.image_description_timeout_seconds
         if timeout_s is None or timeout_s <= 0:
-            return self.describe_image(image_bytes)
+            return self.describe_image(image_bytes, context_hint=context_hint)
         executor = ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(self.describe_image, image_bytes)
+        future = executor.submit(self.describe_image, image_bytes, context_hint=context_hint)
         try:
             return future.result(timeout=timeout_s)
         except FuturesTimeoutError:
@@ -1552,7 +1647,12 @@ class DocumentTextifier:
         md_parts = [f"# {file_name}\n"]
 
         self._report(0.3, "Describing image with vision model...")
-        description = self.describe_image(image_bytes)
+        try:
+            gps_for_hint = self.read_gps(file_path)
+        except Exception:
+            gps_for_hint = None
+        time_hint = self.build_photo_time_hint(file_path, gps_for_hint)
+        description = self.describe_image(image_bytes, context_hint=time_hint)
         md_parts.append(f"> **[Image]**: {description}")
         md_parts.append("")
 
@@ -1583,11 +1683,14 @@ class DocumentTextifier:
     TEXT_MODELS = ["mistral:latest", "mistral-small3.2", "llama3:latest", "gemma:latest"]
     CLEANUP_MODELS = ["qwen2.5:32b", "qwen2.5:14b", "mistral:latest", "llama3:latest"]
 
-    def extract_keywords(self, description: str) -> List[str]:
+    def extract_keywords(self, description: str, anchor_keywords: Optional[List[str]] = None) -> List[str]:
         """Extract flat keywords from an image description using a text LLM.
 
         Uses a text model (Mistral etc.) rather than the VLM, because VLMs
         like Qwen3-VL return empty responses for text-only prompts.
+
+        anchor_keywords: existing EXIF tags from the photographer — passed as
+        strong hints so specific names (species, places) are preserved verbatim.
         """
         # Don't hallucinate keywords from empty/failed descriptions
         if not description or description.startswith("[Image:"):
@@ -1608,6 +1711,16 @@ class DocumentTextifier:
                 logger.warning("No text model available for keyword extraction")
                 return self._extract_keywords_simple(description)
 
+            anchor_section = ""
+            if anchor_keywords:
+                anchor_list = ", ".join(anchor_keywords[:20])
+                anchor_section = (
+                    f"The photographer has already tagged this image with: {anchor_list}. "
+                    "Treat these as ground-truth — include the relevant ones verbatim in your output "
+                    "rather than replacing specific terms with vague equivalents "
+                    "(e.g. keep 'condor' not 'bird', keep 'Antarctica' not 'remote location'). "
+                )
+
             response = client.chat(
                 model=text_model,
                 messages=[{
@@ -1621,7 +1734,8 @@ class DocumentTextifier:
                         "Do NOT include photography jargon (bokeh, depth of field, "
                         "backlit, composition, close up) or vague words (atmosphere, "
                         "mood, scene, tones). Maximum 15 tags.\n\n"
-                        f"Description: {description}"
+                        + anchor_section
+                        + f"Description: {description}"
                     ),
                 }],
                 options={"temperature": 0.1, "num_predict": 200},
@@ -1985,6 +2099,337 @@ class DocumentTextifier:
                 seen.add(w)
                 keywords.append(w)
         return keywords[:20]
+
+    # ------------------------------------------------------------------
+    # Photo capture-time context (dawn vs dusk, sunrise vs sunset)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_exif_tz_offset_minutes(offset_str: str) -> Optional[int]:
+        """Parse '+10:00' / '-05:30' / '+1000' -> total minutes from UTC."""
+        if not offset_str:
+            return None
+        m = _EXIF_TZ_OFFSET_RE.match(str(offset_str).strip())
+        if not m:
+            return None
+        sign = 1 if m.group(1) == "+" else -1
+        hours = int(m.group(2))
+        minutes = int(m.group(3))
+        if hours >= 24 or minutes >= 60:
+            return None
+        return sign * (hours * 60 + minutes)
+
+    @staticmethod
+    def _parse_filename_capture_datetime(file_name: str) -> Optional[Dict[str, Any]]:
+        """Extract a naive capture datetime from common filename patterns."""
+        name = str(file_name or "")
+        if not name:
+            return None
+        for pattern, kind in _FILENAME_CAPTURE_DATETIME_PATTERNS:
+            match = pattern.search(name)
+            if not match:
+                continue
+            groups = match.groups()
+            try:
+                year = int(groups[0])
+                month = int(groups[1])
+                day = int(groups[2])
+                hour = int(groups[3])
+                minute = int(groups[4])
+                second = int(groups[5]) if len(groups) > 5 and groups[5] is not None else 0
+                dt_naive = datetime.datetime(year, month, day, hour, minute, second)
+            except (ValueError, TypeError):
+                continue
+            if dt_naive.year < 1990 or dt_naive.year > 2100:
+                continue
+            return {"datetime_naive": dt_naive, "offset_minutes": None, "source": f"filename:{kind}"}
+        return None
+
+    @staticmethod
+    def _read_exif_capture_datetime(file_path: str) -> Optional[Dict[str, Any]]:
+        """Read DateTimeOriginal (+ offset) from EXIF via exiftool."""
+        import shutil
+
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return None
+        try:
+            result = subprocess.run(
+                [
+                    exiftool_path,
+                    "-json",
+                    "-DateTimeOriginal",
+                    "-OffsetTimeOriginal",
+                    "-OffsetTime",
+                    "-CreateDate",
+                    file_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return None
+            data = json.loads(result.stdout)
+            if not data:
+                return None
+            row = data[0] or {}
+        except Exception as exc:
+            logger.debug(f"EXIF capture-time read failed for {file_path}: {exc}")
+            return None
+        raw_dt = str(row.get("DateTimeOriginal") or row.get("CreateDate") or "").strip()
+        if not raw_dt:
+            return None
+        m = _EXIF_DATETIME_RE.match(raw_dt)
+        if not m:
+            return None
+        try:
+            dt_naive = datetime.datetime(
+                int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                int(m.group(4)), int(m.group(5)), int(m.group(6)),
+            )
+        except ValueError:
+            return None
+        offset_minutes = DocumentTextifier._parse_exif_tz_offset_minutes(
+            str(row.get("OffsetTimeOriginal") or row.get("OffsetTime") or "")
+        )
+        return {"datetime_naive": dt_naive, "offset_minutes": offset_minutes, "source": "exif"}
+
+    @staticmethod
+    def _read_photo_capture_datetime(file_path: str) -> Optional[Dict[str, Any]]:
+        """Return capture datetime info preferring EXIF, falling back to filename.
+
+        When EXIF has no explicit timezone offset, the filename time is cross-checked.
+        If they differ by more than 3 hours (modulo 24) the filename is preferred —
+        cameras often store UTC without an offset tag, while filenames encode local time.
+        """
+        exif_result = DocumentTextifier._read_exif_capture_datetime(file_path)
+        filename_result = DocumentTextifier._parse_filename_capture_datetime(
+            Path(file_path).name
+        )
+
+        if exif_result is None:
+            return filename_result
+
+        if exif_result.get("offset_minutes") is not None:
+            return exif_result
+
+        if filename_result is not None:
+            exif_hour = exif_result["datetime_naive"].hour
+            fname_hour = filename_result["datetime_naive"].hour
+            raw_diff = abs(exif_hour - fname_hour)
+            diff = min(raw_diff, 24 - raw_diff)
+            if diff > 3:
+                logger.warning(
+                    f"EXIF time ({exif_hour:02d}h) and filename time ({fname_hour:02d}h) "
+                    f"differ by {diff}h for {Path(file_path).name}; "
+                    "no tz offset in EXIF — using filename time"
+                )
+                return filename_result
+
+        return exif_result
+
+    @staticmethod
+    def _coarse_hour_bucket(hour: int) -> str:
+        """Fallback phase label when no GPS or astral lookup is possible."""
+        h = int(hour) % 24
+        if h < 5:
+            return "night"
+        if h < 7:
+            return "dawn"
+        if h < 11:
+            return "morning"
+        if h < 14:
+            return "midday"
+        if h < 17:
+            return "afternoon"
+        if h < 19:
+            return "evening"
+        if h < 21:
+            return "dusk"
+        return "night"
+
+    @staticmethod
+    def _classify_sun_phase(
+        local_aware: datetime.datetime, events: Dict[str, Any]
+    ) -> str:
+        """Bucket a local datetime against astral's sun events for that date.
+
+        Astral returns civil dawn/dusk (sun 6° below horizon). We widen the
+        morning and evening windows by ~60 min to capture nautical/astronomical
+        twilight (the "blue hour") as ``pre-dawn``/``post-dusk`` rather than
+        outright ``night``.
+        """
+        try:
+            dawn = events["dawn"]
+            sunrise = events["sunrise"]
+            noon = events["noon"]
+            sunset = events["sunset"]
+            dusk = events["dusk"]
+        except KeyError:
+            return DocumentTextifier._coarse_hour_bucket(local_aware.hour)
+        pre_dawn_start = sunrise - datetime.timedelta(minutes=90)
+        post_dusk_end = dusk + datetime.timedelta(minutes=60)
+        if local_aware < pre_dawn_start:
+            return "night"
+        if local_aware < dawn:
+            return "pre-dawn"
+        if local_aware < sunrise:
+            return "dawn"
+        if local_aware < sunrise + datetime.timedelta(minutes=30):
+            return "sunrise"
+        if local_aware < noon:
+            return "morning"
+        if local_aware < noon + datetime.timedelta(hours=2):
+            return "midday"
+        if local_aware < sunset - datetime.timedelta(minutes=30):
+            return "afternoon"
+        if local_aware < sunset:
+            return "sunset"
+        if local_aware < dusk:
+            return "dusk"
+        if local_aware < post_dusk_end:
+            return "post-dusk"
+        return "night"
+
+    @staticmethod
+    def _compute_photo_time_context(
+        dt_naive: datetime.datetime,
+        offset_minutes: Optional[int],
+        gps: Optional[Tuple[float, float]],
+    ) -> Dict[str, Any]:
+        """Turn a naive capture datetime + optional tz offset + GPS into a phase label."""
+        lat_lon: Optional[Tuple[float, float]] = None
+        if gps and len(gps) == 2:
+            try:
+                lat_lon = (float(gps[0]), float(gps[1]))
+            except (TypeError, ValueError):
+                lat_lon = None
+        if lat_lon is None:
+            return {
+                "phase": DocumentTextifier._coarse_hour_bucket(dt_naive.hour),
+                "local_time_str": dt_naive.strftime("%H:%M on %Y-%m-%d"),
+                "sunrise_str": None,
+                "sunset_str": None,
+                "source": "hour-bucket",
+            }
+        if offset_minutes is not None:
+            tz = datetime.timezone(datetime.timedelta(minutes=offset_minutes))
+        else:
+            approx_hours = round(lat_lon[1] / 15.0)
+            tz = datetime.timezone(datetime.timedelta(hours=approx_hours))
+        local_aware = dt_naive.replace(tzinfo=tz)
+        try:
+            from astral import Observer
+            from astral.sun import sun as astral_sun
+        except ImportError:
+            return {
+                "phase": DocumentTextifier._coarse_hour_bucket(dt_naive.hour),
+                "local_time_str": dt_naive.strftime("%H:%M on %Y-%m-%d"),
+                "sunrise_str": None,
+                "sunset_str": None,
+                "source": "hour-bucket-no-astral",
+            }
+        try:
+            observer = Observer(latitude=lat_lon[0], longitude=lat_lon[1])
+            events = astral_sun(observer, date=local_aware.date(), tzinfo=tz)
+            phase = DocumentTextifier._classify_sun_phase(local_aware, events)
+            return {
+                "phase": phase,
+                "local_time_str": local_aware.strftime("%H:%M on %Y-%m-%d"),
+                "sunrise_str": events["sunrise"].strftime("%H:%M"),
+                "sunset_str": events["sunset"].strftime("%H:%M"),
+                "source": "astral",
+            }
+        except Exception as exc:
+            logger.debug(f"astral sun() failed (lat={lat_lon[0]}, lon={lat_lon[1]}): {exc}")
+            return {
+                "phase": DocumentTextifier._coarse_hour_bucket(dt_naive.hour),
+                "local_time_str": dt_naive.strftime("%H:%M on %Y-%m-%d"),
+                "sunrise_str": None,
+                "sunset_str": None,
+                "source": "hour-bucket-astral-error",
+            }
+
+    @staticmethod
+    def _format_photo_time_hint(context: Dict[str, Any]) -> str:
+        """Render a photo time-context dict into a one-sentence prompt addendum."""
+        if not context:
+            return ""
+        phase = str(context.get("phase") or "").strip()
+        local_time = str(context.get("local_time_str") or "").strip()
+        if not phase or not local_time:
+            return ""
+        sunrise = str(context.get("sunrise_str") or "").strip()
+        sunset = str(context.get("sunset_str") or "").strip()
+        if phase in {"pre-dawn", "dawn", "sunrise"}:
+            guidance = "Lighting is a morning scene — label as dawn/sunrise, never as dusk/sunset."
+        elif phase in {"sunset", "dusk", "post-dusk"}:
+            guidance = "Lighting is an evening scene — label as sunset/dusk, never as sunrise/dawn."
+        elif phase == "night":
+            guidance = "The sun is well below the horizon — label as night, not twilight."
+        elif phase in {"morning", "midday", "afternoon", "evening"}:
+            guidance = f"Natural light is typical {phase} light; do not call it sunrise or sunset."
+        else:
+            guidance = ""
+        pieces = [f"Context: local capture time is {local_time} ({phase})."]
+        if sunrise and sunset:
+            pieces.append(f"Local sunrise {sunrise}, sunset {sunset}.")
+        if guidance:
+            pieces.append(guidance)
+        return " ".join(pieces)
+
+    @staticmethod
+    def _build_keyword_hint(
+        keywords: List[str],
+        location: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """Build a concise VLM prompt hint from existing EXIF keywords and resolved location.
+
+        Keeps the hint short and factual so the model uses the data rather than
+        reasoning about it. Location is listed first so it overrides visual guesses
+        (e.g. a conical mountain is in Chile, not Japan).
+        Returns an empty string when no keywords and no location are available.
+        """
+        pieces: List[str] = []
+
+        loc_parts = []
+        if location:
+            for field in ("city", "state", "country"):
+                val = (location.get(field) or "").strip()
+                if val:
+                    loc_parts.append(val)
+        if loc_parts:
+            pieces.append(f"Location: {', '.join(loc_parts)}.")
+
+        if keywords:
+            kw_list = ", ".join(keywords[:20])
+            pieces.append(f"Known subjects: {kw_list}.")
+
+        if not pieces:
+            return ""
+
+        return (
+            " ".join(pieces)
+            + " Use these facts when describing the image."
+            " Do not list or discuss these tags — just describe what you see."
+        )
+
+    @staticmethod
+    def build_photo_time_hint(file_path: str, gps: Optional[Tuple[float, float]] = None) -> str:
+        """Public entry point: read capture time + compute phase, return a prompt hint.
+
+        Returns an empty string when neither EXIF nor the filename yields a datetime.
+        """
+        capture = DocumentTextifier._read_photo_capture_datetime(file_path)
+        if not capture:
+            return ""
+        context = DocumentTextifier._compute_photo_time_context(
+            capture["datetime_naive"],
+            capture.get("offset_minutes"),
+            gps,
+        )
+        return DocumentTextifier._format_photo_time_hint(context)
 
     @staticmethod
     def read_exif_keywords(file_path: str) -> List[str]:
@@ -3083,10 +3528,17 @@ class DocumentTextifier:
                 image_bytes = f.read()
 
             self._report(0.2, "Describing image with vision model...")
-            description = self.describe_image(image_bytes)
+            time_hint = self.build_photo_time_hint(file_path, gps)
+            if time_hint:
+                logger.info(f"Photo time hint for {file_name}: {time_hint}")
+            keyword_hint = self._build_keyword_hint(existing_keywords, location=location)
+            if keyword_hint:
+                logger.info(f"Keyword hint for {file_name}: {keyword_hint}")
+            combined_hint = " ".join(filter(None, [time_hint, keyword_hint]))
+            description = self.describe_image(image_bytes, context_hint=combined_hint)
 
             self._report(0.5, "Extracting keywords...")
-            keywords = self.extract_keywords(description)
+            keywords = self.extract_keywords(description, anchor_keywords=existing_keywords)
         else:
             self._report(0.5, "Skipping AI description generation")
 

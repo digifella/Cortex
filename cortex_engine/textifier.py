@@ -443,6 +443,15 @@ class DocumentTextifier:
             flags=re.IGNORECASE,
         ).strip()
         cleaned = re.sub(
+            r"^(?:let'?s break this down|let me break this down|breaking this down"
+            r"|based on the tags?|looking at the tags?|tags? (?:suggest|include|like)"
+            r"|the tags?|known subjects|context is (?:sunset|sunrise|evening|morning|night)"
+            r"|the photographer(?:'s)? (?:has )?tagged this)[^.!?]*[.!?]\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        cleaned = re.sub(
             r"^(?:the photo|this photo|the image|this image)\s+(shows?|depicts?)\s+",
             "",
             cleaned,
@@ -468,6 +477,29 @@ class DocumentTextifier:
             "user wants",
             "the user asked",
             "user asked",
+            # reasoning/analysis preambles triggered by tag hints
+            "let's break this down",
+            "let me break this down",
+            "breaking this down",
+            "based on the tags",
+            "looking at the tags",
+            "tags suggest",
+            "tags include",
+            "tags like",
+            "the tags",
+            "known subjects",
+            "the photographer tagged",
+            "the photographer has tagged",
+            "the photographer's tags",
+            "main subject and setting",
+            "specifically from the tags",
+            "using these as",
+            "using the tags",
+            "use these facts",
+            "context is sunset",
+            "context is sunrise",
+            "context is evening",
+            "context is morning",
         )
         filler_only = {
             "let's see",
@@ -494,6 +526,12 @@ class DocumentTextifier:
             s = re.sub(r"^(?:answer|description)\s*:\s*", "", s, flags=re.IGNORECASE).strip()
             s = re.sub(r"^(?:the user wants|user wants|the user asked|user asked)\s+", "", s, flags=re.IGNORECASE).strip()
             if not s:
+                continue
+            # Strip inline rhetorical questions like "right?" or ", right?"
+            s = re.sub(r",?\s*right\?\s*$", ".", s, flags=re.IGNORECASE).strip()
+            s = re.sub(r",?\s*correct\?\s*$", ".", s, flags=re.IGNORECASE).strip()
+            # Drop entire sentences that are questions
+            if s.endswith("?"):
                 continue
             slow = s.lower()
             normalized_stub = re.sub(r"[^a-z]+", " ", slow).strip()
@@ -584,8 +622,9 @@ class DocumentTextifier:
     ) -> str:
         """Call a specific VLM model and normalize the returned text."""
         prompt = (
-            "Describe this photograph very briefly in 1-2 short plain sentences (max 35 words total). "
+            "Describe this photograph in 1-2 short plain declarative sentences (max 35 words total). "
             "Identify only the main subject and setting. "
+            "Write statements only — do not ask questions or use question marks. "
             "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
             "return exactly: [Image: logo/icon omitted]. "
             "Do not use markdown, headings, or bullet points."
@@ -791,7 +830,7 @@ class DocumentTextifier:
                     if not model:
                         continue
                     result = self._describe_with_model(
-                        model, encoded, simple_prompt=True, context_hint=context_hint
+                        model, encoded, simple_prompt=False, context_hint=context_hint
                     )
                 except Exception as model_error:
                     err_text = str(model_error)
@@ -1644,11 +1683,14 @@ class DocumentTextifier:
     TEXT_MODELS = ["mistral:latest", "mistral-small3.2", "llama3:latest", "gemma:latest"]
     CLEANUP_MODELS = ["qwen2.5:32b", "qwen2.5:14b", "mistral:latest", "llama3:latest"]
 
-    def extract_keywords(self, description: str) -> List[str]:
+    def extract_keywords(self, description: str, anchor_keywords: Optional[List[str]] = None) -> List[str]:
         """Extract flat keywords from an image description using a text LLM.
 
         Uses a text model (Mistral etc.) rather than the VLM, because VLMs
         like Qwen3-VL return empty responses for text-only prompts.
+
+        anchor_keywords: existing EXIF tags from the photographer — passed as
+        strong hints so specific names (species, places) are preserved verbatim.
         """
         # Don't hallucinate keywords from empty/failed descriptions
         if not description or description.startswith("[Image:"):
@@ -1669,6 +1711,16 @@ class DocumentTextifier:
                 logger.warning("No text model available for keyword extraction")
                 return self._extract_keywords_simple(description)
 
+            anchor_section = ""
+            if anchor_keywords:
+                anchor_list = ", ".join(anchor_keywords[:20])
+                anchor_section = (
+                    f"The photographer has already tagged this image with: {anchor_list}. "
+                    "Treat these as ground-truth — include the relevant ones verbatim in your output "
+                    "rather than replacing specific terms with vague equivalents "
+                    "(e.g. keep 'condor' not 'bird', keep 'Antarctica' not 'remote location'). "
+                )
+
             response = client.chat(
                 model=text_model,
                 messages=[{
@@ -1682,7 +1734,8 @@ class DocumentTextifier:
                         "Do NOT include photography jargon (bokeh, depth of field, "
                         "backlit, composition, close up) or vague words (atmosphere, "
                         "mood, scene, tones). Maximum 15 tags.\n\n"
-                        f"Description: {description}"
+                        + anchor_section
+                        + f"Description: {description}"
                     ),
                 }],
                 options={"temperature": 0.1, "num_predict": 200},
@@ -2144,11 +2197,37 @@ class DocumentTextifier:
 
     @staticmethod
     def _read_photo_capture_datetime(file_path: str) -> Optional[Dict[str, Any]]:
-        """Return capture datetime info preferring EXIF, falling back to filename."""
+        """Return capture datetime info preferring EXIF, falling back to filename.
+
+        When EXIF has no explicit timezone offset, the filename time is cross-checked.
+        If they differ by more than 3 hours (modulo 24) the filename is preferred —
+        cameras often store UTC without an offset tag, while filenames encode local time.
+        """
         exif_result = DocumentTextifier._read_exif_capture_datetime(file_path)
-        if exif_result:
+        filename_result = DocumentTextifier._parse_filename_capture_datetime(
+            Path(file_path).name
+        )
+
+        if exif_result is None:
+            return filename_result
+
+        if exif_result.get("offset_minutes") is not None:
             return exif_result
-        return DocumentTextifier._parse_filename_capture_datetime(Path(file_path).name)
+
+        if filename_result is not None:
+            exif_hour = exif_result["datetime_naive"].hour
+            fname_hour = filename_result["datetime_naive"].hour
+            raw_diff = abs(exif_hour - fname_hour)
+            diff = min(raw_diff, 24 - raw_diff)
+            if diff > 3:
+                logger.warning(
+                    f"EXIF time ({exif_hour:02d}h) and filename time ({fname_hour:02d}h) "
+                    f"differ by {diff}h for {Path(file_path).name}; "
+                    "no tz offset in EXIF — using filename time"
+                )
+                return filename_result
+
+        return exif_result
 
     @staticmethod
     def _coarse_hour_bucket(hour: int) -> str:
@@ -2299,6 +2378,42 @@ class DocumentTextifier:
         if guidance:
             pieces.append(guidance)
         return " ".join(pieces)
+
+    @staticmethod
+    def _build_keyword_hint(
+        keywords: List[str],
+        location: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """Build a concise VLM prompt hint from existing EXIF keywords and resolved location.
+
+        Keeps the hint short and factual so the model uses the data rather than
+        reasoning about it. Location is listed first so it overrides visual guesses
+        (e.g. a conical mountain is in Chile, not Japan).
+        Returns an empty string when no keywords and no location are available.
+        """
+        pieces: List[str] = []
+
+        loc_parts = []
+        if location:
+            for field in ("city", "state", "country"):
+                val = (location.get(field) or "").strip()
+                if val:
+                    loc_parts.append(val)
+        if loc_parts:
+            pieces.append(f"Location: {', '.join(loc_parts)}.")
+
+        if keywords:
+            kw_list = ", ".join(keywords[:20])
+            pieces.append(f"Known subjects: {kw_list}.")
+
+        if not pieces:
+            return ""
+
+        return (
+            " ".join(pieces)
+            + " Use these facts when describing the image."
+            " Do not list or discuss these tags — just describe what you see."
+        )
 
     @staticmethod
     def build_photo_time_hint(file_path: str, gps: Optional[Tuple[float, float]] = None) -> str:
@@ -3416,10 +3531,14 @@ class DocumentTextifier:
             time_hint = self.build_photo_time_hint(file_path, gps)
             if time_hint:
                 logger.info(f"Photo time hint for {file_name}: {time_hint}")
-            description = self.describe_image(image_bytes, context_hint=time_hint)
+            keyword_hint = self._build_keyword_hint(existing_keywords, location=location)
+            if keyword_hint:
+                logger.info(f"Keyword hint for {file_name}: {keyword_hint}")
+            combined_hint = " ".join(filter(None, [time_hint, keyword_hint]))
+            description = self.describe_image(image_bytes, context_hint=combined_hint)
 
             self._report(0.5, "Extracting keywords...")
-            keywords = self.extract_keywords(description)
+            keywords = self.extract_keywords(description, anchor_keywords=existing_keywords)
         else:
             self._report(0.5, "Skipping AI description generation")
 
