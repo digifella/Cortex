@@ -20,7 +20,7 @@ from cortex_engine.utils import convert_windows_to_wsl_path, get_logger, resolve
 from cortex_engine.version_config import VERSION_STRING
 
 from cortex_engine.llm_metadata_sync import exiftool_runner
-from cortex_engine.llm_metadata_sync.matcher import build_raw_index, resolve_jpg
+from cortex_engine.llm_metadata_sync.matcher import build_raw_index, resolve_jpg, strip_rating_suffix
 from cortex_engine.llm_metadata_sync.models import SyncConfig, SyncReport
 from cortex_engine.llm_metadata_sync.sync import run_sync
 
@@ -1736,9 +1736,19 @@ def _render_lms_tab() -> None:
         )
 
         if report.orphaned_jpgs:
-            with st.expander(f"Show orphaned JPGs ({len(report.orphaned_jpgs)})"):
+            snap_cfg: Optional[SyncConfig] = st.session_state.get("lms_config_snapshot")
+            _rating_range = snap_cfg.rating_suffix_range if snap_cfg else (1, 5)
+            with st.expander(f"⚠️ Orphaned JPGs — no RAW/TIF match found ({len(report.orphaned_jpgs)})"):
+                st.caption(
+                    "These JPGs had no matching RAW or derivative file in the raw root. "
+                    "The **lookup key** is the filename stem after stripping the rating suffix — "
+                    "a matching RAW/TIF must index under the same key."
+                )
+                rows = []
                 for p in report.orphaned_jpgs:
-                    st.text(p.name)
+                    stripped = strip_rating_suffix(p.stem, _rating_range)
+                    rows.append({"JPG filename": p.name, "Lookup key (must match RAW/TIF base)": stripped})
+                st.table(rows)
 
         if not report.actions:
             st.info("No matches found. Check that paths are correct and filenames align.")
