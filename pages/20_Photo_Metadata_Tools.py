@@ -424,8 +424,215 @@ def _clear_photokw_manifest() -> None:
             logger.warning(f"Could not remove photo batch manifest: {e}")
 
 
+def _render_live_log(placeholder: Any, entries: list, mode: str) -> None:
+    """Render the processing log into a Streamlit placeholder."""
+    if not entries:
+        return
+    lines = ["**Processing log**"]
+    lines.append(
+        '<div style="max-height:320px;overflow-y:auto;'
+        'border:1px solid #333;border-radius:6px;padding:10px 14px;'
+        'background:#111;font-size:0.82em;font-family:monospace;">'
+    )
+    for e in reversed(entries):
+        icon = "✅" if e.get("ok") else "❌"
+        lines.append(
+            f'<div style="margin-bottom:10px;padding-bottom:8px;'
+            f'border-bottom:1px solid #2a2a2a;">'
+        )
+        lines.append(
+            f'<span style="color:#ccc;">{icon} <strong style="color:#e8e8e8;">'
+            f'{e["fname"]}</strong></span>'
+        )
+        if e.get("error"):
+            lines.append(
+                f'<br><span style="color:#f87171;">Error: {e["error"]}</span>'
+            )
+        else:
+            if e.get("description"):
+                desc_preview = e["description"][:120].replace("<", "&lt;").replace(">", "&gt;")
+                if len(e["description"]) > 120:
+                    desc_preview += "…"
+                lines.append(
+                    f'<br><span style="color:#9ca3af;font-style:italic;">'
+                    f'"{desc_preview}"</span>'
+                )
+            if e.get("new_keywords"):
+                kw_html = ", ".join(
+                    f'<span style="color:#6ee7b7;">{k}</span>'
+                    for k in e["new_keywords"][:30]
+                )
+                if len(e["new_keywords"]) > 30:
+                    kw_html += f', <span style="color:#6b7280;">+{len(e["new_keywords"])-30} more</span>'
+                lines.append(f'<br><span style="color:#6b7280;">New keywords: </span>{kw_html}')
+            elif e.get("mode") == "keyword_metadata":
+                lines.append('<br><span style="color:#6b7280;font-style:italic;">No new keywords</span>')
+            if e.get("location_str"):
+                lines.append(
+                    f'<br><span style="color:#93c5fd;">Location: {e["location_str"]}</span>'
+                )
+            if e.get("mode") == "resize_only":
+                resize_info = e.get("resize_info", {})
+                if resize_info.get("resized"):
+                    lines.append(
+                        f'<br><span style="color:#fde68a;">Resized: '
+                        f'{resize_info.get("original_size","?")} → {resize_info.get("new_size","?")}</span>'
+                    )
+                else:
+                    lines.append('<br><span style="color:#6b7280;">No resize needed</span>')
+        lines.append("</div>")
+    lines.append("</div>")
+    placeholder.markdown("\n".join(lines), unsafe_allow_html=True)
+
+
 def _render_photo_keywords_tab():
     """Render the Photo Processor tool for batch resize and photo metadata workflows."""
+
+    # ── Active-run dispatch ──────────────────────────────────────────────────
+    # Runs before any widgets so it can call st.rerun() cleanly.
+    _dispatch_manifest = _load_photokw_manifest()
+    if _dispatch_manifest and _dispatch_manifest.get("status") == "running":
+        # Handle cooldown: if resume_after is set and still in the future, sleep briefly
+        resume_after_str = _dispatch_manifest.get("resume_after")
+        if resume_after_str:
+            try:
+                resume_after_dt = datetime.fromisoformat(resume_after_str)
+                remaining = (resume_after_dt - datetime.now()).total_seconds()
+                if remaining > 0:
+                    time.sleep(min(remaining, 0.5))
+                    st.rerun()
+            except Exception:
+                pass  # malformed timestamp — ignore and proceed
+
+        all_paths = _dispatch_manifest.get("all_file_paths") or []
+        current_idx = int(_dispatch_manifest.get("current_idx") or 0)
+        settings = _dispatch_manifest.get("run_settings") or {}
+        mode = _dispatch_manifest.get("mode", "keyword_metadata")
+
+        if current_idx < len(all_paths):
+            fpath = all_paths[current_idx]
+            fname = Path(fpath).name
+
+            if not Path(fpath).exists():
+                logger.warning(f"Dispatch: file no longer exists, skipping: {fpath}")
+                result = {"file_name": fname, "error": "file no longer exists"}
+            else:
+                from cortex_engine.textifier import DocumentTextifier
+                textifier = DocumentTextifier(use_vision=True)
+
+                def _dispatch_progress(frac, msg, _name=fname, _idx=current_idx, _total=len(all_paths)):
+                    st.session_state["photokw_dispatch_progress"] = (frac, msg, _name, _idx, _total)
+
+                textifier.on_progress = _dispatch_progress
+                try:
+                    if mode == "resize_only":
+                        max_width = settings.get("max_width")
+                        max_height = settings.get("max_height")
+                        if max_width is None or max_height is None:
+                            result = {
+                                "file_name": fname,
+                                "output_path": fpath,
+                                "resize_info": {"resized": False, "metadata_preserved": True, "skipped_resize": True},
+                            }
+                        else:
+                            result = textifier.resize_image_only(
+                                fpath,
+                                max_width=max_width,
+                                max_height=max_height,
+                                convert_to_jpg=settings.get("convert_to_jpg", False),
+                                jpg_quality=settings.get("jpg_quality", 90),
+                            )
+                        output_path = str(result.get("output_path", fpath))
+                        all_paths[current_idx] = output_path
+                        if settings.get("anonymize_keywords"):
+                            result["keyword_anonymize_result"] = textifier.anonymize_existing_photo_keywords(
+                                output_path, blocked_keywords=settings.get("blocked_keywords", [])
+                            )
+                        if settings.get("apply_ownership") and settings.get("ownership_notice", "").strip():
+                            result["ownership_result"] = textifier.write_ownership_metadata(
+                                output_path, settings["ownership_notice"].strip()
+                            )
+                    elif mode == "halftone_repair":
+                        result = textifier.repair_halftone_image(
+                            fpath,
+                            strength=settings.get("halftone_strength", 42),
+                            preserve_color=settings.get("halftone_preserve_color", True),
+                            convert_to_jpg=settings.get("convert_to_jpg", False),
+                            jpg_quality=settings.get("jpg_quality", 90),
+                        )
+                        output_path = str(result.get("output_path", fpath))
+                        all_paths[current_idx] = output_path
+                        if settings.get("apply_ownership") and settings.get("ownership_notice", "").strip():
+                            result["ownership_result"] = textifier.write_ownership_metadata(
+                                output_path, settings["ownership_notice"].strip()
+                            )
+                    else:
+                        result = textifier.keyword_image(
+                            fpath,
+                            city_radius_km=settings.get("city_radius", 5),
+                            clear_keywords=(settings.get("clear_keywords", False) if settings.get("generate_description", True) else False),
+                            clear_location=(settings.get("clear_location", False) if settings.get("populate_location", True) else False),
+                            generate_description=settings.get("generate_description", True),
+                            populate_location=settings.get("populate_location", True),
+                            anonymize_keywords=settings.get("anonymize_keywords", False),
+                            blocked_keywords=settings.get("blocked_keywords", []),
+                            fallback_city=settings.get("fallback_city", ""),
+                            fallback_country=settings.get("fallback_country", ""),
+                            ownership_notice=(settings.get("ownership_notice", "").strip() if settings.get("apply_ownership") else ""),
+                        )
+                except Exception as exc:
+                    logger.error(f"Dispatch error for {fpath}: {exc}", exc_info=True)
+                    result = {"file_name": fname, "error": str(exc)}
+
+            # Update cumulative results in session state
+            done_results = list(_dispatch_manifest.get("results") or [])
+            done_paths = list(_dispatch_manifest.get("file_paths") or [])
+            done_results.append(result)
+            done_paths.append(all_paths[current_idx])
+            new_idx = current_idx + 1
+
+            st.session_state["photokw_results"] = done_results
+            st.session_state["photokw_paths"] = done_paths
+            st.session_state["photokw_mode"] = mode
+
+            # Build live log entry
+            _loc = result.get("location") or {}
+            _loc_parts = [v for v in (_loc.get("city"), _loc.get("state"), _loc.get("country")) if v]
+            _live_log = list(st.session_state.get("photokw_live_log") or [])
+            _live_log.append({
+                "fname": fname,
+                "ok": not bool(result.get("error")),
+                "mode": mode,
+                "description": result.get("description", ""),
+                "new_keywords": result.get("new_keywords", []),
+                "location_str": ", ".join(_loc_parts) if _loc_parts else "",
+                "resize_info": result.get("resize_info", {}),
+                "error": result.get("error"),
+            })
+            st.session_state["photokw_live_log"] = _live_log
+
+            # Cooldown
+            cooldown = float(settings.get("batch_cooldown_seconds", 0))
+            if new_idx < len(all_paths) and cooldown > 0:
+                resume_after_ts = (datetime.now() + timedelta(seconds=cooldown)).isoformat()
+            else:
+                resume_after_ts = None
+
+            new_status = "done" if new_idx >= len(all_paths) else "running"
+            _save_photokw_manifest({
+                **_dispatch_manifest,
+                "status": new_status,
+                "current_idx": new_idx,
+                "results": done_results,
+                "file_paths": done_paths,
+                "all_file_paths": all_paths,
+                "resume_after": resume_after_ts,
+            })
+
+            if new_status == "running":
+                st.rerun()
+            # If done: fall through — normal render will show results
+
     st.markdown(
         "Process photos in batch: resize for gallery use, generate AI keywords, "
         "clean sensitive tags, and write EXIF/XMP ownership metadata."
