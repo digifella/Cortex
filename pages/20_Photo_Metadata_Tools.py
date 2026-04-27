@@ -645,21 +645,34 @@ def _render_photo_keywords_tab():
         _manifest = _load_photokw_manifest()
         if _manifest:
             _ts = _manifest.get("timestamp", "unknown")
-            _count = len(_manifest.get("results") or [])
-            _missing = int(_manifest.get("missing_count") or 0)
-            _msg = f"📦 **Recover last batch** — {_count} processed photo(s) from {_ts} are still on disk."
-            if _missing:
-                _msg += f" ({_missing} file(s) no longer present and will be skipped.)"
-            st.info(_msg)
-            rc1, rc2, _ = st.columns([1, 1, 4])
-            if rc1.button("Recover", key="photokw_recover_last_batch", type="primary"):
-                st.session_state["photokw_results"] = _manifest.get("results") or []
-                st.session_state["photokw_paths"] = _manifest.get("file_paths") or []
-                st.session_state["photokw_mode"] = _manifest.get("mode", "keyword_metadata")
-                st.rerun()
-            if rc2.button("Discard", key="photokw_discard_last_batch"):
-                _clear_photokw_manifest()
-                st.rerun()
+            if _is_active_run(_manifest):
+                # Paused run — show resume/cancel (running runs auto-resume via dispatch block)
+                _done = int(_manifest.get("current_idx") or 0)
+                _total_count = len(_manifest.get("all_file_paths") or [])
+                st.info(f"⏸ **Paused batch** — {_done} of {_total_count} photos done. Last run: {_ts}")
+                _rc1, _rc2, _ = st.columns([1, 1, 4])
+                if _rc1.button("▶ Resume", key="photokw_banner_resume", type="primary"):
+                    _save_photokw_manifest({**_manifest, "status": "running", "resume_after": None})
+                    st.rerun()
+                if _rc2.button("✕ Cancel", key="photokw_banner_cancel"):
+                    _clear_photokw_manifest()
+                    st.rerun()
+            else:
+                _count = len(_manifest.get("results") or [])
+                _missing = int(_manifest.get("missing_count") or 0)
+                _msg = f"📦 **Recover last batch** — {_count} processed photo(s) from {_ts} are still on disk."
+                if _missing:
+                    _msg += f" ({_missing} file(s) no longer present and will be skipped.)"
+                st.info(_msg)
+                rc1, rc2, _ = st.columns([1, 1, 4])
+                if rc1.button("Recover", key="photokw_recover_last_batch", type="primary"):
+                    st.session_state["photokw_results"] = _manifest.get("results") or []
+                    st.session_state["photokw_paths"] = _manifest.get("file_paths") or []
+                    st.session_state["photokw_mode"] = _manifest.get("mode", "keyword_metadata")
+                    st.rerun()
+                if rc2.button("Discard", key="photokw_discard_last_batch"):
+                    _clear_photokw_manifest()
+                    st.rerun()
 
     col1, col2 = st.columns([1, 2])
 
@@ -839,6 +852,48 @@ def _render_photo_keywords_tab():
 
     with col2:
         st.header("Results")
+
+        # Active-run progress display
+        _run_manifest = _load_photokw_manifest()
+        if _run_manifest and _is_active_run(_run_manifest):
+            _run_idx = int(_run_manifest.get("current_idx") or 0)
+            _run_total = len(_run_manifest.get("all_file_paths") or [])
+            _run_status = _run_manifest.get("status", "running")
+            _run_frac = _run_idx / _run_total if _run_total > 0 else 0
+
+            if _run_status == "running":
+                _prog_info = st.session_state.get("photokw_dispatch_progress")
+                if _prog_info:
+                    _pfrac, _pmsg, _pname, _pidx, _ptotal = _prog_info
+                    _overall = min((_pidx + _pfrac) / _ptotal, 1.0)
+                    st.progress(_overall, f"[{_pname}] {_pmsg}")
+                else:
+                    st.progress(_run_frac, f"Processing photo {_run_idx} of {_run_total}...")
+                if st.button("⏸ Pause after this photo", key="photokw_pause_btn"):
+                    _save_photokw_manifest({**_run_manifest, "status": "paused"})
+                    st.rerun()
+            else:  # paused
+                st.progress(_run_frac, f"Paused — {_run_idx} of {_run_total} done")
+                st.info(f"⏸ Batch paused at photo {_run_idx} of {_run_total}.")
+                _pr1, _pr2, _ = st.columns([1, 1, 4])
+                if _pr1.button("▶ Resume", key="photokw_resume_btn", type="primary"):
+                    _save_photokw_manifest({**_run_manifest, "status": "running", "resume_after": None})
+                    st.session_state.pop("photokw_dispatch_progress", None)
+                    st.rerun()
+                if _pr2.button("✕ Cancel", key="photokw_cancel_btn"):
+                    _clear_photokw_manifest()
+                    st.session_state.pop("photokw_results", None)
+                    st.session_state.pop("photokw_paths", None)
+                    st.session_state.pop("photokw_mode", None)
+                    st.session_state.pop("photokw_live_log", None)
+                    st.session_state.pop("photokw_dispatch_progress", None)
+                    st.rerun()
+
+            # Live log from session state
+            _live_entries = st.session_state.get("photokw_live_log") or []
+            if _live_entries:
+                _log_ph = st.empty()
+                _render_live_log(_log_ph, _live_entries, _run_manifest.get("mode", "keyword_metadata"))
 
         if uploaded:
             accepted_uploads = []
