@@ -870,220 +870,71 @@ def _render_photo_keywords_tab():
                     st.warning("Select at least one metadata action before processing.")
                     return
 
-                from cortex_engine.textifier import DocumentTextifier
-
-                # New batch starting — invalidate any stale recovery manifest
-                # so the one we write reflects only the current run.
-                _clear_photokw_manifest()
-
                 # Save uploads to temp dir
                 temp_dir = Path(tempfile.gettempdir()) / "cortex_photokw"
                 temp_dir.mkdir(exist_ok=True, mode=0o755)
-                file_paths = []
+                all_file_paths: list[str] = []
                 if total == 1 and st.session_state.get("photokw_single_working_path"):
                     working_path = st.session_state.get("photokw_single_working_path")
                     if working_path and Path(working_path).exists():
                         dest = temp_dir / uploaded[0].name
                         shutil.copy2(working_path, dest)
                         os.chmod(str(dest), 0o644)
-                        file_paths.append(str(dest))
-                    else:
+                        all_file_paths.append(str(dest))
+                if not all_file_paths:
+                    if total == 1:
                         uf = uploaded[0]
                         dest = temp_dir / uf.name
                         with open(dest, "wb") as f:
                             f.write(uf.getvalue())
                         os.chmod(str(dest), 0o644)
-                        file_paths.append(str(dest))
-                else:
-                    for uf in uploaded:
-                        dest = temp_dir / uf.name
-                        with open(dest, "wb") as f:
-                            f.write(uf.getvalue())
-                        os.chmod(str(dest), 0o644)
-                        file_paths.append(str(dest))
+                        all_file_paths.append(str(dest))
+                    else:
+                        for uf in uploaded:
+                            dest = temp_dir / uf.name
+                            with open(dest, "wb") as f:
+                                f.write(uf.getvalue())
+                            os.chmod(str(dest), 0o644)
+                            all_file_paths.append(str(dest))
 
-                textifier = DocumentTextifier(use_vision=True)
-                results = []
-                if do_resize_only:
-                    mode = "resize_only"
-                    progress_message = "Starting resize..."
-                elif do_halftone_repair:
-                    mode = "halftone_repair"
-                    progress_message = "Starting halftone repair..."
-                else:
-                    mode = "keyword_metadata"
-                    progress_message = "Starting metadata processing..."
-                progress = st.progress(0.0, progress_message)
+                if not all_file_paths:
+                    st.error("No files to process.")
+                    return
+
                 blocked_keywords = [k.strip().lower() for k in blocked_keywords_text.split(",") if k.strip()]
+                mode = "resize_only" if do_resize_only else ("halftone_repair" if do_halftone_repair else "keyword_metadata")
 
-                # Live processing log — updated after each photo completes
-                log_placeholder = st.empty()
-                _live_log: list[dict] = []
-
-                def _render_live_log(entries: list[dict]) -> None:
-                    """Render the processing log inside the placeholder."""
-                    if not entries:
-                        return
-                    lines = ["**Processing log**"]
-                    lines.append(
-                        '<div style="max-height:320px;overflow-y:auto;'
-                        'border:1px solid #333;border-radius:6px;padding:10px 14px;'
-                        'background:#111;font-size:0.82em;font-family:monospace;">'
-                    )
-                    for e in reversed(entries):
-                        icon = "✅" if e["ok"] else "❌"
-                        lines.append(
-                            f'<div style="margin-bottom:10px;padding-bottom:8px;'
-                            f'border-bottom:1px solid #2a2a2a;">'
-                        )
-                        lines.append(
-                            f'<span style="color:#ccc;">{icon} <strong style="color:#e8e8e8;">'
-                            f'{e["fname"]}</strong></span>'
-                        )
-                        if e.get("error"):
-                            lines.append(
-                                f'<br><span style="color:#f87171;">Error: {e["error"]}</span>'
-                            )
-                        else:
-                            if e.get("description"):
-                                desc_preview = e["description"][:120].replace("<", "&lt;").replace(">", "&gt;")
-                                if len(e["description"]) > 120:
-                                    desc_preview += "…"
-                                lines.append(
-                                    f'<br><span style="color:#9ca3af;font-style:italic;">'
-                                    f'"{desc_preview}"</span>'
-                                )
-                            if e.get("new_keywords"):
-                                kw_html = ", ".join(
-                                    f'<span style="color:#6ee7b7;">{k}</span>'
-                                    for k in e["new_keywords"][:30]
-                                )
-                                if len(e["new_keywords"]) > 30:
-                                    kw_html += f', <span style="color:#6b7280;">+{len(e["new_keywords"])-30} more</span>'
-                                lines.append(f'<br><span style="color:#6b7280;">New keywords: </span>{kw_html}')
-                            elif e.get("mode") == "keyword_metadata":
-                                lines.append('<br><span style="color:#6b7280;font-style:italic;">No new keywords</span>')
-                            if e.get("location_str"):
-                                lines.append(
-                                    f'<br><span style="color:#93c5fd;">Location: {e["location_str"]}</span>'
-                                )
-                            if e.get("mode") == "resize_only":
-                                resize_info = e.get("resize_info", {})
-                                if resize_info.get("resized"):
-                                    lines.append(
-                                        f'<br><span style="color:#fde68a;">Resized: '
-                                        f'{resize_info.get("original_size","?")} → {resize_info.get("new_size","?")}</span>'
-                                    )
-                                else:
-                                    lines.append('<br><span style="color:#6b7280;">No resize needed</span>')
-                        lines.append("</div>")
-                    lines.append("</div>")
-                    log_placeholder.markdown("\n".join(lines), unsafe_allow_html=True)
-
-                for idx, fpath in enumerate(file_paths):
-                    fname = Path(fpath).name
-
-                    def _on_progress(frac, msg, _idx=idx, _total=total, _name=fname):
-                        overall = min((_idx + frac) / _total, 1.0)
-                        progress.progress(overall, f"[{_name}] {msg}")
-
-                    textifier.on_progress = _on_progress
-                    try:
-                        if do_resize_only:
-                            if max_width is None or max_height is None:
-                                result = {
-                                    "file_name": Path(fpath).name,
-                                    "output_path": fpath,
-                                    "resize_info": {
-                                        "resized": False,
-                                        "metadata_preserved": True,
-                                        "skipped_resize": True,
-                                    },
-                                }
-                            else:
-                                result = textifier.resize_image_only(
-                                    fpath,
-                                    max_width=max_width,
-                                    max_height=max_height,
-                                    convert_to_jpg=convert_to_jpg,
-                                    jpg_quality=jpg_quality,
-                                )
-                            output_path = str(result.get("output_path", fpath))
-                            file_paths[idx] = output_path
-                            if anonymize_keywords:
-                                result["keyword_anonymize_result"] = textifier.anonymize_existing_photo_keywords(
-                                    output_path, blocked_keywords=blocked_keywords
-                                )
-                            if apply_ownership and ownership_notice.strip():
-                                result["ownership_result"] = textifier.write_ownership_metadata(
-                                    output_path, ownership_notice.strip()
-                                )
-                        elif do_halftone_repair:
-                            result = textifier.repair_halftone_image(
-                                fpath,
-                                strength=halftone_strength,
-                                preserve_color=halftone_preserve_color,
-                                convert_to_jpg=convert_to_jpg,
-                                jpg_quality=jpg_quality,
-                            )
-                            output_path = str(result.get("output_path", fpath))
-                            file_paths[idx] = output_path
-                            if apply_ownership and ownership_notice.strip():
-                                result["ownership_result"] = textifier.write_ownership_metadata(
-                                    output_path, ownership_notice.strip()
-                                )
-                        else:
-                            result = textifier.keyword_image(
-                                fpath, city_radius_km=city_radius,
-                                clear_keywords=(clear_keywords if generate_description else False),
-                                clear_location=(clear_location if populate_location else False),
-                                generate_description=generate_description,
-                                populate_location=populate_location,
-                                anonymize_keywords=anonymize_keywords,
-                                blocked_keywords=blocked_keywords,
-                                fallback_city=fallback_city,
-                                fallback_country=fallback_country,
-                                ownership_notice=(ownership_notice.strip() if apply_ownership else ""),
-                            )
-                        results.append(result)
-                        # Persist incremental progress so a mid-batch session wipe
-                        # (rerun / WS drop / PC sleep) can still recover what's done.
-                        _save_photokw_manifest(results, file_paths[: idx + 1], mode)
-                        # Build log entry from result
-                        _loc = result.get("location") or {}
-                        _loc_parts = [v for v in (_loc.get("city"), _loc.get("state"), _loc.get("country")) if v]
-                        _live_log.append({
-                            "fname": fname,
-                            "ok": True,
-                            "mode": mode,
-                            "description": result.get("description", ""),
-                            "new_keywords": result.get("new_keywords", []),
-                            "location_str": ", ".join(_loc_parts) if _loc_parts else "",
-                            "resize_info": result.get("resize_info", {}),
-                        })
-                        _render_live_log(_live_log)
-                    except Exception as e:
-                        st.error(f"Failed: {fname}: {e}")
-                        logger.error(f"Photo keyword error for {fpath}: {e}", exc_info=True)
-                        _live_log.append({"fname": fname, "ok": False, "mode": mode, "error": str(e)})
-                        _render_live_log(_live_log)
-                    if photokw_batch_cooldown_seconds > 0 and total > 1 and idx < total - 1:
-                        progress.progress(
-                            min((idx + 1) / total, 1.0),
-                            f"Cooling down for {photokw_batch_cooldown_seconds:.1f}s before next photo..."
-                        )
-                        time.sleep(photokw_batch_cooldown_seconds)
-
-                progress.progress(1.0, "Done!")
-
-                # If writing to originals, user needs to copy back — but since
-                # we're working on uploaded copies in temp, the writes already happened.
-                # The user downloads the processed files.
-                if results:
-                    st.session_state["photokw_results"] = results
-                    st.session_state["photokw_paths"] = file_paths
-                    st.session_state["photokw_mode"] = mode
-                    _save_photokw_manifest(results, file_paths, mode)
+                _save_photokw_manifest({
+                    "version": 2,
+                    "status": "running",
+                    "mode": mode,
+                    "all_file_paths": all_file_paths,
+                    "current_idx": 0,
+                    "results": [],
+                    "file_paths": [],
+                    "run_settings": {
+                        "generate_description": generate_description,
+                        "populate_location": populate_location,
+                        "clear_keywords": clear_keywords,
+                        "clear_location": clear_location,
+                        "anonymize_keywords": anonymize_keywords,
+                        "blocked_keywords": blocked_keywords,
+                        "apply_ownership": apply_ownership,
+                        "ownership_notice": ownership_notice,
+                        "city_radius": city_radius,
+                        "fallback_city": fallback_city,
+                        "fallback_country": fallback_country,
+                        "max_width": max_width,
+                        "max_height": max_height,
+                        "convert_to_jpg": convert_to_jpg,
+                        "jpg_quality": jpg_quality,
+                        "halftone_strength": halftone_strength,
+                        "halftone_preserve_color": halftone_preserve_color,
+                        "batch_cooldown_seconds": photokw_batch_cooldown_seconds,
+                    },
+                    "resume_after": None,
+                })
+                st.rerun()
 
         # Display results
         results = st.session_state.get("photokw_results")
