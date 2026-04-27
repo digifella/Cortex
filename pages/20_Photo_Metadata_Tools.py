@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import time
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -351,31 +351,36 @@ def _photokw_manifest_path() -> Path:
     return _photokw_temp_dir() / "_last_batch.json"
 
 
-def _save_photokw_manifest(results: list, file_paths: list, mode: str) -> None:
-    """Persist the latest batch summary to disk so Results can be recovered
-    if Streamlit session state is wiped (file-watcher rerun, WS drop, sleep)."""
+def _save_photokw_manifest(payload: dict) -> None:
+    """Write a manifest dict to disk atomically. Adds/updates 'timestamp' on every write."""
     try:
         temp_dir = _photokw_temp_dir()
         temp_dir.mkdir(exist_ok=True, mode=0o755)
-        payload = {
-            "version": 1,
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "mode": mode,
-            "file_paths": list(file_paths),
-            "results": results,
-        }
+        to_write = dict(payload)
+        to_write["timestamp"] = datetime.now().isoformat(timespec="seconds")
         manifest_path = _photokw_manifest_path()
         tmp_path = manifest_path.with_suffix(".json.tmp")
         with open(tmp_path, "w") as f:
-            json.dump(payload, f, default=str)
+            json.dump(to_write, f, default=str)
         os.replace(tmp_path, manifest_path)
     except Exception as e:
         logger.warning(f"Could not save photo batch manifest: {e}")
 
 
+def _is_active_run(manifest: dict) -> bool:
+    """Return True when the manifest represents an in-progress or paused batch."""
+    return manifest.get("status") in ("running", "paused")
+
+
 def _load_photokw_manifest() -> Optional[dict]:
-    """Load the last-batch manifest, filtering out entries whose files no longer exist.
-    Returns None if no usable manifest is present."""
+    """Load the last-batch manifest from disk.
+
+    For completed batches (status='done' or v1 manifests): filters out entries
+    whose temp files no longer exist and returns None if nothing is left.
+    For active runs (status='running'/'paused'): returns the manifest as-is so
+    the dispatch block can resume; the caller handles missing files.
+    Returns None if no usable manifest is present.
+    """
     manifest_path = _photokw_manifest_path()
     if not manifest_path.exists():
         return None
@@ -386,6 +391,11 @@ def _load_photokw_manifest() -> Optional[dict]:
         logger.warning(f"Could not read photo batch manifest: {e}")
         return None
 
+    # Active runs (v2) are returned as-is — dispatch block handles skipping
+    if _is_active_run(payload):
+        return payload
+
+    # Completed / legacy v1 manifests: filter missing file paths
     results = payload.get("results") or []
     file_paths = payload.get("file_paths") or []
     kept_results: list = []
