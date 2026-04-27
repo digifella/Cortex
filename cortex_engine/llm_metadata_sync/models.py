@@ -57,7 +57,7 @@ class SyncConfig:
     )
     embed_extensions: tuple[str, ...] = ("tif", "tiff", "psd", "psb", "dng")
     deriv_patterns: tuple[str, ...] = (
-        r"-Edit", r"-Edit-\d+",
+        r"(?:-Edit)+", r"(?:-Edit)+-\d+",
         r"-Enhanced", r"-Enhanced-NR",
         r"-HDR", r"-HDR-\d+",
         r"-Pano", r"-Pano-\d+",
