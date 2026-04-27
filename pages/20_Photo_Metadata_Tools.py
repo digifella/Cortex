@@ -1815,12 +1815,17 @@ def _render_lms_tab() -> None:
                 pass
 
         full_log = "\n".join(log_lines)
-        st.download_button(
+        _lms_end_col1, _lms_end_col2 = st.columns([1, 3])
+        _lms_end_col1.download_button(
             "Download full log",
             full_log,
             file_name="lms_sync_log.txt",
             mime="text/plain",
         )
+        if _lms_end_col2.button("🗑 Clear — ready for next ingest", key="lms_clear_after_apply"):
+            for _k in [k for k in st.session_state if k.startswith("lms_")]:
+                st.session_state.pop(_k, None)
+            st.rerun()
 
         if not dry_run:
             st.success(
