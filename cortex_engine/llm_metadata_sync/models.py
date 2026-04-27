@@ -59,8 +59,12 @@ class SyncConfig:
     embed_extensions: tuple[str, ...] = ("tif", "tiff", "psd", "psb", "dng")
     jpg_extensions: tuple[str, ...] = ("jpg", "jpeg")  # catalog JPGs → JPG_REPLACE action
     deriv_patterns: tuple[str, ...] = (
-        r"(?:-Edit)+", r"(?:-Edit)+-\d+",
-        r"-Enhanced", r"-Enhanced-NR",
-        r"-HDR", r"-HDR-\d+",
-        r"-Pano", r"-Pano-\d+",
+        # Compound patterns must come first so re.search matches at the leftmost
+        # position (e.g. -Enhanced-NR-Edit-Edit) rather than just the trailing -Edit-Edit.
+        r"-Enhanced-NR(?:-Edit)+-\d+", r"-Enhanced-NR(?:-Edit)+",
+        r"-Enhanced(?:-Edit)+-\d+",    r"-Enhanced(?:-Edit)+",
+        r"(?:-Edit)+-\d+",             r"(?:-Edit)+",
+        r"-Enhanced-NR", r"-Enhanced",
+        r"-HDR-\d+",     r"-HDR",
+        r"-Pano-\d+",    r"-Pano",
     )

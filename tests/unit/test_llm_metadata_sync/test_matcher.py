@@ -77,6 +77,27 @@ def test_index_double_edit_tif_matches_rated_jpg(tmp_path):
     assert actions[0].target_type == TargetType.EMBEDDED
 
 
+def test_index_enhanced_nr_double_edit_tif_indexed_by_base_stem(tmp_path):
+    """2025-01-08 15-58-04-X-T5-Enhanced-NR-Edit-Edit.tif must strip the full compound suffix."""
+    (tmp_path / "2025-01-08 15-58-04-X-T5-Enhanced-NR-Edit-Edit.tif").touch()
+    index = build_raw_index(tmp_path, _cfg(tmp_path))
+    key = "2025-01-08 15-58-04-x-t5"
+    assert key in index, f"Expected key '{key}', got: {list(index.keys())}"
+    assert tmp_path / "2025-01-08 15-58-04-X-T5-Enhanced-NR-Edit-Edit.tif" in index[key]
+
+
+def test_index_enhanced_nr_double_edit_tif_matches_rated_jpg(tmp_path):
+    """Full round-trip: Enhanced-NR-Edit-Edit TIF must match a rated JPG at the base timestamp."""
+    (tmp_path / "2025-01-08 15-58-04-X-T5-Enhanced-NR-Edit-Edit.tif").touch()
+    cfg = _cfg(tmp_path)
+    index = build_raw_index(tmp_path, cfg)
+    jpg = tmp_path / "2025-01-08 15-58-04-X-T5-5.jpg"
+    jpg.touch()
+    actions = resolve_jpg(jpg, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_type == TargetType.EMBEDDED
+
+
 def test_index_multiple_matches_same_stem(tmp_path):
     (tmp_path / "shot.RAF").touch()
     (tmp_path / "shot-Edit.tif").touch()
