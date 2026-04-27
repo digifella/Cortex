@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Generator
 
@@ -32,7 +33,63 @@ def run_sync(config: SyncConfig) -> Generator[SyncResult, None, None]:
             yield _process_action(action, config)
 
 
+def _process_jpg_replace(action: SyncAction, config: SyncConfig) -> SyncResult:
+    """Back up the catalog JPG as .old and copy the described JPG into its place.
+
+    The described JPG already carries all metadata (keywords, description, location),
+    so no exiftool calls are needed.
+    """
+    jpg_keywords, description = read_jpg_metadata(action.jpg_path)
+    jpg_location = read_location(action.jpg_path)
+    location_written = len([v for v in jpg_location.values() if v]) if jpg_location else 0
+
+    if config.dry_run:
+        return SyncResult(
+            action=action,
+            success=True,
+            keywords_written=len(jpg_keywords),
+            description_written=bool(description),
+            location_written=location_written,
+            error=None,
+        )
+
+    old_path = action.target_path.with_suffix(".old")
+    try:
+        action.target_path.rename(old_path)
+    except Exception as exc:
+        return SyncResult(
+            action=action, success=False,
+            keywords_written=0, description_written=False, location_written=0,
+            error=f"Could not rename original to .old: {exc}",
+        )
+    try:
+        shutil.copy2(action.jpg_path, action.target_path)
+    except Exception as exc:
+        # Restore original so the catalog isn't left without the file
+        try:
+            old_path.rename(action.target_path)
+        except Exception:
+            pass
+        return SyncResult(
+            action=action, success=False,
+            keywords_written=0, description_written=False, location_written=0,
+            error=f"Could not copy described JPG into place: {exc}",
+        )
+
+    return SyncResult(
+        action=action,
+        success=True,
+        keywords_written=len(jpg_keywords),
+        description_written=bool(description),
+        location_written=location_written,
+        error=None,
+    )
+
+
 def _process_action(action: SyncAction, config: SyncConfig) -> SyncResult:
+    if action.target_type == TargetType.JPG_REPLACE:
+        return _process_jpg_replace(action, config)
+
     try:
         jpg_keywords, description = read_jpg_metadata(action.jpg_path)
         jpg_location = read_location(action.jpg_path)

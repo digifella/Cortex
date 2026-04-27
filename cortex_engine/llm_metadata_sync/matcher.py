@@ -28,10 +28,12 @@ def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]
     Target paths:
     - .xmp sidecar path (may not exist) for raw originals
     - embedded file path for TIF/PSD/DNG/PSB derivatives
+    - the JPG file itself for catalog JPGs (JPG_REPLACE)
     ACR files are always skipped.
     """
     raw_exts = {e.lower() for e in config.raw_extensions}
     embed_exts = {e.lower() for e in config.embed_extensions}
+    jpg_exts = {e.lower() for e in config.jpg_extensions}
     deriv_re = _deriv_regex(config.deriv_patterns)
 
     index: dict[str, list[Path]] = {}
@@ -65,6 +67,15 @@ def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]
                     sidecar = dir_path / f"{stem}.xmp"
                     index.setdefault(key, []).append(sidecar)
 
+            elif ext in jpg_exts:
+                # Catalog / mobile JPG (no raw original) → JPG_REPLACE target.
+                # Only index files without a derivative suffix; rated/described JPGs
+                # (e.g. shot-5.jpg, shot-Edit.tif equivalents) live in jpg_dir and
+                # are the *source* of metadata, not the target.
+                if not deriv_re.search(stem):
+                    key = stem.lower()
+                    index.setdefault(key, []).append(path)
+
     return index
 
 
@@ -77,6 +88,7 @@ def resolve_jpg(
     targets = index.get(key, [])
 
     embed_exts = {e.lower() for e in config.embed_extensions}
+    jpg_exts = {e.lower() for e in config.jpg_extensions}
     actions: list[SyncAction] = []
 
     for target in targets:
@@ -106,6 +118,20 @@ def resolve_jpg(
                     jpg_path=jpg_path,
                     target_path=target,
                     target_type=TargetType.EMBEDDED,
+                    sidecar_action=SidecarAction.NONE,
+                    raw_path=None,
+                )
+            )
+
+        elif ext in jpg_exts:
+            # Don't create a self-replace action (happens when jpg_dir == raw_root)
+            if target.resolve() == jpg_path.resolve():
+                continue
+            actions.append(
+                SyncAction(
+                    jpg_path=jpg_path,
+                    target_path=target,
+                    target_type=TargetType.JPG_REPLACE,
                     sidecar_action=SidecarAction.NONE,
                     raw_path=None,
                 )

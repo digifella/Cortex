@@ -98,11 +98,19 @@ def test_index_nested_directory(tmp_path):
     assert "deep" in index
 
 
-def test_index_skips_non_raw_non_embed(tmp_path):
-    (tmp_path / "shot.jpg").touch()
+def test_index_skips_xmp_standalone(tmp_path):
+    """Bare .xmp files are not indexed (they're sidecar outputs, not sources)."""
     (tmp_path / "shot.xmp").touch()
     index = build_raw_index(tmp_path, _cfg(tmp_path))
     assert index == {}
+
+
+def test_index_jpg_indexed_as_jpg_replace_target(tmp_path):
+    """Plain JPG in raw_root is indexed as a JPG_REPLACE target, not skipped."""
+    (tmp_path / "shot.jpg").touch()
+    index = build_raw_index(tmp_path, _cfg(tmp_path))
+    assert "shot" in index
+    assert tmp_path / "shot.jpg" in index["shot"]
 
 
 # ── resolve_jpg ──────────────────────────────────────────────────────────────
@@ -158,3 +166,40 @@ def test_resolve_jpg_orphan_returns_empty(tmp_path):
     jpg = tmp_path / "orphan.jpg"
     jpg.touch()
     assert resolve_jpg(jpg, index, cfg) == []
+
+
+# ── JPG_REPLACE (mobile / catalog JPG sources) ───────────────────────────────
+
+def test_index_catalog_jpg_indexed_as_jpg_replace(tmp_path):
+    """Plain JPG in raw_root (no rating suffix) must appear in index as a JPG_REPLACE target."""
+    (tmp_path / "2025-09-09 11-24-48-Pixel 9 Pro.jpg").touch()
+    index = build_raw_index(tmp_path, _cfg(tmp_path))
+    key = "2025-09-09 11-24-48-pixel 9 pro"
+    assert key in index
+    assert tmp_path / "2025-09-09 11-24-48-Pixel 9 Pro.jpg" in index[key]
+
+
+def test_catalog_jpg_matches_rated_described_jpg(tmp_path):
+    """Full round-trip: described rated JPG from jpg_dir must resolve to catalog JPG via JPG_REPLACE."""
+    catalog_jpg = tmp_path / "2025-09-09 11-24-48-Pixel 9 Pro.jpg"
+    catalog_jpg.touch()
+    cfg = _cfg(tmp_path)
+    index = build_raw_index(tmp_path, cfg)
+    # described photo is the jpg_path (has rating suffix, is in jpg_dir)
+    described = tmp_path / "2025-09-09 11-24-48-Pixel 9 Pro-5.jpg"
+    described.touch()
+    actions = resolve_jpg(described, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_type == TargetType.JPG_REPLACE
+    assert actions[0].target_path == catalog_jpg
+    assert actions[0].jpg_path == described
+
+
+def test_catalog_jpg_does_not_match_itself(tmp_path):
+    """When jpg_dir == raw_root a catalog JPG must not create a self-replace action."""
+    catalog_jpg = tmp_path / "2025-09-09 11-24-48-Pixel 9 Pro.jpg"
+    catalog_jpg.touch()
+    cfg = _cfg(tmp_path)
+    index = build_raw_index(tmp_path, cfg)
+    actions = resolve_jpg(catalog_jpg, index, cfg)
+    assert actions == []

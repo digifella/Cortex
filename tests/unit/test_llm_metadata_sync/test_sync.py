@@ -107,6 +107,63 @@ def test_orphaned_jpgs_do_not_produce_results(tmp_path):
     assert results == []
 
 
+def test_jpg_replace_renames_original_and_copies_described(tmp_path):
+    """JPG_REPLACE: original catalog JPG renamed to .old, described JPG copied in its place."""
+    raw_dir = tmp_path / "raw"
+    jpg_dir = tmp_path / "jpg"
+    raw_dir.mkdir()
+    jpg_dir.mkdir()
+
+    catalog_jpg = raw_dir / "2025-09-09 11-24-48-Pixel 9 Pro.jpg"
+    catalog_jpg.write_bytes(b"original")
+    described_jpg = jpg_dir / "2025-09-09 11-24-48-Pixel 9 Pro-5.jpg"
+    described_jpg.write_bytes(b"described")
+
+    cfg = SyncConfig(raw_root=raw_dir, jpg_dir=jpg_dir)
+
+    with patch("cortex_engine.llm_metadata_sync.sync.read_jpg_metadata", return_value=(["bird"], "Two birds.")), \
+         patch("cortex_engine.llm_metadata_sync.sync.read_location", return_value={"city": "Bern", "state": "", "country": "Switzerland", "gps": ""}):
+        results = list(sync.run_sync(cfg))
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.success is True
+    assert result.keywords_written == 1
+    assert result.description_written is True
+
+    old_path = raw_dir / "2025-09-09 11-24-48-Pixel 9 Pro.old"
+    assert old_path.exists(), "Original should be backed up as .old"
+    assert old_path.read_bytes() == b"original"
+
+    assert catalog_jpg.exists(), "Described file should be at the original path"
+    assert catalog_jpg.read_bytes() == b"described"
+
+
+def test_jpg_replace_dry_run_makes_no_changes(tmp_path):
+    """JPG_REPLACE dry run reports what would happen without touching files."""
+    raw_dir = tmp_path / "raw"
+    jpg_dir = tmp_path / "jpg"
+    raw_dir.mkdir()
+    jpg_dir.mkdir()
+
+    catalog_jpg = raw_dir / "2025-09-09 11-24-48-Pixel 9 Pro.jpg"
+    catalog_jpg.write_bytes(b"original")
+    described_jpg = jpg_dir / "2025-09-09 11-24-48-Pixel 9 Pro-5.jpg"
+    described_jpg.write_bytes(b"described")
+
+    cfg = SyncConfig(raw_root=raw_dir, jpg_dir=jpg_dir, dry_run=True)
+
+    with patch("cortex_engine.llm_metadata_sync.sync.read_jpg_metadata", return_value=(["bird"], "Two birds.")), \
+         patch("cortex_engine.llm_metadata_sync.sync.read_location", return_value={}):
+        results = list(sync.run_sync(cfg))
+
+    assert len(results) == 1
+    assert results[0].success is True
+    # No files should have been changed
+    assert catalog_jpg.read_bytes() == b"original"
+    assert not (raw_dir / "2025-09-09 11-24-48-Pixel 9 Pro.old").exists()
+
+
 def test_clear_called_before_write_for_existing_sidecar(tmp_path):
     _make_files(tmp_path, ["shot"])
     (tmp_path / "raw" / "shot.xmp").touch()

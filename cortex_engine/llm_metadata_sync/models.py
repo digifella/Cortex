@@ -8,6 +8,7 @@ from pathlib import Path
 class TargetType(Enum):
     SIDECAR = "sidecar"      # write to .xmp sidecar
     EMBEDDED = "embedded"    # write into TIF/PSD/DNG/PSB
+    JPG_REPLACE = "jpg_replace"  # back up original catalog JPG (.old), copy described JPG in its place
 
 
 class SidecarAction(Enum):
@@ -56,6 +57,7 @@ class SyncConfig:
         "PNG",   # PNG files → XMP sidecar alongside the file
     )
     embed_extensions: tuple[str, ...] = ("tif", "tiff", "psd", "psb", "dng")
+    jpg_extensions: tuple[str, ...] = ("jpg", "jpeg")  # catalog JPGs → JPG_REPLACE action
     deriv_patterns: tuple[str, ...] = (
         r"(?:-Edit)+", r"(?:-Edit)+-\d+",
         r"-Enhanced", r"-Enhanced-NR",
