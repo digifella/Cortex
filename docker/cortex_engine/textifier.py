@@ -429,6 +429,13 @@ class DocumentTextifier:
     def _normalize_vlm_text(text: str) -> str:
         """Normalize model text by removing think tags, lead-ins, and reasoning chatter."""
         cleaned = re.sub(r"<think>.*?</think>", "", str(text or ""), flags=re.DOTALL).strip()
+        # Strip parenthetical asides containing meta-commentary
+        cleaned = re.sub(
+            r"\s*\([^)]*\b(?:think|but the description|should focus|focus on what|I believe|I'm not sure)[^)]*\)",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         cleaned = re.sub(
             r"^(?:got it|okay|ok|sure|let'?s see|let us see|alright)[,\.\!\s:;-]*",
@@ -507,6 +514,9 @@ class DocumentTextifier:
             "context is sunrise",
             "context is evening",
             "context is morning",
+            # structural label format ("The main subject is X. The setting is Y.")
+            "main subject is",
+            "the setting is the",
             # chain-of-thought conclusion leakage ("So describe...", "Therefore describe...")
             "so describe",
             "therefore describe",
@@ -641,10 +651,11 @@ class DocumentTextifier:
         """Call a specific VLM model and normalize the returned text."""
         prompt = (
             "Describe this photograph in 1-2 short plain declarative sentences (max 35 words total). "
-            "Identify only the main subject and setting. "
+            "Write as flowing prose — do NOT use structural labels like "
+            "'The main subject is...' or 'The setting is...'. "
             "Output the description only — begin immediately with the subject or scene. "
-            "Do not include reasoning, analysis, transitional conclusions, or any sentence starting with "
-            "'So', 'Therefore', 'Thus', 'Hence', or similar. "
+            "Do not include reasoning, analysis, parenthetical asides, or transitional conclusions "
+            "('So', 'Therefore', 'Thus', 'Hence', 'I think', etc.). "
             "Write statements only — do not ask questions or use question marks. "
             "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
             "return exactly: [Image: logo/icon omitted]. "
