@@ -533,6 +533,11 @@ class DocumentTextifier:
             "begin with",
             "note that",
             "describe the",
+            # keyword/hint instruction echo-back
+            "use these facts",
+            "do not list or discuss",
+            "just describe what you see",
+            "describe what you see",
             # chain-of-thought conclusion leakage ("So describe...", "Therefore describe...")
             "so describe",
             "therefore describe",
@@ -589,6 +594,19 @@ class DocumentTextifier:
             cleaned = " ".join(filtered[:2]).strip()
 
         cleaned = re.sub(r"^(?:the photo|this photo|the image|this image)\s+(shows?|depicts?)\s+", "", cleaned, flags=re.IGNORECASE)
+        # Strip echoed hint instructions that sometimes appear at the end
+        cleaned = re.sub(
+            r"\s*Use these facts[^.]*\.\s*$",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        cleaned = re.sub(
+            r"\s*Do not list or discuss[^.]*\.\s*$",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
         return cleaned.strip(" -")
 
     def _call_ollama_chat_http(
