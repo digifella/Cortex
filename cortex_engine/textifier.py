@@ -456,6 +456,13 @@ class DocumentTextifier:
             cleaned,
             flags=re.IGNORECASE,
         ).strip()
+        # Strip self-directive sentences from the start ("Focus on X.", "Start with Y.")
+        cleaned = re.sub(
+            r"^(?:focus on|start with|begin with|note that|describe the)[^.!?]*[.!?]\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
         cleaned = re.sub(
             r"^(?:let'?s break this down|let me break this down|breaking this down"
             r"|based on the tags?|looking at the tags?|tags? (?:suggest|include|like)"
@@ -517,6 +524,15 @@ class DocumentTextifier:
             # structural label format ("The main subject is X. The setting is Y.")
             "main subject is",
             "the setting is the",
+            # self-directives ("Focus on the architecture", "Start with the scene")
+            "focus on the",
+            "focus on",
+            "start with the",
+            "start with",
+            "begin with the",
+            "begin with",
+            "note that",
+            "describe the",
             # chain-of-thought conclusion leakage ("So describe...", "Therefore describe...")
             "so describe",
             "therefore describe",
@@ -654,6 +670,8 @@ class DocumentTextifier:
             "Write as flowing prose — do NOT use structural labels like "
             "'The main subject is...' or 'The setting is...'. "
             "Output the description only — begin immediately with the subject or scene. "
+            "Do NOT write self-directives like 'Focus on...', 'Start with...', 'Begin with...', "
+            "'Describe the...', or 'Note that...'. "
             "Do not include reasoning, analysis, parenthetical asides, or transitional conclusions "
             "('So', 'Therefore', 'Thus', 'Hence', 'I think', etc.). "
             "Write statements only — do not ask questions or use question marks. "
