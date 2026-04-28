@@ -442,6 +442,13 @@ class DocumentTextifier:
             cleaned,
             flags=re.IGNORECASE,
         ).strip()
+        # Strip chain-of-thought transitional conclusions from the start
+        cleaned = re.sub(
+            r"^(?:so|therefore|thus|hence)\s+(?:describe|the description|the image|the photo|it shows?|this shows?)[^.!?]*[.!?]\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
         cleaned = re.sub(
             r"^(?:let'?s break this down|let me break this down|breaking this down"
             r"|based on the tags?|looking at the tags?|tags? (?:suggest|include|like)"
@@ -500,6 +507,17 @@ class DocumentTextifier:
             "context is sunrise",
             "context is evening",
             "context is morning",
+            # chain-of-thought conclusion leakage ("So describe...", "Therefore describe...")
+            "so describe",
+            "therefore describe",
+            "thus describe",
+            "hence describe",
+            "so the description",
+            "therefore the description",
+            "the description should",
+            "so the image",
+            "so it shows",
+            "so the photo",
         )
         filler_only = {
             "let's see",
@@ -624,6 +642,9 @@ class DocumentTextifier:
         prompt = (
             "Describe this photograph in 1-2 short plain declarative sentences (max 35 words total). "
             "Identify only the main subject and setting. "
+            "Output the description only — begin immediately with the subject or scene. "
+            "Do not include reasoning, analysis, transitional conclusions, or any sentence starting with "
+            "'So', 'Therefore', 'Thus', 'Hence', or similar. "
             "Write statements only — do not ask questions or use question marks. "
             "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
             "return exactly: [Image: logo/icon omitted]. "
@@ -2219,7 +2240,7 @@ class DocumentTextifier:
             fname_hour = filename_result["datetime_naive"].hour
             raw_diff = abs(exif_hour - fname_hour)
             diff = min(raw_diff, 24 - raw_diff)
-            if diff > 3:
+            if diff >= 3:
                 logger.warning(
                     f"EXIF time ({exif_hour:02d}h) and filename time ({fname_hour:02d}h) "
                     f"differ by {diff}h for {Path(file_path).name}; "

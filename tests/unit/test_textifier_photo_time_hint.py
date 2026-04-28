@@ -252,7 +252,7 @@ def test_describe_with_model_without_hint_uses_base_prompt_only(monkeypatch):
 # ------------------------------------------------------------------
 
 def test_read_capture_datetime_prefers_filename_when_exif_time_diverges(tmp_path):
-    """When EXIF has no tz offset and differs from filename by >3h, filename wins."""
+    """When EXIF has no tz offset and differs from filename by >=3h, filename wins."""
     fake_jpg = tmp_path / "2025-09-27 12-51-13--5.jpg"
     fake_jpg.touch()
 
@@ -290,6 +290,27 @@ def test_read_capture_datetime_keeps_exif_when_times_agree(tmp_path):
 
     assert result["source"] == "exif"
     assert result["datetime_naive"].hour == 12
+
+
+def test_read_capture_datetime_prefers_filename_at_exactly_3h_diff(tmp_path):
+    """Exactly 3h difference (UTC+3 camera like Istanbul) must prefer filename."""
+    fake_jpg = tmp_path / "2025-09-06 06-46-39-X-S20.jpg"
+    fake_jpg.touch()
+
+    exif_result = {
+        "datetime_naive": datetime.datetime(2025, 9, 6, 3, 46, 39),  # UTC stored by camera
+        "offset_minutes": None,
+        "source": "exif",
+    }
+    with patch(
+        "cortex_engine.textifier.DocumentTextifier._read_exif_capture_datetime",
+        return_value=exif_result,
+    ):
+        result = DocumentTextifier._read_photo_capture_datetime(str(fake_jpg))
+
+    assert result is not None
+    assert result["datetime_naive"].hour == 6
+    assert result["source"].startswith("filename:")
 
 
 def test_read_capture_datetime_trusts_exif_with_tz_offset(tmp_path):
