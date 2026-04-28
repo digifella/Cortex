@@ -2368,6 +2368,10 @@ class DocumentTextifier:
         else:
             approx_hours = round(lat_lon[1] / 15.0)
             tz = datetime.timezone(datetime.timedelta(hours=approx_hours))
+            logger.debug(
+                f"Sun phase GPS: lat={lat_lon[0]:.4f} lon={lat_lon[1]:.4f} "
+                f"approx_tz=UTC{approx_hours:+d} naive={dt_naive.strftime('%H:%M')}"
+            )
         local_aware = dt_naive.replace(tzinfo=tz)
         try:
             from astral import Observer

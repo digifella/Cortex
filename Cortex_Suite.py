@@ -15,16 +15,39 @@ project_root = Path(__file__).parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from cortex_engine.system_status import system_status
-from cortex_engine.version_config import get_version_display, VERSION_METADATA
-from cortex_engine.utils.model_checker import model_checker
-from cortex_engine.help_system import help_system
-from cortex_engine.utils import get_logger
-from cortex_engine.config import (
-    QWEN3_VL_RERANKER_ENABLED,
-    QWEN3_VL_RERANKER_SIZE,
-    QWEN3_VL_RERANKER_WARMUP_ENABLED,
-)
+def _import_cortex_engine():
+    """Import cortex_engine modules with one retry on importlib race conditions.
+
+    Rapid st.rerun() cycles can corrupt sys.modules mid-import, producing a
+    KeyError inside frozen importlib._bootstrap._load_unlocked.  Clearing the
+    stale entries and retrying once reliably recovers from this.
+    """
+    for attempt in range(2):
+        try:
+            global system_status, get_version_display, VERSION_METADATA
+            global model_checker, help_system, get_logger
+            global QWEN3_VL_RERANKER_ENABLED, QWEN3_VL_RERANKER_SIZE
+            global QWEN3_VL_RERANKER_WARMUP_ENABLED
+            from cortex_engine.system_status import system_status
+            from cortex_engine.version_config import get_version_display, VERSION_METADATA
+            from cortex_engine.utils.model_checker import model_checker
+            from cortex_engine.help_system import help_system
+            from cortex_engine.utils import get_logger
+            from cortex_engine.config import (
+                QWEN3_VL_RERANKER_ENABLED,
+                QWEN3_VL_RERANKER_SIZE,
+                QWEN3_VL_RERANKER_WARMUP_ENABLED,
+            )
+            return
+        except KeyError:
+            if attempt == 0:
+                for key in list(sys.modules.keys()):
+                    if key.startswith("cortex_engine"):
+                        del sys.modules[key]
+            else:
+                raise
+
+_import_cortex_engine()
 
 logger = get_logger(__name__)
 
