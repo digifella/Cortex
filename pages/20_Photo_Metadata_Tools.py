@@ -513,13 +513,19 @@ def _render_photo_keywords_tab():
             fpath = all_paths[current_idx]
             fname = Path(fpath).name
 
-            # Render progress immediately — before the VLM call — so the
-            # browser shows something during the 10-60 s processing time.
+            # Render progress + Pause button immediately — before the VLM call —
+            # so the browser shows feedback during the 10-60 s processing time.
+            # The Pause button must live here because st.rerun() at the end of
+            # the dispatch block means col2 is never reached while running.
             _done_so_far = current_idx
             _total_n = len(all_paths)
             _frac_now = _done_so_far / _total_n if _total_n > 0 else 0
-            st.progress(_frac_now, f"Processing {_done_so_far + 1} of {_total_n}: {fname}")
-            st.info(f"⏳ Processing **{fname}** — please wait…")
+            _prog_col, _pause_col = st.columns([5, 1])
+            _prog_col.progress(_frac_now, f"Processing {_done_so_far + 1} of {_total_n}: {fname}")
+            if _pause_col.button("⏸ Pause", key="photokw_dispatch_pause", use_container_width=True):
+                _save_photokw_manifest({**_dispatch_manifest, "status": "paused"})
+                st.rerun()
+            st.caption(f"⏳ Processing **{fname}**…")
             _live_so_far = st.session_state.get("photokw_live_log") or []
             if _live_so_far:
                 _log_ph = st.empty()
