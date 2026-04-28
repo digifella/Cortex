@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 
 from .models import SidecarAction, SyncAction, SyncConfig, TargetType
+
+_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})(-.+)?$")
 
 
 def strip_rating_suffix(stem: str, suffix_range: tuple[int, int]) -> str:
@@ -48,24 +51,27 @@ def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]
             if ext == "acr":
                 continue
 
-            if ext in raw_exts:
-                key = stem.lower()
-                sidecar = dir_path / f"{stem}.xmp"
-                index.setdefault(key, []).append(sidecar)
-
-            elif ext in embed_exts:
+            if ext in embed_exts:
                 m = deriv_re.search(stem)
                 if m:
-                    # Derivative (e.g. shot-Edit.tif) → write embedded into the file
+                    # Derivative embed (e.g. shot-Edit.tif, shot-Pano.dng) — includes
+                    # DNG panoramas/HDR merges created by Lightroom.  Check embed_exts
+                    # before raw_exts so derivative-suffix DNGs land here rather than
+                    # being indexed as raw originals under their full (un-stripped) stem.
                     base_stem = stem[: m.start()]
                     key = base_stem.lower()
                     index.setdefault(key, []).append(path)
                 else:
-                    # Standalone embed-format file (e.g. plain shot.psd, shot.tif)
+                    # Standalone embed-format file or original DNG capture (no suffix)
                     # → write to an XMP sidecar alongside it
                     key = stem.lower()
                     sidecar = dir_path / f"{stem}.xmp"
                     index.setdefault(key, []).append(sidecar)
+
+            elif ext in raw_exts:
+                key = stem.lower()
+                sidecar = dir_path / f"{stem}.xmp"
+                index.setdefault(key, []).append(sidecar)
 
             elif ext in jpg_exts:
                 # Catalog / mobile JPG (no raw original) → JPG_REPLACE target.
@@ -79,6 +85,44 @@ def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]
     return index
 
 
+def _parse_key_ts(key: str):
+    """Return (datetime, camera_suffix) from a key, or None if not parseable."""
+    m = _TS_RE.match(key)
+    if not m:
+        return None
+    ts_str = m.group(1)  # "YYYY-MM-DD HH-MM-SS"
+    cam = (m.group(2) or "").lower()
+    try:
+        ts = datetime(
+            int(ts_str[0:4]), int(ts_str[5:7]), int(ts_str[8:10]),
+            int(ts_str[11:13]), int(ts_str[14:16]), int(ts_str[17:19]),
+        )
+        return ts, cam
+    except ValueError:
+        return None
+
+
+def _fuzzy_targets(key: str, index: dict[str, list[Path]], tolerance_s: int) -> list[Path]:
+    """Find index targets whose key matches key's camera suffix with timestamp ≤ tolerance_s away."""
+    parsed = _parse_key_ts(key)
+    if parsed is None:
+        return []
+    ts, cam = parsed
+    results: list[Path] = []
+    for idx_key, idx_targets in index.items():
+        if idx_key == key:
+            continue
+        parsed2 = _parse_key_ts(idx_key)
+        if parsed2 is None:
+            continue
+        idx_ts, idx_cam = parsed2
+        if idx_cam != cam:
+            continue
+        if 0 < abs((idx_ts - ts).total_seconds()) <= tolerance_s:
+            results.extend(idx_targets)
+    return results
+
+
 def resolve_jpg(
     jpg_path: Path, index: dict[str, list[Path]], config: SyncConfig
 ) -> list[SyncAction]:
@@ -86,6 +130,12 @@ def resolve_jpg(
     stem = strip_rating_suffix(jpg_path.stem, config.rating_suffix_range)
     key = stem.lower()
     targets = index.get(key, [])
+
+    # Fuzzy fallback: panorama DNGs are often timestamped 2–4 s before the
+    # exported JPG.  When tolerance_seconds > 0 and exact match fails, scan
+    # the index for the same camera suffix within the allowed window.
+    if not targets and config.timestamp_tolerance_seconds > 0:
+        targets = _fuzzy_targets(key, index, config.timestamp_tolerance_seconds)
 
     embed_exts = {e.lower() for e in config.embed_extensions}
     jpg_exts = {e.lower() for e in config.jpg_extensions}

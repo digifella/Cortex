@@ -1655,6 +1655,15 @@ def _render_lms_tab() -> None:
             rating_hi = st.number_input(
                 "Rating suffix max", value=5, min_value=1, max_value=9, key="lms_rating_hi"
             )
+        ts_tolerance = st.number_input(
+            "Timestamp tolerance (seconds)",
+            value=5, min_value=0, max_value=30,
+            help="Allow JPG and RAW/DNG timestamps to differ by up to this many seconds. "
+                 "Useful for panoramas: Lightroom names the DNG from capture-start time "
+                 "but the exported JPG gets the stitching-completion time (typically 2–4 s later). "
+                 "Set to 0 for exact matching only.",
+            key="lms_ts_tolerance",
+        )
         deriv_patterns_str = st.text_area(
             "Derivative suffix patterns (one per line, regex)",
             value="\n".join(SyncConfig.__dataclass_fields__["deriv_patterns"].default),
@@ -1670,6 +1679,7 @@ def _render_lms_tab() -> None:
             filter_keywords=filter_kws,
             keep_backups=keep_backups,
             rating_suffix_range=(int(rating_lo), int(rating_hi)),
+            timestamp_tolerance_seconds=int(ts_tolerance),
             deriv_patterns=patterns,
             dry_run=dry_run,
         )
