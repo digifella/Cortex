@@ -59,17 +59,18 @@ def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]
                     # before raw_exts so derivative-suffix DNGs land here rather than
                     # being indexed as raw originals under their full (un-stripped) stem.
                     base_stem = stem[: m.start()]
-                    key = base_stem.lower()
+                    key = base_stem.lower().rstrip("- ")
                     index.setdefault(key, []).append(path)
                 else:
                     # Standalone embed-format file or original DNG capture (no suffix)
                     # → write to an XMP sidecar alongside it
-                    key = stem.lower()
+                    key = stem.lower().rstrip("- ")
                     sidecar = dir_path / f"{stem}.xmp"
                     index.setdefault(key, []).append(sidecar)
 
             elif ext in raw_exts:
-                key = stem.lower()
+                # rstrip("- ") handles empty camera-model stems like "2025-10-10 10-15-24-"
+                key = stem.lower().rstrip("- ")
                 sidecar = dir_path / f"{stem}.xmp"
                 index.setdefault(key, []).append(sidecar)
 
@@ -79,7 +80,7 @@ def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]
                 # (e.g. shot-5.jpg, shot-Edit.tif equivalents) live in jpg_dir and
                 # are the *source* of metadata, not the target.
                 if not deriv_re.search(stem):
-                    key = stem.lower()
+                    key = stem.lower().rstrip("- ")
                     index.setdefault(key, []).append(path)
 
     return index
@@ -128,7 +129,17 @@ def resolve_jpg(
 ) -> list[SyncAction]:
     """Resolve a JPG to a list of SyncActions against the pre-built index."""
     stem = strip_rating_suffix(jpg_path.stem, config.rating_suffix_range)
-    key = stem.lower()
+
+    # Strip derivative suffixes from the JPG stem so a JPG named shot-Pano-5.jpg
+    # (rating stripped → shot-Pano) resolves to the same base key as the DNG
+    # shot-Pano.dng (indexed under "shot").
+    deriv_re = _deriv_regex(config.deriv_patterns)
+    m_deriv = deriv_re.search(stem)
+    if m_deriv:
+        stem = stem[: m_deriv.start()]
+
+    # Normalise trailing hyphens/spaces (empty camera-model names leave "ts-").
+    key = stem.lower().rstrip("- ")
     targets = index.get(key, [])
 
     # Fuzzy fallback: panorama DNGs are often timestamped 2–4 s before the
