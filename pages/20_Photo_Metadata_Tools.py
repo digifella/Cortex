@@ -513,6 +513,18 @@ def _render_photo_keywords_tab():
             fpath = all_paths[current_idx]
             fname = Path(fpath).name
 
+            # Render progress immediately — before the VLM call — so the
+            # browser shows something during the 10-60 s processing time.
+            _done_so_far = current_idx
+            _total_n = len(all_paths)
+            _frac_now = _done_so_far / _total_n if _total_n > 0 else 0
+            st.progress(_frac_now, f"Processing {_done_so_far + 1} of {_total_n}: {fname}")
+            st.info(f"⏳ Processing **{fname}** — please wait…")
+            _live_so_far = st.session_state.get("photokw_live_log") or []
+            if _live_so_far:
+                _log_ph = st.empty()
+                _render_live_log(_log_ph, _live_so_far, mode)
+
             if not Path(fpath).exists():
                 logger.warning(f"Dispatch: file no longer exists, skipping: {fpath}")
                 result = {"file_name": fname, "error": "file no longer exists"}
