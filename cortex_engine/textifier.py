@@ -538,6 +538,17 @@ class DocumentTextifier:
             "do not list or discuss",
             "just describe what you see",
             "describe what you see",
+            # time-hint guidance echo-back
+            "natural light is typical",
+            "do not call it sunrise or sunset",
+            "label as dawn/sunrise",
+            "label as sunset/dusk",
+            "label as night",
+            "never as dusk/sunset",
+            "never as sunrise/dawn",
+            "the sun is well below the horizon",
+            "lighting is a morning scene",
+            "lighting is an evening scene",
             # chain-of-thought conclusion leakage ("So describe...", "Therefore describe...")
             "so describe",
             "therefore describe",
@@ -588,25 +599,34 @@ class DocumentTextifier:
                 continue
             if any(marker in slow for marker in meta_markers):
                 continue
+            # Drop keyword echo-backs: comma-separated tag lists with no verb
+            # (e.g. model echoes "crowd, day, denmark, drummers, parade, uniform, urban.")
+            if slow.count(",") >= 5 and not re.search(
+                r"\b(is|are|was|were|has|have|show|sit|stand|lie|feature|include"
+                r"|walk|run|fly|perch|overlook|depict|capture|rise|reflect|surround"
+                r"|dominat|extend|stretch|wind|flow|glow|cast|illuminat)\w*\b",
+                slow,
+            ):
+                continue
             filtered.append(s)
 
-        if filtered:
-            cleaned = " ".join(filtered[:2]).strip()
+        # Always reassign cleaned — if all sentences were filtered, return "" so
+        # the caller can fall back to thinking text or retry, rather than keeping
+        # the original bad output.
+        cleaned = " ".join(filtered[:2]).strip()
 
         cleaned = re.sub(r"^(?:the photo|this photo|the image|this image)\s+(shows?|depicts?)\s+", "", cleaned, flags=re.IGNORECASE)
-        # Strip echoed hint instructions that sometimes appear at the end
-        cleaned = re.sub(
-            r"\s*Use these facts[^.]*\.\s*$",
-            "",
-            cleaned,
-            flags=re.IGNORECASE,
-        ).strip()
-        cleaned = re.sub(
+        # Strip echoed hint instructions from the end (run in reverse order so
+        # each pass can expose the next sentence for stripping).
+        for _hint_pat in [
             r"\s*Do not list or discuss[^.]*\.\s*$",
-            "",
-            cleaned,
-            flags=re.IGNORECASE,
-        ).strip()
+            r"\s*Use these facts[^.]*\.\s*$",
+            r"\s*Natural light is typical[^.]*\.\s*$",
+            r"\s*Lighting is (?:a|an) (?:morning|evening)[^.]*\.\s*$",
+            r"\s*The sun is well below[^.]*\.\s*$",
+            r"\s*label as (?:dawn|sunrise|sunset|dusk|night|twilight)[^.]*\.\s*$",
+        ]:
+            cleaned = re.sub(_hint_pat, "", cleaned, flags=re.IGNORECASE).strip()
         return cleaned.strip(" -")
 
     def _call_ollama_chat_http(
