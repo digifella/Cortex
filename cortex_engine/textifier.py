@@ -79,6 +79,7 @@ class DocumentTextifier:
 
     # Preferred vision models in order of priority
     VISION_MODELS = [
+        "qwen3-vl:32b",
         "qwen3-vl:8b",
         "qwen3-vl:4b",
         "qwen3-vl",
@@ -440,6 +441,10 @@ class DocumentTextifier:
     def _normalize_vlm_text(text: str) -> str:
         """Normalize model text by removing think tags, lead-ins, and reasoning chatter."""
         cleaned = re.sub(r"<think>.*?</think>", "", str(text or ""), flags=re.DOTALL).strip()
+        # Strip gemma-style label prefixes: "* Image: ...", "Image content: ...",
+        # "Description: ...", "* Task: ..." etc. — any leading "* Word(s): " pattern.
+        cleaned = re.sub(r"^\*\s*", "", cleaned).strip()
+        cleaned = re.sub(r"^(?:Image\s*(?:content|description)?|Description|Photo|Scene)\s*:\s*", "", cleaned, flags=re.IGNORECASE).strip()
         # Strip parenthetical asides containing meta-commentary
         cleaned = re.sub(
             r"\s*\([^)]*\b(?:think|but the description|should focus|focus on what|I believe|I'm not sure)[^)]*\)",
