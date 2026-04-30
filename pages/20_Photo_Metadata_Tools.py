@@ -623,6 +623,15 @@ def _render_photo_keywords_tab():
             st.session_state["photokw_paths"] = done_paths
             st.session_state["photokw_mode"] = mode
 
+            # CLI progress line — visible in the Streamlit terminal log
+            _cli_desc = result.get("description", "")
+            _cli_err = result.get("error", "")
+            if _cli_err:
+                print(f"[{new_idx}/{len(all_paths)}] ❌ {fname}: {_cli_err}", flush=True)
+            else:
+                _cli_desc_short = (_cli_desc[:120] + "…") if len(_cli_desc) > 120 else _cli_desc
+                print(f"[{new_idx}/{len(all_paths)}] ✅ {fname}: {_cli_desc_short or '(no description)'}", flush=True)
+
             # Build live log entry
             _loc = result.get("location") or {}
             _loc_parts = [v for v in (_loc.get("city"), _loc.get("state"), _loc.get("country")) if v]
