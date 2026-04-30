@@ -13,6 +13,7 @@ import json
 import subprocess
 import tempfile
 import statistics
+import warnings
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
@@ -23,6 +24,16 @@ from urllib.request import Request, urlopen
 from cortex_engine.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
+
+# PIL's decompression-bomb guard fires on legitimate high-resolution photos
+# (e.g. 10,500 × 10,500 px panoramas).  All VLM inputs are downscaled to
+# 1600 px before use, so this warning is never actionable here.
+try:
+    from PIL import Image as _PIL_Image
+    _PIL_Image.MAX_IMAGE_PIXELS = None
+except Exception:
+    pass
+warnings.filterwarnings("ignore", message=".*[Dd]ecompression[Bb]omb.*")
 
 
 # Filename capture-time patterns used when EXIF DateTimeOriginal is absent.
