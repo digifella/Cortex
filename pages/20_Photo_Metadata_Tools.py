@@ -491,13 +491,14 @@ def _render_photo_keywords_tab():
     # ── Active-run dispatch ──────────────────────────────────────────────────
     # Runs before any widgets so it can call st.rerun() cleanly.
     _dispatch_manifest = _load_photokw_manifest()
-    # Fresh page load (no live log in session state) with a running manifest means
-    # the browser was closed/refreshed mid-run.  Treat as paused so the user sees
-    # the recovery banner and can choose Resume or Cancel.
+    # Fresh page load with a running manifest means the browser was closed/refreshed
+    # mid-run.  Treat as paused so the user sees the recovery banner.
+    # photokw_run_active is set in session state when the user explicitly starts a run
+    # in this session, so its absence is a reliable "fresh load" signal.
     if (
         _dispatch_manifest
         and _dispatch_manifest.get("status") == "running"
-        and not st.session_state.get("photokw_live_log")
+        and not st.session_state.get("photokw_run_active")
     ):
         _save_photokw_manifest({**_dispatch_manifest, "status": "paused"})
         st.rerun()
@@ -659,7 +660,10 @@ def _render_photo_keywords_tab():
 
             if new_status == "running":
                 st.rerun()
-            # If done: fall through — normal render will show results
+            else:
+                # Run complete — clear the active flag so a future page load
+                # doesn't auto-resume the now-finished manifest.
+                st.session_state.pop("photokw_run_active", None)
 
     st.markdown(
         "Process photos in batch: resize for gallery use, generate AI keywords, "
@@ -680,6 +684,7 @@ def _render_photo_keywords_tab():
                 st.info(f"⏸ **Paused batch** — {_done} of {_total_count} photos done. Last run: {_ts}")
                 _rc1, _rc2, _ = st.columns([1, 1, 4])
                 if _rc1.button("▶ Resume", key="photokw_banner_resume", type="primary"):
+                    st.session_state["photokw_run_active"] = True
                     _save_photokw_manifest({**_manifest, "status": "running", "resume_after": None})
                     st.rerun()
                 if _rc2.button("✕ Cancel", key="photokw_banner_cancel"):
@@ -905,6 +910,7 @@ def _render_photo_keywords_tab():
                 st.info(f"⏸ Batch paused at photo {_run_idx} of {_run_total}.")
                 _pr1, _pr2, _ = st.columns([1, 1, 4])
                 if _pr1.button("▶ Resume", key="photokw_resume_btn", type="primary"):
+                    st.session_state["photokw_run_active"] = True
                     _save_photokw_manifest({**_run_manifest, "status": "running", "resume_after": None})
                     st.session_state.pop("photokw_dispatch_progress", None)
                     st.rerun()
@@ -915,6 +921,7 @@ def _render_photo_keywords_tab():
                     st.session_state.pop("photokw_mode", None)
                     st.session_state.pop("photokw_live_log", None)
                     st.session_state.pop("photokw_dispatch_progress", None)
+                    st.session_state.pop("photokw_run_active", None)
                     st.rerun()
 
             # Live log from session state
@@ -1194,6 +1201,7 @@ def _render_photo_keywords_tab():
                 blocked_keywords = [k.strip().lower() for k in blocked_keywords_text.split(",") if k.strip()]
                 mode = "resize_only" if do_resize_only else ("halftone_repair" if do_halftone_repair else "keyword_metadata")
 
+                st.session_state["photokw_run_active"] = True
                 _save_photokw_manifest({
                     "version": 2,
                     "status": "running",
