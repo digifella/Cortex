@@ -79,8 +79,8 @@ class DocumentTextifier:
 
     # Preferred vision models in order of priority
     VISION_MODELS = [
-        "qwen3-vl:32b",
         "qwen3-vl:8b",
+        "qwen3-vl:32b",
         "qwen3-vl:4b",
         "qwen3-vl",
         "qwen2.5vl:7b",
@@ -89,6 +89,10 @@ class DocumentTextifier:
         "qwen2.5vl",
     ]
     VISION_FALLBACK_MODELS = ["llava:7b", "llava:latest", "llava"]
+
+    # Claude vision model — used when ANTHROPIC_API_KEY is set.
+    # Haiku is low-cost and follows complex instructions reliably.
+    CLAUDE_VISION_MODEL = "claude-haiku-4-5-20251001"
 
     def __init__(
         self,
@@ -759,6 +763,85 @@ class DocumentTextifier:
             self._log_vlm_response_debug(model, simple_prompt, response, result, cleaned, elapsed)
         return cleaned
 
+    def _describe_with_claude(
+        self,
+        encoded_image: str,
+        context_hint: str = "",
+        timeout: float = 30.0,
+    ) -> str:
+        """Describe an image using the Anthropic Claude vision API.
+
+        Requires ANTHROPIC_API_KEY in the environment.  Returns an empty string
+        on any error so the caller can fall back to local Ollama models.
+        """
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            return ""
+        try:
+            import anthropic
+        except ImportError:
+            logger.warning("anthropic package not installed — Claude vision unavailable")
+            return ""
+
+        prompt = (
+            "Describe this photograph in 1-2 short plain declarative sentences (max 35 words total). "
+            "Write as flowing prose — do NOT use structural labels like "
+            "'The main subject is...' or 'The setting is...'. "
+            "Output the description only — begin immediately with the subject or scene. "
+            "Do NOT write self-directives like 'Focus on...', 'Start with...', 'Begin with...', "
+            "'Describe the...', or 'Note that...'. "
+            "Do not include reasoning, analysis, parenthetical asides, or transitional conclusions "
+            "('So', 'Therefore', 'Thus', 'Hence', 'I think', etc.). "
+            "Write statements only — do not ask questions or use question marks. "
+            "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
+            "return exactly: [Image: logo/icon omitted]. "
+            "Do not use markdown, headings, or bullet points."
+        )
+        if context_hint:
+            prompt += " " + context_hint.strip()
+
+        started = time.monotonic()
+        try:
+            client = anthropic.Anthropic(api_key=api_key)
+            response = client.messages.create(
+                model=self.CLAUDE_VISION_MODEL,
+                max_tokens=120,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": encoded_image,
+                                },
+                            },
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ],
+            )
+            raw = ""
+            for block in response.content or []:
+                if hasattr(block, "text"):
+                    raw = block.text or ""
+                    break
+            elapsed = time.monotonic() - started
+            cleaned = self._normalize_vlm_text(raw.strip())
+            logger.info(
+                "Claude vision (%s) returned %d chars in %.1fs",
+                self.CLAUDE_VISION_MODEL,
+                len(cleaned),
+                elapsed,
+            )
+            return cleaned
+        except Exception as e:
+            elapsed = time.monotonic() - started
+            logger.warning("Claude vision failed after %.1fs: %s", elapsed, e)
+            return ""
+
     def probe_image_vlm(self, image_bytes: bytes, simple_prompt: bool = True) -> Dict[str, Any]:
         """Run a one-shot diagnostic probe for a single image and return raw response metadata."""
         original_bytes = image_bytes or b""
@@ -919,15 +1002,30 @@ class DocumentTextifier:
         ``context_hint`` is an optional sentence appended to the prompt — used
         by the photo pipeline to pass local-time / sun-phase context so the
         VLM can distinguish dawn from dusk and sunrise from sunset.
+
+        If ANTHROPIC_API_KEY is set, Claude Haiku is tried first.  On failure
+        or empty result the pipeline falls through to the local Ollama models.
         """
         if not self.use_vision:
             return "[Image: vision model disabled]"
-        self._init_vlm()
-        if self._vlm_client is None:
-            return "[Image: could not be described — vision model unavailable]"
         try:
             prepared_bytes = self._prepare_vlm_image_bytes(image_bytes)
             encoded = base64.b64encode(prepared_bytes).decode("utf-8")
+
+            # ── Claude Haiku (tried first when API key is available) ──────────
+            if os.environ.get("ANTHROPIC_API_KEY", "").strip():
+                claude_result = self._describe_with_claude(encoded, context_hint=context_hint)
+                if claude_result:
+                    if self._looks_like_logo_icon_description(claude_result):
+                        return "[Image: logo/icon omitted]"
+                    return claude_result
+                logger.info("Claude vision returned empty — falling back to local Ollama model")
+
+            # ── Local Ollama models ───────────────────────────────────────────
+            self._init_vlm()
+            if self._vlm_client is None:
+                return "[Image: could not be described — vision model unavailable]"
+
             models_tried: List[str] = []
             for idx, requested_model in enumerate(self._vlm_model_candidates(include_current=True)):
                 model = requested_model

@@ -491,6 +491,16 @@ def _render_photo_keywords_tab():
     # ── Active-run dispatch ──────────────────────────────────────────────────
     # Runs before any widgets so it can call st.rerun() cleanly.
     _dispatch_manifest = _load_photokw_manifest()
+    # Fresh page load (no live log in session state) with a running manifest means
+    # the browser was closed/refreshed mid-run.  Treat as paused so the user sees
+    # the recovery banner and can choose Resume or Cancel.
+    if (
+        _dispatch_manifest
+        and _dispatch_manifest.get("status") == "running"
+        and not st.session_state.get("photokw_live_log")
+    ):
+        _save_photokw_manifest({**_dispatch_manifest, "status": "paused"})
+        st.rerun()
     if _dispatch_manifest and _dispatch_manifest.get("status") == "running":
         # Handle cooldown: if resume_after is set and still in the future, sleep briefly
         resume_after_str = _dispatch_manifest.get("resume_after")
@@ -664,7 +674,7 @@ def _render_photo_keywords_tab():
         if _manifest:
             _ts = _manifest.get("timestamp", "unknown")
             if _is_active_run(_manifest):
-                # Paused run — show resume/cancel (running runs auto-resume via dispatch block)
+                # Paused run (or running manifest from a closed/refreshed browser tab)
                 _done = int(_manifest.get("current_idx") or 0)
                 _total_count = len(_manifest.get("all_file_paths") or [])
                 st.info(f"⏸ **Paused batch** — {_done} of {_total_count} photos done. Last run: {_ts}")
