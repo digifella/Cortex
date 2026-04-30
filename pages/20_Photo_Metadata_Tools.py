@@ -525,6 +525,22 @@ def _render_photo_keywords_tab():
             fpath = all_paths[current_idx]
             fname = Path(fpath).name
 
+            # Render progress + pause + log BEFORE the blocking VLM call.
+            # st.rerun() stops execution, so anything after the dispatch block
+            # never runs — all active-run UI must live here.
+            _done_so_far = current_idx
+            _total_n = len(all_paths)
+            _frac_now = _done_so_far / _total_n if _total_n > 0 else 0
+            _prog_col, _pause_col = st.columns([5, 1])
+            _prog_col.progress(_frac_now, f"Processing {_done_so_far + 1} of {_total_n}: {fname}")
+            if _pause_col.button("⏸ Pause", key="photokw_dispatch_pause", use_container_width=True):
+                _save_photokw_manifest({**_dispatch_manifest, "status": "paused"})
+                st.rerun()
+            st.caption(f"⏳ Processing **{fname}**…")
+            _live_so_far = st.session_state.get("photokw_live_log") or []
+            _log_slot = st.empty()
+            _render_live_log(_log_slot, _live_so_far, mode)
+
             if not Path(fpath).exists():
                 logger.warning(f"Dispatch: file no longer exists, skipping: {fpath}")
                 result = {"file_name": fname, "error": "file no longer exists"}
@@ -653,29 +669,6 @@ def _render_photo_keywords_tab():
         "clean sensitive tags, and write EXIF/XMP ownership metadata."
     )
 
-    # ── Active-run progress panel ────────────────────────────────────────────
-    # Rendered at a stable page position every rerun while a run is active.
-    # Keeping it outside the dispatch block means the log accumulates visibly
-    # without flashing — the dispatch block only does processing, not rendering.
-    _active_manifest = _load_photokw_manifest()
-    if _active_manifest and _active_manifest.get("status") == "running":
-        _a_all = _active_manifest.get("all_file_paths") or []
-        _a_idx = int(_active_manifest.get("current_idx") or 0)
-        _a_total = len(_a_all)
-        _a_frac = _a_idx / _a_total if _a_total > 0 else 0
-        _a_fname = Path(_a_all[_a_idx]).name if _a_idx < _a_total else ""
-        _a_mode = _active_manifest.get("mode", "keyword_metadata")
-        _ap_col, _apause_col = st.columns([5, 1])
-        _ap_col.progress(_a_frac, f"Processing {_a_idx + 1} of {_a_total}: {_a_fname}")
-        if _apause_col.button("⏸ Pause", key="photokw_active_pause", use_container_width=True):
-            _save_photokw_manifest({**_active_manifest, "status": "paused"})
-            st.rerun()
-        if _a_fname:
-            st.caption(f"⏳ Processing **{_a_fname}**…")
-        _live_entries = st.session_state.get("photokw_live_log") or []
-        if _live_entries:
-            _log_slot = st.empty()
-            _render_live_log(_log_slot, _live_entries, _a_mode)
 
     # Recovery banner — if the browser/session was reset after a batch finished,
     # the processed files and their summary survive on disk in /tmp/cortex_photokw/.
