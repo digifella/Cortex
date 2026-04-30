@@ -610,15 +610,15 @@ class DocumentTextifier:
                 continue
             if any(marker in slow for marker in meta_markers):
                 continue
-            # Drop keyword echo-backs: comma-separated tag lists with no verb
-            # (e.g. model echoes "crowd, day, denmark, drummers, parade, uniform, urban.")
-            if slow.count(",") >= 5 and not re.search(
-                r"\b(is|are|was|were|has|have|show|sit|stand|lie|feature|include"
-                r"|walk|run|fly|perch|overlook|depict|capture|rise|reflect|surround"
-                r"|dominat|extend|stretch|wind|flow|glow|cast|illuminat)\w*\b",
-                slow,
-            ):
-                continue
+            # Drop keyword echo-backs: comma-separated tag lists.
+            # Use comma-to-word ratio rather than a verb check — lists like
+            # "The subjects are: architecture, blue sky, ..." escape a verb
+            # filter but still have a very high comma density.
+            _comma_n = slow.count(",")
+            if _comma_n >= 4:
+                _word_n = len(slow.split())
+                if _word_n > 0 and _comma_n / _word_n > 0.25:
+                    continue
             filtered.append(s)
 
         # Always reassign cleaned — if all sentences were filtered, return "" so
