@@ -3870,8 +3870,17 @@ def _render_textifier_tab():
 
             if len(results) == 1:
                 name, content = next(iter(results.items()))
-                st.download_button("Download Markdown", content, file_name=name,
-                                   mime="text/markdown", use_container_width=True)
+                _dl_col1, _dl_col2 = st.columns(2)
+                _dl_col1.download_button("Download Markdown (.md)", content, file_name=name,
+                                         mime="text/markdown", use_container_width=True)
+                from cortex_engine.textifier import DocumentTextifier
+                _plain_content = DocumentTextifier.markdown_to_plaintext(content)
+                _txt_name = name.rsplit(".", 1)[0] + ".txt"
+                _dl_col2.download_button(
+                    "Download Plain Text (.txt)", _plain_content, file_name=_txt_name,
+                    mime="text/plain", use_container_width=True,
+                    help="Tables and headings formatted for email or plain-text use",
+                )
                 with st.expander("Preview", expanded=True):
                     st.markdown(content[:5000] + ("\n\n*... truncated ...*" if len(content) > 5000 else ""))
             else:

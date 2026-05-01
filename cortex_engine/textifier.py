@@ -1108,6 +1108,39 @@ class DocumentTextifier:
             executor.shutdown(wait=False, cancel_futures=True)
 
     @staticmethod
+    def markdown_to_plaintext(markdown_text: str, width: int = 80) -> str:
+        """Convert markdown to plain text suitable for email or text files.
+
+        Tables are rendered as ruled ASCII boxes, headings as plain text with
+        surrounding whitespace, and bullets as '•'.  Requires the ``rich``
+        library (already a dependency of Streamlit).
+        """
+        import io
+        try:
+            from rich.console import Console
+            from rich.markdown import Markdown as RichMarkdown
+        except ImportError:
+            # Fallback: strip markdown syntax manually
+            import re
+            text = markdown_text or ""
+            text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+            text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+            text = re.sub(r"\*(.+?)\*", r"\1", text)
+            text = re.sub(r"`(.+?)`", r"\1", text)
+            text = re.sub(r"^\|.*\|$", "", text, flags=re.MULTILINE)
+            text = re.sub(r"^[-|: ]+$", "", text, flags=re.MULTILINE)
+            return "\n".join(line.rstrip() for line in text.splitlines())
+
+        buf = io.StringIO()
+        console = Console(
+            file=buf, width=width, highlight=False, markup=False, no_color=True
+        )
+        console.print(RichMarkdown(markdown_text or ""))
+        # Strip trailing whitespace from each line (rich pads to full width)
+        lines = [line.rstrip() for line in buf.getvalue().splitlines()]
+        return "\n".join(lines)
+
+    @staticmethod
     def table_to_markdown(rows: List[List[str]]) -> str:
         """Convert a list-of-lists table to Markdown."""
         if not rows:

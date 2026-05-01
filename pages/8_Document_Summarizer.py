@@ -555,7 +555,7 @@ def display_summary_results(result: SummaryResult):
     # Download options
     st.subheader("💾 Download Options")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         # Generate filename for download
@@ -574,6 +574,18 @@ def display_summary_results(result: SummaryResult):
         )
 
     with col2:
+        from cortex_engine.textifier import DocumentTextifier
+        _plain = DocumentTextifier.markdown_to_plaintext(result.summary)
+        st.download_button(
+            label="📄 Download as Plain Text",
+            data=_plain,
+            file_name=f"{base_name}_{summary_level}_{timestamp}.txt",
+            mime="text/plain",
+            use_container_width=True,
+            help="Tables, headings and bullets formatted for email or plain-text use",
+        )
+
+    with col3:
         # Copy to clipboard button (using st.code for easy copying)
         if st.button("📋 Show Raw Markdown", use_container_width=True):
             st.code(result.summary, language="markdown")
