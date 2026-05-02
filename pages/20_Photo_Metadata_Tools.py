@@ -23,6 +23,13 @@ from cortex_engine.llm_metadata_sync import exiftool_runner
 from cortex_engine.llm_metadata_sync.matcher import build_raw_index, resolve_jpg, strip_rating_suffix
 from cortex_engine.llm_metadata_sync.models import SyncConfig, SyncReport
 from cortex_engine.llm_metadata_sync.sync import run_sync
+from cortex_engine.photo_metadata_copy import (
+    PhotoMetadataCopyConfig,
+    PhotoMetadataCopyReport,
+    is_exiftool_available as is_photo_copy_exiftool_available,
+    run_photo_metadata_copy,
+    scan_photo_metadata_copy,
+)
 
 PAGE_VERSION = VERSION_STRING
 MAX_BATCH_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
@@ -1587,6 +1594,222 @@ def _render_photo_keywords_tab():
 
 # ── LLM Metadata Sync tab ────────────────────────────────────────────────────
 
+def _pmc_resolve_path(p: str) -> Path:
+    raw = p.strip()
+    if os.path.exists("/.dockerenv"):
+        return Path(raw)
+    return Path(convert_windows_to_wsl_path(raw))
+
+
+def _pmc_validate_folder(p: str) -> Optional[str]:
+    if not p.strip():
+        return "Folder path is required."
+    path = _pmc_resolve_path(p)
+    if not path.exists():
+        return f"Folder does not exist: {path}"
+    if not path.is_dir():
+        return f"Not a folder: {path}"
+    return None
+
+
+def _render_photo_metadata_copy_tab() -> None:
+    st.markdown(
+        "Copy description, caption, and keyword metadata from JPG files to matching "
+        "TIF/DNG files or to the XMP sidecars of matching RAW files in the same folder."
+    )
+    st.info(
+        "Existing XMP sidecars are edited surgically: this updates only "
+        "`XMP-dc:Description` and `XMP-dc:Subject`, leaving Lightroom/ACR edit settings "
+        "and unrelated metadata untouched."
+    )
+
+    if not is_photo_copy_exiftool_available():
+        st.error("ExifTool is not available on PATH. Install ExifTool before applying metadata copies.")
+        st.code("sudo apt install libimage-exiftool-perl", language="bash")
+        return
+
+    folder_str = st.text_input(
+        "Folder containing JPG and matching TIF/DNG/RAW files",
+        placeholder="/mnt/f/Photos/One-Off-Metadata-Fix",
+        key="pmc_folder",
+    )
+    folder_err = _pmc_validate_folder(folder_str) if folder_str else None
+    if folder_err:
+        st.error(folder_err)
+
+    with st.expander("Options", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            recursive = st.toggle("Include subfolders", value=False, key="pmc_recursive")
+            set_rating = st.toggle(
+                "Set source JPG star rating to 1 after successful copy",
+                value=False,
+                key="pmc_set_rating",
+            )
+        with col2:
+            keep_backups = st.toggle(
+                "Keep ExifTool _original backups",
+                value=True,
+                key="pmc_keep_backups",
+            )
+            strip_suffix = st.toggle(
+                "Match JPG names after stripping trailing -1 to -5",
+                value=False,
+                key="pmc_strip_suffix",
+            )
+
+        embedded_exts = st.text_input(
+            "Embedded targets",
+            value="tif,tiff,dng",
+            help="Files with these extensions receive embedded XMP/IPTC metadata.",
+            key="pmc_embedded_exts",
+        )
+        raw_exts = st.text_input(
+            "RAW sidecar targets",
+            value="raf,raw,nef,cr2,cr3,arw,rw2,orf,pef,srw",
+            help="Files with these extensions receive or create a same-name .xmp sidecar.",
+            key="pmc_raw_exts",
+        )
+
+    def _ext_tuple(value: str) -> tuple[str, ...]:
+        return tuple(e.strip().lower().lstrip(".") for e in value.split(",") if e.strip())
+
+    def _build_pmc_config(dry_run: bool) -> PhotoMetadataCopyConfig:
+        return PhotoMetadataCopyConfig(
+            folder=_pmc_resolve_path(folder_str),
+            recursive=bool(recursive),
+            dry_run=dry_run,
+            keep_backups=bool(keep_backups),
+            set_jpg_rating_to_one=bool(set_rating),
+            strip_rating_suffix=bool(strip_suffix),
+            embedded_extensions=_ext_tuple(embedded_exts),
+            raw_sidecar_extensions=_ext_tuple(raw_exts),
+        )
+
+    paths_valid = bool(folder_str and not folder_err)
+
+    if st.button("Scan Folder", disabled=not paths_valid, type="secondary", key="pmc_scan"):
+        cfg = _build_pmc_config(dry_run=True)
+        with st.spinner("Scanning for matching JPG and target files..."):
+            report = scan_photo_metadata_copy(cfg)
+        st.session_state["pmc_report"] = report
+        st.session_state["pmc_config_snapshot"] = cfg
+
+    report: Optional[PhotoMetadataCopyReport] = st.session_state.get("pmc_report")
+    config_changed = False
+    if report and paths_valid:
+        snap: Optional[PhotoMetadataCopyConfig] = st.session_state.get("pmc_config_snapshot")
+        current = _build_pmc_config(dry_run=True)
+        if snap and (
+            current.folder != snap.folder
+            or current.recursive != snap.recursive
+            or current.strip_rating_suffix != snap.strip_rating_suffix
+            or current.embedded_extensions != snap.embedded_extensions
+            or current.raw_sidecar_extensions != snap.raw_sidecar_extensions
+        ):
+            config_changed = True
+            st.warning("Folder or matching options changed since the last scan. Scan again before applying.")
+
+    if report is not None:
+        st.markdown("---")
+        matched_jpgs = len({action.jpg_path for action in report.actions})
+        total_jpgs = matched_jpgs + len(report.orphaned_jpgs)
+        st.markdown(
+            f"**Scan results:** {len(report.actions)} target update(s) from "
+            f"{matched_jpgs} matched JPG(s)"
+        )
+        if report.actions:
+            import pandas as pd
+
+            rows = [
+                {
+                    "JPG": action.jpg_path.name,
+                    "Target": action.target_path.name,
+                    "Target type": action.target_type.value,
+                    "RAW": action.raw_path.name if action.raw_path else "",
+                    "XMP existed": "Yes" if action.sidecar_exists else "",
+                }
+                for action in report.actions
+            ]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        st.caption(
+            f"Total JPGs: {total_jpgs} | Matched: {matched_jpgs} | "
+            f"Unmatched JPGs: {len(report.orphaned_jpgs)}"
+        )
+
+        if report.orphaned_jpgs:
+            with st.expander(f"Unmatched JPGs ({len(report.orphaned_jpgs)})"):
+                st.table([{"JPG filename": p.name, "Folder": str(p.parent)} for p in report.orphaned_jpgs])
+
+    run_mode = st.radio(
+        "Run mode",
+        ["Dry run", "Live run"],
+        horizontal=True,
+        key="pmc_run_mode",
+    )
+    dry_run = run_mode == "Dry run"
+
+    apply_disabled = not report or not report.actions or config_changed
+    if st.button("Apply Metadata Copy", disabled=apply_disabled, type="primary", key="pmc_apply"):
+        cfg = _build_pmc_config(dry_run=dry_run)
+        log_lines: list[str] = []
+        success_count = 0
+        error_count = 0
+        total = len(report.actions) if report else 0
+        t_start = time.time()
+
+        with st.status("Applying metadata copy...", expanded=True) as status_widget:
+            progress_bar = st.progress(0)
+            log_placeholder = st.empty()
+
+            for idx, result in enumerate(run_photo_metadata_copy(cfg), start=1):
+                if total:
+                    progress_bar.progress(min(idx / total, 1.0))
+                if result.success:
+                    success_count += 1
+                    parts = [f"OK {result.action.jpg_path.name} -> {result.action.target_path.name}"]
+                    if result.keywords_written:
+                        parts.append(f"{result.keywords_written} keyword(s)")
+                    if result.description_written:
+                        parts.append("description")
+                    if result.caption_written and result.action.target_type.value == "embedded":
+                        parts.append("caption")
+                    if result.rating_written:
+                        parts.append("JPG rating=1")
+                    line = " | ".join(parts)
+                else:
+                    error_count += 1
+                    line = f"ERR {result.action.jpg_path.name} -> {result.action.target_path.name}: {result.error}"
+
+                log_lines.append(line)
+                log_placeholder.text_area(
+                    "Progress log",
+                    "\n".join(log_lines[-80:]),
+                    height=260,
+                    key=f"pmc_log_{idx}",
+                )
+
+            elapsed = time.time() - t_start
+            state = "complete" if error_count == 0 else "error"
+            status_widget.update(
+                label=f"Done: {success_count} succeeded, {error_count} failed ({elapsed:.1f}s)",
+                state=state,
+            )
+
+        st.download_button(
+            "Download metadata copy log",
+            "\n".join(log_lines),
+            file_name="photo_metadata_copy_log.txt",
+            mime="text/plain",
+            key="pmc_download_log",
+        )
+        if not dry_run:
+            st.success(
+                "Metadata copy complete. If Lightroom Classic has these files in a catalog, "
+                "select the affected photos and run Metadata -> Read Metadata from File."
+            )
+
 def _lms_resolve_path(p: str) -> Path:
     """Convert a Windows or WSL path string to a resolved Path."""
     return Path(convert_windows_to_wsl_path(p.strip()))
@@ -1917,13 +2140,18 @@ def _render_page_footer() -> None:
 def main() -> None:
     st.title("Photo & Metadata Tools")
     st.caption(
-        f"Version: {PAGE_VERSION} • Photo processing, batch keywords, and LLM metadata sync"
+        f"Version: {PAGE_VERSION} • Photo processing, batch keywords, metadata copy, and LLM metadata sync"
     )
 
-    tab_photo, tab_lms = st.tabs(["Photo Processor", "LLM Metadata Sync"])
+    tab_photo, tab_copy, tab_lms = st.tabs(
+        ["Photo Processor", "JPG Metadata Copy", "LLM Metadata Sync"]
+    )
 
     with tab_photo:
         _render_photo_keywords_tab()
+
+    with tab_copy:
+        _render_photo_metadata_copy_tab()
 
     with tab_lms:
         _render_lms_tab()

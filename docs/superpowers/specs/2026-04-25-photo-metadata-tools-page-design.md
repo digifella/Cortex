@@ -7,10 +7,11 @@
 
 ## Overview
 
-Create a new Streamlit page (`20_Photo_Metadata_Tools.py`) dedicated to image and metadata workflows. This page consolidates two tools:
+Create a new Streamlit page (`20_Photo_Metadata_Tools.py`) dedicated to image and metadata workflows. This page consolidates three tools:
 
 1. **Photo Processor** — the existing batch resize + AI keyword + EXIF ownership tool, moved from `7_Document_Extract.py`.
-2. **LLM Metadata Sync** — a new tool that propagates LLM-generated keywords and descriptions from a flat JPG directory back into matching RAW source files and embedded derivatives via ExifTool, implementing `docs/llm_metadata_sync_spec.md`.
+2. **JPG Metadata Copy** — a one-off folder workflow that copies description, caption, and keywords from JPG files into matching TIF/DNG files or RAW XMP sidecars.
+3. **LLM Metadata Sync** — a new tool that propagates LLM-generated keywords and descriptions from a flat JPG directory back into matching RAW source files and embedded derivatives via ExifTool, implementing `docs/llm_metadata_sync_spec.md`.
 
 `7_Document_Extract.py` reverts to a pure text/PDF page with three tabs: PDF Ingestor, PDF Image Extractor, Anonymizer.
 
@@ -20,7 +21,7 @@ Create a new Streamlit page (`20_Photo_Metadata_Tools.py`) dedicated to image an
 
 - **Title:** "Photo & Metadata Tools"
 - **Page icon:** 📷
-- **Tabs:** `["Photo Processor", "LLM Metadata Sync"]`
+- **Tabs:** `["Photo Processor", "JPG Metadata Copy", "LLM Metadata Sync"]`
 
 ### Tab 1 — Photo Processor
 
@@ -34,7 +35,44 @@ Verbatim extraction of `_render_photo_keywords_tab()` and all its helpers from `
 
 The tab renders identically to today — no behaviour changes.
 
-### Tab 2 — LLM Metadata Sync
+### Tab 2 — JPG Metadata Copy
+
+A focused ExifTool workflow for a single folder containing same-stem pairs such as:
+
+- `shot.jpg` → `shot.tif`
+- `shot.jpg` → `shot.dng`
+- `shot.jpg` + `shot.raf` → `shot.xmp`
+
+UI layout:
+
+1. Folder path input, normalized through `convert_windows_to_wsl_path` outside Docker and used as-is inside Docker.
+2. Options expander:
+   - Include subfolders
+   - Keep ExifTool `_original` backups
+   - Match JPG names after stripping trailing `-1` to `-5`
+   - Set source JPG rating to `1` after successful copy
+   - Editable embedded target extensions (`tif,tiff,dng`)
+   - Editable RAW sidecar target extensions (`raf,raw,nef,cr2,cr3,arw,rw2,orf,pef,srw`)
+3. **Scan Folder** button. Builds same-folder matches without writing files.
+4. Results table showing source JPG, target file or sidecar, target type, RAW filename, and whether an XMP sidecar already exists.
+5. Dry run / Live run radio. Default is **Dry run**.
+6. **Apply Metadata Copy** button with progress log and downloadable log.
+
+Sidecar write safety:
+
+- Existing RAW XMP sidecars are edited in place and only update `XMP-dc:Description` and `XMP-dc:Subject`.
+- Existing Lightroom/ACR edit settings and unrelated XMP namespaces are not cleared or rewritten.
+- Missing RAW sidecars may be created from the JPG metadata.
+- Embedded TIF/DNG targets receive synchronized XMP/IPTC keywords plus description/caption fields.
+- Source JPG rating reset is optional and runs once per JPG even when that JPG maps to multiple targets.
+
+Backend:
+
+- `cortex_engine/photo_metadata_copy.py`
+- `docker/cortex_engine/photo_metadata_copy.py`
+- Unit tests: `tests/unit/test_photo_metadata_copy.py`
+
+### Tab 3 — LLM Metadata Sync
 
 Implements the spec in `docs/llm_metadata_sync_spec.md`. UI layout (top to bottom):
 

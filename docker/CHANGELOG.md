@@ -6,6 +6,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Photo Metadata Copy Tab
+
+Adds a one-off JPG-to-target metadata copy workflow for photo folders.
+
+### ✨ New Features
+- Photo & Metadata Tools: new `JPG Metadata Copy` tab copies description, caption, and keywords from JPG files into matching TIF/DNG files or RAW XMP sidecars.
+- Photo Metadata Copy: optional dry run, subfolder scanning, trailing rating suffix matching (`-1` to `-5`), ExifTool backup retention, and source JPG rating reset to 1.
+
+### 🚀 Improvements
+- Existing RAW XMP sidecars are updated surgically: only `XMP-dc:Description` and `XMP-dc:Subject` are touched, preserving Lightroom/ACR edit settings and unrelated metadata.
 
 
 
