@@ -21,8 +21,8 @@
 
 | Path | Repo | Change |
 |---|---|---|
-| `worker/handlers/pdf_textify.py` | cortex_suite | Modify — also write `.txt` (via `DocumentTextifier.markdown_to_plaintext`) when `email_textify_mode` is set; pick which file is `output_file` |
-| `tests/unit/test_pdf_textify_email_modes.py` | cortex_suite | New — covers the .txt sibling and output_file selection |
+| `worker/handlers/pdf_textify.py` | cortex_suite | Modify — when `email_textify_mode='text'` write `.txt` (via `DocumentTextifier.markdown_to_plaintext`) instead of `.md`; otherwise unchanged |
+| `tests/unit/test_pdf_textify_email_modes.py` | cortex_suite | New — covers .txt vs .md primary-output selection by mode |
 | `worker/lab_mailbox_worker.py` | cortex_suite | Modify — fetch attachments via Graph, base64-encode, include in webhook payload (gated by `LAB_FETCH_ATTACHMENTS` env flag) |
 | `tests/unit/test_lab_mailbox_attachments.py` | cortex_suite | New — covers Graph attachment fetch + normalisation |
 | `worker/config.env.example` | cortex_suite | Modify — document `LAB_FETCH_ATTACHMENTS` |
@@ -96,13 +96,15 @@ git commit -m "feat: add email_correlation_id column to jobs for grouped textify
 
 ---
 
-## Task 2: `pdf_textify` handler — also emit `.txt` for email mode
+## Task 2: `pdf_textify` handler — emit `.txt` for `text` mode, `.md` otherwise
 
 **Repo:** cortex_suite
 
 **Files:**
 - Modify: `worker/handlers/pdf_textify.py`
 - Create: `tests/unit/test_pdf_textify_email_modes.py`
+
+The worker only uploads the single primary `output_file` to the queue, so the handler writes exactly one output: `.txt` when `email_textify_mode='text'`, otherwise `.md`. The notifier reads `output_filename` directly — no alt-file fallback.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -136,6 +138,12 @@ def _patch_textifier(markdown: str = "# Title\n\nBody.\n"):
         def textify_file(self, _path):
             return markdown
 
+        @staticmethod
+        def markdown_to_plaintext(text: str, width: int = 80) -> str:
+            # Strip the leading '# ' so we can assert it was called
+            import re
+            return re.sub(r"^#+\s+", "", text, flags=re.MULTILINE)
+
     return patch.object(pdf_textify, "DocumentTextifier", _FakeTextifier)
 
 
@@ -149,11 +157,10 @@ def test_legacy_invocation_writes_only_md(fake_input):
         )
     assert result["output_file"].suffix == ".md"
     assert result["output_file"].exists()
-    txt_path = fake_input.with_suffix(".txt")
-    assert not txt_path.exists()
+    assert not fake_input.with_suffix(".txt").exists()
 
 
-def test_email_text_mode_writes_both_and_returns_txt(fake_input):
+def test_email_text_mode_writes_only_txt(fake_input):
     with _patch_textifier(markdown="# Heading\n\n- bullet\n"):
         result = pdf_textify.handle(
             input_path=fake_input,
@@ -164,17 +171,16 @@ def test_email_text_mode_writes_both_and_returns_txt(fake_input):
             job={"id": 2},
         )
     assert result["output_file"].suffix == ".txt"
-    md_path = fake_input.with_suffix(".md")
-    txt_path = fake_input.with_suffix(".txt")
-    assert md_path.exists() and txt_path.exists()
-    txt_content = txt_path.read_text(encoding="utf-8")
-    # markdown_to_plaintext strips the leading '# '
+    assert result["output_file"].exists()
+    # No .md sibling — we only write what the worker will upload
+    assert not fake_input.with_suffix(".md").exists()
+    txt_content = result["output_file"].read_text(encoding="utf-8")
+    # markdown_to_plaintext stripped the '# '
     assert "Heading" in txt_content
-    assert "#" not in txt_content.splitlines()[0]
-    assert result["output_data"]["alt_output_file"].suffix == ".md"
+    assert not txt_content.lstrip().startswith("#")
 
 
-def test_email_markdown_mode_writes_both_and_returns_md(fake_input):
+def test_email_markdown_mode_writes_only_md(fake_input):
     with _patch_textifier(markdown="# Heading\n"):
         result = pdf_textify.handle(
             input_path=fake_input,
@@ -185,10 +191,11 @@ def test_email_markdown_mode_writes_both_and_returns_md(fake_input):
             job={"id": 3},
         )
     assert result["output_file"].suffix == ".md"
-    md_path = fake_input.with_suffix(".md")
-    txt_path = fake_input.with_suffix(".txt")
-    assert md_path.exists() and txt_path.exists()
-    assert result["output_data"]["alt_output_file"].suffix == ".txt"
+    assert result["output_file"].exists()
+    assert not fake_input.with_suffix(".txt").exists()
+    # Content should be raw markdown (still has the '#')
+    md_content = result["output_file"].read_text(encoding="utf-8")
+    assert md_content.lstrip().startswith("#")
 ```
 
 - [ ] **Step 2: Run the tests to confirm they fail**
@@ -199,38 +206,27 @@ source venv/bin/activate
 pytest tests/unit/test_pdf_textify_email_modes.py -v
 ```
 
-Expected: `test_email_text_mode_writes_both_and_returns_txt` and `test_email_markdown_mode_writes_both_and_returns_md` fail (they expect `.txt` and `alt_output_file` in `output_data` that the current handler doesn't produce). `test_legacy_invocation_writes_only_md` should pass since it asserts current behaviour.
+Expected: `test_legacy_invocation_writes_only_md` passes (current handler already does that). `test_email_text_mode_writes_only_txt` fails because the current handler always writes `.md` regardless of mode. `test_email_markdown_mode_writes_only_md` likely passes today (the new mode key is ignored, default `.md` path is taken) — but assert it stays passing after the change.
 
-- [ ] **Step 3: Modify the handler to emit both formats when in email mode**
+- [ ] **Step 3: Modify the handler to switch output by mode**
 
 Replace the section of `worker/handlers/pdf_textify.py` from the existing `# Write output .md file alongside the input` comment through the end of `output_data` construction (current lines 68–88) with:
 
 ```python
-    # Determine which output(s) to write
+    # Pick output format based on email mode (when invoked from the lab mailbox).
     email_mode = str((input_data or {}).get("email_textify_mode") or "").strip().lower()
 
-    md_filename = input_path.stem + ".md"
-    md_path = input_path.parent / md_filename
-    md_path.write_text(markdown_text, encoding="utf-8")
-
-    txt_path = None
-    txt_filename = None
-    if email_mode in {"text", "markdown"}:
-        txt_filename = input_path.stem + ".txt"
-        txt_path = input_path.parent / txt_filename
-        plaintext = DocumentTextifier.markdown_to_plaintext(markdown_text, width=80)
-        txt_path.write_text(plaintext, encoding="utf-8")
-
-    if email_mode == "text" and txt_path is not None:
-        primary_path = txt_path
-        primary_filename = txt_filename
-        alt_path = md_path
+    if email_mode == "text":
+        body_text = DocumentTextifier.markdown_to_plaintext(markdown_text, width=80)
+        output_filename = input_path.stem + ".txt"
     else:
-        primary_path = md_path
-        primary_filename = md_filename
-        alt_path = txt_path  # may be None when email_mode is empty
+        body_text = markdown_text
+        output_filename = input_path.stem + ".md"
 
-    # Stats are computed against the markdown (more meaningful than against plain text)
+    output_path = input_path.parent / output_filename
+    output_path.write_text(body_text, encoding="utf-8")
+
+    # Stats computed against the markdown (more meaningful than against plain text)
     line_count = len(markdown_text.splitlines())
     table_count = markdown_text.count("|---")
     heading_count = sum(1 for line in markdown_text.splitlines() if line.startswith("#"))
@@ -238,7 +234,7 @@ Replace the section of `worker/handlers/pdf_textify.py` from the existing `# Wri
     output_data = {
         "summary": "Converted via cortex_engine.textifier.DocumentTextifier",
         "source_filename": input_path.name,
-        "output_filename": primary_filename,
+        "output_filename": output_filename,
         "markdown_length": len(markdown_text),
         "line_count": line_count,
         "headings_found": heading_count,
@@ -247,13 +243,11 @@ Replace the section of `worker/handlers/pdf_textify.py` from the existing `# Wri
         "pdf_strategy": mode,
         "email_textify_mode": email_mode or "",
     }
-    if alt_path is not None:
-        output_data["alt_output_file"] = alt_path
 
     logger.info(
         "Textified %s -> %s (%d lines, %d headings, %d tables, mode=%s)",
         input_path.name,
-        primary_filename,
+        output_filename,
         line_count,
         heading_count,
         table_count,
@@ -262,7 +256,7 @@ Replace the section of `worker/handlers/pdf_textify.py` from the existing `# Wri
     if progress_cb:
         progress_cb(100, "Textification complete", "done")
 
-    return {"output_data": output_data, "output_file": primary_path}
+    return {"output_data": output_data, "output_file": output_path}
 ```
 
 - [ ] **Step 4: Run the tests to confirm they pass**
@@ -288,7 +282,7 @@ Expected: no failures (we didn't touch the handoff contract, but `pdf_textify`'s
 ```bash
 cd /home/longboardfella/cortex_suite
 git add worker/handlers/pdf_textify.py tests/unit/test_pdf_textify_email_modes.py
-git commit -m "feat(textify): emit .txt sibling and select primary output by email_textify_mode"
+git commit -m "feat(textify): switch output to .txt when email_textify_mode='text'"
 ```
 
 ---
@@ -1104,7 +1098,6 @@ foreach ($readyGroups as $cid) {
     $mode = 'markdown';
     while ($srow = $sibRes->fetchArray(SQLITE3_ASSOC)) {
         $inp = json_decode($srow['input_data'] ?: '{}', true) ?: [];
-        $out = json_decode($srow['output_data'] ?: '{}', true) ?: [];
         if (!$email && !empty($srow['submitter_email'])) $email = (string)$srow['submitter_email'];
         if (!$sendTo && !empty($inp['send_to'])) $sendTo = (string)$inp['send_to'];
         if (!empty($inp['email_textify_mode'])) $mode = (string)$inp['email_textify_mode'];
@@ -1113,7 +1106,6 @@ foreach ($readyGroups as $cid) {
             'status'            => (string)$srow['status'],
             'original_filename' => (string)($inp['original_filename'] ?? ('job_' . $srow['id'])),
             'output_filename'   => (string)$srow['output_filename'],
-            'alt_output_file'   => (string)($out['alt_output_file'] ?? ''),
             'error_message'     => (string)$srow['error_message'],
             'completed_at'      => (string)$srow['completed_at'],
         ];
@@ -1137,21 +1129,9 @@ foreach ($readyGroups as $cid) {
             $failed[] = $s;
             continue;
         }
-        $primaryName = $s['output_filename'];
-        $primaryPath = $QUEUE_FILES_DIR . '/outputs/' . $primaryName;
-        $useThis = $primaryPath;
-        // If the primary doesn't match the requested extension, fall back to alt
-        if (substr($primaryName, -strlen($attachExt)) !== $attachExt && $s['alt_output_file']) {
-            $altPath = (string)$s['alt_output_file'];
-            // alt_output_file from the handler is an absolute path inside queue_files/inputs/
-            // but we copied .md/.txt into queue_files/outputs/. Look there too.
-            $altBase = basename($altPath);
-            if (file_exists($QUEUE_FILES_DIR . '/outputs/' . $altBase)) {
-                $useThis = $QUEUE_FILES_DIR . '/outputs/' . $altBase;
-            } elseif (file_exists($altPath)) {
-                $useThis = $altPath;
-            }
-        }
+        // Handler picked the right extension based on email_textify_mode, so output_filename
+        // already matches what we want to send.
+        $useThis = $QUEUE_FILES_DIR . '/outputs/' . $s['output_filename'];
         if (!file_exists($useThis) || filesize($useThis) === 0) {
             $failed[] = $s;
             continue;
