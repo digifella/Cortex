@@ -45,6 +45,7 @@ class LabMailboxConfig:
     webhook_secret: str
     suppress_replies: bool
     state_path: Path
+    fetch_attachments: bool = False
 
     @classmethod
     def from_env(cls, env: dict[str, str]) -> "LabMailboxConfig":
@@ -67,6 +68,7 @@ class LabMailboxConfig:
             webhook_secret=get("LAB_WEBHOOK_SECRET"),
             suppress_replies=get_bool("LAB_SUPPRESS_REPLIES", "0"),
             state_path=Path(get("LAB_STATE_FILE", str(ROOT / "tmp" / "lab_mailbox_state.json"))),
+            fetch_attachments=get_bool("LAB_FETCH_ATTACHMENTS", "0"),
         )
 
     def validate(self) -> None:
@@ -188,6 +190,23 @@ class LabGraphClient:
         response.raise_for_status()
         return list(response.json().get("value") or [])
 
+    def list_attachments(self, message_id: str) -> list[dict]:
+        """Fetch all attachments for a Graph message.
+
+        Returns the raw Graph attachment objects (each with name, contentType,
+        size, isInline, contentBytes, plus @odata.type). Caller filters /
+        normalises.
+        """
+        if not message_id:
+            return []
+        response = requests.get(
+            f"https://graph.microsoft.com/v1.0/users/{self.config.graph_mailbox}/messages/{message_id}/attachments",
+            headers=self._headers(),
+            timeout=self.config.graph_timeout,
+        )
+        response.raise_for_status()
+        return list(response.json().get("value") or [])
+
     def mark_read(self, message_id: str) -> None:
         response = requests.patch(
             f"https://graph.microsoft.com/v1.0/users/{self.config.graph_mailbox}/messages/{message_id}",
@@ -221,7 +240,11 @@ def email_address(value: dict) -> tuple[str, str]:
     return str(addr.get("name") or "").strip(), str(addr.get("address") or "").strip()
 
 
-def normalize_graph_message(item: dict) -> dict:
+def normalize_graph_message(
+    item: dict,
+    graph_client: "LabGraphClient | None" = None,
+    fetch: bool = False,
+) -> dict:
     from_name, from_email = email_address(dict(item.get("from") or {}))
     recipients = list(item.get("toRecipients") or [])
     to_name, to_email = email_address(dict(recipients[0] if recipients else {}))
@@ -230,6 +253,28 @@ def normalize_graph_message(item: dict) -> dict:
     content_type = str(body.get("contentType") or "").strip().lower()
     text_body = strip_html(content) if content_type == "html" else content.strip()
     html_body = content if content_type == "html" else ""
+
+    attachments: list[dict] = []
+    if fetch and graph_client is not None and item.get("hasAttachments"):
+        graph_id = str(item.get("id") or "").strip()
+        try:
+            raw = graph_client.list_attachments(graph_id)
+        except Exception:
+            logging.exception("Failed to fetch attachments for message %s", graph_id)
+            raw = []
+        for att in raw:
+            # Only handle fileAttachment — itemAttachment / referenceAttachment have no bytes.
+            odata_type = str(att.get("@odata.type") or "")
+            if odata_type and "fileAttachment" not in odata_type:
+                continue
+            attachments.append({
+                "filename": str(att.get("name") or "").strip(),
+                "mime_type": str(att.get("contentType") or "").strip(),
+                "size_bytes": int(att.get("size") or 0),
+                "is_inline": bool(att.get("isInline")),
+                "content_base64": str(att.get("contentBytes") or ""),
+            })
+
     return {
         "message_id": str(item.get("internetMessageId") or item.get("id") or "").strip(),
         "graph_message_id": str(item.get("id") or "").strip(),
@@ -241,7 +286,7 @@ def normalize_graph_message(item: dict) -> dict:
         "received_at": str(item.get("receivedDateTime") or datetime.now(timezone.utc).isoformat()).strip(),
         "text_body": text_body,
         "html_body": html_body,
-        "attachments": [],
+        "attachments": attachments,
     }
 
 
@@ -275,7 +320,11 @@ def poll_once(config: LabMailboxConfig, *, dry_run: bool = False) -> tuple[int, 
     skipped = 0
 
     for item in graph.list_unread_messages():
-        message = normalize_graph_message(item)
+        message = normalize_graph_message(
+            item,
+            graph_client=graph,
+            fetch=config.fetch_attachments,
+        )
         graph_id = str(message.get("graph_message_id") or "").strip()
         if state.has_processed(graph_id):
             skipped += 1

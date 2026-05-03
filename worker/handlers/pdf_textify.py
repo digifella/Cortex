@@ -65,12 +65,20 @@ def handle(
     if not markdown_text or not markdown_text.strip():
         raise RuntimeError(f"Textifier returned empty output for {input_path.name}")
 
-    # Write output .md file alongside the input
-    output_filename = input_path.stem + ".md"
-    output_path = input_path.parent / output_filename
-    output_path.write_text(markdown_text, encoding="utf-8")
+    # Pick output format based on email mode (when invoked from the lab mailbox).
+    email_mode = str((input_data or {}).get("email_textify_mode") or "").strip().lower()
 
-    # Gather stats
+    if email_mode == "text":
+        body_text = DocumentTextifier.markdown_to_plaintext(markdown_text, width=80)
+        output_filename = input_path.stem + ".txt"
+    else:
+        body_text = markdown_text
+        output_filename = input_path.stem + ".md"
+
+    output_path = input_path.parent / output_filename
+    output_path.write_text(body_text, encoding="utf-8")
+
+    # Stats computed against the markdown (more meaningful than against plain text)
     line_count = len(markdown_text.splitlines())
     table_count = markdown_text.count("|---")
     heading_count = sum(1 for line in markdown_text.splitlines() if line.startswith("#"))
@@ -85,15 +93,17 @@ def handle(
         "tables_found": table_count,
         "use_vision": use_vision,
         "pdf_strategy": mode,
+        "email_textify_mode": email_mode or "",
     }
 
     logger.info(
-        "Textified %s -> %s (%d lines, %d headings, %d tables)",
+        "Textified %s -> %s (%d lines, %d headings, %d tables, mode=%s)",
         input_path.name,
         output_filename,
         line_count,
         heading_count,
         table_count,
+        email_mode or "default",
     )
     if progress_cb:
         progress_cb(100, "Textification complete", "done")
