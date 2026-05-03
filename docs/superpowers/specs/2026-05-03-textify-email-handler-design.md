@@ -84,8 +84,16 @@ User emails lab@longboardfella.com.au
   subject (after `Re:` / `Fwd:` stripping). The `JOB:` prefix is optional
   to mirror the existing flex parser.
 - If both keywords appear, **`MARKDOWN` wins**.
-- The match runs *before* the existing `_jilib_parseJobSubject` /
-  `_jilib_flexParseSubject` so it short-circuits the URL/YouTube path.
+- The explicit-keyword match runs *before* the existing
+  `_jilib_parseJobSubject` / `_jilib_flexParseSubject` so it short-circuits
+  the URL/YouTube path.
+- **Implicit fallback:** if no other keyword (TEXTIFY, MARKDOWN, JOB,
+  CANCEL, DISPATCH, APPEND, HELP, URL, YOUTUBE, RIP, SCRAPE, STRIP) matches
+  the subject **and** the body has no URLs **and** the email carries at
+  least one qualifying attachment, route to TEXTIFY in `text` mode. This
+  makes "send a PDF to lab@ with any subject" the zero-friction default.
+  When the user *did* express clear intent (e.g. `JOB: URL INGEST` with a
+  PDF attached), URL ingest still wins and the attachment is ignored.
 - Outcome strings used by the ingest log:
   `accepted_textify` (jobs queued), `no_attachments` (rejected), and the
   existing `rejected_sender` / `rejected_capability`-style codes if needed.
