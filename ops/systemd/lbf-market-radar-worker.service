@@ -1,0 +1,14 @@
+[Unit]
+Description=Longboardfella website market_radar worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/longboardfella/longboardfella_website
+ExecStart=/usr/bin/python3 /home/longboardfella/longboardfella_website/worker/worker.py
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target

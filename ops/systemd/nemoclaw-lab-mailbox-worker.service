@@ -1,0 +1,7 @@
+[Unit]
+Description=NemoClaw Lab mailbox Graph poller
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/longboardfella/cortex_suite
+ExecStart=/usr/bin/python3 /home/longboardfella/cortex_suite/worker/lab_mailbox_worker.py --once

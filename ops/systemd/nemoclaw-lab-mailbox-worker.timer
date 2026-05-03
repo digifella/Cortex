@@ -1,0 +1,10 @@
+[Unit]
+Description=Run NemoClaw Lab mailbox Graph poller every 2 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+Unit=nemoclaw-lab-mailbox-worker.service
+
+[Install]
+WantedBy=timers.target

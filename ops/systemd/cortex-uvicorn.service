@@ -1,0 +1,14 @@
+[Unit]
+Description=Cortex Suite API (uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/longboardfella/cortex_suite
+ExecStart=/home/longboardfella/cortex_suite/venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target

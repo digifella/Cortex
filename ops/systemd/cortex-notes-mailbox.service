@@ -1,0 +1,14 @@
+[Unit]
+Description=Cortex notes mailbox poller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/longboardfella/cortex_suite
+ExecStart=/home/longboardfella/cortex_suite/venv/bin/python3.11 /home/longboardfella/cortex_suite/worker/notes_mailbox_worker.py
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target
