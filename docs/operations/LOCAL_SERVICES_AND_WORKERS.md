@@ -106,6 +106,43 @@ Live in cPanel → Cron Jobs. These run on the shared host, not on WSL.
 These do not need editing in normal operation. They are listed here so a
 post-reboot or post-deploy verification has a single place to check.
 
+### TEXTIFY completion email delivery
+
+`queue_notify.php` sends the final TEXTIFY workpackage email after all
+`pdf_textify` siblings in an `email_correlation_id` group have completed. The
+admin queue detail panel shows rows from `email_send_log`; `mail()=true` only
+means PHP accepted the message for handoff, not that the recipient mailbox
+delivered it.
+
+Preferred production setup is Microsoft Graph sending from `lab@` for TEXTIFY
+completion emails. Define these constants in the server-managed
+`public_html/admin/config.php`:
+
+```php
+define('QUEUE_NOTIFY_GRAPH_TENANT_ID', '...');
+define('QUEUE_NOTIFY_GRAPH_CLIENT_ID', '...');
+define('QUEUE_NOTIFY_GRAPH_CLIENT_SECRET', '...');
+define('QUEUE_NOTIFY_GRAPH_MAILBOX', 'lab@longboardfella.com.au');
+```
+
+If the dedicated `QUEUE_NOTIFY_GRAPH_*` constants are absent, `queue_notify.php`
+falls back to `LAB_GRAPH_TENANT_ID`, `LAB_GRAPH_CLIENT_ID`,
+`LAB_GRAPH_CLIENT_SECRET`, and `LAB_GRAPH_MAILBOX` when those constants are
+available. If neither set is configured, it falls back to PHP `mail()`.
+
+For a missing completion email, open the job group in the admin queue and check
+Email diagnostics:
+
+- `error_msg = graph` means the Graph send path accepted the message.
+- `graph: ...` followed by a `mail()=true` row means Graph failed and PHP
+  `mail()` fallback was attempted.
+- `mail()=true` alone is not proof of inbox delivery; check spam/quarantine or
+  host mail logs around the `attempted_at` timestamp.
+
+Use **Reset notification -> retry** on the group after fixing Graph credentials
+or recipient filtering; the next `queue_notify.php` cron run will retry the
+whole group.
+
 ---
 
 ## Critical: do not double-run
