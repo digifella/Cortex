@@ -6,8 +6,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-
-
+- LLM Metadata Sync: PNG matches now target the actual `.png` files instead of synthetic `.xmp` sidecar paths, with XMP-only writes for PNG targets
 
 ## v6.0.12 - 2026-04-28
 

@@ -31,6 +31,8 @@ For each JPG in the JPG directory:
    - **Adobe derivative** — `<stem><suffix>.<EMBED_EXT>` where suffix matches one of: `-Edit`, `-Edit-2`, `-Edit-3`, …, `-Enhanced`, `-Enhanced-NR`, `-HDR`, `-HDR-2`, …, `-Pano`, `-Pano-2`, …; and `EMBED_EXT` is `tif`, `tiff`, `psd`, `psb`, or `dng`. Match → write metadata directly into the file.
    - **Skip** any `.acr` file regardless of stem match — these are binary AI Denoise caches and contain no editable metadata.
 
+When indexing RAW or derivative filenames, also tolerate editor-added underscore-delimited blocks between the capture timestamp and the trailing camera segment. For example, `2020-02-13 11-17-31_Sri Lanka_4896 x 3264_X-T1-Enhanced-NR-Edit.tif` should still match `2020-02-13 11-17-31-X-T1-5.jpg` by collapsing the source stem to `2020-02-13 11-17-31-X-T1` in addition to keeping its full original stem key.
+
 Multiple matches per JPG are allowed and expected — a single stem may have a RAW + sidecar AND one or more `-Edit*` derivatives. All matched sources receive the metadata.
 
 A JPG with zero matches is reported as orphaned (warning logged, no error).

@@ -134,6 +134,31 @@ def test_index_jpg_indexed_as_jpg_replace_target(tmp_path):
     assert tmp_path / "shot.jpg" in index["shot"]
 
 
+def test_index_png_targets_actual_png_file(tmp_path):
+    """PNG sources should match the PNG itself, not a synthetic .xmp sidecar path."""
+    (tmp_path / "shot.png").touch()
+    index = build_raw_index(tmp_path, _cfg(tmp_path))
+    assert "shot" in index
+    assert tmp_path / "shot.png" in index["shot"]
+    assert tmp_path / "shot.xmp" not in index["shot"]
+
+
+def test_index_tif_with_inserted_location_and_dimensions_adds_collapsed_key(tmp_path):
+    source = tmp_path / "2020-02-13 11-17-31_Sri Lanka_4896 x 3264_X-T1-Enhanced-NR-Edit.tif"
+    source.touch()
+    index = build_raw_index(tmp_path, _cfg(tmp_path))
+    assert "2020-02-13 11-17-31-x-t1" in index
+    assert source in index["2020-02-13 11-17-31-x-t1"]
+
+
+def test_index_raw_with_inserted_location_and_dimensions_adds_collapsed_key(tmp_path):
+    source = tmp_path / "2020-02-20 17-09-25_Sri Lanka_6000 x 3376_X-T2.RAF"
+    source.touch()
+    index = build_raw_index(tmp_path, _cfg(tmp_path))
+    assert "2020-02-20 17-09-25-x-t2" in index
+    assert tmp_path / "2020-02-20 17-09-25_Sri Lanka_6000 x 3376_X-T2.xmp" in index["2020-02-20 17-09-25-x-t2"]
+
+
 # ── resolve_jpg ──────────────────────────────────────────────────────────────
 
 def test_resolve_jpg_sidecar_create_when_xmp_absent(tmp_path):
@@ -169,6 +194,45 @@ def test_resolve_jpg_embedded_derivative(tmp_path):
     assert len(actions) == 1
     assert actions[0].target_type == TargetType.EMBEDDED
     assert actions[0].sidecar_action == SidecarAction.NONE
+
+
+def test_resolve_jpg_png_target_is_embedded_png(tmp_path):
+    (tmp_path / "shot.png").touch()
+    cfg = _cfg(tmp_path)
+    index = build_raw_index(tmp_path, cfg)
+    jpg = tmp_path / "shot.jpg"
+    jpg.touch()
+    actions = resolve_jpg(jpg, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_type == TargetType.EMBEDDED
+    assert actions[0].sidecar_action == SidecarAction.NONE
+    assert actions[0].target_path == tmp_path / "shot.png"
+
+
+def test_resolve_jpg_matches_tif_with_inserted_location_and_dimensions(tmp_path):
+    target = tmp_path / "2020-02-13 11-17-31_Sri Lanka_4896 x 3264_X-T1-Enhanced-NR-Edit.tif"
+    target.touch()
+    cfg = _cfg(tmp_path)
+    index = build_raw_index(tmp_path, cfg)
+    jpg = tmp_path / "2020-02-13 11-17-31-X-T1-5.jpg"
+    jpg.touch()
+    actions = resolve_jpg(jpg, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_type == TargetType.EMBEDDED
+    assert actions[0].target_path == target
+
+
+def test_resolve_jpg_matches_raw_with_inserted_location_and_dimensions(tmp_path):
+    raw = tmp_path / "2020-02-20 17-09-25_Sri Lanka_6000 x 3376_X-T2.RAF"
+    raw.touch()
+    cfg = _cfg(tmp_path)
+    index = build_raw_index(tmp_path, cfg)
+    jpg = tmp_path / "2020-02-20 17-09-25-X-T2-5.jpg"
+    jpg.touch()
+    actions = resolve_jpg(jpg, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_type == TargetType.SIDECAR
+    assert actions[0].target_path == tmp_path / "2020-02-20 17-09-25_Sri Lanka_6000 x 3376_X-T2.xmp"
 
 
 def test_resolve_jpg_strips_rating_suffix(tmp_path):

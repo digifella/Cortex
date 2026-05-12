@@ -54,9 +54,8 @@ class SyncConfig:
     raw_extensions: tuple[str, ...] = (
         "RAF", "NEF", "CR2", "CR3", "ARW", "DNG",
         "RW2", "ORF", "PEF", "SRW", "IIQ", "3FR",
-        "PNG",   # PNG files → XMP sidecar alongside the file
     )
-    embed_extensions: tuple[str, ...] = ("tif", "tiff", "psd", "psb", "dng")
+    embed_extensions: tuple[str, ...] = ("tif", "tiff", "psd", "psb", "dng", "png")
     jpg_extensions: tuple[str, ...] = ("jpg", "jpeg")  # catalog JPGs → JPG_REPLACE action
     timestamp_tolerance_seconds: int = 0
     deriv_patterns: tuple[str, ...] = (

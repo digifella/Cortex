@@ -8,6 +8,7 @@ from pathlib import Path
 from .models import SidecarAction, SyncAction, SyncConfig, TargetType
 
 _TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})(-.+)?$")
+_TS_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})(.*)$")
 
 
 def strip_rating_suffix(stem: str, suffix_range: tuple[int, int]) -> str:
@@ -23,6 +24,51 @@ def strip_rating_suffix(stem: str, suffix_range: tuple[int, int]) -> str:
 def _deriv_regex(patterns: tuple[str, ...]) -> re.Pattern:
     alternation = "|".join(f"(?:{p})" for p in patterns)
     return re.compile(f"({alternation})$", re.IGNORECASE)
+
+
+def _normalized_key(stem: str) -> str:
+    return stem.lower().rstrip("- ")
+
+
+def _candidate_keys(stem: str, config: SyncConfig) -> list[str]:
+    """Return one or more lookup keys for a stem.
+
+    Primary key is the normalized stem itself. For timestamp-based filenames that
+    have editor-added underscore blocks in the middle, also add a collapsed key
+    using only the leading timestamp and the trailing underscore-delimited chunk.
+    Example:
+    2020-02-13 11-17-31_Sri Lanka_4896 x 3264_X-T1-Enhanced-NR-Edit
+    -> 2020-02-13 11-17-31-x-t1
+    """
+    deriv_re = _deriv_regex(config.deriv_patterns)
+    m_deriv = deriv_re.search(stem)
+    if m_deriv:
+        stem = stem[: m_deriv.start()]
+
+    keys: list[str] = []
+
+    primary = _normalized_key(stem)
+    if primary:
+        keys.append(primary)
+
+    m_ts = _TS_PREFIX_RE.match(stem)
+    if not m_ts:
+        return keys
+
+    ts_prefix, remainder = m_ts.groups()
+    remainder = remainder.strip()
+    if not remainder or "_" not in remainder:
+        return keys
+
+    tail = remainder.split("_")[-1].strip(" _-")
+    if not tail:
+        return keys
+
+    collapsed = _normalized_key(f"{ts_prefix}-{tail}")
+    if collapsed and collapsed not in keys:
+        keys.append(collapsed)
+
+    return keys
 
 
 def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]:
@@ -59,20 +105,25 @@ def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]
                     # before raw_exts so derivative-suffix DNGs land here rather than
                     # being indexed as raw originals under their full (un-stripped) stem.
                     base_stem = stem[: m.start()]
-                    key = base_stem.lower().rstrip("- ")
-                    index.setdefault(key, []).append(path)
+                    for key in _candidate_keys(base_stem, config):
+                        index.setdefault(key, []).append(path)
+                elif ext == "png":
+                    # PNG sources should be updated in place rather than routed
+                    # through a synthetic XMP sidecar path.
+                    for key in _candidate_keys(stem, config):
+                        index.setdefault(key, []).append(path)
                 else:
                     # Standalone embed-format file or original DNG capture (no suffix)
                     # → write to an XMP sidecar alongside it
-                    key = stem.lower().rstrip("- ")
                     sidecar = dir_path / f"{stem}.xmp"
-                    index.setdefault(key, []).append(sidecar)
+                    for key in _candidate_keys(stem, config):
+                        index.setdefault(key, []).append(sidecar)
 
             elif ext in raw_exts:
                 # rstrip("- ") handles empty camera-model stems like "2025-10-10 10-15-24-"
-                key = stem.lower().rstrip("- ")
                 sidecar = dir_path / f"{stem}.xmp"
-                index.setdefault(key, []).append(sidecar)
+                for key in _candidate_keys(stem, config):
+                    index.setdefault(key, []).append(sidecar)
 
             elif ext in jpg_exts:
                 # Catalog / mobile JPG (no raw original) → JPG_REPLACE target.
@@ -80,8 +131,8 @@ def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]
                 # (e.g. shot-5.jpg, shot-Edit.tif equivalents) live in jpg_dir and
                 # are the *source* of metadata, not the target.
                 if not deriv_re.search(stem):
-                    key = stem.lower().rstrip("- ")
-                    index.setdefault(key, []).append(path)
+                    for key in _candidate_keys(stem, config):
+                        index.setdefault(key, []).append(path)
 
     return index
 
@@ -130,23 +181,29 @@ def resolve_jpg(
     """Resolve a JPG to a list of SyncActions against the pre-built index."""
     stem = strip_rating_suffix(jpg_path.stem, config.rating_suffix_range)
 
-    # Strip derivative suffixes from the JPG stem so a JPG named shot-Pano-5.jpg
-    # (rating stripped → shot-Pano) resolves to the same base key as the DNG
-    # shot-Pano.dng (indexed under "shot").
-    deriv_re = _deriv_regex(config.deriv_patterns)
-    m_deriv = deriv_re.search(stem)
-    if m_deriv:
-        stem = stem[: m_deriv.start()]
-
-    # Normalise trailing hyphens/spaces (empty camera-model names leave "ts-").
-    key = stem.lower().rstrip("- ")
-    targets = index.get(key, [])
+    keys = _candidate_keys(stem, config)
+    targets: list[Path] = []
+    for key in keys:
+        targets.extend(index.get(key, []))
+    if targets:
+        seen: set[Path] = set()
+        deduped_targets: list[Path] = []
+        for target in targets:
+            if target in seen:
+                continue
+            seen.add(target)
+            deduped_targets.append(target)
+        targets = deduped_targets
 
     # Fuzzy fallback: panorama DNGs are often timestamped 2–4 s before the
     # exported JPG.  When tolerance_seconds > 0 and exact match fails, scan
     # the index for the same camera suffix within the allowed window.
     if not targets and config.timestamp_tolerance_seconds > 0:
-        targets = _fuzzy_targets(key, index, config.timestamp_tolerance_seconds)
+        for key in keys:
+            fuzzy_targets = _fuzzy_targets(key, index, config.timestamp_tolerance_seconds)
+            if fuzzy_targets:
+                targets = fuzzy_targets
+                break
 
     embed_exts = {e.lower() for e in config.embed_extensions}
     jpg_exts = {e.lower() for e in config.jpg_extensions}

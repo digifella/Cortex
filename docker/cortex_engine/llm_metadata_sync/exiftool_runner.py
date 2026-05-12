@@ -65,6 +65,11 @@ def _backup_flag(keep_backups: bool) -> str:
     return "-overwrite_original" if keep_backups else "-overwrite_original_in_place"
 
 
+def _uses_iptc_namespace(target: Path, target_type: TargetType) -> bool:
+    """Return True when the target supports the embedded IPTC mirror writes."""
+    return target_type == TargetType.EMBEDDED and target.suffix.lower() != ".png"
+
+
 def clear_keyword_lists(
     target: Path, target_type: TargetType, keep_backups: bool
 ) -> RunResult:
@@ -79,7 +84,10 @@ def clear_keyword_lists(
     if target_type == TargetType.SIDECAR:
         args = [et, backup, "-xmp-dc:subject=", str(target)]
     else:
-        args = [et, backup, "-xmp-dc:subject=", "-iptc:Keywords=", str(target)]
+        args = [et, backup, "-xmp-dc:subject="]
+        if _uses_iptc_namespace(target, target_type):
+            args.append("-iptc:Keywords=")
+        args.append(str(target))
 
     return _run(args)
 
@@ -111,29 +119,30 @@ def write_metadata(
     else:
         for kw in keywords:
             args.append(f"-xmp-dc:subject+={kw}")
-            args.append(f"-iptc:Keywords+={kw}")
+            if _uses_iptc_namespace(target, target_type):
+                args.append(f"-iptc:Keywords+={kw}")
 
     # Build -tagsfromfile copy tags for description and location
     copy_tags: list[str] = []
 
     if description:
         copy_tags.append("-xmp-dc:description<iptc:Caption-Abstract")
-        if target_type == TargetType.EMBEDDED:
+        if _uses_iptc_namespace(target, target_type):
             copy_tags.append("-iptc:Caption-Abstract<iptc:Caption-Abstract")
 
     if "city" in location_fields:
         copy_tags.append("-XMP-photoshop:City<XMP-photoshop:City")
-        if target_type == TargetType.EMBEDDED:
+        if _uses_iptc_namespace(target, target_type):
             copy_tags.append("-IPTC:City<XMP-photoshop:City")
 
     if "state" in location_fields:
         copy_tags.append("-XMP-photoshop:State<XMP-photoshop:State")
-        if target_type == TargetType.EMBEDDED:
+        if _uses_iptc_namespace(target, target_type):
             copy_tags.append("-IPTC:Province-State<XMP-photoshop:State")
 
     if "country" in location_fields:
         copy_tags.append("-XMP-photoshop:Country<XMP-photoshop:Country")
-        if target_type == TargetType.EMBEDDED:
+        if _uses_iptc_namespace(target, target_type):
             copy_tags.append("-IPTC:Country-PrimaryLocationName<XMP-photoshop:Country")
 
     if "gps" in location_fields:
