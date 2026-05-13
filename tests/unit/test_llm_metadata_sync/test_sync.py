@@ -49,6 +49,7 @@ def test_dry_run_does_not_call_exiftool(tmp_path):
     cfg = _cfg(tmp_path, dry_run=True)
 
     with patch("cortex_engine.llm_metadata_sync.sync.read_jpg_metadata", return_value=(["kw1"], "desc")), \
+         patch("cortex_engine.llm_metadata_sync.sync.read_rating", return_value=None), \
          patch("cortex_engine.llm_metadata_sync.sync.read_existing_keywords", return_value=[]), \
          patch("cortex_engine.llm_metadata_sync.exiftool_runner.clear_keyword_lists") as mock_clear, \
          patch("cortex_engine.llm_metadata_sync.exiftool_runner.write_metadata") as mock_write:
@@ -68,6 +69,7 @@ def test_one_file_failure_does_not_abort_others(tmp_path):
     cfg = _cfg(tmp_path)
 
     with patch("cortex_engine.llm_metadata_sync.sync.read_jpg_metadata", return_value=(["kw"], "desc")), \
+         patch("cortex_engine.llm_metadata_sync.sync.read_rating", return_value=None), \
          patch("cortex_engine.llm_metadata_sync.sync.read_existing_keywords", return_value=[]), \
          patch("cortex_engine.llm_metadata_sync.exiftool_runner.clear_keyword_lists",
                side_effect=[_fail_result(), _ok_result()]), \
@@ -85,6 +87,7 @@ def test_jpg_with_no_metadata_skips_exiftool(tmp_path):
     cfg = _cfg(tmp_path)
 
     with patch("cortex_engine.llm_metadata_sync.sync.read_jpg_metadata", return_value=([], "")), \
+         patch("cortex_engine.llm_metadata_sync.sync.read_rating", return_value=None), \
          patch("cortex_engine.llm_metadata_sync.exiftool_runner.clear_keyword_lists") as mock_clear, \
          patch("cortex_engine.llm_metadata_sync.exiftool_runner.write_metadata") as mock_write:
         results = list(sync.run_sync(cfg))
@@ -101,7 +104,8 @@ def test_orphaned_jpgs_do_not_produce_results(tmp_path):
     (tmp_path / "jpg" / "orphan.jpg").touch()
     cfg = _cfg(tmp_path)
 
-    with patch("cortex_engine.llm_metadata_sync.sync.read_jpg_metadata", return_value=(["kw"], "desc")):
+    with patch("cortex_engine.llm_metadata_sync.sync.read_jpg_metadata", return_value=(["kw"], "desc")), \
+         patch("cortex_engine.llm_metadata_sync.sync.read_rating", return_value=None):
         results = list(sync.run_sync(cfg))
 
     assert results == []
@@ -122,6 +126,7 @@ def test_jpg_replace_renames_original_and_copies_described(tmp_path):
     cfg = SyncConfig(raw_root=raw_dir, jpg_dir=jpg_dir)
 
     with patch("cortex_engine.llm_metadata_sync.sync.read_jpg_metadata", return_value=(["bird"], "Two birds.")), \
+         patch("cortex_engine.llm_metadata_sync.sync.read_rating", return_value=5), \
          patch("cortex_engine.llm_metadata_sync.sync.read_location", return_value={"city": "Bern", "state": "", "country": "Switzerland", "gps": ""}):
         results = list(sync.run_sync(cfg))
 
@@ -154,6 +159,7 @@ def test_jpg_replace_dry_run_makes_no_changes(tmp_path):
     cfg = SyncConfig(raw_root=raw_dir, jpg_dir=jpg_dir, dry_run=True)
 
     with patch("cortex_engine.llm_metadata_sync.sync.read_jpg_metadata", return_value=(["bird"], "Two birds.")), \
+         patch("cortex_engine.llm_metadata_sync.sync.read_rating", return_value=5), \
          patch("cortex_engine.llm_metadata_sync.sync.read_location", return_value={}):
         results = list(sync.run_sync(cfg))
 
@@ -180,9 +186,29 @@ def test_clear_called_before_write_for_existing_sidecar(tmp_path):
         return _ok_result()
 
     with patch("cortex_engine.llm_metadata_sync.sync.read_jpg_metadata", return_value=(["kw"], "desc")), \
+         patch("cortex_engine.llm_metadata_sync.sync.read_rating", return_value=None), \
          patch("cortex_engine.llm_metadata_sync.sync.read_existing_keywords", return_value=[]), \
          patch("cortex_engine.llm_metadata_sync.exiftool_runner.clear_keyword_lists", side_effect=mock_clear), \
          patch("cortex_engine.llm_metadata_sync.exiftool_runner.write_metadata", side_effect=mock_write):
         list(sync.run_sync(cfg))
 
     assert call_order == ["clear", "write"]
+
+
+def test_rating_only_jpg_still_writes_metadata(tmp_path):
+    _make_files(tmp_path, ["shot"])
+    cfg = _cfg(tmp_path)
+
+    with patch("cortex_engine.llm_metadata_sync.sync.read_jpg_metadata", return_value=([], "")), \
+         patch("cortex_engine.llm_metadata_sync.sync.read_rating", return_value=5), \
+         patch("cortex_engine.llm_metadata_sync.sync.read_existing_keywords", return_value=[]), \
+         patch("cortex_engine.llm_metadata_sync.sync.read_location", return_value={}), \
+         patch("cortex_engine.llm_metadata_sync.exiftool_runner.clear_keyword_lists", return_value=_ok_result()), \
+         patch("cortex_engine.llm_metadata_sync.exiftool_runner.write_metadata", return_value=_ok_result()) as mock_write:
+        results = list(sync.run_sync(cfg))
+
+    assert len(results) == 1
+    assert results[0].success is True
+    assert results[0].description_written is True
+    _, kwargs = mock_write.call_args
+    assert kwargs["rating"] == 5

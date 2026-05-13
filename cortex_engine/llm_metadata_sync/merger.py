@@ -56,6 +56,36 @@ def read_jpg_metadata(jpg: Path) -> tuple[list[str], str]:
     return keywords, description
 
 
+def read_rating(path: Path) -> int | None:
+    """Read XMP rating from a file via exiftool."""
+    if not path.exists():
+        return None
+    exiftool = shutil.which("exiftool")
+    if not exiftool:
+        return None
+    result = subprocess.run(
+        [exiftool, "-json", "-s", "-XMP-xmp:Rating", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not payload:
+        return None
+    raw_value = payload[0].get("Rating")
+    try:
+        if raw_value is None or str(raw_value).strip() == "":
+            return None
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return None
+
+
 def read_location(path: Path) -> dict[str, str]:
     """Read location fields from any file via exiftool.
 

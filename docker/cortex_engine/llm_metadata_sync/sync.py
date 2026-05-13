@@ -11,6 +11,7 @@ from .merger import (
     read_existing_keywords,
     read_jpg_metadata,
     read_location,
+    read_rating,
 )
 from .models import SyncAction, SyncConfig, SyncResult, TargetType
 
@@ -36,12 +37,13 @@ def _process_action(action: SyncAction, config: SyncConfig) -> SyncResult:
     try:
         jpg_keywords, description = read_jpg_metadata(action.jpg_path)
         jpg_location = read_location(action.jpg_path)
+        jpg_rating = read_rating(action.jpg_path)
 
         # Determine location fields to copy before deciding whether to skip
         existing_location = read_location(action.target_path)
         location_fields = build_location_update(jpg_location, existing_location)
 
-        if not jpg_keywords and not description and not location_fields:
+        if not jpg_keywords and not description and not location_fields and jpg_rating is None:
             return SyncResult(
                 action=action,
                 success=True,
@@ -61,7 +63,7 @@ def _process_action(action: SyncAction, config: SyncConfig) -> SyncResult:
                 action=action,
                 success=True,
                 keywords_written=len(merged_keywords),
-                description_written=bool(description),
+                description_written=bool(description or jpg_rating is not None),
                 location_written=len(location_fields),
                 error=None,
             )
@@ -90,6 +92,7 @@ def _process_action(action: SyncAction, config: SyncConfig) -> SyncResult:
             description,
             config.keep_backups,
             location_fields,
+            rating=jpg_rating,
         )
         if not write_result.ok:
             return SyncResult(
@@ -105,7 +108,7 @@ def _process_action(action: SyncAction, config: SyncConfig) -> SyncResult:
             action=action,
             success=True,
             keywords_written=len(merged_keywords),
-            description_written=bool(description),
+            description_written=bool(description or jpg_rating is not None),
             location_written=len(location_fields),
             error=None,
         )

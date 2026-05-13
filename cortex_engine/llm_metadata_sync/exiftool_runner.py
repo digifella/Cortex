@@ -105,12 +105,13 @@ def write_metadata(
     description: str,
     keep_backups: bool,
     location_fields: set[str] = frozenset(),
+    rating: int | None = None,
 ) -> RunResult:
-    """Step 2 of two-step write: populate keywords, description, and/or location.
+    """Step 2 of two-step write: populate keywords, description, location, and/or rating.
 
     SIDECAR: writes to xmp-dc / xmp-photoshop namespaces.
     EMBEDDED: writes to both xmp and iptc namespaces (kept in sync).
-    Description and location copied from JPG via -tagsfromfile.
+    Description, location, and rating copied from JPG via -tagsfromfile.
     location_fields: subset of {"city", "state", "country", "gps"} to copy.
     """
     et = exiftool_path()
@@ -133,6 +134,9 @@ def write_metadata(
         copy_tags.append("-xmp-dc:description<iptc:Caption-Abstract")
         if _uses_iptc_namespace(target, target_type):
             copy_tags.append("-iptc:Caption-Abstract<iptc:Caption-Abstract")
+
+    if rating is not None:
+        copy_tags.append("-XMP-xmp:Rating<XMP-xmp:Rating")
 
     if "city" in location_fields:
         copy_tags.append("-XMP-photoshop:City<XMP-photoshop:City")

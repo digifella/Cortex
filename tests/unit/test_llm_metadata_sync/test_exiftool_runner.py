@@ -49,6 +49,7 @@ def test_write_metadata_png_uses_xmp_only(monkeypatch, tmp_path):
         description="Two birds.",
         keep_backups=True,
         location_fields={"city", "country"},
+        rating=5,
     )
 
     args = captured["args"]
@@ -59,6 +60,7 @@ def test_write_metadata_png_uses_xmp_only(monkeypatch, tmp_path):
     assert "-iptc:Keywords+=bird" not in args
     assert "-iptc:Keywords+=wetland" not in args
     assert "-xmp-dc:description<iptc:Caption-Abstract" in args
+    assert "-XMP-xmp:Rating<XMP-xmp:Rating" in args
     assert "-iptc:Caption-Abstract<iptc:Caption-Abstract" not in args
     assert "-XMP-photoshop:City<XMP-photoshop:City" in args
     assert "-IPTC:City<XMP-photoshop:City" not in args

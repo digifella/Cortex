@@ -8,6 +8,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - LLM Metadata Sync: PNG matches now target the actual `.png` files instead of synthetic `.xmp` sidecar paths, with XMP-only writes for PNG targets
 - LLM Metadata Sync: fixed ExifTool backup handling so the default backup toggle now preserves `<filename>_original` files for rewritten existing targets instead of forcing overwrite mode
+- LLM Metadata Sync: now propagates XMP star ratings from the described JPG into matched RAW sidecars and embedded targets so Lightroom star-filtered views remain stable after metadata re-read
 
 ## v6.0.12 - 2026-04-28
 
