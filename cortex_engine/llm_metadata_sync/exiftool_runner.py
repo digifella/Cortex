@@ -61,8 +61,14 @@ def _run(args: list[str]) -> RunResult:
     )
 
 
-def _backup_flag(keep_backups: bool) -> str:
-    return "-overwrite_original" if keep_backups else "-overwrite_original_in_place"
+def _overwrite_flags(keep_backups: bool) -> list[str]:
+    """Return ExifTool overwrite flags.
+
+    When keep_backups is True, omit overwrite flags so ExifTool keeps the
+    original file as <filename>_original when rewriting an existing target.
+    When False, rewrite in place without keeping the ExifTool backup.
+    """
+    return [] if keep_backups else ["-overwrite_original_in_place"]
 
 
 def _uses_iptc_namespace(target: Path, target_type: TargetType) -> bool:
@@ -79,12 +85,11 @@ def clear_keyword_lists(
     EMBEDDED: clears xmp-dc:subject AND iptc:Keywords.
     """
     et = exiftool_path()
-    backup = _backup_flag(keep_backups)
 
     if target_type == TargetType.SIDECAR:
-        args = [et, backup, "-xmp-dc:subject=", str(target)]
+        args = [et, *_overwrite_flags(keep_backups), "-xmp-dc:subject=", str(target)]
     else:
-        args = [et, backup, "-xmp-dc:subject="]
+        args = [et, *_overwrite_flags(keep_backups), "-xmp-dc:subject="]
         if _uses_iptc_namespace(target, target_type):
             args.append("-iptc:Keywords=")
         args.append(str(target))
@@ -109,8 +114,7 @@ def write_metadata(
     location_fields: subset of {"city", "state", "country", "gps"} to copy.
     """
     et = exiftool_path()
-    backup = _backup_flag(keep_backups)
-    args = [et, backup]
+    args = [et, *_overwrite_flags(keep_backups)]
 
     # Direct keyword writes
     if target_type == TargetType.SIDECAR:

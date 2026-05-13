@@ -21,7 +21,6 @@ def test_clear_keyword_lists_png_uses_xmp_only(monkeypatch, tmp_path):
 
     assert captured["args"] == [
         "/usr/bin/exiftool",
-        "-overwrite_original",
         "-xmp-dc:subject=",
         str(target),
     ]
@@ -53,7 +52,8 @@ def test_write_metadata_png_uses_xmp_only(monkeypatch, tmp_path):
     )
 
     args = captured["args"]
-    assert args[0:2] == ["/usr/bin/exiftool", "-overwrite_original"]
+    assert args[0] == "/usr/bin/exiftool"
+    assert "-overwrite_original_in_place" not in args
     assert "-xmp-dc:subject+=bird" in args
     assert "-xmp-dc:subject+=wetland" in args
     assert "-iptc:Keywords+=bird" not in args
@@ -65,3 +65,26 @@ def test_write_metadata_png_uses_xmp_only(monkeypatch, tmp_path):
     assert "-XMP-photoshop:Country<XMP-photoshop:Country" in args
     assert "-IPTC:Country-PrimaryLocationName<XMP-photoshop:Country" not in args
     assert args[-1] == str(target)
+
+
+def test_clear_keyword_lists_without_backups_uses_in_place_overwrite(monkeypatch, tmp_path):
+    target = tmp_path / "shot.png"
+    target.touch()
+    captured: dict[str, list[str]] = {}
+
+    monkeypatch.setattr(exiftool_runner, "exiftool_path", lambda: "/usr/bin/exiftool")
+
+    def fake_run(args: list[str]):
+        captured["args"] = args
+        return exiftool_runner.RunResult(0, "", "", args)
+
+    monkeypatch.setattr(exiftool_runner, "_run", fake_run)
+
+    exiftool_runner.clear_keyword_lists(target, TargetType.EMBEDDED, keep_backups=False)
+
+    assert captured["args"] == [
+        "/usr/bin/exiftool",
+        "-overwrite_original_in_place",
+        "-xmp-dc:subject=",
+        str(target),
+    ]

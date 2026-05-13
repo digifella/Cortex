@@ -1689,7 +1689,10 @@ def _render_lms_tab() -> None:
             key="lms_filter_kw",
         )
         keep_backups = st.toggle(
-            "Keep ExifTool backups (_original files)", value=True, key="lms_keep_backups"
+            "Keep ExifTool backups (_original files)",
+            value=True,
+            key="lms_keep_backups",
+            help="Recommended. When enabled, ExifTool keeps <filename>_original backups for rewritten existing targets such as TIF/PSD/PNG files.",
         )
         col1, col2 = st.columns(2)
         with col1:
@@ -1702,11 +1705,14 @@ def _render_lms_tab() -> None:
             )
         ts_tolerance = st.number_input(
             "Timestamp tolerance (seconds)",
-            value=5, min_value=0, max_value=30,
+            value=0, min_value=0, max_value=30,
             help="Allow JPG and RAW/DNG timestamps to differ by up to this many seconds. "
-                 "Useful for panoramas: Lightroom names the DNG from capture-start time "
-                 "but the exported JPG gets the stitching-completion time (typically 2–4 s later). "
-                 "Set to 0 for exact matching only.",
+                 "Default 0 (exact matching only). Raise to 4–5 for panorama batches: "
+                 "Lightroom names the DNG from capture-start time but the exported JPG "
+                 "gets the stitching-completion time (typically 2–4 s later). "
+                 "WARNING: non-zero values can mis-match burst-mode frames whose RAW is "
+                 "missing — the JPG will silently snap to the nearest unrelated RAW within "
+                 "the tolerance window.",
             key="lms_ts_tolerance",
         )
         deriv_patterns_str = st.text_area(
