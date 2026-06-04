@@ -87,3 +87,17 @@ def test_idea_exporter_writes_pdf(tmp_path):
     pdf_path = tmp_path / exported["pdf"].split("/")[-1]
     assert pdf_path.exists()
     assert pdf_path.read_bytes()[:5] == b"%PDF-"
+
+
+def test_returns_none_when_weasyprint_native_libs_missing(monkeypatch):
+    # WeasyPrint dlopens native libs at import time; a missing .so raises
+    # OSError (not ImportError). The helper must still degrade to None.
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "weasyprint":
+            raise OSError("cannot load library 'libgobject-2.0-0'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert markdown_to_pdf_bytes(SAMPLE_MD, title="x") is None

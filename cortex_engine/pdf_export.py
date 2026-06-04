@@ -60,8 +60,11 @@ def markdown_to_pdf_bytes(markdown_text: str, *, title: str = "") -> Optional[by
         return None
     try:
         from weasyprint import HTML
-    except ImportError:
-        logger.warning("weasyprint not installed — PDF export unavailable")
+    except (ImportError, OSError):
+        # ImportError: package not installed.
+        # OSError: package present but native libs (pango/cairo) missing —
+        # WeasyPrint dlopens them at import time.
+        logger.warning("weasyprint unavailable (missing package or native libs) — PDF export unavailable")
         return None
 
     try:
