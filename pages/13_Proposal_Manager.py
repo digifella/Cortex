@@ -1295,7 +1295,7 @@ elif phase == 3:
     exp_col1, exp_col2, exp_col3 = st.columns(3)
 
     with exp_col1:
-        export_format = st.selectbox("Format", ["Markdown", "DOCX"], key="pm_export_fmt")
+        export_format = st.selectbox("Format", ["Markdown", "DOCX", "PDF"], key="pm_export_fmt")
     with exp_col2:
         include_citations = st.checkbox("Include citations", value=False, key="pm_export_cite")
     with exp_col3:
@@ -1315,7 +1315,7 @@ elif phase == 3:
             type="primary",
             key="pm_dl_md"
         )
-    else:
+    elif export_format == "DOCX":
         docx_bytes = export_engine.generate_export_docx(
             st.session_state.pm_workspace_id,
             include_citations=include_citations,
@@ -1332,6 +1332,23 @@ elif phase == 3:
             )
         else:
             st.warning("DOCX export requires python-docx. Install with: pip install python-docx")
+    else:
+        pdf_bytes = export_engine.generate_export_pdf(
+            st.session_state.pm_workspace_id,
+            include_citations=include_citations,
+            flag_incomplete=flag_incomplete
+        )
+        if pdf_bytes:
+            st.download_button(
+                "Download PDF",
+                data=pdf_bytes,
+                file_name=f"proposal_{ws.metadata.workspace_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                type="primary",
+                key="pm_dl_pdf"
+            )
+        else:
+            st.warning("PDF export requires markdown and weasyprint. Install with: pip install markdown weasyprint")
 
     # Back button
     st.divider()
