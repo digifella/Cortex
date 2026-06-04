@@ -474,3 +474,33 @@ class ProposalExportEngine:
         doc.save(buffer)
         buffer.seek(0)
         return buffer.getvalue()
+
+    def generate_export_pdf(
+        self,
+        workspace_id: str,
+        include_citations: bool = False,
+        flag_incomplete: bool = True
+    ) -> Optional[bytes]:
+        """
+        Generate a PDF export of the proposal.
+
+        Reuses the Markdown export and renders it to PDF. Returns the PDF bytes,
+        or None if the PDF dependencies (markdown/weasyprint) are unavailable.
+        """
+        from cortex_engine.pdf_export import markdown_to_pdf_bytes
+
+        markdown_text = self.generate_export_markdown(
+            workspace_id,
+            include_citations=include_citations,
+            flag_incomplete=flag_incomplete,
+        )
+
+        title = ""
+        try:
+            workspace = self.workspace_manager.get_workspace(workspace_id)
+            if workspace:
+                title = workspace.metadata.tender_name or ""
+        except Exception:
+            title = ""
+
+        return markdown_to_pdf_bytes(markdown_text, title=title)
