@@ -1127,6 +1127,16 @@ else:
                 mime="text/plain",
                 type="primary"
             )
+            from cortex_engine.pdf_export import markdown_to_pdf_bytes
+            pdf_bytes = markdown_to_pdf_bytes(export_text, title=selected_workspace_name)
+            if pdf_bytes:
+                st.download_button(
+                    "Download PDF",
+                    data=pdf_bytes,
+                    file_name=f"proposal_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                    mime="application/pdf",
+                    key="ic_dl_pdf"
+                )
 
 # Footer
 st.markdown("<div style='height: 2rem'></div>", unsafe_allow_html=True)
