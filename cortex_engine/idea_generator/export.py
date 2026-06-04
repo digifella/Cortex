@@ -62,7 +62,16 @@ class IdeaExporter:
             markdown_content = self._generate_markdown_report(phase_results)
             with open(md_file, 'w', encoding='utf-8') as f:
                 f.write(markdown_content)
-            
+
+            # Export as PDF (skipped silently if markdown/weasyprint unavailable)
+            from cortex_engine.pdf_export import markdown_to_pdf_bytes
+            pdf_bytes = markdown_to_pdf_bytes(markdown_content, title=filename_prefix)
+            if pdf_bytes:
+                pdf_file = output_path / f"{filename_prefix}_{timestamp}.pdf"
+                with open(pdf_file, 'wb') as f:
+                    f.write(pdf_bytes)
+                exported_files["pdf"] = str(pdf_file)
+
             # Export summary
             summary_file = output_path / f"{filename_prefix}_summary_{timestamp}.txt"
             exported_files["summary"] = str(summary_file)

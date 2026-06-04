@@ -71,3 +71,19 @@ def test_engine_generate_export_pdf_wraps_markdown(monkeypatch):
     assert captured == {"workspace_id": "ws-1", "include_citations": True, "flag_incomplete": False}
     assert isinstance(result, bytes)
     assert result[:5] == b"%PDF-"
+
+
+def test_idea_exporter_writes_pdf(tmp_path):
+    from cortex_engine.idea_generator.export import IdeaExporter
+
+    exporter = IdeaExporter()
+    phase_results = {"phase_1": {"summary": "An idea", "items": ["a", "b"]}}
+
+    exported = exporter.export_results(
+        phase_results, output_dir=str(tmp_path), filename_prefix="sess"
+    )
+
+    assert "pdf" in exported
+    pdf_path = tmp_path / exported["pdf"].split("/")[-1]
+    assert pdf_path.exists()
+    assert pdf_path.read_bytes()[:5] == b"%PDF-"
