@@ -2517,6 +2517,7 @@ def _extract_study_miner_documents(
         return []
 
     mode_map = {
+        "OpenDataLoader (fast tables, Docling fallback)": "opendataloader",
         "Hybrid (Recommended): Docling first, Qwen enhancement, fallback on timeout": "hybrid",
         "Docling only (best layout/tables)": "docling",
         "Qwen 30B cleanup (LLM-first, no Docling)": "qwen30b",
@@ -3708,13 +3709,14 @@ def _render_textifier_tab():
         pdf_mode_label = st.selectbox(
             "PDF processing mode",
             options=[
+                "OpenDataLoader (fast tables, Docling fallback)",
                 "Hybrid (Recommended): Docling first, Qwen enhancement, fallback on timeout",
                 "Docling only (best layout/tables)",
                 "Qwen 30B cleanup (LLM-first, no Docling)",
             ],
             index=0,
             key="txt_pdf_mode",
-            help="Hybrid runs Docling first, then enriches with vision/LLM, and falls back if timeout limits are hit.",
+            help="OpenDataLoader is fastest for digital PDFs and tables; Docling/PyMuPDF/Qwen remain fallbacks.",
         )
         cleanup_provider = st.selectbox(
             "Cleanup LLM provider",
@@ -3815,6 +3817,7 @@ def _render_textifier_tab():
                         status_text.info(f"File {file_idx + 1}/{total_files}: {_user_visible_filename(fpath)}")
 
                     mode_map = {
+                        "OpenDataLoader (fast tables, Docling fallback)": "opendataloader",
                         "Hybrid (Recommended): Docling first, Qwen enhancement, fallback on timeout": "hybrid",
                         "Docling only (best layout/tables)": "docling",
                         "Qwen 30B cleanup (LLM-first, no Docling)": "qwen30b",
@@ -5322,12 +5325,14 @@ def _render_study_miner_tab():
         pdf_mode_label = st.selectbox(
             "Extraction mode",
             options=[
+                "OpenDataLoader (fast tables, Docling fallback)",
                 "Hybrid (Recommended): Docling first, Qwen enhancement, fallback on timeout",
                 "Docling only (best layout/tables)",
                 "Qwen 30B cleanup (LLM-first, no Docling)",
             ],
             index=0,
             key="study_miner_pdf_mode",
+            help="OpenDataLoader is fastest for digital PDFs and tables; Docling/PyMuPDF/Qwen remain fallbacks.",
         )
         docling_timeout_seconds = st.number_input(
             "Docling timeout (seconds)",

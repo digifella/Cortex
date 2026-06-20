@@ -193,6 +193,42 @@ Docling model repair:
 - On missing Docling model artifacts, Cortex attempts a one-time cache repair automatically.
 - Disable auto-repair if needed: `export CORTEX_DOCLING_AUTO_REPAIR=0`
 
+**3c. Optional: Fast PDF Tables with OpenDataLoader**
+
+Cortex Textifier also supports `pdf_strategy="opendataloader"` for digital PDFs. This path uses
+OpenDataLoader PDF's local Java-backed parser first, then falls back to Docling and finally the
+existing PyMuPDF/Qwen vision path if OpenDataLoader is unavailable or produces weak output.
+
+Use this mode when table fidelity and throughput matter, especially for board packs, reports, and
+other born-digital PDFs. Keep Docling or Hybrid available for scanned PDFs, difficult OCR, and cases
+where OpenDataLoader output is incomplete.
+
+Requirements:
+- Java 11+ available on `PATH` (`java -version`)
+- Python package from `requirements.txt`: `opendataloader-pdf==2.4.7`
+
+Controls:
+- UI: `Document or Photo Processing -> Textifier -> PDF processing mode -> OpenDataLoader`
+- Study Miner: `Extraction mode -> OpenDataLoader`
+- Handoff/API jobs: `textify_options.pdf_strategy = "opendataloader"`
+- Python:
+```python
+from cortex_engine.textifier import DocumentTextifier
+
+textifier = DocumentTextifier.from_options({
+    "pdf_strategy": "opendataloader",
+    "use_vision": True,
+})
+markdown = textifier.textify_file("/path/to/report.pdf")
+```
+
+Notes:
+- Cortex intentionally uses OpenDataLoader local mode, not OpenDataLoader's hybrid server, because
+  the hybrid path brings a separate Docling/SmolVLM service stack and did not outperform local mode
+  on table-heavy Cortex samples.
+- Set `CORTEX_OPENDATALOADER_TABLE_METHOD=cluster` to opt into OpenDataLoader's cluster table mode
+  for experimental table recovery.
+
 **4. Set Up Environment Variables:**
 Create a `.env` file in the project root with your API keys.```# .env file
 # For the AI Research module, choose 'openai', 'ollama', or 'gemini'.

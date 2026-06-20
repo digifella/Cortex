@@ -42,6 +42,14 @@ def test_pdf_textify_normalizes_valid_options():
     assert opts["image_enrich_max_seconds"] == 45.0
 
 
+def test_pdf_textify_accepts_opendataloader_strategy():
+    payload = validate_pdf_textify_input(
+        {"textify_options": {"pdf_strategy": "opendataloader"}}
+    )
+
+    assert payload["textify_options"]["pdf_strategy"] == "opendataloader"
+
+
 def test_pdf_textify_rejects_invalid_strategy():
     with pytest.raises(ValueError, match="Invalid pdf_strategy"):
         validate_pdf_textify_input({"textify_options": {"pdf_strategy": "bad_mode"}})

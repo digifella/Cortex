@@ -40,7 +40,7 @@ SUPPORTED_ANONYMIZER_OPTIONS = [
     "preserve_source_formatting",
 ]
 
-SUPPORTED_TEXTIFY_STRATEGIES = {"docling", "qwen30b", "hybrid"}
+SUPPORTED_TEXTIFY_STRATEGIES = {"docling", "qwen30b", "hybrid", "opendataloader"}
 SUPPORTED_CLEANUP_PROVIDERS = {"ollama", "lmstudio"}
 SUPPORTED_INCLUDED_STUDY_PROVIDERS = {"anthropic", "gemini"}
 SUPPORTED_INCLUDED_STUDY_SCOPES = {"all_trials", "rct_or_clinical"}
