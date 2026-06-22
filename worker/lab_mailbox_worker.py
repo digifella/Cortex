@@ -9,6 +9,7 @@ import signal
 import sys
 import threading
 import time
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -90,6 +91,24 @@ class LabMailboxConfig:
 
 def strip_html(value: str) -> str:
     text = re.sub(r"(?is)<(script|style).*?>.*?</(script|style)>", " ", str(value or ""))
+    # Preserve link targets before tags are stripped. A YouTube "share to email"
+    # (or any rich link / preview card) shows the title as the anchor text and
+    # keeps the real URL only in href; stripping tags would otherwise drop it and
+    # the email would be rejected as having no URLs (or misread as a plain URL).
+    seen: set[str] = set()
+
+    def _anchor(m: "re.Match[str]") -> str:
+        href, inner = m.group(1), m.group(2)
+        # Unwrap Gmail/Google redirect wrappers (google.com/url?q=<real-url>).
+        rm = re.match(r"(?i)https?://(?:www\.)?google\.[^/]+/url\?(?:[^&]*&)*q=([^&]+)", href)
+        if rm:
+            href = urllib.parse.unquote(rm.group(1))
+        if href in seen or href in inner:
+            return f" {inner} "
+        seen.add(href)
+        return f" {inner}\n{href}\n"
+
+    text = re.sub(r'(?is)<a\b[^>]*?href="([^"]+)"[^>]*>(.*?)</a>', _anchor, text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</p\s*>", "\n", text)
     text = re.sub(r"(?i)</div\s*>", "\n", text)
