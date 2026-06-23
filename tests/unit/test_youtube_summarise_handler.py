@@ -43,7 +43,7 @@ def test_fetch_youtube_metadata_uses_oembed(monkeypatch):
         })
 
     monkeypatch.setattr(yt.urllib.request, "urlopen", fake_urlopen)
-    meta = yt._fetch_youtube_metadata("https://youtu.be/example")
+    meta = yt._fetch_youtube_metadata("https://youtu.be/qpEZoK2JmOg")
 
     assert meta["video_title"] == "ACCC Chair on Competition Reform"
     assert meta["author"] == "ACCC"
@@ -151,7 +151,7 @@ def test_timeout_retries_lowres_when_duration_lookup_misses(monkeypatch):
 def test_build_report_includes_report_title_and_clip_metadata():
     report = yt._build_report(
         results=[{
-            "url": "https://youtu.be/example",
+            "url": "https://youtu.be/qpEZoK2JmOg",
             "report_title": "Competition Reform Priorities",
             "video_title": "Chair Discusses Competition Reform",
             "author": "ACCC",
@@ -181,6 +181,137 @@ def test_remove_sponsor_paragraphs_drops_sponsor_copy():
     assert "implementation risks" in cleaned
 
 
+def test_chunk_transcript_entries_splits_requested_windows():
+    chunks = yt._chunk_transcript_entries(
+        [
+            {"start": 0, "duration": 15, "text": "Intro"},
+            {"start": 1800, "duration": 20, "text": "Middle"},
+            {"start": 3700, "duration": 20, "text": "Second hour"},
+        ],
+        chunk_duration_seconds=3600,
+        start_time_seconds=0,
+        end_time_seconds=7200,
+    )
+
+    assert len(chunks) == 2
+    assert chunks[0]["start_seconds"] == 0
+    assert chunks[0]["end_seconds"] == 3600
+    assert [item["text"] for item in chunks[0]["entries"]] == ["Intro", "Middle"]
+    assert chunks[1]["start_seconds"] == 3600
+    assert chunks[1]["end_seconds"] == 7200
+    assert [item["text"] for item in chunks[1]["entries"]] == ["Second hour"]
+
+
+def test_handle_chunked_transcript_mode_returns_chunk_metadata(monkeypatch):
+    monkeypatch.setattr(yt, "_fetch_youtube_metadata", lambda url: {
+        "video_title": "Long Interview",
+        "author": "Channel",
+        "author_url": "https://www.youtube.com/@channel",
+        "provider": "YouTube",
+    })
+    monkeypatch.setattr(yt, "_fetch_youtube_extra_context", lambda url: {})
+    monkeypatch.setattr(yt, "_extract_transcript_entries", lambda url: [
+        {"start": 0, "duration": 30, "text": "Opening remarks"},
+        {"start": 3500, "duration": 30, "text": "Closing first hour"},
+        {"start": 3700, "duration": 30, "text": "Second hour starts"},
+    ])
+    monkeypatch.setattr(yt, "_summarise_gemini_transcript", lambda transcript, context_label, model_name, output_modes, language="": {
+        "summary": f"Summary for {context_label}",
+        "timestamps": "Chunk timestamps",
+    })
+    monkeypatch.setattr(yt, "_generate_report_title", lambda url, api_choice, metadata, sections, index, language="": "Long Interview Summary")
+
+    result = yt.handle(
+        None,
+        {
+            "urls": ["https://youtu.be/qpEZoK2JmOg"],
+            "api_choice": "gemini-flash",
+            "output_modes": ["summary", "timestamps"],
+            "youtube_options": {
+                "chunk_duration_seconds": 3600,
+                "start_time_seconds": 0,
+                "end_time_seconds": 7200,
+            },
+        },
+        {"id": 321},
+    )
+
+    output_data = result["output_data"]
+    assert output_data["chunked"] is True
+    assert output_data["chunk_count"] == 2
+    assert output_data["videos"][0]["chunk_count"] == 2
+    rendered = result["output_file"].read_text(encoding="utf-8")
+    assert "### Chunk 1 (00:00 - 01:00:00)" in rendered
+    assert "### Chunk 2 (01:00:00 - 02:00:00)" in rendered
+    assert "Processed as:** 2 time chunk(s)" in rendered
+
+
+def test_is_youtube_url_rejects_non_youtube_and_truncated():
+    assert yt._is_youtube_url("https://youtu.be/qpEZoK2JmOg") is True
+    assert yt._is_youtube_url("https://www.youtube.com/watch?v=qpEZoK2JmOg") is True
+    # the reported failures: a website URL and a truncated 10-char id
+    assert yt._is_youtube_url("http://www.longboardfella.com.au") is False
+    assert yt._is_youtube_url("https://www.youtube.com/watch?v=ije_fF8SWc") is False  # 10 chars
+
+
+def test_non_youtube_url_skipped_not_sent_to_gemini(monkeypatch):
+    monkeypatch.setattr(yt, "_fetch_youtube_metadata", lambda url: {"video_title": "", "author": "", "author_url": "", "provider": "YouTube"})
+    monkeypatch.setattr(yt, "_fetch_youtube_extra_context", lambda url: {})
+
+    def _must_not_call(*a, **k):
+        raise AssertionError("non-YouTube URL must never reach Gemini")
+    monkeypatch.setattr(yt, "_summarise_gemini", _must_not_call)
+    monkeypatch.setattr(yt, "_generate_report_title", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no title gen for skipped URL")))
+
+    result = yt.handle(None, {"urls": ["http://www.longboardfella.com.au"], "api_choice": "gemini-flash"}, {"id": 2087})
+    od = result["output_data"]
+    assert od["error_count"] == 1
+    assert od["videos_processed"] == 0
+    assert "youtube" in od["errors"][0]["error"].lower()
+
+
+def test_mixed_batch_skips_invalid_processes_valid(monkeypatch):
+    monkeypatch.setattr(yt, "_fetch_youtube_metadata", lambda url: {"video_title": "V", "author": "A", "author_url": "", "provider": "YouTube"})
+    monkeypatch.setattr(yt, "_fetch_youtube_extra_context", lambda url: {})
+    seen = []
+    def fake_summary(url, model_name, output_modes, language=""):
+        seen.append(url)
+        return {"summary": "Real summary."}
+    monkeypatch.setattr(yt, "_summarise_gemini", fake_summary)
+    monkeypatch.setattr(yt, "_generate_report_title", lambda *a, **k: "Title")
+
+    result = yt.handle(None, {"urls": ["http://www.longboardfella.com.au", "https://youtu.be/qpEZoK2JmOg"], "api_choice": "gemini-flash"}, {"id": 1})
+    od = result["output_data"]
+    assert od["videos_processed"] == 1
+    assert od["error_count"] == 1
+    assert seen == ["https://youtu.be/qpEZoK2JmOg"]  # only the valid URL hit Gemini
+
+
+def test_no_vault_note_when_all_content_failed(monkeypatch):
+    monkeypatch.setattr(yt, "_fetch_youtube_metadata", lambda url: {"video_title": "", "author": "", "author_url": "", "provider": "YouTube"})
+    monkeypatch.setattr(yt, "_fetch_youtube_extra_context", lambda url: {})
+    monkeypatch.setattr(yt, "_summarise_gemini", lambda *a, **k: {"summary": "[Error generating summary: 400 Request contains an invalid argument.]"})
+    monkeypatch.setattr(yt, "_generate_report_title", lambda *a, **k: "Should Not Publish")
+    wrote = []
+    monkeypatch.setattr(yt, "_write_vault_lab_note", lambda content, title, job: wrote.append(title))
+
+    # a valid URL but the summary errored -> no successful content -> no vault note
+    yt.handle(None, {"urls": ["https://youtu.be/qpEZoK2JmOg"], "api_choice": "gemini-flash", "source_system": "email"}, {"id": 9})
+    assert wrote == []
+
+
+def test_vault_note_written_on_success(monkeypatch):
+    monkeypatch.setattr(yt, "_fetch_youtube_metadata", lambda url: {"video_title": "", "author": "", "author_url": "", "provider": "YouTube"})
+    monkeypatch.setattr(yt, "_fetch_youtube_extra_context", lambda url: {})
+    monkeypatch.setattr(yt, "_summarise_gemini", lambda *a, **k: {"summary": "A real summary."})
+    monkeypatch.setattr(yt, "_generate_report_title", lambda *a, **k: "Good Title")
+    wrote = []
+    monkeypatch.setattr(yt, "_write_vault_lab_note", lambda content, title, job: wrote.append(title))
+
+    yt.handle(None, {"urls": ["https://youtu.be/qpEZoK2JmOg"], "api_choice": "gemini-flash", "source_system": "email"}, {"id": 10})
+    assert wrote == ["Good Title"]
+
+
 def test_handle_returns_rich_output_data(monkeypatch):
     monkeypatch.setattr(yt, "_fetch_youtube_metadata", lambda url: {
         "video_title": "Silverchain CEO on Community Care",
@@ -200,7 +331,7 @@ def test_handle_returns_rich_output_data(monkeypatch):
     result = yt.handle(
         None,
         {
-            "urls": ["https://youtu.be/example"],
+            "urls": ["https://youtu.be/qpEZoK2JmOg"],
             "api_choice": "gemini-flash",
             "output_modes": ["summary", "timestamps"],
         },

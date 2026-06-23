@@ -22,6 +22,11 @@ input_data schema:
     kb_category   str         KB category for push_to_kb (optional)
     source_system str         Origin system (lab / admin)
     language      str         Output language (optional, e.g. "Danish", "French"). Defaults to English.
+    youtube_options dict      Optional time slicing:
+                              - start_time_seconds
+                              - end_time_seconds
+                              - chunk_duration_seconds
+                              - chunk_overlap_seconds
 """
 
 import json
@@ -35,6 +40,8 @@ import urllib.request
 from html import unescape
 from datetime import date
 from pathlib import Path
+
+from cortex_engine.handoff_contract import validate_youtube_summarise_input
 
 logger = logging.getLogger(__name__)
 VAULT_LAB_NOTES_DIR = Path(os.environ.get("NEMOCLAW_LAB_NOTES_DIR", "/mnt/c/Users/paul/Documents/AI-Vault/lab-notes"))
@@ -101,6 +108,7 @@ MODEL_DETAILS = {
 
 LONG_VIDEO_LOWRES_SECONDS = int(os.environ.get("YOUTUBE_LOWRES_THRESHOLD_SECONDS", str(25 * 60)))
 GEMINI_LOWRES_VALUE = "MEDIA_RESOLUTION_LOW"
+TRANSCRIPT_CHAR_LIMIT = 90_000
 
 
 def _is_gemini_timeout_error(exc: Exception) -> bool:
@@ -157,6 +165,13 @@ def _youtube_video_id(url: str) -> str:
         if parsed.path.startswith("/embed/"):
             return parsed.path.split("/embed/", 1)[1].split("/", 1)[0]
     return ""
+
+
+def _is_youtube_url(url: str) -> bool:
+    """True only for real YouTube video URLs. A valid YouTube video id is exactly
+    11 characters; this rejects non-YouTube URLs (id "") and truncated/malformed
+    ids (e.g. 10 chars) before they are ever sent to Gemini as a video file_uri."""
+    return len(_youtube_video_id(url)) == 11
 
 
 def _parse_iso8601_duration(value: str) -> int | None:
@@ -384,6 +399,20 @@ def _canonical_youtube_url(url: str) -> str:
     if not video_id:
         return str(url or "").strip()
     return f"https://www.youtube.com/watch?v={video_id}"
+
+
+def _format_seconds_label(total_seconds: int) -> str:
+    total_seconds = max(0, int(total_seconds))
+    mm, ss = divmod(total_seconds, 60)
+    hh, mm = divmod(mm, 60)
+    return f"{hh:02d}:{mm:02d}:{ss:02d}" if hh else f"{mm:02d}:{ss:02d}"
+
+
+def _transcript_text_excerpt(value: str, limit: int = TRANSCRIPT_CHAR_LIMIT) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n\n[Transcript truncated due to length]"
 
 
 def _title_context(url: str, metadata: dict, sections: dict) -> str:
@@ -649,10 +678,38 @@ def _summarise_gemini(url: str, model_name: str, output_modes: list[str], langua
     return sections
 
 
+def _summarise_gemini_transcript(transcript: str, context_label: str, model_name: str, output_modes: list[str], language: str = "") -> dict:
+    genai = _gemini_client()
+    model_id = "gemini-2.5-pro" if model_name == "gemini-pro" else "gemini-2.5-flash"
+    model = genai.GenerativeModel(model_id)
+    transcript_excerpt = _transcript_text_excerpt(transcript)
+    lang_instruction = f"\n\nIMPORTANT: Write your entire response in {language}." if language else ""
+
+    sections = {}
+    for mode in output_modes:
+        prompt = MODE_PROMPTS.get(mode, f"Provide {mode} for this video.")
+        response = model.generate_content(
+            (
+                f"Here is the transcript of a YouTube video segment ({context_label}):\n\n"
+                f"---\n{transcript_excerpt}\n---\n\n"
+                f"Task: {prompt}{lang_instruction}"
+            ),
+            request_options={"timeout": 90},
+        )
+        sections[mode] = (response.text or "").strip()
+    return sections
+
+
 # ── Transcript extraction (for Claude path) ──
 
 def _extract_transcript(url: str) -> str:
     """Extract transcript text using youtube-transcript-api."""
+    entries = _extract_transcript_entries(url)
+    return _format_transcript_entries(entries)
+
+
+def _extract_transcript_entries(url: str) -> list[dict]:
+    """Extract transcript entries with timing using youtube-transcript-api."""
     from youtube_transcript_api import YouTubeTranscriptApi
     from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
 
@@ -675,16 +732,95 @@ def _extract_transcript(url: str) -> str:
         except Exception:
             raise RuntimeError(f"No transcript available for video {video_id}: {e}")
 
-    # Format with timestamps
-    lines = []
+    entries = []
     for entry in transcript_list:
-        secs = int(entry["start"])
-        mm, ss = divmod(secs, 60)
-        hh, mm = divmod(mm, 60)
-        ts = f"{hh:02d}:{mm:02d}:{ss:02d}" if hh else f"{mm:02d}:{ss:02d}"
-        lines.append(f"[{ts}] {entry['text']}")
+        entries.append(
+            {
+                "start": float(entry.get("start") or 0.0),
+                "duration": float(entry.get("duration") or 0.0),
+                "text": str(entry.get("text") or "").strip(),
+            }
+        )
+    return entries
 
+
+def _format_transcript_entries(entries: list[dict]) -> str:
+    lines = []
+    for entry in entries:
+        text = str(entry.get("text") or "").strip()
+        if not text:
+            continue
+        lines.append(f"[{_format_seconds_label(int(entry.get('start') or 0))}] {text}")
     return "\n".join(lines)
+
+
+def _slice_transcript_entries(
+    entries: list[dict],
+    start_time_seconds: int = 0,
+    end_time_seconds: int = 0,
+) -> list[dict]:
+    if not entries:
+        return []
+
+    start_bound = max(0.0, float(start_time_seconds or 0))
+    end_bound = float(end_time_seconds or 0)
+    sliced = []
+    for entry in entries:
+        entry_start = float(entry.get("start") or 0.0)
+        entry_duration = max(0.0, float(entry.get("duration") or 0.0))
+        entry_end = entry_start + entry_duration
+        if entry_end <= start_bound:
+            continue
+        if end_bound and entry_start >= end_bound:
+            continue
+        sliced.append(entry)
+    return sliced
+
+
+def _chunk_transcript_entries(
+    entries: list[dict],
+    chunk_duration_seconds: int,
+    chunk_overlap_seconds: int = 0,
+    start_time_seconds: int = 0,
+    end_time_seconds: int = 0,
+) -> list[dict]:
+    scoped_entries = _slice_transcript_entries(entries, start_time_seconds, end_time_seconds)
+    if not scoped_entries:
+        return []
+
+    if chunk_duration_seconds <= 0:
+        actual_start = max(0, int(start_time_seconds or scoped_entries[0].get("start") or 0))
+        actual_end = int(end_time_seconds or (scoped_entries[-1].get("start") or 0) + (scoped_entries[-1].get("duration") or 0))
+        return [{
+            "index": 1,
+            "start_seconds": actual_start,
+            "end_seconds": max(actual_start, actual_end),
+            "entries": scoped_entries,
+        }]
+
+    chunks = []
+    window_start = max(0, int(start_time_seconds or scoped_entries[0].get("start") or 0))
+    natural_end = int((scoped_entries[-1].get("start") or 0) + (scoped_entries[-1].get("duration") or 0))
+    final_end = int(end_time_seconds or natural_end)
+    step = max(1, chunk_duration_seconds - max(0, chunk_overlap_seconds))
+    index = 1
+
+    while window_start < final_end:
+        window_end = min(final_end, window_start + chunk_duration_seconds)
+        chunk_entries = _slice_transcript_entries(scoped_entries, window_start, window_end)
+        if chunk_entries:
+            chunks.append(
+                {
+                    "index": index,
+                    "start_seconds": window_start,
+                    "end_seconds": window_end,
+                    "entries": chunk_entries,
+                }
+            )
+            index += 1
+        window_start += step
+
+    return chunks
 
 
 # ── Claude path ──
@@ -699,9 +835,7 @@ def _summarise_claude(transcript: str, url: str, model_name: str, output_modes: 
     )
 
     # Truncate long transcripts (100k chars ≈ ~75k tokens, well within context)
-    transcript_excerpt = transcript[:90_000]
-    if len(transcript) > 90_000:
-        transcript_excerpt += "\n\n[Transcript truncated due to length]"
+    transcript_excerpt = _transcript_text_excerpt(transcript)
 
     lang_instruction = f"\n\nIMPORTANT: Write your entire response in {language}." if language else ""
 
@@ -725,6 +859,47 @@ def _summarise_claude(transcript: str, url: str, model_name: str, output_modes: 
             sections[mode] = f"[Error generating {mode}: {e}]"
 
     return sections
+
+
+def _summarise_transcript_chunks(
+    transcript_entries: list[dict],
+    url: str,
+    api_choice: str,
+    output_modes: list[str],
+    language: str,
+    youtube_options: dict,
+) -> list[dict]:
+    chunks = _chunk_transcript_entries(
+        transcript_entries,
+        youtube_options.get("chunk_duration_seconds", 0),
+        youtube_options.get("chunk_overlap_seconds", 0),
+        youtube_options.get("start_time_seconds", 0),
+        youtube_options.get("end_time_seconds", 0),
+    )
+    if not chunks:
+        return []
+
+    chunk_results = []
+    for chunk in chunks:
+        transcript_text = _format_transcript_entries(chunk["entries"])
+        context_label = (
+            f"{url} from {_format_seconds_label(chunk['start_seconds'])} "
+            f"to {_format_seconds_label(chunk['end_seconds'])}"
+        )
+        if api_choice.startswith("gemini"):
+            sections = _summarise_gemini_transcript(transcript_text, context_label, api_choice, output_modes, language)
+        else:
+            sections = _summarise_claude(transcript_text, context_label, api_choice, output_modes, language)
+        chunk_results.append(
+            {
+                "index": chunk["index"],
+                "start_seconds": chunk["start_seconds"],
+                "end_seconds": chunk["end_seconds"],
+                "sections": _sanitize_sections(sections),
+                "transcript_entry_count": len(chunk["entries"]),
+            }
+        )
+    return chunk_results
 
 
 # ── Report builder ──
@@ -773,21 +948,41 @@ def _build_report(results: list[dict], output_modes: list[str], api_choice: str,
         report_title = result.get("report_title") or result.get("video_title") or f"Video {i}"
         video_title = result.get("video_title", "")
         author = result.get("author", "")
+        chunk_results = result.get("chunk_results") or []
         lines.append(f"## {report_title}")
         if video_title:
             lines.append(f"**Clip title:** {video_title}")
         if author:
             lines.append(f"**Author / channel:** {author}")
         lines.append(f"**URL:** {url}")
+        if chunk_results:
+            lines.append(f"**Processed as:** {len(chunk_results)} time chunk(s)")
         lines.append("")
 
-        sections = result.get("sections", {})
-        for mode in output_modes:
-            label = MODE_LABELS.get(mode, mode)
-            content = sections.get(mode, "[Not generated]")
-            lines.append(f"### {label}")
-            lines.append(content)
-            lines.append("")
+        if chunk_results:
+            for chunk in chunk_results:
+                lines.append(
+                    "### Chunk "
+                    f"{chunk.get('index', '?')} "
+                    f"({_format_seconds_label(chunk.get('start_seconds', 0))}"
+                    f" - {_format_seconds_label(chunk.get('end_seconds', 0))})"
+                )
+                lines.append("")
+                sections = chunk.get("sections", {})
+                for mode in output_modes:
+                    label = MODE_LABELS.get(mode, mode)
+                    content = sections.get(mode, "[Not generated]")
+                    lines.append(f"#### {label}")
+                    lines.append(content)
+                    lines.append("")
+        else:
+            sections = result.get("sections", {})
+            for mode in output_modes:
+                label = MODE_LABELS.get(mode, mode)
+                content = sections.get(mode, "[Not generated]")
+                lines.append(f"### {label}")
+                lines.append(content)
+                lines.append("")
 
         extra_context = result.get("extra_context") or {}
         description = (extra_context.get("description") or "").strip()
@@ -873,6 +1068,23 @@ def _safe_filename(value: str) -> str:
     return value[:VAULT_NOTE_FILENAME_MAX].strip(".-") or "youtube-summary"
 
 
+def _has_successful_content(results: list[dict]) -> bool:
+    """True if any result produced a real (non-error) section. Used to gate KB /
+    vault publishing so failed or skipped jobs never pollute the knowledge base."""
+    def _ok(sections: dict) -> bool:
+        return any(
+            v and not str(v).strip().startswith("[Error")
+            for v in (sections or {}).values()
+        )
+    for r in results:
+        if _ok(r.get("sections")):
+            return True
+        for chunk in (r.get("chunk_results") or []):
+            if _ok(chunk.get("sections")):
+                return True
+    return False
+
+
 def _write_vault_lab_note(content: str, title: str, job: dict) -> None:
     """Persist email-origin YouTube summaries where the wiki ingest can see them."""
     try:
@@ -897,35 +1109,61 @@ def handle(input_path, input_data: dict, job: dict):
     Returns:
         {"output_data": dict, "output_file": Path | None}
     """
-    urls         = input_data.get("urls", [])
-    api_choice   = input_data.get("api_choice", "gemini-flash")
+    input_data = validate_youtube_summarise_input(input_data)
+    urls = input_data.get("urls", [])
+    api_choice = input_data.get("api_choice", "gemini-flash")
     output_modes = input_data.get("output_modes", ["summary"])
-    push_to_kb   = input_data.get("push_to_kb", False)
-    kb_category  = input_data.get("kb_category", "")
-    language     = input_data.get("language", "")
+    push_to_kb = input_data.get("push_to_kb", False)
+    kb_category = input_data.get("kb_category", "")
+    language = input_data.get("language", "")
+    youtube_options = input_data.get("youtube_options", {})
 
     if not urls:
         raise ValueError("No YouTube URLs provided in input_data")
 
     use_gemini = api_choice.startswith("gemini")
+    use_chunked_transcript = any(
+        youtube_options.get(key, 0) > 0
+        for key in ("start_time_seconds", "end_time_seconds", "chunk_duration_seconds")
+    )
     results = []
     errors  = []
 
     for url in urls:
+        if not _is_youtube_url(url):
+            logger.warning("Skipping non-YouTube URL (not sent to Gemini): %s", url)
+            errors.append({"url": url, "error": "Not a valid YouTube URL — skipped"})
+            continue
         logger.info(f"Processing: {url} via {api_choice}")
         metadata = _fetch_youtube_metadata(url)
         extra_context = _fetch_youtube_extra_context(url)
         try:
-            if use_gemini:
+            chunk_results = []
+            if use_chunked_transcript:
+                transcript_entries = _extract_transcript_entries(url)
+                chunk_results = _summarise_transcript_chunks(
+                    transcript_entries,
+                    url,
+                    api_choice,
+                    output_modes,
+                    language,
+                    youtube_options,
+                )
+                if not chunk_results:
+                    raise RuntimeError("No transcript content found in the requested time range")
+                sections = {}
+            elif use_gemini:
                 sections = _summarise_gemini(url, api_choice, output_modes, language)
             else:
                 transcript = _extract_transcript(url)
-                sections   = _summarise_claude(transcript, url, api_choice, output_modes, language)
+                sections = _summarise_claude(transcript, url, api_choice, output_modes, language)
             sections = _sanitize_sections(sections)
-            report_title = _generate_report_title(url, api_choice, metadata, sections, len(results) + 1, language)
+            title_sections = chunk_results[0]["sections"] if chunk_results else sections
+            report_title = _generate_report_title(url, api_choice, metadata, title_sections, len(results) + 1, language)
             results.append({
                 "url": url,
                 "sections": sections,
+                "chunk_results": chunk_results,
                 "video_title": metadata.get("video_title", ""),
                 "author": metadata.get("author", ""),
                 "author_url": metadata.get("author_url", ""),
@@ -938,6 +1176,7 @@ def handle(input_path, input_data: dict, job: dict):
             results.append({
                 "url": url,
                 "sections": {m: f"[Error: {e}]" for m in output_modes},
+                "chunk_results": [],
                 "video_title": metadata.get("video_title", ""),
                 "author": metadata.get("author", ""),
                 "author_url": metadata.get("author_url", ""),
@@ -966,6 +1205,9 @@ def handle(input_path, input_data: dict, job: dict):
         "model": model_info["label"],
         "modes": output_modes,
         "language": language or "English",
+        "chunked": use_chunked_transcript,
+        "chunk_options": youtube_options,
+        "chunk_count": sum(len(item.get("chunk_results") or []) for item in results),
         "report_title": results[0].get("report_title", "YouTube Summary Report") if len(results) == 1 else f"YouTube Summary Report - {len(results)} Videos",
         "videos": [
             {
@@ -973,6 +1215,7 @@ def handle(input_path, input_data: dict, job: dict):
                 "clip_title": item.get("video_title", ""),
                 "author": item.get("author", ""),
                 "report_title": item.get("report_title", ""),
+                "chunk_count": len(item.get("chunk_results") or []),
                 "description_available": bool((item.get("extra_context") or {}).get("description")),
                 "top_comment_count": len((item.get("extra_context") or {}).get("comments") or []),
             }
@@ -981,9 +1224,13 @@ def handle(input_path, input_data: dict, job: dict):
         "errors": errors,
     }
 
-    if push_to_kb:
+    publishable = _has_successful_content(results)
+    if not publishable:
+        logger.warning("No successful content for job %s — skipping KB/vault publish (errors=%s)",
+                       job.get("id", "job"), len(errors))
+    if push_to_kb and publishable:
         _push_to_kb(report_md, kb_category, job)
-    if str(input_data.get("source_system", "")).lower() == "email":
+    if publishable and str(input_data.get("source_system", "")).lower() == "email":
         _write_vault_lab_note(report_md, output_data["report_title"], job)
 
     return {"output_data": output_data, "output_file": output_path}
