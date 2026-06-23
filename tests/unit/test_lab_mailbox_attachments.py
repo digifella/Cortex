@@ -163,3 +163,13 @@ def test_config_from_env_reads_fetch_attachments():
     env["LAB_FETCH_ATTACHMENTS"] = "0"
     cfg2 = _Cfg.from_env(env)
     assert cfg2.fetch_attachments is False
+
+
+def test_strip_html_normalises_nbsp_so_shared_url_is_standalone():
+    """Gmail appends &nbsp; after a shared link; left as U+00A0 it survives PHP
+    trim() and breaks the intake's ^https?://\\S+$ URL match ("no URLs found")."""
+    from worker.lab_mailbox_worker import strip_html
+    html = '<div><a href="https://youtu.be/l9F1LAGmv7Q?si=x">https://youtu.be/l9F1LAGmv7Q?si=x</a>&nbsp;</div><div>See: <a href="http://www.longboardfella.com.au">www.longboardfella.com.au</a></div>'
+    lines = strip_html(html).split("\n")
+    assert "https://youtu.be/l9F1LAGmv7Q?si=x" in lines  # clean, standalone line
+    assert "\xa0" not in strip_html(html)

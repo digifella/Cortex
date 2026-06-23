@@ -114,6 +114,10 @@ def strip_html(value: str) -> str:
     text = re.sub(r"(?i)</div\s*>", "\n", text)
     text = re.sub(r"<[^>]+>", " ", text)
     text = html.unescape(text)
+    # Normalise non-breaking spaces (Gmail appends &nbsp; -> U+00A0 after links).
+    # Left in place they survive PHP trim() and break the intake's ^https?://\S+$
+    # URL match, so a shared YouTube link is rejected as "no URLs found".
+    text = text.replace("\xa0", " ")
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
