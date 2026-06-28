@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 project_root = Path(__file__).resolve().parent.parent
@@ -196,3 +197,110 @@ def sync_photos(
           f"{kw} keywords, {desc} descriptions, {loc} location fields written")
     return {"actions": len(actions), "orphaned": len(orphaned), "applied": True,
             "succeeded": ok, "failed": fail}
+
+
+def read_existing_description(path: Path) -> str:
+    """Read the current caption from a photo, first non-empty of the three
+    standard fields. Returns "" if exiftool is unavailable or none is set."""
+    import shutil
+    import subprocess
+
+    exiftool = shutil.which("exiftool")
+    if not exiftool:
+        return ""
+    try:
+        result = subprocess.run(
+            [exiftool, "-json",
+             "-XMP-dc:Description", "-IPTC:Caption-Abstract", "-EXIF:ImageDescription",
+             str(path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return ""
+        rows = json.loads(result.stdout)
+        if not rows:
+            return ""
+        row = rows[0]
+        for field in ("Description", "Caption-Abstract", "ImageDescription"):
+            val = (row.get(field) or "").strip()
+            if val:
+                return val
+        return ""
+    except Exception:
+        return ""
+
+
+def tag_one(path: Path, ownership_notice: str) -> dict:
+    """Run the full vision tag on a single photo, in place.
+
+    generate_description=True overwrites the (bad/missing) caption; location is
+    fill-missing-only (clear_location stays False); keywords merge (+=).
+    """
+    from cortex_engine.textifier import DocumentTextifier
+
+    return DocumentTextifier(use_vision=True).keyword_image(
+        str(path),
+        generate_description=True,
+        populate_location=True,
+        clear_location=False,
+        clear_keywords=False,
+        anonymize_keywords=False,
+        ownership_notice=ownership_notice,
+    )
+
+
+def tag_photos(
+    to_tag_dir,
+    *,
+    min_desc_len: int = DEFAULT_MIN_DESC_LEN,
+    redescribe_all: bool = False,
+    ownership_notice: str = DEFAULT_OWNERSHIP,
+    cooldown: float = 0.0,
+) -> dict:
+    """Tag every top-level JPG that needs it, with a resumable checkpoint."""
+    to_tag_dir = Path(to_tag_dir)
+    photos = sorted(list(to_tag_dir.glob("*.jpg")) + list(to_tag_dir.glob("*.JPG")))
+    checkpoint = load_checkpoint(to_tag_dir)
+    total = len(photos)
+    tagged = skipped = failed = 0
+
+    for i, path in enumerate(photos, start=1):
+        if is_done(path, checkpoint):
+            skipped += 1
+            print(f"[{i}/{total}] SKIP {path.name} (checkpoint)")
+            continue
+
+        existing = read_existing_description(path)
+        if not redescribe_all and not description_is_bad(existing, min_desc_len):
+            checkpoint[file_key(path)] = {
+                "status": "skipped-good",
+                "description": existing[:120],
+            }
+            save_checkpoint(to_tag_dir, checkpoint)
+            skipped += 1
+            print(f"[{i}/{total}] SKIP {path.name} (good description)")
+            continue
+
+        try:
+            result = tag_one(path, ownership_notice)
+            description = (result.get("description") or "")
+            # file_key recomputed AFTER the in-place write so the checkpoint key
+            # matches the file's new size/mtime (enables fast-skip next run).
+            checkpoint[file_key(path)] = {
+                "status": "tagged",
+                "description": description[:120],
+                "keywords": len(result.get("new_keywords") or []),
+            }
+            tagged += 1
+            print(f"[{i}/{total}] TAGGED {path.name}: {description[:120]}")
+        except Exception as exc:
+            checkpoint[file_key(path)] = {"status": "failed", "error": str(exc)}
+            failed += 1
+            print(f"[{i}/{total}] FAIL {path.name}: {exc}")
+
+        save_checkpoint(to_tag_dir, checkpoint)
+        if cooldown > 0 and i < total:
+            time.sleep(cooldown)
+
+    print(f"Tag complete: {tagged} tagged, {skipped} skipped, {failed} failed (of {total})")
+    return {"tagged": tagged, "skipped": skipped, "failed": failed, "total": total}
