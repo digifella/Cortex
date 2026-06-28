@@ -10,6 +10,8 @@ See docs/superpowers/specs/2026-06-28-photo-batch-harness-design.md
 """
 from __future__ import annotations
 
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -56,3 +58,38 @@ def description_is_bad(text, min_len: int = DEFAULT_MIN_DESC_LEN) -> bool:
     if len(s) < min_len:
         return True
     return False
+
+
+def file_key(path: Path) -> str:
+    """Identity key for resume: name + size + integer mtime."""
+    st = path.stat()
+    return f"{path.name}:{st.st_size}:{int(st.st_mtime)}"
+
+
+def checkpoint_path(to_tag_dir: Path) -> Path:
+    return Path(to_tag_dir) / CHECKPOINT_NAME
+
+
+def load_checkpoint(to_tag_dir: Path) -> dict:
+    p = checkpoint_path(to_tag_dir)
+    if not p.exists():
+        return {}
+    try:
+        with open(p) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_checkpoint(to_tag_dir: Path, data: dict) -> None:
+    p = checkpoint_path(to_tag_dir)
+    tmp = p.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, p)
+
+
+def is_done(path: Path, checkpoint: dict) -> bool:
+    entry = checkpoint.get(file_key(path))
+    return bool(entry) and entry.get("status") in ("tagged", "skipped-good")
