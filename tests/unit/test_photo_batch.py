@@ -75,3 +75,74 @@ def test_skipped_good_counts_as_done(tmp_path):
     a.write_bytes(b"a")
     cp = {pb.file_key(a): {"status": "skipped-good"}}
     assert pb.is_done(a, cp) is True
+
+
+def test_build_sync_config_dry_run_defaults():
+    cfg = pb.build_sync_config("/raw", "/jpg", dry_run=True)
+    assert cfg.dry_run is True
+    assert cfg.keep_backups is True
+    assert cfg.filter_keywords == ["nogps"]
+    assert cfg.timestamp_tolerance_seconds == 0
+    assert str(cfg.raw_root) == "/raw"
+    assert str(cfg.jpg_dir) == "/jpg"
+
+
+def test_build_sync_config_flags_passthrough():
+    cfg = pb.build_sync_config(
+        "/raw", "/jpg",
+        dry_run=False, keep_backups=False,
+        filter_keywords=["x", "y"], timestamp_tolerance=4,
+    )
+    assert cfg.dry_run is False
+    assert cfg.keep_backups is False
+    assert cfg.filter_keywords == ["x", "y"]
+    assert cfg.timestamp_tolerance_seconds == 4
+
+
+def test_scan_actions_matches_raw_by_stem(tmp_path):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    jpgdir = tmp_path / "jpg"
+    jpgdir.mkdir()
+    (raw / "2020-01-01 10-00-00-X-T1.NEF").write_bytes(b"raw")
+    (jpgdir / "2020-01-01 10-00-00-X-T1.jpg").write_bytes(b"jpg")
+
+    cfg = pb.build_sync_config(raw, jpgdir, dry_run=True)
+    actions, orphaned = pb.scan_actions(cfg)
+
+    assert len(actions) == 1
+    assert actions[0].target_path.name == "2020-01-01 10-00-00-X-T1.xmp"
+    assert orphaned == []
+    # scanning is read-only — no sidecar is created
+    assert not (raw / "2020-01-01 10-00-00-X-T1.xmp").exists()
+
+
+def test_scan_actions_reports_orphan(tmp_path):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    jpgdir = tmp_path / "jpg"
+    jpgdir.mkdir()
+    (jpgdir / "loner.jpg").write_bytes(b"jpg")
+
+    cfg = pb.build_sync_config(raw, jpgdir, dry_run=True)
+    actions, orphaned = pb.scan_actions(cfg)
+
+    assert actions == []
+    assert [p.name for p in orphaned] == ["loner.jpg"]
+
+
+def test_sync_photos_dry_run_writes_nothing(tmp_path, capsys):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    jpgdir = tmp_path / "jpg"
+    jpgdir.mkdir()
+    (raw / "2020-01-01 10-00-00-X-T1.NEF").write_bytes(b"raw")
+    (jpgdir / "2020-01-01 10-00-00-X-T1.jpg").write_bytes(b"jpg")
+
+    summary = pb.sync_photos(jpgdir, raw, apply=False)
+
+    assert summary["applied"] is False
+    assert summary["actions"] == 1
+    assert not (raw / "2020-01-01 10-00-00-X-T1.xmp").exists()
+    out = capsys.readouterr().out
+    assert "DRY RUN" in out
