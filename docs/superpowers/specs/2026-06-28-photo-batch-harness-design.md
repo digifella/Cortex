@@ -54,29 +54,63 @@ venv/bin/python scripts/photo_batch.py tag <to_tag_dir> [options]
 - Selects **top-level** `*.jpg` / `*.JPG` files in `<to_tag_dir>`. This matches
   `run_sync`'s top-level glob so both phases operate on the same file set.
   (Nested subfolders are intentionally not processed; sync would not see them.)
-- For each photo not already done, calls:
-  ```python
-  DocumentTextifier(use_vision=True).keyword_image(
-      path,
-      generate_description=True,
-      populate_location=True,
-      anonymize_keywords=False,
-      ownership_notice=OWNERSHIP_NOTICE,   # non-empty => ownership written
-  )
-  ```
-  Tagging options per approved scope: description+keywords, location+GPS,
-  ownership. Anonymize off. No resize/halftone.
+
+**Per-photo decision (in order):**
+
+1. **Fast resume skip** — compute key `name + size + mtime`. If the key is in the
+   checkpoint with status `tagged` or `skipped-good` and the file is unchanged,
+   skip without touching exiftool. (A file changed on disk re-evaluates.)
+2. **Read the existing description** (exiftool: `XMP-dc:Description`,
+   `IPTC:Caption-Abstract`, `EXIF:ImageDescription` — first non-empty).
+3. **Classify the description.** Regenerate if `--redescribe-all` is set OR the
+   description is *bad* by any of these tests:
+   - empty / whitespace only;
+   - starts with `[Image:` (the engine's own placeholder written on VLM
+     timeout / unavailable / error / logo-skip — see `_photo_description_issue`);
+   - shorter than `--min-desc-len` (default **40** chars) — catches truncated
+     output like `"I must give a description…"`;
+   - matches a refusal/meta prefix (case-insensitive): `I must`, `I cannot`,
+     `I can't`, `I'm sorry`, `I am sorry`, `As an AI`, `Sure,`, `Here is a
+     description`, `Here's a description`, `I will describe`, `I'd be happy`.
+4. **Act:**
+   - *Good description* → **skip entirely** (status `skipped-good`). No VLM call,
+     no file write.
+   - *Bad / missing description* → run the full tag:
+     ```python
+     DocumentTextifier(use_vision=True).keyword_image(
+         path,
+         generate_description=True,    # replaces the bad description (= overwrite)
+         populate_location=True,       # fills only MISSING location/GPS fields
+         clear_location=False,         # never overwrite existing location/GPS
+         clear_keywords=False,         # keywords merge/append (+=)
+         anonymize_keywords=False,
+         ownership_notice=OWNERSHIP_NOTICE,   # non-empty => ownership written
+     )
+     ```
+     status `tagged`.
+
+   Location/GPS behaviour is the engine default and needs no harness logic:
+   `resolve_photo_location` → `_merge_location_fields` keeps the first non-empty
+   value per field (existing wins), and GPS is written only when none exists.
+   The harness must never pass `clear_location=True`.
+
 - **Checkpoint** at `<to_tag_dir>/.photo_batch_tag.json`:
-  - Records, per processed file, a key of `name + size + mtime` and a one-line
-    result summary (ok flag, short description, keyword count, error).
+  - Records, per processed file, key `name + size + mtime`, a `status`
+    (`tagged` / `skipped-good` / `failed`), and a one-line summary (short
+    description, keyword count, error).
   - Written atomically (temp file + `os.replace`) after **every** photo.
-  - On startup the checkpoint is loaded; files whose `name+size+mtime` key is
-    already present and `ok` are skipped. A file that changed on disk (different
-    size/mtime) is re-processed.
-- Per-photo stdout line: `[i/N] OK name: description…` or `[i/N] FAIL name: error`.
+  - Note: skipping is also self-healing without the checkpoint — a photo that
+    already has a good embedded description is skipped on any future run because
+    the live description read (step 2–3) catches it. This correctly handles
+    descriptions left by *prior* (non-harness) LLM runs that aren't in the
+    checkpoint: good ones are skipped, bad/truncated ones are replaced.
+- Per-photo stdout line: `[i/N] TAGGED name: description…`,
+  `[i/N] SKIP name (good description)`, or `[i/N] FAIL name: error`.
 - `--cooldown SECONDS` (default 0): pause between photos.
+- `--min-desc-len N` (default 40): length below which a description is "bad".
+- `--redescribe-all`: regenerate every description regardless of current content.
 - `--ownership "text"` overrides the default notice; `--no-ownership` disables.
-- Final summary: tagged / failed / skipped counts.
+- Final summary: tagged / skipped-good / failed counts.
 
 Default ownership notice (matches the Streamlit default):
 `All rights (c) Longboardfella. Contact longboardfella.com for info on use of photos.`
@@ -120,6 +154,8 @@ venv/bin/python scripts/photo_batch.py sync <to_tag_dir> <raw_root> [--apply] [o
 | Flag | Phase | Default | Effect |
 |------|-------|---------|--------|
 | `--cooldown N` | tag | 0 | Seconds between photos |
+| `--min-desc-len N` | tag | 40 | Below this, existing description is "bad" |
+| `--redescribe-all` | tag | off | Regenerate every description regardless |
 | `--ownership "…"` | tag | standard notice | Override ownership text |
 | `--no-ownership` | tag | off | Skip ownership write |
 | `--apply` | sync | off (dry-run) | Perform destructive sync |
@@ -146,14 +182,22 @@ venv/bin/python scripts/photo_batch.py sync <to_tag_dir> <raw_root> [--apply] [o
 
 TDD on the harness logic that does not require a GPU/VLM:
 
-1. **Checkpoint resume** — given a checkpoint marking file A as `ok`, a tag run
+1. **Bad-description detection** — the classifier flags empty, `[Image:…]`,
+   too-short, and refusal/meta-prefix strings as bad, and passes a normal
+   sentence-length caption as good. `--min-desc-len` and `--redescribe-all`
+   change the verdict as expected.
+2. **Checkpoint resume** — given a checkpoint marking file A `tagged`, a tag run
    over {A, B} skips A and only processes B; a changed A (different mtime/size)
-   is re-processed.
-2. **Sync dry-run wiring** — synthetic `raw_root` with a `.NEF` (or `.tif`) whose
+   is re-evaluated.
+3. **Sync dry-run wiring** — synthetic `raw_root` with a `.NEF` (or `.tif`) whose
    stem matches a tagged JPG fixture; assert the dry-run reports the expected
    matched action and that no files were modified.
-3. **Arg/config mapping** — flags produce the expected `SyncConfig`
+4. **Arg/config mapping** — flags produce the expected `SyncConfig`
    (`dry_run`, `keep_backups`, `filter_keywords`, `timestamp_tolerance_seconds`).
+
+The description classifier is the unit most worth isolating (a pure
+`description_is_bad(text, min_len) -> bool` function) so it can be tested without
+touching files.
 
 The matcher/merger/sync engines already have unit tests under
 `tests/unit/test_llm_metadata_sync/` — not re-tested here.
