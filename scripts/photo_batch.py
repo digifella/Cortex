@@ -10,6 +10,7 @@ See docs/superpowers/specs/2026-06-28-photo-batch-harness-design.md
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -304,3 +305,68 @@ def tag_photos(
 
     print(f"Tag complete: {tagged} tagged, {skipped} skipped, {failed} failed (of {total})")
     return {"tagged": tagged, "skipped": skipped, "failed": failed, "total": total}
+
+
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="photo_batch",
+        description="Headless batch photo tagging + Lightroom catalog sync.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    pt = sub.add_parser("tag", help="VLM-tag photos in a directory, in place.")
+    pt.add_argument("to_tag_dir", type=Path)
+    pt.add_argument("--min-desc-len", type=int, default=DEFAULT_MIN_DESC_LEN,
+                    help="Existing descriptions shorter than this are regenerated.")
+    pt.add_argument("--redescribe-all", action="store_true",
+                    help="Regenerate every description regardless of current content.")
+    pt.add_argument("--cooldown", type=float, default=0.0,
+                    help="Seconds to pause between photos.")
+    pt.add_argument("--ownership", default=DEFAULT_OWNERSHIP,
+                    help="Ownership/copyright notice to embed.")
+    pt.add_argument("--no-ownership", action="store_true",
+                    help="Do not write ownership metadata.")
+
+    ps = sub.add_parser("sync", help="Reconcile tagged JPG metadata onto catalog originals.")
+    ps.add_argument("to_tag_dir", type=Path)
+    ps.add_argument("raw_root", type=Path)
+    ps.add_argument("--apply", action="store_true",
+                    help="Perform the destructive sync (default is dry-run).")
+    ps.add_argument("--no-backups", action="store_true",
+                    help="Do not keep .old/.bak backups of modified originals.")
+    ps.add_argument("--filter-keywords", default="nogps",
+                    help="Comma-separated keywords to drop during sync.")
+    ps.add_argument("--timestamp-tolerance", type=int, default=0,
+                    help="Allow JPG/RAW capture times to differ by up to N seconds.")
+
+    args = parser.parse_args(argv)
+
+    if args.command == "tag":
+        if not args.to_tag_dir.is_dir():
+            parser.error(f"Not a directory: {args.to_tag_dir}")
+        ownership = "" if args.no_ownership else args.ownership
+        tag_photos(
+            args.to_tag_dir,
+            min_desc_len=args.min_desc_len,
+            redescribe_all=args.redescribe_all,
+            ownership_notice=ownership,
+            cooldown=args.cooldown,
+        )
+    elif args.command == "sync":
+        if not args.to_tag_dir.is_dir():
+            parser.error(f"Not a directory: {args.to_tag_dir}")
+        if not args.raw_root.is_dir():
+            parser.error(f"Not a directory: {args.raw_root}")
+        filter_keywords = [k.strip() for k in args.filter_keywords.split(",") if k.strip()]
+        sync_photos(
+            args.to_tag_dir,
+            args.raw_root,
+            apply=args.apply,
+            keep_backups=not args.no_backups,
+            filter_keywords=filter_keywords,
+            timestamp_tolerance=args.timestamp_tolerance,
+        )
+
+
+if __name__ == "__main__":
+    main()

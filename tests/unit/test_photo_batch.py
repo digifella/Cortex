@@ -146,3 +146,55 @@ def test_sync_photos_dry_run_writes_nothing(tmp_path, capsys):
     assert not (raw / "2020-01-01 10-00-00-X-T1.xmp").exists()
     out = capsys.readouterr().out
     assert "DRY RUN" in out
+
+
+def test_main_tag_invokes_tag_photos(tmp_path, monkeypatch):
+    calls = {}
+
+    def fake_tag_photos(to_tag_dir, **kwargs):
+        calls["dir"] = to_tag_dir
+        calls["kwargs"] = kwargs
+        return {}
+
+    monkeypatch.setattr(pb, "tag_photos", fake_tag_photos)
+    pb.main(["tag", str(tmp_path), "--min-desc-len", "10", "--redescribe-all",
+             "--cooldown", "1.5", "--no-ownership"])
+
+    assert str(calls["dir"]) == str(tmp_path)
+    assert calls["kwargs"]["min_desc_len"] == 10
+    assert calls["kwargs"]["redescribe_all"] is True
+    assert calls["kwargs"]["cooldown"] == 1.5
+    assert calls["kwargs"]["ownership_notice"] == ""
+
+
+def test_main_sync_defaults_to_dry_run(tmp_path, monkeypatch):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    calls = {}
+
+    def fake_sync_photos(to_tag_dir, raw_root, **kwargs):
+        calls["kwargs"] = kwargs
+        return {}
+
+    monkeypatch.setattr(pb, "sync_photos", fake_sync_photos)
+    pb.main(["sync", str(tmp_path), str(raw)])
+
+    assert calls["kwargs"]["apply"] is False
+    assert calls["kwargs"]["keep_backups"] is True
+    assert calls["kwargs"]["filter_keywords"] == ["nogps"]
+    assert calls["kwargs"]["timestamp_tolerance"] == 0
+
+
+def test_main_sync_apply_and_flags(tmp_path, monkeypatch):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    calls = {}
+    monkeypatch.setattr(pb, "sync_photos",
+                        lambda d, r, **k: calls.update(k) or {})
+    pb.main(["sync", str(tmp_path), str(raw), "--apply", "--no-backups",
+             "--filter-keywords", "nogps,private", "--timestamp-tolerance", "4"])
+
+    assert calls["apply"] is True
+    assert calls["keep_backups"] is False
+    assert calls["filter_keywords"] == ["nogps", "private"]
+    assert calls["timestamp_tolerance"] == 4
