@@ -257,7 +257,15 @@ def tag_one(path: Path, ownership_notice: str) -> dict:
     """
     from cortex_engine.textifier import DocumentTextifier
 
-    return DocumentTextifier(use_vision=True).keyword_image(
+    t = DocumentTextifier(use_vision=True)
+    # Keyword extraction defaults to the first installed TEXT_MODELS entry, which
+    # here is mistral-small3.2 (~23GB VRAM). Loaded per photo alongside LM Studio
+    # it saturates the GPU (~44/46GB), stalling the whole machine and adding
+    # 15-50s of mistral inference per photo. A small local model derives photo
+    # keywords from the caption just as well in ~1-2s with ~10GB. (Vision itself
+    # is the Claude Haiku API path, so no local VLM is loaded.)
+    t.TEXT_MODELS = ["llama3.2:3b-instruct-q8_0", *t.TEXT_MODELS]
+    return t.keyword_image(
         str(path),
         generate_description=True,
         populate_location=True,
