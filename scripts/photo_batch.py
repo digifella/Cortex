@@ -89,7 +89,25 @@ def save_checkpoint(to_tag_dir: Path, data: dict) -> None:
     tmp = p.with_suffix(".json.tmp")
     with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
-    os.replace(tmp, p)
+    # On WSL+OneDrive (9p drvfs) the atomic os.replace() over an existing file
+    # intermittently fails with EPERM/EACCES because OneDrive's sync briefly
+    # locks the target. Retry, then fall back to a direct in-place write — the
+    # checkpoint is only resume state, so a non-atomic write is acceptable.
+    for attempt in range(5):
+        try:
+            os.replace(tmp, p)
+            return
+        except PermissionError:
+            time.sleep(0.5 * (attempt + 1))
+    try:
+        with open(p, "w") as f:
+            json.dump(data, f, indent=2)
+    finally:
+        if tmp.exists():
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def is_done(path: Path, checkpoint: dict) -> bool:
@@ -257,13 +275,19 @@ def tag_photos(
     redescribe_all: bool = False,
     ownership_notice: str = DEFAULT_OWNERSHIP,
     cooldown: float = 0.0,
+    limit: int = 0,
 ) -> dict:
-    """Tag every top-level JPG that needs it, with a resumable checkpoint."""
+    """Tag every top-level JPG that needs it, with a resumable checkpoint.
+
+    When limit > 0, stop after that many photos have actually been processed
+    (tagged or failed) this run — already-good/already-done skips don't count,
+    so successive runs march through the backlog in fixed-size batches.
+    """
     to_tag_dir = Path(to_tag_dir)
     photos = sorted(list(to_tag_dir.glob("*.jpg")) + list(to_tag_dir.glob("*.JPG")))
     checkpoint = load_checkpoint(to_tag_dir)
     total = len(photos)
-    tagged = skipped = failed = 0
+    tagged = skipped = failed = processed = 0
 
     for i, path in enumerate(photos, start=1):
         if is_done(path, checkpoint):
@@ -300,6 +324,11 @@ def tag_photos(
             print(f"[{i}/{total}] FAIL {path.name}: {exc}")
 
         save_checkpoint(to_tag_dir, checkpoint)
+        processed += 1
+        if limit > 0 and processed >= limit:
+            print(f"Reached batch limit ({limit} processed) — stopping. "
+                  f"Re-run to continue from the checkpoint.")
+            break
         if cooldown > 0 and i < total:
             time.sleep(cooldown)
 
@@ -307,7 +336,30 @@ def tag_photos(
     return {"tagged": tagged, "skipped": skipped, "failed": failed, "total": total}
 
 
+def load_dotenv_keys() -> None:
+    """Load project-root .env into os.environ for any keys not already set.
+
+    The vision tagger prefers the Claude Haiku path when ANTHROPIC_API_KEY is
+    present; without it the engine silently falls back to local VLMs that emit
+    reasoning-scaffolding instead of captions. Loading .env here makes the
+    headless run match the Streamlit app's behaviour. Values may be quoted.
+    """
+    env_path = project_root / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
 def main(argv=None) -> None:
+    load_dotenv_keys()
     parser = argparse.ArgumentParser(
         prog="photo_batch",
         description="Headless batch photo tagging + Lightroom catalog sync.",
@@ -322,6 +374,10 @@ def main(argv=None) -> None:
                     help="Regenerate every description regardless of current content.")
     pt.add_argument("--cooldown", type=float, default=0.0,
                     help="Seconds to pause between photos.")
+    pt.add_argument("--limit", type=int, default=0,
+                    help="Stop after N photos are processed this run (0 = no limit). "
+                         "Skips don't count, so re-running marches through the backlog "
+                         "in fixed-size batches.")
     pt.add_argument("--ownership", default=DEFAULT_OWNERSHIP,
                     help="Ownership/copyright notice to embed.")
     pt.add_argument("--no-ownership", action="store_true",
@@ -351,6 +407,7 @@ def main(argv=None) -> None:
             redescribe_all=args.redescribe_all,
             ownership_notice=ownership,
             cooldown=args.cooldown,
+            limit=args.limit,
         )
     elif args.command == "sync":
         if not args.to_tag_dir.is_dir():
