@@ -112,9 +112,18 @@ def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]
                     # through a synthetic XMP sidecar path.
                     for key in _candidate_keys(stem, config):
                         index.setdefault(key, []).append(path)
+                elif ext in ("tif", "tiff", "psd", "psb"):
+                    # Edited raster master (e.g. a Photoshop TIF) with no derivative
+                    # suffix — embed metadata into the file itself (that's where
+                    # Lightroom reads TIF/PSD metadata from, not a sidecar). These
+                    # often keep the export rating suffix (-N) in their filename
+                    # while the source JPG has it stripped, so key off the stripped
+                    # stem to align the two.
+                    base_stem = strip_rating_suffix(stem, config.rating_suffix_range)
+                    for key in _candidate_keys(base_stem, config):
+                        index.setdefault(key, []).append(path)
                 else:
-                    # Standalone embed-format file or original DNG capture (no suffix)
-                    # → write to an XMP sidecar alongside it
+                    # Standalone original DNG capture (no suffix) → XMP sidecar
                     sidecar = dir_path / f"{stem}.xmp"
                     for key in _candidate_keys(stem, config):
                         index.setdefault(key, []).append(sidecar)

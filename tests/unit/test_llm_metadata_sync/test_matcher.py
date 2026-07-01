@@ -288,3 +288,18 @@ def test_catalog_jpg_does_not_match_itself(tmp_path):
     index = build_raw_index(tmp_path, cfg)
     actions = resolve_jpg(catalog_jpg, index, cfg)
     assert actions == []
+
+
+def test_rating_suffixed_tif_edit_matches_as_embedded(tmp_path):
+    """A Photoshop TIF edit that kept the export rating suffix (-N) in its name
+    must still match the described JPG (which has -N stripped) and embed into
+    the TIF rather than being left orphaned."""
+    (tmp_path / "2025-03-02 07-08-57-X-T5-4.tif").touch()
+    cfg = _cfg(tmp_path)
+    index = build_raw_index(tmp_path, cfg)
+    described = tmp_path / "2025-03-02 07-08-57-X-T5-4.jpg"
+    described.touch()
+    actions = resolve_jpg(described, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_type == TargetType.EMBEDDED
+    assert actions[0].target_path.name == "2025-03-02 07-08-57-X-T5-4.tif"
