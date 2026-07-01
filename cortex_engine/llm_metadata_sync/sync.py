@@ -31,7 +31,17 @@ def run_sync(config: SyncConfig) -> Generator[SyncResult, None, None]:
     for jpg in jpgs:
         actions = resolve_jpg(jpg, index, config)
         for action in actions:
-            yield _process_action(action, config)
+            # Never let one bad photo (unexpected metadata shape, transient IO)
+            # abort the whole run — surface it as a failed result and continue.
+            try:
+                yield _process_action(action, config)
+            except Exception as exc:
+                yield SyncResult(
+                    action=action, success=False,
+                    keywords_written=0, description_written=False,
+                    location_written=0,
+                    error=f"Unhandled error: {exc}",
+                )
 
 
 def _process_jpg_replace(action: SyncAction, config: SyncConfig) -> SyncResult:
@@ -56,6 +66,16 @@ def _process_jpg_replace(action: SyncAction, config: SyncConfig) -> SyncResult:
         )
 
     old_path = action.target_path.with_suffix(".old")
+    if old_path.exists():
+        # A .old backup already exists — either this target was replaced in a
+        # prior run, or the user has a pre-existing backup. Skip so we never
+        # clobber the original backup with an already-described copy. This also
+        # makes the run safely resumable after an interruption.
+        return SyncResult(
+            action=action, success=True,
+            keywords_written=len(jpg_keywords), description_written=bool(description),
+            location_written=location_written, error=None,
+        )
     try:
         action.target_path.rename(old_path)
     except Exception as exc:

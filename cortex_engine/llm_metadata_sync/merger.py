@@ -49,9 +49,11 @@ def read_jpg_metadata(jpg: Path) -> tuple[list[str], str]:
         return [], ""
     row = payload[0]
     kws = row.get("Keywords", [])
-    if isinstance(kws, str):
+    if not isinstance(kws, list):
         kws = [kws]
-    keywords = [k.strip() for k in kws if k.strip()]
+    # exiftool returns purely-numeric keywords (e.g. a year "2025") as ints, so
+    # coerce every element to str before stripping.
+    keywords = [str(k).strip() for k in kws if str(k).strip()]
     description = (row.get("Caption-Abstract") or "").strip()
     return keywords, description
 
