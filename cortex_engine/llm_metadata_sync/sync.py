@@ -65,7 +65,11 @@ def _process_jpg_replace(action: SyncAction, config: SyncConfig) -> SyncResult:
             error=f"Could not rename original to .old: {exc}",
         )
     try:
-        shutil.copy2(action.jpg_path, action.target_path)
+        # copyfile (data only), not copy2: copy2's copystat() calls os.chmod,
+        # which returns EPERM on WSL drvfs mounts (e.g. the L: catalog), failing
+        # every JPG replace. The described JPG already carries all metadata in
+        # its bytes, so file permissions/timestamps don't need copying.
+        shutil.copyfile(action.jpg_path, action.target_path)
     except Exception as exc:
         # Restore original so the catalog isn't left without the file
         try:
