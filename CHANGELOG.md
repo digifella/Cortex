@@ -6,6 +6,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+
+## v6.0.13 - 2026-07-10
+
+### LMS Hyphen-Delimited Export Matching
+
+LMS metadata sync now reconciles Lightroom exports that inject hyphen-delimited location/dimension tokens between the timestamp and camera model, using a timestamp + camera-suffix fallback.
+
+### 🚀 Improvements
+- LMS matcher: additive fallback matches JPGs to RAW/derivative targets by timestamp plus camera-token-as-suffix when exact-key matching fails, handling exports with injected '-<location>-<W x H>-' tokens in inconsistent order
+- LMS matcher: camera-suffix fallback is tolerance-aware — panorama JPGs timestamped a few seconds off their source DNG match the nearest same-camera target within --timestamp-tolerance
+
 - LLM Metadata Sync: PNG matches now target the actual `.png` files instead of synthetic `.xmp` sidecar paths, with XMP-only writes for PNG targets
 - LLM Metadata Sync: fixed ExifTool backup handling so the default backup toggle now preserves `<filename>_original` files for rewritten existing targets instead of forcing overwrite mode
 - LLM Metadata Sync: now propagates XMP star ratings from the described JPG into matched RAW sidecars and embedded targets so Lightroom star-filtered views remain stable after metadata re-read

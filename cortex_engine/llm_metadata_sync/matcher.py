@@ -184,6 +184,62 @@ def _fuzzy_targets(key: str, index: dict[str, list[Path]], tolerance_s: int) -> 
     return results
 
 
+def _camera_suffix_targets(
+    jpg_stem: str, index: dict[str, list[Path]], config: SyncConfig
+) -> list[Path]:
+    """Match injected-token exports by timestamp + camera-token-as-suffix.
+
+    Some Lightroom export templates inject hyphen-delimited '-<location>-<W x H>-'
+    (or '-<W x H>-<tag>-') blocks between the timestamp and the camera model, and
+    the token order is inconsistent across batches. Rather than parse that variable
+    junk, key off what is stable: the leading timestamp, and the RAW-side camera
+    token appearing as a suffix of the (deriv-stripped) JPG stem. Among index keys
+    at the exact same timestamp, the longest matching camera token wins, so a
+    second body that fired the same second never gets the metadata.
+    """
+    deriv_re = _deriv_regex(config.deriv_patterns)
+    m_deriv = deriv_re.search(jpg_stem)
+    if m_deriv:
+        jpg_stem = jpg_stem[: m_deriv.start()]
+    parsed = _parse_key_ts(_normalized_key(jpg_stem))
+    if parsed is None:
+        return []
+    ts, _ = parsed
+    jl = jpg_stem.lower()
+
+    # (abs_seconds_from_ts, camera_token, targets) for every same-camera candidate.
+    matches: list[tuple[float, str, list[Path]]] = []
+    tol = config.timestamp_tolerance_seconds
+    for idx_key, idx_targets in index.items():
+        parsed2 = _parse_key_ts(idx_key)
+        if parsed2 is None:
+            continue
+        idx_ts, idx_cam = parsed2
+        delta = abs((idx_ts - ts).total_seconds())
+        if delta > tol:
+            continue
+        cam = idx_cam.lstrip("-")
+        # Empty-camera targets only qualify at the exact timestamp; matching them
+        # across a tolerance window would be too loose (they match any stem).
+        if delta > 0 and cam == "":
+            continue
+        if cam == "" or jl.endswith(cam):
+            matches.append((delta, cam, idx_targets))
+    if not matches:
+        return []
+
+    # Prefer the nearest timestamp, then the longest (most specific) camera token,
+    # so an exact hit always beats a within-tolerance neighbour.
+    nearest = min(delta for delta, _, _ in matches)
+    at_nearest = [(cam, tgts) for delta, cam, tgts in matches if delta == nearest]
+    longest = max(len(cam) for cam, _ in at_nearest)
+    results: list[Path] = []
+    for cam, idx_targets in at_nearest:
+        if len(cam) == longest:
+            results.extend(idx_targets)
+    return results
+
+
 def resolve_jpg(
     jpg_path: Path, index: dict[str, list[Path]], config: SyncConfig
 ) -> list[SyncAction]:
@@ -194,6 +250,13 @@ def resolve_jpg(
     targets: list[Path] = []
     for key in keys:
         targets.extend(index.get(key, []))
+
+    # Fallback for exports that inject hyphen-delimited location/dimension tokens
+    # between the timestamp and camera (see _camera_suffix_targets). Only runs when
+    # exact key matching found nothing, so existing matches are never altered.
+    if not targets:
+        targets = _camera_suffix_targets(stem, index, config)
+
     if targets:
         seen: set[Path] = set()
         deduped_targets: list[Path] = []

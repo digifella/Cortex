@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.0.12"
+CORTEX_VERSION = "6.0.13"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 0,
-    "patch": 12,
+    "patch": 13,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,22 +24,17 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-04-28",
-    "release_name": "Photo Batch Pause/Resume + EXIF & LMS Fixes",
-    "description": "Photo Processor: full pause/resume for batch jobs (surviving tab close), EXIF time-of-day fix for cameras storing UTC without a timezone offset, and LMS compound derivative suffix matching.",
+    "release_date": "2026-07-10",
+    "release_name": "LMS Hyphen-Delimited Export Matching",
+    "description": "LMS metadata sync now reconciles Lightroom exports that inject hyphen-delimited location/dimension tokens between the timestamp and camera model, using a timestamp + camera-suffix fallback.",
     "breaking_changes": [],
-    "new_features": [
-        "Photo Processor: pause/resume for batch keyword/resize/halftone jobs — progress survives tab close and page refresh",
-        "Photo Processor: Pause button during run, Resume/Cancel when paused, recovery banner distinguishes paused vs completed batches",
-    ],
+    "new_features": [],
     "improvements": [
-        "Photo Processor: batch now processes one photo per Streamlit rerun (manifest-driven) instead of a blocking for-loop",
-        "Photo Processor: cooldown delay written as a resume_after timestamp so it survives tab close",
+        "LMS matcher: additive fallback matches JPGs to RAW/derivative targets by timestamp plus camera-token-as-suffix when exact-key matching fails, handling exports with injected '-<location>-<W x H>-' tokens in inconsistent order",
+        "LMS matcher: camera-suffix fallback is tolerance-aware — panorama JPGs timestamped a few seconds off their source DNG match the nearest same-camera target within --timestamp-tolerance",
     ],
     "bug_fixes": [
-        "Photo Processor: EXIF time-of-day hint now prefers filename when EXIF has no timezone offset and times differ by >3h (fixes 'night' label on midday photos from cameras storing UTC)",
-        "LMS matcher: TIF files with compound derivative suffixes (e.g. -Enhanced-NR-Edit-Edit) now correctly strip the full suffix and match the base camera timestamp",
-        "Document Extract photo tab removal correctly applied after stash conflict during merge",
+        "LMS matcher: hyphen-delimited exports (e.g. '2023-01-01 10-55-07-Malaysia-4896 x 3264-X-T1.jpg') no longer orphan every JPG; the fallback only fires when exact matching finds nothing, so existing matches are unchanged",
     ],
     "performance": []
 }

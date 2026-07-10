@@ -235,6 +235,85 @@ def test_resolve_jpg_matches_raw_with_inserted_location_and_dimensions(tmp_path)
     assert actions[0].target_path == tmp_path / "2020-02-20 17-09-25_Sri Lanka_6000 x 3376_X-T2.xmp"
 
 
+def test_resolve_jpg_matches_hyphen_delimited_location_and_dimensions(tmp_path):
+    """JPG exported with hyphen-delimited '-<location>-<W x H>-' tokens injected
+    between the timestamp and camera must still match a clean RAW-side target."""
+    target = tmp_path / "2023-01-01 11-29-47-X-T1.tif"
+    target.touch()
+    cfg = _cfg(tmp_path)
+    index = build_raw_index(tmp_path, cfg)
+    jpg = tmp_path / "2023-01-01 11-29-47-Malaysia-4896 x 3264-X-T1.jpg"
+    jpg.touch()
+    actions = resolve_jpg(jpg, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_type == TargetType.EMBEDDED
+    assert actions[0].target_path == target
+
+
+def test_resolve_jpg_matches_dimensions_first_template(tmp_path):
+    """A different export template puts '-<W x H>-<tag>-' before the camera, plus a
+    derivative suffix. Camera token (X-T1) must still align after deriv-stripping."""
+    target = tmp_path / "2023-03-08 15-10-38-X-T1.tif"
+    target.touch()
+    cfg = _cfg(tmp_path)
+    index = build_raw_index(tmp_path, cfg)
+    jpg = tmp_path / "2023-03-08 15-10-38-4896 x 3264-FandK-X-T1-Edit.jpg"
+    jpg.touch()
+    actions = resolve_jpg(jpg, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_type == TargetType.EMBEDDED
+    assert actions[0].target_path == target
+
+
+def test_resolve_jpg_hyphen_template_does_not_cross_cameras(tmp_path):
+    """When two cameras fired at the same second, the injected-token JPG must match
+    only its own camera's target, never the other body's."""
+    xt1 = tmp_path / "2023-05-01 10-00-00-X-T1.tif"
+    xs10 = tmp_path / "2023-05-01 10-00-00-X-S10.tif"
+    xt1.touch()
+    xs10.touch()
+    cfg = _cfg(tmp_path)
+    index = build_raw_index(tmp_path, cfg)
+    jpg = tmp_path / "2023-05-01 10-00-00-Melb-4896 x 3264-X-T1.jpg"
+    jpg.touch()
+    actions = resolve_jpg(jpg, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_path == xt1
+
+
+def test_resolve_jpg_hyphen_template_pano_matches_within_tolerance(tmp_path):
+    """A panorama JPG carrying injected tokens, timestamped a few seconds off its
+    source DNG, matches by camera-suffix within the tolerance window. The nearest
+    same-camera target wins; an out-of-window same-camera target is ignored."""
+    near = tmp_path / "2023-12-09 06-17-54-X-T1.tif"      # 6s away
+    far = tmp_path / "2023-12-09 06-18-20-X-T1.tif"       # 32s away, must be ignored
+    near.touch()
+    far.touch()
+    cfg = _cfg(tmp_path, timestamp_tolerance_seconds=6)
+    index = build_raw_index(tmp_path, cfg)
+    jpg = tmp_path / "2023-12-09 06-17-48-NZ-X-T1-Pano.jpg"
+    jpg.touch()
+    actions = resolve_jpg(jpg, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_path == near
+
+
+def test_resolve_jpg_hyphen_template_prefers_exact_over_tolerance(tmp_path):
+    """When both an exact-timestamp and a near-timestamp same-camera target exist,
+    the exact one wins and the near one is not also pulled in."""
+    exact = tmp_path / "2023-12-09 06-17-48-X-T1.tif"
+    near = tmp_path / "2023-12-09 06-17-50-X-T1.tif"
+    exact.touch()
+    near.touch()
+    cfg = _cfg(tmp_path, timestamp_tolerance_seconds=6)
+    index = build_raw_index(tmp_path, cfg)
+    jpg = tmp_path / "2023-12-09 06-17-48-NZ-X-T1-Pano.jpg"
+    jpg.touch()
+    actions = resolve_jpg(jpg, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_path == exact
+
+
 def test_resolve_jpg_strips_rating_suffix(tmp_path):
     (tmp_path / "shot.RAF").touch()
     cfg = _cfg(tmp_path)
