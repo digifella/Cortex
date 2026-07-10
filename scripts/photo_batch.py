@@ -292,7 +292,11 @@ def tag_photos(
     so successive runs march through the backlog in fixed-size batches.
     """
     to_tag_dir = Path(to_tag_dir)
-    photos = sorted(list(to_tag_dir.glob("*.jpg")) + list(to_tag_dir.glob("*.JPG")))
+    photos = sorted(
+        set(to_tag_dir.glob("*.jpg")) | set(to_tag_dir.glob("*.JPG"))
+        | set(to_tag_dir.glob("*.tif")) | set(to_tag_dir.glob("*.TIF"))
+        | set(to_tag_dir.glob("*.tiff")) | set(to_tag_dir.glob("*.TIFF"))
+    )
     checkpoint = load_checkpoint(to_tag_dir)
     total = len(photos)
     tagged = skipped = failed = processed = 0
