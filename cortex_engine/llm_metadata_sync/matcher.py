@@ -138,9 +138,14 @@ def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]
                 # Catalog / mobile JPG (no raw original) → JPG_REPLACE target.
                 # Only index files without a derivative suffix; rated/described JPGs
                 # (e.g. shot-5.jpg, shot-Edit.tif equivalents) live in jpg_dir and
-                # are the *source* of metadata, not the target.
+                # are the *source* of metadata, not the target. Some catalogs (e.g.
+                # pre-RAW JPG-only years) keep the export rating suffix (-N) baked
+                # into the catalog filename itself, identical to the jpg_dir source —
+                # strip it the same way as the TIF/PSD embed path above so those still
+                # match instead of being spuriously orphaned.
                 if not deriv_re.search(stem):
-                    for key in _candidate_keys(stem, config):
+                    base_stem = strip_rating_suffix(stem, config.rating_suffix_range)
+                    for key in _candidate_keys(base_stem, config):
                         index.setdefault(key, []).append(path)
 
     return index

@@ -359,6 +359,24 @@ def test_catalog_jpg_matches_rated_described_jpg(tmp_path):
     assert actions[0].jpg_path == described
 
 
+def test_catalog_jpg_with_baked_in_rating_suffix_matches_identical_named_source(tmp_path):
+    """Pre-RAW (JPG-only) catalogs: the catalog JPG keeps the export rating suffix
+    baked into its filename, identical to the jpg_dir source. Must still resolve
+    via JPG_REPLACE instead of being orphaned."""
+    catalog_jpg = tmp_path / "2008-01-01 14-07-06-Canon PowerShot A570 IS-4.jpg"
+    catalog_jpg.touch()
+    cfg = _cfg(tmp_path)
+    index = build_raw_index(tmp_path, cfg)
+    jpg_dir = tmp_path / "described"
+    jpg_dir.mkdir()
+    described = jpg_dir / "2008-01-01 14-07-06-Canon PowerShot A570 IS-4.jpg"
+    described.touch()
+    actions = resolve_jpg(described, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_type == TargetType.JPG_REPLACE
+    assert actions[0].target_path == catalog_jpg
+
+
 def test_catalog_jpg_does_not_match_itself(tmp_path):
     """When jpg_dir == raw_root a catalog JPG must not create a self-replace action."""
     catalog_jpg = tmp_path / "2025-09-09 11-24-48-Pixel 9 Pro.jpg"
