@@ -173,4 +173,4 @@ def read_existing_keywords(target: Path) -> list[str]:
     val = payload[0].get("Subject", [])
     if isinstance(val, str):
         val = [val]
-    return [k.strip() for k in val if k.strip()]
+    return [str(k).strip() for k in val if str(k).strip()]
