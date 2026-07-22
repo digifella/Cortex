@@ -123,15 +123,25 @@ def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]
                     for key in _candidate_keys(base_stem, config):
                         index.setdefault(key, []).append(path)
                 else:
-                    # Standalone original DNG capture (no suffix) → XMP sidecar
+                    # Standalone original DNG capture (no suffix) → XMP sidecar.
+                    # Some catalogs (e.g. "Pre-Dig" scanned-film years) keep the export
+                    # rating suffix (-N) baked into the DNG filename itself, identical
+                    # to the jpg_dir source — strip it so those still match (same
+                    # rationale as the TIF/PSD embed path above).
                     sidecar = dir_path / f"{stem}.xmp"
-                    for key in _candidate_keys(stem, config):
+                    base_stem = strip_rating_suffix(stem, config.rating_suffix_range)
+                    for key in _candidate_keys(base_stem, config):
                         index.setdefault(key, []).append(sidecar)
 
             elif ext in raw_exts:
                 # rstrip("- ") handles empty camera-model stems like "2025-10-10 10-15-24-"
+                # Some catalogs (e.g. "Pre-Dig" scanned-film years) keep the export
+                # rating suffix (-N) baked into the raw filename itself, identical to
+                # the jpg_dir source — strip it so those still match instead of being
+                # spuriously orphaned (same rationale as the embed/catalog-JPG paths).
                 sidecar = dir_path / f"{stem}.xmp"
-                for key in _candidate_keys(stem, config):
+                base_stem = strip_rating_suffix(stem, config.rating_suffix_range)
+                for key in _candidate_keys(base_stem, config):
                     index.setdefault(key, []).append(sidecar)
 
             elif ext in jpg_exts:

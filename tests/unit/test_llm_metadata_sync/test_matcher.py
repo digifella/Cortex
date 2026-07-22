@@ -400,3 +400,32 @@ def test_rating_suffixed_tif_edit_matches_as_embedded(tmp_path):
     assert len(actions) == 1
     assert actions[0].target_type == TargetType.EMBEDDED
     assert actions[0].target_path.name == "2025-03-02 07-08-57-X-T5-4.tif"
+
+
+def test_rating_suffixed_raf_matches_sidecar(tmp_path):
+    """A RAF raw original that kept the export rating suffix (-N) in its name
+    (e.g. "Pre-Dig" scanned-film catalogs) must still match the described JPG
+    (which has -N stripped) and route to its own sidecar rather than orphaning."""
+    (tmp_path / "2001-03-01 10-31-35-X-S10-4.RAF").touch()
+    cfg = _cfg(tmp_path)
+    index = build_raw_index(tmp_path, cfg)
+    described = tmp_path / "2001-03-01 10-31-35-X-S10-4.jpg"
+    described.touch()
+    actions = resolve_jpg(described, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_type == TargetType.SIDECAR
+    assert actions[0].target_path.name == "2001-03-01 10-31-35-X-S10-4.xmp"
+
+
+def test_rating_suffixed_standalone_dng_matches_sidecar(tmp_path):
+    """A standalone DNG raw original that kept the export rating suffix (-N) in
+    its name must still match the described JPG and route to its own sidecar."""
+    (tmp_path / "2001-01-19 15-03-48-iPhone 13 Pro-4.DNG").touch()
+    cfg = _cfg(tmp_path)
+    index = build_raw_index(tmp_path, cfg)
+    described = tmp_path / "2001-01-19 15-03-48-iPhone 13 Pro-4.jpg"
+    described.touch()
+    actions = resolve_jpg(described, index, cfg)
+    assert len(actions) == 1
+    assert actions[0].target_type == TargetType.SIDECAR
+    assert actions[0].target_path.name == "2001-01-19 15-03-48-iPhone 13 Pro-4.xmp"
