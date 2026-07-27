@@ -105,11 +105,17 @@ graph TD
 
 ### 6. Installation & Operation
 
-**1. System-Level Dependencies (for Mind Maps):**
-The AI Research Assistant requires the Graphviz system command `dot` to be installed and accessible in the system's PATH.
+**1. System-Level Dependencies:**
+
+*Graphviz (for Mind Maps)* — The AI Research Assistant requires the Graphviz system command `dot` to be installed and accessible in the system's PATH.
 -   **Debian/Ubuntu:** `sudo apt-get install graphviz`
 -   **MacOS (Homebrew):** `brew install graphviz`
 -   **Windows:** Download from the official site and add the `bin` directory to your system's `PATH`.
+
+*ExifTool (for Photo & Metadata Tools)* — The Photo Processor and LLM Metadata Sync features invoke `exiftool` as a subprocess to read and write EXIF/IPTC/XMP metadata. Without it, both tabs on the Photo & Metadata Tools page are disabled.
+-   **Debian/Ubuntu:** `sudo apt-get install libimage-exiftool-perl`
+-   **MacOS (Homebrew):** `brew install exiftool`
+-   **Windows:** Download from [exiftool.org](https://exiftool.org), rename `exiftool(-k).exe` to `exiftool.exe`, and add its directory to your `PATH`.
 
 **2. Python Environment (Python 3.11 Required):**
 This system is stabilized on Python 3.11. If you are using a different version, you must set up a 3.11 environment.

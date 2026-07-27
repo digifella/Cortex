@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     build-essential \
+    libimage-exiftool-perl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app user first

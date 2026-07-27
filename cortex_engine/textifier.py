@@ -23,6 +23,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from cortex_engine.utils.logging_utils import get_logger
+from cortex_engine.offline_geocoder import resolve as _resolve_location
+from cortex_engine.photo_name_tags import (
+    DEFAULT_NAME_TAGS,
+    apply_names as _apply_person_names,
+)
 
 logger = get_logger(__name__)
 
@@ -105,9 +110,20 @@ class DocumentTextifier:
         docling_timeout_seconds: Optional[float] = None,
         image_description_timeout_seconds: Optional[float] = None,
         image_enrich_max_seconds: Optional[float] = None,
+        geocode_mode: str = "auto",
+        prefer_local_vision: bool = False,
+        name_tags: Optional[Dict[str, str]] = None,
     ):
         self.use_vision = use_vision
         self.on_progress = on_progress
+        # "online" (Nominatim), "offline" (local GeoNames), or "auto" (online
+        # first, offline fallback). "offline" makes the pipeline network-free.
+        self.geocode_mode = (geocode_mode or "auto").strip().lower()
+        # When True, skip Claude even if ANTHROPIC_API_KEY is set — the
+        # travelling / offline configuration.
+        self.prefer_local_vision = bool(prefer_local_vision)
+        # Person keyword -> display name, applied to generated descriptions.
+        self.name_tags = dict(name_tags) if name_tags else dict(DEFAULT_NAME_TAGS)
         self.pdf_strategy = (pdf_strategy or "docling").strip().lower()
         self.cleanup_provider = (cleanup_provider or "").strip().lower()
         self.cleanup_model = (cleanup_model or "").strip()
@@ -1014,7 +1030,11 @@ class DocumentTextifier:
             encoded = base64.b64encode(prepared_bytes).decode("utf-8")
 
             # ── Claude Haiku (tried first when API key is available) ──────────
-            if os.environ.get("ANTHROPIC_API_KEY", "").strip():
+            # prefer_local_vision skips Claude entirely — the offline/travelling
+            # configuration, where reaching the API would fail or cost roaming data.
+            if self.prefer_local_vision:
+                logger.info("Local vision preferred — skipping Claude")
+            elif os.environ.get("ANTHROPIC_API_KEY", "").strip():
                 claude_result = self._describe_with_claude(encoded, context_hint=context_hint)
                 if claude_result:
                     if self._looks_like_logo_icon_description(claude_result):
@@ -2925,6 +2945,22 @@ class DocumentTextifier:
             logger.warning(f"GPS read failed for {file_path}: {e}")
         return None
 
+    def resolve_location(self, lat: float, lon: float) -> Dict[str, str]:
+        """Reverse-geocode using this instance's geocode_mode.
+
+        "online" uses Nominatim, "offline" the local GeoNames dataset, "auto"
+        tries online first and falls back offline. Offline returns the nearest
+        suburb rather than the metro name; state and country are unaffected.
+        """
+        location, source = _resolve_location(
+            lat, lon, mode=self.geocode_mode, online_fn=self.reverse_geocode
+        )
+        if source == "offline":
+            logger.info("Location resolved offline for (%s, %s): %s", lat, lon, location)
+        elif source == "none":
+            logger.warning("No location resolved for (%s, %s)", lat, lon)
+        return location
+
     @staticmethod
     def _merge_location_fields(*locations: Optional[Dict[str, str]]) -> Dict[str, str]:
         """Merge location dicts, keeping the first non-empty value for each field."""
@@ -3036,7 +3072,7 @@ class DocumentTextifier:
         resolved_gps = existing_gps
 
         if resolved_gps:
-            reverse = self.reverse_geocode(resolved_gps[0], resolved_gps[1])
+            reverse = self.resolve_location(resolved_gps[0], resolved_gps[1])
             resolved_location = self._merge_location_fields(seed_location, reverse)
         elif any(seed_location.values()):
             derived_gps = self.geocode_location_hint(
@@ -3046,7 +3082,7 @@ class DocumentTextifier:
             )
             if derived_gps:
                 resolved_gps = derived_gps
-                reverse = self.reverse_geocode(derived_gps[0], derived_gps[1])
+                reverse = self.resolve_location(derived_gps[0], derived_gps[1])
                 resolved_location = self._merge_location_fields(seed_location, reverse)
 
         return {
@@ -3798,6 +3834,14 @@ class DocumentTextifier:
                 logger.info(f"Keyword hint for {file_name}: {keyword_hint}")
             combined_hint = " ".join(filter(None, [time_hint, keyword_hint]))
             description = self.describe_image(image_bytes, context_hint=combined_hint)
+
+            # Name known people from their keywords ("A man smiles" -> "Paul smiles").
+            # Applied post-hoc so it does not depend on the model following
+            # instructions — small local models are unreliable at that.
+            named = _apply_person_names(description, existing_keywords, self.name_tags)
+            if named != description:
+                logger.info(f"Named people in description for {file_name}")
+                description = named
 
             self._report(0.5, "Extracting keywords...")
             keywords = self.extract_keywords(description, anchor_keywords=existing_keywords)

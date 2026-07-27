@@ -6,6 +6,26 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+
+## v6.2.0 - 2026-07-28
+
+### Offline Photo Enrichment
+
+Photo Processor can run with no network access: local vision model, offline reverse geocoding from a local GeoNames dataset, and post-hoc person-name substitution. Combined with in-place folder enrichment, a Lightroom catalog can be tagged end to end while travelling.
+
+### ✨ New Features
+- Photo Processor: 'Folder on disk' source mode — enriches all supported images in a folder (recursively) in place, using real file paths instead of temp copies
+- Photo Processor: offline reverse geocoding (cortex_engine/offline_geocoder.py) with Auto / Online only / Offline only modes — no network and no Nominatim rate limit
+- Photo Processor: 'Use local vision model only' skips Claude even when ANTHROPIC_API_KEY is set, for fully offline runs
+- Photo Processor: person-name substitution (cortex_engine/photo_name_tags.py) rewrites 'A man smiles' to 'Paul smiles' from configurable Tag=Name keywords, applied after the model rather than via the prompt
+
+### 🚀 Improvements
+- Photo Processor: folder mode skips exiftool *_original backup files when collecting images
+- Offline geocoding degrades loudly with install instructions rather than silently returning empty location fields
+- Docs: added docs/photo_processor_spec.md covering the enrichment pipeline, offline mode, name substitution, UI options, and known sharp edges
+- Docs: exiftool declared as a required system binary in README, CLAUDE.md, and the Docker image
+- Tests: 28 unit tests across offline geocoding modes and name substitution edge cases
+
 - LLM Metadata Sync: PNG matches now target the actual `.png` files instead of synthetic `.xmp` sidecar paths, with XMP-only writes for PNG targets
 - LLM Metadata Sync: fixed ExifTool backup handling so the default backup toggle now preserves `<filename>_original` files for rewritten existing targets instead of forcing overwrite mode
 - LLM Metadata Sync: now propagates XMP star ratings from the described JPG into matched RAW sidecars and embedded targets so Lightroom star-filtered views remain stable after metadata re-read

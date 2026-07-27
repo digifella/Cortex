@@ -138,6 +138,7 @@ ollama==0.6.1
 # OPENAI & CLOUD AI
 # ============================================================================
 openai==2.15.0
+anthropic==0.120.0
 google-ai-generativelanguage==0.6.4
 google-generativeai==0.5.4
 google-api-core==2.25.1
@@ -396,3 +397,6 @@ qwen-vl-utils==0.0.14
 #
 # ============================================================================
 geopy>=2.4.0
+# Offline reverse geocoding for photo enrichment without network access
+reverse_geocoder>=1.5.1
+pycountry>=24.6.1

@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.0.12"
+CORTEX_VERSION = "6.2.0"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
-    "minor": 0,
-    "patch": 12,
+    "minor": 2,
+    "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,24 +24,31 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-04-28",
-    "release_name": "Photo Batch Pause/Resume + EXIF & LMS Fixes",
-    "description": "Photo Processor: full pause/resume for batch jobs (surviving tab close), EXIF time-of-day fix for cameras storing UTC without a timezone offset, and LMS compound derivative suffix matching.",
+    "release_date": "2026-07-28",
+    "release_name": "Offline Photo Enrichment",
+    "description": "Photo Processor can run with no network access: local vision model, offline reverse geocoding from a local GeoNames dataset, and post-hoc person-name substitution. Combined with in-place folder enrichment, a Lightroom catalog can be tagged end to end while travelling.",
     "breaking_changes": [],
     "new_features": [
-        "Photo Processor: pause/resume for batch keyword/resize/halftone jobs — progress survives tab close and page refresh",
-        "Photo Processor: Pause button during run, Resume/Cancel when paused, recovery banner distinguishes paused vs completed batches",
+        "Photo Processor: 'Folder on disk' source mode — enriches all supported images in a folder (recursively) in place, using real file paths instead of temp copies",
+        "Photo Processor: offline reverse geocoding (cortex_engine/offline_geocoder.py) with Auto / Online only / Offline only modes — no network and no Nominatim rate limit",
+        "Photo Processor: 'Use local vision model only' skips Claude even when ANTHROPIC_API_KEY is set, for fully offline runs",
+        "Photo Processor: person-name substitution (cortex_engine/photo_name_tags.py) rewrites 'A man smiles' to 'Paul smiles' from configurable Tag=Name keywords, applied after the model rather than via the prompt",
     ],
     "improvements": [
-        "Photo Processor: batch now processes one photo per Streamlit rerun (manifest-driven) instead of a blocking for-loop",
-        "Photo Processor: cooldown delay written as a resume_after timestamp so it survives tab close",
+        "Photo Processor: folder mode skips exiftool *_original backup files when collecting images",
+        "Offline geocoding degrades loudly with install instructions rather than silently returning empty location fields",
+        "Docs: added docs/photo_processor_spec.md covering the enrichment pipeline, offline mode, name substitution, UI options, and known sharp edges",
+        "Docs: exiftool declared as a required system binary in README, CLAUDE.md, and the Docker image",
+        "Tests: 28 unit tests across offline geocoding modes and name substitution edge cases",
     ],
     "bug_fixes": [
-        "Photo Processor: EXIF time-of-day hint now prefers filename when EXIF has no timezone offset and times differ by >3h (fixes 'night' label on midday photos from cameras storing UTC)",
-        "LMS matcher: TIF files with compound derivative suffixes (e.g. -Enhanced-NR-Edit-Edit) now correctly strip the full suffix and match the base camera timestamp",
-        "Document Extract photo tab removal correctly applied after stash conflict during merge",
+        "Photo Processor: removed the dead 'Write to original files' toggle, which was never wired into run settings and had no effect",
+        "Dependencies: anthropic SDK pinned in requirements.txt — Claude Haiku vision silently fell back to Ollama when the package was absent",
+        "Dependencies: reverse_geocoder and pycountry pinned for offline geocoding",
     ],
-    "performance": []
+    "performance": [
+        "Offline geocoding removes the ~1 req/sec Nominatim pacing, making offline batches faster than online ones",
+    ]
 }
 
 # ============================================================================
