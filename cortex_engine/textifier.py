@@ -122,6 +122,21 @@ class DocumentTextifier:
     }
     VLM_NUM_PREDICT_DEFAULT = 200
 
+    # Descriptions the pipeline emits when it could not describe the image. These
+    # are placeholders, not captions — they must never be treated as a successful
+    # result, and a batch runner should collect them for a retry pass.
+    PLACEHOLDER_PREFIX = "[Image:"
+
+    @staticmethod
+    def is_placeholder_description(description: str) -> bool:
+        """True when the text is a failure placeholder rather than a real caption.
+
+        Note `[Image: logo/icon omitted]` counts as a placeholder for retry
+        purposes even though it is a deliberate outcome — a stronger model often
+        describes a photo the smaller one dismissed as a graphic.
+        """
+        return (description or "").strip().startswith(DocumentTextifier.PLACEHOLDER_PREFIX)
+
     @classmethod
     def _num_predict_for(cls, model: str) -> int:
         """Token budget for a model, overridable via CORTEX_VLM_NUM_PREDICT."""
@@ -167,6 +182,9 @@ class DocumentTextifier:
         # same install adapts from an 8GB laptop to a 48GB workstation. Explicitly
         # setting VISION_MODELS after construction still overrides this.
         self.selected_vision_model: Optional[str] = None
+        # Which model actually produced the most recent description — recorded so
+        # the caption's provenance can be written to IPTC:Writer-Editor.
+        self.last_vision_model_used: Optional[str] = None
         if auto_select_vision:
             picked, reason = _select_vision_model()
             if picked:
@@ -1172,6 +1190,7 @@ class DocumentTextifier:
             elif os.environ.get("ANTHROPIC_API_KEY", "").strip():
                 claude_result = self._describe_with_claude(encoded, context_hint=context_hint)
                 if claude_result:
+                    self.last_vision_model_used = self.CLAUDE_VISION_MODEL
                     if self._looks_like_logo_icon_description(claude_result):
                         return "[Image: logo/icon omitted]"
                     return claude_result
@@ -1196,6 +1215,7 @@ class DocumentTextifier:
                         model = str(self._vlm_model).strip()
                     if not model:
                         continue
+                    self.last_vision_model_used = model
                     result = self._describe_with_model(
                         model, encoded, simple_prompt=False, context_hint=context_hint
                     )
@@ -3283,6 +3303,45 @@ class DocumentTextifier:
             return {"success": False, "message": str(e)}
 
     @staticmethod
+    def write_caption_provenance(file_path: str, model: str) -> Dict[str, Any]:
+        """Record which model wrote the caption, in the IPTC field meant for it.
+
+        IPTC:Writer-Editor is the standard "caption writer" field — Lightroom
+        surfaces it in the metadata panel. Keeping provenance here rather than
+        appending it to the caption leaves the description clean and searchable,
+        and stops the attribution travelling into exports as visible text.
+        """
+        import shutil
+
+        model = (model or "").strip()
+        if not model:
+            return {"success": True, "message": "no model recorded", "fields_written": 0}
+
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return {"success": False, "message": "exiftool not found on PATH", "fields_written": 0}
+
+        try:
+            from cortex_engine.version_config import CORTEX_VERSION
+            writer = f"Cortex {CORTEX_VERSION} / {model}"
+        except Exception:
+            writer = f"Cortex / {model}"
+
+        cmd = [
+            exiftool_path, "-overwrite_original",
+            f"-IPTC:Writer-Editor={writer}",
+            f"-XMP-photoshop:CaptionWriter={writer}",
+            file_path,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        except Exception as exc:
+            return {"success": False, "message": str(exc), "fields_written": 0}
+        if result.returncode != 0:
+            return {"success": False, "message": result.stderr.strip()[:200], "fields_written": 0}
+        return {"success": True, "message": writer, "fields_written": 2}
+
+    @staticmethod
     def write_ownership_metadata(file_path: str, ownership_notice: str) -> Dict[str, any]:
         """Write ownership/copyright metadata fields using exiftool."""
         import shutil
@@ -3977,6 +4036,17 @@ class DocumentTextifier:
             if named != description:
                 logger.info(f"Named people in description for {file_name}")
                 description = named
+
+            # Record who wrote the caption — but only for a real caption. Stamping
+            # provenance on a "[Image: ...]" placeholder would assert authorship of
+            # a failure and make the file look successfully processed.
+            if self.is_placeholder_description(description):
+                logger.warning(
+                    "Vision model %s returned a placeholder for %s: %s",
+                    self.last_vision_model_used, file_name, description,
+                )
+            elif self.last_vision_model_used:
+                self.write_caption_provenance(file_path, self.last_vision_model_used)
 
             self._report(0.5, "Extracting keywords...")
             keywords = self.extract_keywords(description, anchor_keywords=existing_keywords)

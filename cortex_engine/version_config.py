@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.3.0"
+CORTEX_VERSION = "6.3.1"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 3,
-    "patch": 0,
+    "patch": 1,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,8 +25,8 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-07-29",
-    "release_name": "VRAM-Adaptive Vision Model Selection",
-    "description": "Local vision model selection now adapts to the free VRAM on the machine, so one install runs well on an 8GB laptop and a 48GB workstation. Reasoning-model output can no longer leak into photo metadata. Photo Processor can run with no network access: local vision model, offline reverse geocoding from a local GeoNames dataset, and post-hoc person-name substitution. Combined with in-place folder enrichment, a Lightroom catalog can be tagged end to end while travelling.",
+    "release_name": "Caption Provenance + Two-Pass Retry",
+    "description": "Captions record which model wrote them, and photos the fast model cannot describe are retried automatically with a stronger one. Local vision model selection adapts to the free VRAM on the machine, so one install runs well on an 8GB laptop and a 48GB workstation. Reasoning-model output can no longer leak into photo metadata. Photo Processor can run with no network access: local vision model, offline reverse geocoding from a local GeoNames dataset, and post-hoc person-name substitution. Combined with in-place folder enrichment, a Lightroom catalog can be tagged end to end while travelling.",
     "breaking_changes": [],
     "new_features": [
         "Photo Processor: 'Folder on disk' source mode — enriches all supported images in a folder (recursively) in place, using real file paths instead of temp copies",
@@ -34,13 +34,15 @@ VERSION_METADATA = {
         "Photo Processor: 'Use local vision model only' skips Claude even when ANTHROPIC_API_KEY is set, for fully offline runs",
         "Photo Processor: person-name substitution (cortex_engine/photo_name_tags.py) rewrites 'A man smiles' to 'Paul smiles' from configurable Tag=Name keywords, applied after the model rather than via the prompt",
         "VRAM-adaptive vision model selection (cortex_engine/vision_model_selector.py): picks the highest-quality installed model that fits current free VRAM, so an 8GB laptop and a 48GB workstation each get an appropriate model with no configuration",
+        "Caption provenance: every generated description records its author in IPTC:Writer-Editor and XMP-photoshop:CaptionWriter as 'Cortex <version> / <model>', visible in Lightroom's metadata panel",
+        "Two-pass batch enrichment (scripts/photo_enrich_batch.py): a fast VRAM-appropriate model first, then an automatic retry of undescribed photos with the strongest installed model — resumable, and --only-empty treats a placeholder as unprocessed",
     ],
     "improvements": [
         "Photo Processor: folder mode skips exiftool *_original backup files when collecting images",
         "Offline geocoding degrades loudly with install instructions rather than silently returning empty location fields",
         "Docs: added docs/photo_processor_spec.md covering the enrichment pipeline, offline mode, name substitution, UI options, and known sharp edges",
         "Docs: exiftool declared as a required system binary in README, CLAUDE.md, and the Docker image",
-        "Tests: 68 unit tests across VRAM-adaptive selection, offline geocoding, name substitution, and VLM text normalization",
+        "Tests: 79 unit tests across VRAM-adaptive selection, caption provenance, placeholder detection, offline geocoding, name substitution, and VLM text normalization",
         "Setup: gemma4:e2b-it-qat declared as the baseline vision model — 1.6GB resident, so it runs alongside Lightroom on an 8GB laptop",
         "Photo Processor shows which local model will be used and why, including a warning when nothing fits available VRAM",
         "Benchmarked four local vision models on identical photos: gemma4:e2b-it-qat 5/6 clean at 80s/photo and 1.6GB; qwen3-vl:8b best content accuracy but 7.4GB and 127s; llava:7b 2/6; qwen3-vl:4b 3/6 with empty outputs",

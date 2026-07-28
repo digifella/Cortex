@@ -129,7 +129,41 @@ Measured on the 122-photo rated re-run (2026-07-28):
 
 **Use the headless script for bulk work**, not the Streamlit page. At minutes-per-photo, the one-photo-per-rerun UI loop means an unusable browser session.
 
-## Running it
+## Running it — use the two-pass batch script
+
+`scripts/photo_enrich_batch.py` is the tool for bulk work:
+
+```bash
+python scripts/photo_enrich_batch.py "C:\Users\paul\Pictures\2026\Catalog_Sources" \
+    --only-empty --state /path/to/resume.json
+```
+
+- **Pass 1** uses the VRAM-appropriate model (fast, handles most photos).
+- **Pass 2** automatically retries anything that came back as a `[Image: ...]` placeholder, using the strongest *installed* model regardless of VRAM fit — slow-but-correct beats fast-but-empty.
+- `--only-empty` treats a placeholder as "not yet captioned", so re-running never redoes good work and always sweeps up past failures.
+- Resumable via `--state`; an interrupted run continues rather than re-describing.
+- `--no-retry` skips pass 2, `--pass1` / `--pass2` override model choice, `--after` filters by capture time.
+
+**A placeholder is a failure, not a caption.** `DocumentTextifier.is_placeholder_description()` is the check. 26 photos once carried `[Image: vision model returned empty description]` as their permanent caption because a runner treated a placeholder as success — never write one and move on, always collect it for retry.
+
+## Provenance
+
+Every real caption records its author in `IPTC:Writer-Editor` and `XMP-photoshop:CaptionWriter` as `Cortex <version> / <model>` — Lightroom shows it in the metadata panel. Paul chose the dedicated field over a caption suffix so descriptions stay clean and searchable and attribution doesn't travel into exports as visible text.
+
+**Provenance is written only for genuine captions.** Stamping it on a placeholder would assert authorship of a failure and make the file look processed.
+
+## Verify a run properly
+
+Checking for reasoning leakage is not sufficient — that check once reported "0 leak patterns" while 26 photos held placeholder captions. Check **both**:
+
+```bash
+# placeholders (failures written as captions)
+exiftool -q -m -r -if '$IPTC:Caption-Abstract =~ /^\[Image:/' -p '$FileName' "$DIR"
+# reasoning leakage
+exiftool -q -m -r -p '$IPTC:Caption-Abstract' "$DIR" | grep -iE "mention the|let's check|^The photo is (of|a)|at [0-9]{1,2}:[0-9]{2}"
+```
+
+## Running it (details)
 
 Either the Streamlit page (**Photo & Metadata Tools → Photo Processor → source: Folder on disk**) or headless. Headless is better for large batches — no browser tab to keep alive:
 
