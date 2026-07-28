@@ -28,6 +28,10 @@ from cortex_engine.photo_name_tags import (
     DEFAULT_NAME_TAGS,
     apply_names as _apply_person_names,
 )
+from cortex_engine.vision_model_selector import (
+    num_predict_for as _profile_num_predict,
+    select_vision_model as _select_vision_model,
+)
 
 logger = get_logger(__name__)
 
@@ -100,6 +104,40 @@ class DocumentTextifier:
     # Haiku is low-cost and follows complex instructions reliably.
     CLAUDE_VISION_MODEL = "claude-haiku-4-5-20251001"
 
+    # Output token budget per model family. Reasoning models emit their chain of
+    # thought before the answer and need headroom to reach it — at 140 tokens
+    # qwen3-vl spent the whole budget thinking and returned nothing. Instruct
+    # models need the opposite: a tight cap, or they overrun the 35-word style
+    # limit (llava averaged 36 words at 512 vs 25 at 140).
+    # Keys are matched as prefixes of the model name.
+    VLM_NUM_PREDICT: Dict[str, int] = {
+        "qwen3-vl": 640,   # reasoning — needs room for thinking + answer
+        "qwen2.5vl": 160,
+        "llava": 160,
+        "gemma4": 640,  # reasoning — Gemma 4 thinks before answering, despite the
+                        # "-it" instruction-tuned naming. Verified: 635 chars of
+                        # reasoning and no answer at a 160-token budget.
+        "gemma": 160,   # Gemma 3 and earlier are plain instruct models
+        "minicpm": 160,
+    }
+    VLM_NUM_PREDICT_DEFAULT = 200
+
+    @classmethod
+    def _num_predict_for(cls, model: str) -> int:
+        """Token budget for a model, overridable via CORTEX_VLM_NUM_PREDICT."""
+        override = os.environ.get("CORTEX_VLM_NUM_PREDICT", "").strip()
+        if override.isdigit():
+            return int(override)
+        # Profile table is authoritative when the model is known to the selector.
+        profiled = _profile_num_predict(model, default=0)
+        if profiled:
+            return profiled
+        name = (model or "").strip().lower()
+        for prefix, budget in cls.VLM_NUM_PREDICT.items():
+            if name.startswith(prefix):
+                return budget
+        return cls.VLM_NUM_PREDICT_DEFAULT
+
     def __init__(
         self,
         use_vision: bool = True,
@@ -113,6 +151,7 @@ class DocumentTextifier:
         geocode_mode: str = "auto",
         prefer_local_vision: bool = False,
         name_tags: Optional[Dict[str, str]] = None,
+        auto_select_vision: bool = True,
     ):
         self.use_vision = use_vision
         self.on_progress = on_progress
@@ -124,6 +163,18 @@ class DocumentTextifier:
         self.prefer_local_vision = bool(prefer_local_vision)
         # Person keyword -> display name, applied to generated descriptions.
         self.name_tags = dict(name_tags) if name_tags else dict(DEFAULT_NAME_TAGS)
+        # Pick the best installed vision model that fits current free VRAM, so the
+        # same install adapts from an 8GB laptop to a 48GB workstation. Explicitly
+        # setting VISION_MODELS after construction still overrides this.
+        self.selected_vision_model: Optional[str] = None
+        if auto_select_vision:
+            picked, reason = _select_vision_model()
+            if picked:
+                self.selected_vision_model = picked
+                self.VISION_MODELS = [picked] + [
+                    m for m in type(self).VISION_MODELS if m != picked
+                ]
+                logger.info("Vision model auto-selected: %s (%s)", picked, reason)
         self.pdf_strategy = (pdf_strategy or "docling").strip().lower()
         self.cleanup_provider = (cleanup_provider or "").strip().lower()
         self.cleanup_model = (cleanup_model or "").strip()
@@ -514,6 +565,29 @@ class DocumentTextifier:
             cleaned,
             flags=re.IGNORECASE,
         ).strip()
+        # Strip trailing self-directives. Observed on qwen3-vl when hints were in
+        # the user turn: "...on a summer day. Mention the beach, people, ocean, sky."
+        cleaned = re.sub(
+            r"\s*(?:mention|include|note|describe|list)\s+the\s+[^.!?]*[.!?]?\s*$",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        # Strip "Let's check the elements:" style planning mid-caption.
+        cleaned = re.sub(
+            r"\b(?:let'?s|let us)\s+(?:check|see|look at|start with)[^.!?:]*[.:!?]\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        # Strip a bare task restatement opener ("The photo is of a beach in X, at 15:00.")
+        # only when a real description follows it.
+        cleaned = re.sub(
+            r"^the (?:photo|photograph|image) is (?:of|a)\b[^.!?]*[.!?]\s+(?=[A-Z])",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
         # Strip self-directive sentences from the start ("Focus on X.", "Start with Y.")
         cleaned = re.sub(
             r"^(?:focus on|start with|begin with|note that|describe the)[^.!?]*[.!?]\s*",
@@ -701,19 +775,33 @@ class DocumentTextifier:
         model: str,
         prompt: str,
         encoded_image: str,
+        system: str = "",
     ) -> Dict[str, Any]:
-        """Call Ollama directly over HTTP to avoid opaque client-side empty-dict behavior."""
+        """Call Ollama directly over HTTP to avoid opaque client-side empty-dict behavior.
+
+        Rules and reference facts belong in *system*, not *prompt*. Concatenating
+        them into the user turn makes small models paraphrase the facts back
+        instead of describing the image — they answer the most recent text they
+        read rather than looking at the picture.
+        """
         base_url = str(os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
         url = f"{base_url}/api/chat"
+        messages = []
+        if system.strip():
+            messages.append({"role": "system", "content": system.strip()})
+        messages.append({
+            "role": "user",
+            "content": prompt,
+            "images": [encoded_image],
+        })
         payload = {
             "model": model,
-            "messages": [{
-                "role": "user",
-                "content": prompt,
-                "images": [encoded_image],
-            }],
+            "messages": messages,
             "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 140},
+            "options": {
+                "temperature": 0.1,
+                "num_predict": self._num_predict_for(model),
+            },
         }
         body = json.dumps(payload).encode("utf-8")
         req = Request(
@@ -730,7 +818,7 @@ class DocumentTextifier:
             "error": "",
         }
         try:
-            with urlopen(req, timeout=120) as resp:
+            with urlopen(req, timeout=int(os.environ.get("CORTEX_OLLAMA_HTTP_TIMEOUT", "120"))) as resp:
                 raw = resp.read()
                 text = raw.decode("utf-8", errors="replace")
                 self._last_vlm_http_meta.update(
@@ -770,32 +858,58 @@ class DocumentTextifier:
         context_hint: str = "",
     ) -> str:
         """Call a specific VLM model and normalize the returned text."""
-        prompt = (
-            "Describe this photograph in 1-2 short plain declarative sentences (max 35 words total). "
-            "Write as flowing prose — do NOT use structural labels like "
-            "'The main subject is...' or 'The setting is...'. "
-            "Output the description only — begin immediately with the subject or scene. "
-            "Do NOT write self-directives like 'Focus on...', 'Start with...', 'Begin with...', "
-            "'Describe the...', or 'Note that...'. "
-            "Do not include reasoning, analysis, parenthetical asides, or transitional conclusions "
-            "('So', 'Therefore', 'Thus', 'Hence', 'I think', etc.). "
-            "Write statements only — do not ask questions or use question marks. "
-            "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
-            "return exactly: [Image: logo/icon omitted]. "
-            "Do not use markdown, headings, or bullet points."
+        # Rules and reference facts go in the system turn. The user turn stays a
+        # bare instruction so the last thing the model reads is "describe the
+        # image", not a list of facts it will otherwise paraphrase back.
+        system = (
+            "You write photo captions. Output only the caption itself.\n"
+            "Style: 1-2 plain declarative sentences, under 35 words, flowing prose, "
+            "starting immediately with the subject or scene.\n"
+            "Write only what is visible in the image.\n"
+            "If the image is primarily a logo, icon, watermark or tiny decorative "
+            "graphic, output exactly: [Image: logo/icon omitted]\n"
+            "Never output: your reasoning, a plan, instructions to yourself, "
+            "questions, markdown, headings, bullet points, or a restatement of the task."
         )
         if context_hint:
-            prompt += " " + context_hint.strip()
+            # Marked as reference-only. Phrasing matters: "use these facts" invites
+            # the model to enumerate them, which is what produced captions like
+            # "The photo is of a beach in Gold Coast, Australia, at 15:00".
+            system += (
+                "\n\nReference facts about this photo (already known — use them only "
+                "to avoid mistakes, never restate them as the caption):\n"
+                + context_hint.strip()
+            )
+        prompt = "Describe this photograph."
         if not simple_prompt:
             prompt += " /no_think"
         started = time.monotonic()
-        response = self._call_ollama_chat_http(model, prompt, encoded_image)
+        response = self._call_ollama_chat_http(model, prompt, encoded_image, system=system)
         message = (response or {}).get("message", {}) if isinstance(response, dict) else {}
         result = str((message or {}).get("content", "") or "").strip()
         thinking = str((message or {}).get("thinking", "") or "").strip()
         cleaned = self._normalize_vlm_text(result)
         if not cleaned and thinking:
-            cleaned = self._normalize_vlm_text(thinking)
+            # Using the model's raw reasoning as the caption writes text like
+            # "First, the beach: sandy, people are around." into permanent photo
+            # metadata. On 2026-07-28 this silently corrupted 44 of 123 captions.
+            # An empty answer with non-empty thinking means the token budget ran
+            # out mid-reasoning — raise CORTEX_VLM_NUM_PREDICT instead.
+            if os.environ.get("CORTEX_VLM_USE_THINKING_FALLBACK", "").strip().lower() in {"1", "true", "yes"}:
+                logger.warning(
+                    "Model %s returned only reasoning; using it as the description "
+                    "because CORTEX_VLM_USE_THINKING_FALLBACK is set. This writes "
+                    "reasoning into metadata — prefer raising CORTEX_VLM_NUM_PREDICT.",
+                    model,
+                )
+                cleaned = self._normalize_vlm_text(thinking)
+            else:
+                logger.warning(
+                    "Model %s produced %d chars of reasoning but no answer — the token "
+                    "budget was exhausted before the caption. Raise CORTEX_VLM_NUM_PREDICT "
+                    "(currently %s). Returning empty rather than writing reasoning to metadata.",
+                    model, len(thinking), os.environ.get("CORTEX_VLM_NUM_PREDICT", "512"),
+                )
         elapsed = time.monotonic() - started
         if not cleaned or self._vlm_debug_enabled():
             self._log_vlm_response_debug(model, simple_prompt, response, result, cleaned, elapsed)

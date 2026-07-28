@@ -343,6 +343,20 @@ def _photo_description_issue(description: str) -> Optional[str]:
     return desc
 
 
+def _vision_model_status() -> str:
+    """Which local model will be used, and why — surfaces VRAM constraints.
+
+    Lightroom holds ~3.5GB of VRAM on a small laptop GPU, which silently forces
+    a large model onto the CPU. Showing the selection reason makes that visible
+    before a multi-hour batch rather than after.
+    """
+    try:
+        from cortex_engine.vision_model_selector import describe_selection
+        return describe_selection()
+    except Exception as exc:
+        return f"Could not determine local vision model: {exc}"
+
+
 def _offline_geocode_warning(mode: str) -> Optional[str]:
     """Warn when offline geocoding is requested but the dataset isn't installed."""
     try:
@@ -876,6 +890,8 @@ def _render_photo_keywords_tab():
             help="Forces the local Ollama model even when ANTHROPIC_API_KEY is set. "
                  "Combine with offline location lookup for a fully network-free run.",
         )
+        if prefer_local_vision:
+            st.caption(f"🖥️ {_vision_model_status()}")
 
         name_tags_text = st.text_input(
             "Person tags (Tag=Name, comma separated)",

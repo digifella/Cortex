@@ -57,6 +57,78 @@ Offline geocoding returns the nearest **suburb** (Toowong) rather than the metro
 
 **Local vision quality caveat:** `llava:7b` follows the format instructions perfectly but makes confident content errors (called a jalapeño "a slice of lime and a pickle"). Paul reviewed the local descriptions and preferred them, so this is his call — but flag accuracy, not formatting, as the risk when he asks about local models. `qwen3-vl:8b` is downloaded and unbenchmarked; the harness is at `scratchpad/vlm_bench.py`.
 
+## ⚠️ Check VRAM before any local-model run — this dominates everything
+
+Paul's laptop: RTX 4060 Laptop, **8188 MiB VRAM**, WSL2. **Lightroom Classic holds ~3.5 GB of it while open.** He has confirmed he cannot use LRC during enrichment runs.
+
+**Always do this first, before estimating time or diagnosing slowness:**
+
+```bash
+nvidia-smi --query-gpu=memory.used,memory.free --format=csv,noheader
+tasklist.exe 2>/dev/null | grep -i lightroom   # warn him to close it if present
+```
+
+Measured 2026-07-28: LRC open → 3510 MiB used / 4450 free. LRC closed → **0 used / 7959 free**.
+
+After the model loads, `ollama ps` is authoritative — it prints the CPU/GPU split:
+
+| Model | Resident | With LRC open | With LRC closed |
+|---|---|---|---|
+| `qwen3-vl:8b` | **7.4 GB** (not the 6.1 GB download) | 75% CPU / 25% GPU, or crashes | 100% GPU |
+| `llava:7b` | 4.9 GB | 19% CPU / 81% GPU | 100% GPU |
+
+Anything other than `100% GPU` means it is spilling and will run 10–100× slower. A crash shows in the server log as `llama runner terminated, exit status 2`, and surfaces to the caller as an empty description or HTTP 500 `model runner has unexpectedly stopped`.
+
+## Model choice is automatic — don't hardcode one
+
+`cortex_engine/vision_model_selector.py` picks the best installed model that fits **current** free VRAM. It adapts to the machine, so on Paul's RTX 8000 it will select a larger model than on the laptop with no config change. Check what it will do:
+
+```python
+from cortex_engine.vision_model_selector import describe_selection
+print(describe_selection())   # "7867MB free VRAM → gemma4:e2b-it-qat (…)"
+```
+
+**Ranking is by content accuracy, not style.** Style problems are fixable by re-running; a wrong noun becomes a permanent catalog keyword. On a big-VRAM machine expect `qwen3-vl:8b` or `:32b` — qwen3-vl was the only model that read a jalapeño garnish correctly where llava said "a slice of lime and a pickle" and Haiku said "cucumber".
+
+**To add a model:** append a `VisionModelProfile`. Measure `vram_mb` from `ollama ps` *during inference* — `ollama list` reports the download size and understates `qwen3-vl:8b` by 1.3 GB, the difference between fitting and crashing.
+
+**Beating Haiku is the bar Paul cares about.** Haiku got the cocktail wrong too (cucumber, and the wrong rim), so a local model that reads fine detail correctly is a genuine upgrade, not just a cost saving.
+
+## Reasoning models: the trap that corrupted 44 captions
+
+Reasoning models emit chain-of-thought *before* the answer. If `num_predict` is too small the answer never arrives — `content` is empty, `thinking` is full — and the pipeline used to write that reasoning into photo metadata as the caption.
+
+**Naming does not tell you which is which.** `gemma4:e2b-it-qat` reads as instruction-tuned and thinks anyway; Gemma 3 doesn't.
+
+| Family | Reasoning | num_predict |
+|---|---|---|
+| `qwen3-vl`, `gemma4` | yes | 640 |
+| `gemma3`, `llava`, `minicpm-v`, `qwen2.5vl` | no | 160 |
+
+`/no_think` and Ollama's `think: false` **do not work** on qwen3-vl (verified on 0.32.5 — `think: false` produced 3× more reasoning).
+
+**When a new model returns empty descriptions,** the log says exactly what to do: `produced N chars of reasoning but no answer — raise CORTEX_VLM_NUM_PREDICT`. Add it to the profile table as a reasoning model rather than re-enabling the fallback.
+
+## Ollama version matters
+
+Gemma 4 needs Ollama ≥ 0.32; on 0.20.0 the pull fails instantly with HTTP 412 `requires a newer version`. If a model won't pull, check `ollama --version` before blaming the network. Upgrade: `curl -fsSL https://ollama.com/install.sh | sudo sh` (keeps existing models).
+
+## Timing — what actually costs time
+
+Measured on the 122-photo rated re-run (2026-07-28):
+
+| Stage | Cost | Notes |
+|---|---|---|
+| Read 72 MB TIF from `/mnt/c` | 0.61 s | negligible |
+| Decode + downscale + JPEG encode | 1.07 s | negligible |
+| **Model inference** | **14 s – 120 s** | dominates entirely |
+
+**Do not "optimise" the TIF path.** Extracting an embedded JPEG preview via ffmpeg/exiftool was considered and measured: file prep is 1.68 s of a ~20 s cycle, under 10%. The apparent "TIFs are slower" signal in the run logs was confounded — the TIF-heavy folders happened to be processed during a period of VRAM pressure. TIF median 152 s vs JPG 127 s in that window; when VRAM freed up, both dropped to ~20 s.
+
+**Estimate from a warm, uncontended measurement of the real file mix** — not from a small JPG-only benchmark. A 6-photo benchmark predicted ~15 s/photo; the real 122-photo run averaged 2.3 min/photo because of VRAM contention.
+
+**Use the headless script for bulk work**, not the Streamlit page. At minutes-per-photo, the one-photo-per-rerun UI loop means an unusable browser session.
+
 ## Running it
 
 Either the Streamlit page (**Photo & Metadata Tools → Photo Processor → source: Folder on disk**) or headless. Headless is better for large batches — no browser tab to keep alive:

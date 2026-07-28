@@ -82,6 +82,45 @@ Configured in the UI as `Tag=Name` pairs (default `Paul_C=Paul, Jacqui_C=Jacqui`
 
 Only the *first* person-reference is replaced, so a photo containing the tagged person plus strangers names only the primary subject.
 
+## 1d. Local vision model selection (VRAM-adaptive)
+
+`cortex_engine/vision_model_selector.py` picks the best **installed** model that fits the VRAM **free right now**, so one install adapts from an 8 GB laptop to a 48 GB workstation without configuration. `config.VLM_MODEL` is the floor — what `model_checker` asks users to install — not the ceiling.
+
+Selection = highest `quality` among profiles whose `vram_mb + 1024 MB headroom` fits free VRAM. The headroom exists because running at the limit produced `llama runner terminated, exit status 2` in testing.
+
+### Measured profiles
+
+RTX 4060 Laptop (8188 MiB), six photos, identical prompts, 2026-07-28:
+
+| Model | Resident | Time/photo | Clean | Notes |
+|---|---|---|---|---|
+| `gemma4:e2b-it-qat` | **1.6 GB** | 80 s | **5/6** | Most practical. Fits *alongside Lightroom*. |
+| `qwen3-vl:8b` | 7.4 GB | 127 s | 4/6 | **Best content accuracy** — only model to read a jalapeño garnish correctly. |
+| `llava:7b` | 4.9 GB | 90 s | 2/6 | Fast, weakest accuracy ("a slice of lime and a pickle"). |
+| `qwen3-vl:4b` | 4.7 GB | 159 s | 3/6 | Worst of both — slow *and* 3 empty outputs. |
+
+`vram_mb` is the **resident** size from `ollama ps` after a real inference, **not** the download size from `ollama list` — the latter understates `qwen3-vl:8b` by 1.3 GB, which is the difference between fitting and crashing.
+
+### Adding a model
+
+Add a `VisionModelProfile` to `VISION_MODEL_PROFILES`. Nothing else changes — the selector, the token budget and the UI status line all read from it. Measure `vram_mb` with `ollama ps` during inference and rank `quality` on **content accuracy**, not style: style is fixable by re-running, a wrong noun becomes a permanent catalog keyword.
+
+### Reasoning vs instruct models
+
+Reasoning models emit chain-of-thought before answering and need a large `num_predict` to reach the answer at all. **Naming is not a reliable signal** — `gemma4:e2b-it-qat` reads as instruction-tuned but thinks; Gemma 3 does not. Verified behaviour:
+
+| Family | Reasoning | `num_predict` | Evidence |
+|---|---|---|---|
+| `qwen3-vl` | yes | 640 | at 140 → 610 chars reasoning, **zero** answer |
+| `gemma4` | yes | 640 | at 160 → 635 chars reasoning, **zero** answer |
+| `gemma3`, `llava`, `minicpm-v`, `qwen2.5vl` | no | 160 | at 512 llava overran to 36 words (25 at 140) |
+
+`/no_think` and Ollama's `think: false` parameter **do not suppress reasoning** on qwen3-vl — verified on Ollama 0.32.5; `think: false` produced *three times more* reasoning.
+
+### The failure this prevents
+
+When a reasoning model exhausts its budget, `content` is empty and `thinking` is full. The pipeline used to fall back to the reasoning text as the caption — silently writing *"First, the beach: sandy, people are around."* into 44 photos' permanent metadata. That fallback is now **off by default** (`CORTEX_VLM_USE_THINKING_FALLBACK` to re-enable) and logs the exact remedy instead.
+
 ## 2. Prerequisites
 
 | Requirement | Purpose | Absence behaviour |
