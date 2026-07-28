@@ -137,6 +137,22 @@ pip install -r requirements.txt
 python -m spacy download en_core_web_sm
 ```
 
+**3b. Install Ollama Models:**
+
+Ollama models are not pip packages — pull them separately. The vision model is
+required for photo and image description (Photo & Metadata Tools, Knowledge
+Ingest image handling):
+
+```bash
+ollama pull qwen3-vl:8b        # vision / image description (6.1GB) — VLM_MODEL
+ollama pull mistral-small3.2   # proposals and synthesis (15GB)
+ollama pull mistral:latest     # general LLM tasks (4.4GB)
+```
+
+`qwen3-vl:8b` needs roughly 6.5GB of free VRAM. On smaller GPUs the pipeline
+falls back automatically to `llava:7b` (4.7GB), which is faster but noticeably
+less accurate on image content — see `docs/photo_processor_spec.md`.
+
 **3a. Optional: GPU Acceleration (NVIDIA GPUs)**
 
 For significantly faster embedding generation and document processing:

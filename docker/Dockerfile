@@ -181,6 +181,12 @@ echo ""
         echo "✅ Mistral Small model ready!"
     fi
 
+    if ! ollama list 2>/dev/null | grep -q "qwen3-vl:8b"; then
+        echo "⬇️ Downloading Qwen3-VL vision model (6.1GB)..."
+        ollama pull qwen3-vl:8b
+        echo "✅ Vision model ready!"
+    fi
+
     echo "🎯 All AI models are now ready!"
     echo "🚀 Full functionality is now available at http://localhost:8501"
 } &

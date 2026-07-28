@@ -493,6 +493,27 @@ class DocumentTextifier:
             cleaned,
             flags=re.IGNORECASE,
         ).strip()
+        # Strip a leading reasoning clause that hands off to the real answer with
+        # a colon. qwen3-vl narrates its analysis before answering:
+        #   "The main thing is a dark cocktail... So: A dark cocktail in a glass..."
+        # The colon makes the hand-off unambiguous, so this cannot eat ordinary prose.
+        cleaned = re.sub(
+            r"^.{0,200}?\bso:\s+(?=[A-Za-z])",
+            "",
+            cleaned,
+            count=1,
+            flags=re.IGNORECASE | re.DOTALL,
+        ).strip()
+        # Strip leading "The main thing is ..." style analysis sentences, which the
+        # same models emit without the "So:" hand-off.
+        cleaned = re.sub(
+            r"^(?:the (?:main|key|primary) (?:thing|subject|focus|element) is"
+            r"|what stands out is|the photo(?:graph)? (?:is|shows) (?:mainly|primarily))"
+            r"[^.!?]*[.!?]\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
         # Strip self-directive sentences from the start ("Focus on X.", "Start with Y.")
         cleaned = re.sub(
             r"^(?:focus on|start with|begin with|note that|describe the)[^.!?]*[.!?]\s*",

@@ -1,5 +1,5 @@
 # ## File: pages/18_Private_Vault_GraphRAG.py
-# Version: v6.2.0
+# Version: v6.2.1
 # Date: 2026-04-22
 # Purpose: Local-only public/private vault GraphRAG search and maintenance UI.
 

@@ -7,6 +7,30 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+
+
+
+## v6.2.1 - 2026-07-28
+
+### Offline Photo Enrichment + Qwen3-VL Default
+
+Qwen3-VL becomes the declared vision model and reasoning leakage is stripped from local model output. Photo Processor can run with no network access: local vision model, offline reverse geocoding from a local GeoNames dataset, and post-hoc person-name substitution. Combined with in-place folder enrichment, a Lightroom catalog can be tagged end to end while travelling.
+
+### ✨ New Features
+- Photo Processor: 'Folder on disk' source mode — enriches all supported images in a folder (recursively) in place, using real file paths instead of temp copies
+- Photo Processor: offline reverse geocoding (cortex_engine/offline_geocoder.py) with Auto / Online only / Offline only modes — no network and no Nominatim rate limit
+- Photo Processor: 'Use local vision model only' skips Claude even when ANTHROPIC_API_KEY is set, for fully offline runs
+- Photo Processor: person-name substitution (cortex_engine/photo_name_tags.py) rewrites 'A man smiles' to 'Paul smiles' from configurable Tag=Name keywords, applied after the model rather than via the prompt
+
+### 🚀 Improvements
+- Photo Processor: folder mode skips exiftool *_original backup files when collecting images
+- Offline geocoding degrades loudly with install instructions rather than silently returning empty location fields
+- Docs: added docs/photo_processor_spec.md covering the enrichment pipeline, offline mode, name substitution, UI options, and known sharp edges
+- Docs: exiftool declared as a required system binary in README, CLAUDE.md, and the Docker image
+- Tests: 40 unit tests across offline geocoding modes, name substitution, and VLM text normalization
+- Setup: qwen3-vl:8b declared as a required Ollama model in README, CLAUDE.md and the Docker startup pulls, so it installs on a fresh machine
+- Benchmarked qwen3-vl:8b against llava:7b on photo description — qwen3-vl is materially more accurate on image content at ~14s/image warm
+
 ## v6.2.0 - 2026-07-28
 
 ### Offline Photo Enrichment

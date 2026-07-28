@@ -275,6 +275,9 @@ python -m spacy download en_core_web_sm
 # Install required model for proposals
 ollama pull mistral-small3.2
 
+# Install required vision model for photo/image description (6.1GB)
+ollama pull qwen3-vl:8b
+
 # Start the application
 streamlit run Cortex_Suite.py
 ```

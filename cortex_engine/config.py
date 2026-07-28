@@ -168,7 +168,12 @@ EMBED_MODEL = os.getenv("CORTEX_EMBED_MODEL", "BAAI/bge-base-en-v1.5")  # Fast d
 # Vision Language Model Configuration
 # Options: "llava:7b", "llava:13b", "llava:34b" (newer, more capable models)
 # or "moondream" (smaller, faster alternative)
-VLM_MODEL = "llava:7b"  # Vision language model for image processing - upgraded to 7B parameter model
+VLM_MODEL = "qwen3-vl:8b"  # Vision language model for image processing.
+# Declared here so model_checker prompts for it and required_models validates it.
+# Benchmarked against llava:7b on photo description: qwen3-vl is materially more
+# accurate on image content (it was the only model to identify a jalapeño garnish
+# that both llava and Claude Haiku got wrong) at ~14s/image warm vs ~1.5s.
+# llava:7b remains the automatic fallback via VISION_FALLBACK_MODELS.
 
 # --- Docling VLM Processing Configuration ---
 # Phase 1: Enhanced figure processing with VLM descriptions

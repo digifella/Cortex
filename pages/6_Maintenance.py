@@ -1,5 +1,5 @@
 # ## File: pages/6_Maintenance.py
-# Version: v6.2.0
+# Version: v6.2.1
 # Date: 2026-01-17
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
 #          Combines database maintenance, system terminal, and other administrative functions

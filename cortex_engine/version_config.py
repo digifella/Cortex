@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.2.0"
+CORTEX_VERSION = "6.2.1"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 2,
-    "patch": 0,
+    "patch": 1,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,8 +25,8 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-07-28",
-    "release_name": "Offline Photo Enrichment",
-    "description": "Photo Processor can run with no network access: local vision model, offline reverse geocoding from a local GeoNames dataset, and post-hoc person-name substitution. Combined with in-place folder enrichment, a Lightroom catalog can be tagged end to end while travelling.",
+    "release_name": "Offline Photo Enrichment + Qwen3-VL Default",
+    "description": "Qwen3-VL becomes the declared vision model and reasoning leakage is stripped from local model output. Photo Processor can run with no network access: local vision model, offline reverse geocoding from a local GeoNames dataset, and post-hoc person-name substitution. Combined with in-place folder enrichment, a Lightroom catalog can be tagged end to end while travelling.",
     "breaking_changes": [],
     "new_features": [
         "Photo Processor: 'Folder on disk' source mode — enriches all supported images in a folder (recursively) in place, using real file paths instead of temp copies",
@@ -39,9 +39,13 @@ VERSION_METADATA = {
         "Offline geocoding degrades loudly with install instructions rather than silently returning empty location fields",
         "Docs: added docs/photo_processor_spec.md covering the enrichment pipeline, offline mode, name substitution, UI options, and known sharp edges",
         "Docs: exiftool declared as a required system binary in README, CLAUDE.md, and the Docker image",
-        "Tests: 28 unit tests across offline geocoding modes and name substitution edge cases",
+        "Tests: 40 unit tests across offline geocoding modes, name substitution, and VLM text normalization",
+        "Setup: qwen3-vl:8b declared as a required Ollama model in README, CLAUDE.md and the Docker startup pulls, so it installs on a fresh machine",
+        "Benchmarked qwen3-vl:8b against llava:7b on photo description — qwen3-vl is materially more accurate on image content at ~14s/image warm",
     ],
     "bug_fixes": [
+        "Vision model: config.VLM_MODEL was 'llava:7b' while textifier.VISION_MODELS listed 'qwen3-vl:8b' first — model_checker therefore never prompted users to install the model the pipeline actually preferred",
+        "Text normalizer: strip reasoning leakage from local vision models ('The main thing is X. So: Y' now yields only Y), with guards so ordinary prose containing 'so,' or 'in the foreground' survives",
         "Photo Processor: removed the dead 'Write to original files' toggle, which was never wired into run settings and had no effect",
         "Dependencies: anthropic SDK pinned in requirements.txt — Claude Haiku vision silently fell back to Ollama when the package was absent",
         "Dependencies: reverse_geocoder and pycountry pinned for offline geocoding",
