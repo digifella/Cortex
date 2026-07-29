@@ -146,6 +146,22 @@ python scripts/photo_enrich_batch.py "C:\Users\paul\Pictures\2026\Catalog_Source
 
 **A placeholder is a failure, not a caption.** `DocumentTextifier.is_placeholder_description()` is the check. 26 photos once carried `[Image: vision model returned empty description]` as their permanent caption because a runner treated a placeholder as success — never write one and move on, always collect it for retry.
 
+## Person names are applied at enrichment time — retro-fit with a separate pass
+
+Name substitution reads the keywords present *when the caption is written*. A photo tagged `jacqui_c` in Lightroom **after** captioning keeps the generic "A woman is walking…" — tagging later cannot retroactively rewrite a caption already on disk.
+
+Fix without re-running the vision model (seconds, not hours — pure text work):
+
+```bash
+python scripts/photo_apply_names.py "C:\Users\paul\Pictures\2026\Catalog_Sources" --apply
+```
+
+Dry-run by default. Run it whenever Paul tags more people.
+
+**Tag separators vary.** His library carries `Paul_C`, `paul c` and `jacqui_c` simultaneously — Lightroom keyword entry is inconsistent. Matching folds spaces, hyphens and underscores, so all resolve; `paulc` and bare `paul` deliberately do not, to avoid false positives.
+
+**A tagged photo with no person phrase is correctly left alone** — e.g. a caption about a market table. Forcing a name in would invent a subject.
+
 ## Provenance
 
 Every real caption records its author in `IPTC:Writer-Editor` and `XMP-photoshop:CaptionWriter` as `Cortex <version> / <model>` — Lightroom shows it in the metadata panel. Paul chose the dedicated field over a caption suffix so descriptions stay clean and searchable and attribution doesn't travel into exports as visible text.

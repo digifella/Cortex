@@ -84,3 +84,47 @@ class TestApplyNames:
     def test_custom_mapping(self):
         out = apply_names("A person waves.", ["dog_c"], {"dog_c": "Rex"})
         assert out == "Rex waves."
+
+
+class TestSeparatorTolerance:
+    """Lightroom keyword entry is inconsistent about separators.
+
+    A real library carried Paul_C, paul c and jacqui_c simultaneously; the space
+    variant silently never matched, so those photos were never named.
+    """
+
+    @pytest.mark.parametrize("tag", ["Paul_C", "paul_c", "paul c", "paul-c",
+                                     "PAUL C", " Paul_C "])
+    def test_variants_all_resolve(self, tag):
+        assert names_from_keywords([tag]) == ["Paul"]
+
+    @pytest.mark.parametrize("tag", ["paulc", "paul", "paula_c", "paul_d"])
+    def test_near_misses_do_not_match(self, tag):
+        # Guarding against false positives on unrelated tags.
+        assert names_from_keywords([tag]) == []
+
+    def test_mixed_separators_across_two_people(self):
+        assert apply_names("A man and a woman walk the beach.",
+                           ["paul c", "Jacqui-C"]) == "Paul and Jacqui walk the beach."
+
+    def test_custom_mapping_keys_are_also_normalised(self):
+        assert apply_names("A person waves.", ["dog c"], {"dog_c": "Rex"}) == "Rex waves."
+
+
+class TestRetroApplication:
+    """Photos tagged after captioning keep generic phrasing until re-applied."""
+
+    def test_generic_caption_becomes_named(self):
+        caption = ("The photograph captures a lively outdoor market scene in Burleigh "
+                   "Waters, Queensland, Australia. A woman is walking past several stalls.")
+        out = apply_names(caption, ["jacqui_c"])
+        assert "Jacqui is walking past several stalls" in out
+        assert "A woman is walking" not in out
+
+    def test_already_named_caption_is_untouched(self):
+        caption = "There's Paul walking, trees on the sides, ocean in the background."
+        assert apply_names(caption, ["Paul_C"]) == caption
+
+    def test_tagged_photo_without_a_person_phrase_is_untouched(self):
+        caption = "A table draped with a white tablecloth serves as the centrepiece."
+        assert apply_names(caption, ["jacqui_c"]) == caption

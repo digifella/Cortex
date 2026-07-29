@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.3.1"
+CORTEX_VERSION = "6.3.2"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 3,
-    "patch": 1,
+    "patch": 2,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,7 +25,7 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-07-29",
-    "release_name": "Caption Provenance + Two-Pass Retry",
+    "release_name": "Person-Tag Matching Fixes",
     "description": "Captions record which model wrote them, and photos the fast model cannot describe are retried automatically with a stronger one. Local vision model selection adapts to the free VRAM on the machine, so one install runs well on an 8GB laptop and a 48GB workstation. Reasoning-model output can no longer leak into photo metadata. Photo Processor can run with no network access: local vision model, offline reverse geocoding from a local GeoNames dataset, and post-hoc person-name substitution. Combined with in-place folder enrichment, a Lightroom catalog can be tagged end to end while travelling.",
     "breaking_changes": [],
     "new_features": [
@@ -36,6 +36,7 @@ VERSION_METADATA = {
         "VRAM-adaptive vision model selection (cortex_engine/vision_model_selector.py): picks the highest-quality installed model that fits current free VRAM, so an 8GB laptop and a 48GB workstation each get an appropriate model with no configuration",
         "Caption provenance: every generated description records its author in IPTC:Writer-Editor and XMP-photoshop:CaptionWriter as 'Cortex <version> / <model>', visible in Lightroom's metadata panel",
         "Two-pass batch enrichment (scripts/photo_enrich_batch.py): a fast VRAM-appropriate model first, then an automatic retry of undescribed photos with the strongest installed model — resumable, and --only-empty treats a placeholder as unprocessed",
+        "scripts/photo_apply_names.py re-applies person names to captions already on disk, for photos tagged after they were captioned — no vision model needed, so it runs in seconds",
     ],
     "improvements": [
         "Photo Processor: folder mode skips exiftool *_original backup files when collecting images",
@@ -48,6 +49,7 @@ VERSION_METADATA = {
         "Benchmarked four local vision models on identical photos: gemma4:e2b-it-qat 5/6 clean at 80s/photo and 1.6GB; qwen3-vl:8b best content accuracy but 7.4GB and 127s; llava:7b 2/6; qwen3-vl:4b 3/6 with empty outputs",
     ],
     "bug_fixes": [
+        "Person-tag matching now folds separators: a library carrying Paul_C, paul c and paul-c matched only the underscore form, so space-separated tags silently never produced a name. paulc and bare paul still do not match, avoiding false positives",
         "Vision output: a reasoning model that exhausted its token budget returned only chain-of-thought, which the pipeline wrote into photo metadata as the caption — this silently corrupted 44 captions before being caught. The fallback is now off by default and logs the remedy",
         "Token budget is per model family: reasoning models (qwen3-vl, gemma4) need 640 to reach an answer; instruct models (llava, gemma3) need 160 or they overrun the word limit",
         "Prompt structure: rules and reference facts moved to the system turn. Concatenated into the user turn, small models paraphrased the facts back instead of describing the image",

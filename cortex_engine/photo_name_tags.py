@@ -61,14 +61,24 @@ def parse_name_tags(raw: str) -> Dict[str, str]:
     return mapping or dict(DEFAULT_NAME_TAGS)
 
 
+def _normalise_tag(tag: str) -> str:
+    """Fold a keyword to a comparable form.
+
+    Real libraries carry the same person as ``Paul_C``, ``paul c`` and
+    ``paul-c`` — Lightroom keyword entry is inconsistent about separators, and a
+    tag that only differs by a space would otherwise silently never match.
+    """
+    return re.sub(r"[\s\-_]+", "_", str(tag or "").strip().lower())
+
+
 def names_from_keywords(
     keywords: Iterable[str],
     name_tags: Dict[str, str] = None,
 ) -> List[str]:
     """Return display names for any person-tags present, in mapping order."""
     tags = name_tags if name_tags is not None else DEFAULT_NAME_TAGS
-    lowered = {str(k).strip().lower() for k in (keywords or [])}
-    return [name for tag, name in tags.items() if tag in lowered]
+    present = {_normalise_tag(k) for k in (keywords or [])}
+    return [name for tag, name in tags.items() if _normalise_tag(tag) in present]
 
 
 def _sub_first(patterns: Iterable[str], text: str, replacement: str):
