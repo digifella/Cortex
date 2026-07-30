@@ -343,6 +343,55 @@ def _photo_description_issue(description: str) -> Optional[str]:
     return desc
 
 
+def _vision_model_status() -> str:
+    """Which local model will be used, and why — surfaces VRAM constraints.
+
+    Lightroom holds ~3.5GB of VRAM on a small laptop GPU, which silently forces
+    a large model onto the CPU. Showing the selection reason makes that visible
+    before a multi-hour batch rather than after.
+    """
+    try:
+        from cortex_engine.vision_model_selector import describe_selection
+        return describe_selection()
+    except Exception as exc:
+        return f"Could not determine local vision model: {exc}"
+
+
+def _offline_geocode_warning(mode: str) -> Optional[str]:
+    """Warn when offline geocoding is requested but the dataset isn't installed."""
+    try:
+        from cortex_engine.offline_geocoder import describe_mode
+        return describe_mode(mode)
+    except Exception:
+        return None
+
+
+PHOTO_DIR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".gif", ".bmp"}
+
+
+def _collect_photo_dir(dir_str: str) -> tuple[Optional[str], list[str]]:
+    """Resolve a folder path and collect supported images for in-place processing.
+
+    Returns (error_message, sorted_paths). Accepts Windows or WSL path strings.
+    Recurses into subfolders; exiftool sidecar backups (*_original) are ignored.
+    """
+    path = Path(convert_windows_to_wsl_path(dir_str.strip()))
+    if not path.exists():
+        return f"Directory does not exist: {path}", []
+    if not path.is_dir():
+        return f"Not a directory: {path}", []
+
+    paths = sorted(
+        str(p) for p in path.rglob("*")
+        if p.is_file()
+        and p.suffix.lower() in PHOTO_DIR_EXTENSIONS
+        and not p.name.endswith("_original")
+    )
+    if not paths:
+        return f"No supported images found in: {path}", []
+    return None, paths
+
+
 def _photokw_temp_dir() -> Path:
     return Path(tempfile.gettempdir()) / "cortex_photokw"
 
@@ -546,7 +595,13 @@ def _render_photo_keywords_tab():
                 result = {"file_name": fname, "error": "file no longer exists"}
             else:
                 from cortex_engine.textifier import DocumentTextifier
-                textifier = DocumentTextifier(use_vision=True)
+                from cortex_engine.photo_name_tags import parse_name_tags
+                textifier = DocumentTextifier(
+                    use_vision=True,
+                    geocode_mode=settings.get("geocode_mode", "auto"),
+                    prefer_local_vision=settings.get("prefer_local_vision", False),
+                    name_tags=parse_name_tags(settings.get("name_tags", "")),
+                )
 
                 def _dispatch_progress(frac, msg, _name=fname, _idx=current_idx, _total=len(all_paths)):
                     st.session_state["photokw_dispatch_progress"] = (frac, msg, _name, _idx, _total)
@@ -728,12 +783,40 @@ def _render_photo_keywords_tab():
             st.session_state["photokw_upload_version"] = 0
         ver = st.session_state["photokw_upload_version"]
 
-        uploaded_input = st.file_uploader(
-            "Drop photos here:",
-            type=["png", "jpg", "jpeg", "tiff", "webp", "gif", "bmp"],
-            accept_multiple_files=True,
-            key=f"photokw_upload_v{ver}",
+        source_mode = st.radio(
+            "Photo source",
+            options=["Upload files", "Folder on disk"],
+            horizontal=True,
+            key="photokw_source_mode",
+            help="Uploads are processed as temp copies (originals untouched). "
+                 "Folder mode writes enriched metadata directly into the files in place.",
         )
+        folder_mode = source_mode == "Folder on disk"
+
+        dir_paths: list[str] = []
+        if folder_mode:
+            photo_dir_str = st.text_input(
+                "Photo folder (processed in place)",
+                key="photokw_dir",
+                placeholder=r"C:\Users\paul\Pictures\2026\Catalog_Sources",
+                help="All supported images in this folder are enriched in place, including subfolders. "
+                     "Run Lightroom's Save Metadata to File (Ctrl+S) before processing.",
+            )
+            if photo_dir_str.strip():
+                dir_error, dir_paths = _collect_photo_dir(photo_dir_str)
+                if dir_error:
+                    st.error(dir_error)
+                else:
+                    st.success(f"{len(dir_paths)} image(s) found — these will be modified in place.")
+
+        uploaded_input = None
+        if not folder_mode:
+            uploaded_input = st.file_uploader(
+                "Drop photos here:",
+                type=["png", "jpg", "jpeg", "tiff", "webp", "gif", "bmp"],
+                accept_multiple_files=True,
+                key=f"photokw_upload_v{ver}",
+            )
         upload_cache_key = "photokw_uploaded_cache"
         if uploaded_input:
             uploaded = [_SessionUpload(uf.name, uf.getvalue()) for uf in uploaded_input]
@@ -741,6 +824,8 @@ def _render_photo_keywords_tab():
                 {"name": uf.name, "data": uf.getvalue()}
                 for uf in uploaded_input
             ]
+        elif folder_mode:
+            uploaded = []
         else:
             cached_uploads = st.session_state.get(upload_cache_key) or []
             uploaded = [
@@ -748,14 +833,6 @@ def _render_photo_keywords_tab():
                 for item in cached_uploads
                 if isinstance(item, dict) and item.get("name")
             ]
-
-        write_to_original = st.toggle(
-            "Write to original files",
-            value=False,
-            key="photokw_write_original",
-            help="When OFF, keywords are written to copies in a temp folder (originals untouched). "
-                 "When ON, keywords are written directly to the uploaded files.",
-        )
 
         city_radius = st.slider(
             "City location radius",
@@ -789,6 +866,46 @@ def _render_photo_keywords_tab():
             key="photokw_populate_location",
             help="Completes City/State/Country from GPS, or derives GPS from City/Country hints when GPS is missing.",
         )
+        geocode_choice = st.selectbox(
+            "Location lookup",
+            options=["Auto (online, offline fallback)", "Online only (Nominatim)",
+                     "Offline only (no network)"],
+            index=0,
+            key="photokw_geocode_mode",
+            disabled=not populate_location,
+            help="Offline uses a local GeoNames dataset — no network and no rate limit, "
+                 "but returns the nearest suburb rather than the metro city "
+                 "(e.g. Toowong instead of Brisbane). State and country are unaffected.",
+        )
+        geocode_mode = {
+            "Auto (online, offline fallback)": "auto",
+            "Online only (Nominatim)": "online",
+            "Offline only (no network)": "offline",
+        }[geocode_choice]
+
+        prefer_local_vision = st.checkbox(
+            "Use local vision model only (skip Claude)",
+            value=False,
+            key="photokw_prefer_local",
+            help="Forces the local Ollama model even when ANTHROPIC_API_KEY is set. "
+                 "Combine with offline location lookup for a fully network-free run.",
+        )
+        if prefer_local_vision:
+            st.caption(f"🖥️ {_vision_model_status()}")
+
+        name_tags_text = st.text_input(
+            "Person tags (Tag=Name, comma separated)",
+            value="Paul_C=Paul, Jacqui_C=Jacqui",
+            key="photokw_name_tags",
+            help="When a photo carries one of these keywords, the generated description "
+                 "names the person: 'A man smiles' becomes 'Paul smiles'. Applied after "
+                 "the model, so it does not rely on the model following instructions.",
+        )
+
+        _geo_warning = _offline_geocode_warning(geocode_mode)
+        if _geo_warning:
+            st.warning(_geo_warning)
+
         fallback_city = st.text_input(
             "Fallback city (optional)",
             value="",
@@ -939,7 +1056,7 @@ def _render_photo_keywords_tab():
                 _log_ph = st.empty()
                 _render_live_log(_log_ph, _live_entries, _run_manifest.get("mode", "keyword_metadata"))
 
-        if uploaded:
+        if uploaded or dir_paths:
             accepted_uploads = []
             accepted_bytes = 0
             for uf in uploaded:
@@ -953,7 +1070,7 @@ def _render_photo_keywords_tab():
                     break
                 accepted_uploads.append(uf)
                 accepted_bytes += size_bytes
-            if not accepted_uploads:
+            if uploaded and not accepted_uploads:
                 st.error("Selected photos exceed the 1GB total upload limit.")
                 return
             if len(accepted_uploads) < len(uploaded):
@@ -962,15 +1079,24 @@ def _render_photo_keywords_tab():
                     f"{len(accepted_uploads)} of {len(uploaded)} photos will be processed."
                 )
             uploaded = accepted_uploads
-            st.session_state[upload_cache_key] = [
-                {"name": uf.name, "data": uf.getvalue()}
-                for uf in uploaded
-            ]
-            total = len(uploaded)
-            st.info(f"{total} photo(s) selected ({accepted_bytes / (1024 * 1024):.1f} MB total)")
+            if uploaded:
+                st.session_state[upload_cache_key] = [
+                    {"name": uf.name, "data": uf.getvalue()}
+                    for uf in uploaded
+                ]
+            total = len(dir_paths) if dir_paths else len(uploaded)
+            if dir_paths:
+                st.warning(
+                    f"{total} photo(s) will be modified **in place**. "
+                    "Run Lightroom's Save Metadata to File (Ctrl+S) first, and keep "
+                    "ExifTool backups on for the first run."
+                )
+            else:
+                st.info(f"{total} photo(s) selected ({accepted_bytes / (1024 * 1024):.1f} MB total)")
 
             # Single-photo metadata preview for quick testing before processing.
-            if total == 1:
+            # Upload mode only — folder mode has no in-memory bytes to preview.
+            if total == 1 and uploaded:
                 preview_photo = uploaded[0]
                 preview_bytes = preview_photo.getvalue()
                 preview_temp_dir = Path(tempfile.gettempdir()) / "cortex_photokw_preview"
@@ -1180,7 +1306,10 @@ def _render_photo_keywords_tab():
                 temp_dir = Path(tempfile.gettempdir()) / "cortex_photokw"
                 temp_dir.mkdir(exist_ok=True, mode=0o755)
                 all_file_paths: list[str] = []
-                if total == 1 and st.session_state.get("photokw_single_working_path"):
+                if dir_paths:
+                    # Folder mode — process the real files in place, no temp copies.
+                    all_file_paths = list(dir_paths)
+                elif total == 1 and st.session_state.get("photokw_single_working_path"):
                     working_path = st.session_state.get("photokw_single_working_path")
                     if working_path and Path(working_path).exists():
                         dest = temp_dir / uploaded[0].name
@@ -1188,7 +1317,7 @@ def _render_photo_keywords_tab():
                         os.chmod(str(dest), 0o644)
                         all_file_paths.append(str(dest))
                 if not all_file_paths:
-                    if total == 1:
+                    if total == 1 and uploaded:
                         uf = uploaded[0]
                         dest = temp_dir / uf.name
                         with open(dest, "wb") as f:
@@ -1231,6 +1360,9 @@ def _render_photo_keywords_tab():
                         "city_radius": city_radius,
                         "fallback_city": fallback_city,
                         "fallback_country": fallback_country,
+                        "geocode_mode": geocode_mode,
+                        "prefer_local_vision": prefer_local_vision,
+                        "name_tags": name_tags_text,
                         "max_width": max_width,
                         "max_height": max_height,
                         "convert_to_jpg": convert_to_jpg,

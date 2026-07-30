@@ -168,7 +168,19 @@ EMBED_MODEL = os.getenv("CORTEX_EMBED_MODEL", "BAAI/bge-base-en-v1.5")  # Fast d
 # Vision Language Model Configuration
 # Options: "llava:7b", "llava:13b", "llava:34b" (newer, more capable models)
 # or "moondream" (smaller, faster alternative)
-VLM_MODEL = "llava:7b"  # Vision language model for image processing - upgraded to 7B parameter model
+VLM_MODEL = "gemma4:e2b-it-qat"  # Baseline vision model — see the note below.
+# This is the *floor*, not the ceiling. At runtime DocumentTextifier calls
+# cortex_engine.vision_model_selector to pick the best installed model that fits
+# the free VRAM on this machine, so an RTX 8000 automatically uses a larger model
+# than an 8GB laptop. VLM_MODEL is what model_checker tells users to install and
+# what config.required_models validates, so it must be something that runs
+# everywhere: gemma4:e2b-it-qat is 1.6GB resident and fits alongside Lightroom.
+#
+# Six-photo benchmark, RTX 4060 Laptop, identical prompts (2026-07-28):
+#   gemma4:e2b-it-qat  1.6GB   80s  5/6 clean   <- most practical
+#   qwen3-vl:8b        7.4GB  127s  4/6 clean   <- best content accuracy
+#   llava:7b           4.9GB   90s  2/6 clean
+#   qwen3-vl:4b        4.7GB  159s  3/6 clean (3 empty)
 
 # --- Docling VLM Processing Configuration ---
 # Phase 1: Enhanced figure processing with VLM descriptions

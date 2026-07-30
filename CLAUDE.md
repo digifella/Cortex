@@ -259,6 +259,9 @@ git push origin main
 
 ### Quick Start
 ```bash
+# System dependencies (graphviz = mind maps, exiftool = photo metadata tools)
+sudo apt-get install graphviz libimage-exiftool-perl
+
 # Create Python 3.11 virtual environment
 python3.11 -m venv venv
 source venv/bin/activate
@@ -272,6 +275,9 @@ python -m spacy download en_core_web_sm
 # Install required model for proposals
 ollama pull mistral-small3.2
 
+# Install required vision model for photo/image description (6.1GB)
+ollama pull qwen3-vl:8b
+
 # Start the application
 streamlit run Cortex_Suite.py
 ```
@@ -280,6 +286,11 @@ streamlit run Cortex_Suite.py
 - **Python**: 3.11 (required for stability)
 - **NumPy**: <2.0.0 (compatibility with spaCy/ChromaDB)
 - **spaCy**: 3.5.0-3.8.0 range
+
+### Required System Binaries
+These are **not** installed by `pip install -r requirements.txt` — they must be present on `PATH`:
+- **`exiftool`** — required by the Photo & Metadata Tools page (both tabs). Invoked as a subprocess; never reimplement EXIF/XMP parsing in Python. Detected via `shutil.which("exiftool")`; when absent the UI disables Scan/Apply.
+- **`dot`** (graphviz) — required for mind map generation in AI Assisted Research.
 
 ## Key Technical Details
 

@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     build-essential \
+    libimage-exiftool-perl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app user first
@@ -178,6 +179,12 @@ echo ""
         echo "⬇️ Downloading Mistral Small model (15GB)..."
         ollama pull mistral-small3.2
         echo "✅ Mistral Small model ready!"
+    fi
+
+    if ! ollama list 2>/dev/null | grep -q "qwen3-vl:8b"; then
+        echo "⬇️ Downloading Qwen3-VL vision model (6.1GB)..."
+        ollama pull qwen3-vl:8b
+        echo "✅ Vision model ready!"
     fi
 
     echo "🎯 All AI models are now ready!"

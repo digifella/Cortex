@@ -205,13 +205,20 @@ def test_build_photo_time_hint_returns_empty_when_no_exif_and_no_pattern(tmp_pat
 # ------------------------------------------------------------------
 
 
-def test_describe_with_model_appends_context_hint_to_prompt(monkeypatch):
+def test_describe_with_model_puts_context_hint_in_system_turn(monkeypatch):
+    """Hints belong in the system turn, not the user turn.
+
+    When rules and facts were concatenated into the user message, small models
+    paraphrased the facts back instead of describing the image — producing
+    captions like "The photo is of a beach in Gold Coast, Australia, at 15:00."
+    Keeping the user turn a bare instruction fixed that.
+    """
     textifier = DocumentTextifier()
 
-    captured_prompts = []
+    captured = []
 
-    def fake_call(self, model, prompt, encoded):  # noqa: ARG001
-        captured_prompts.append(prompt)
+    def fake_call(self, model, prompt, encoded, system=""):  # noqa: ARG001
+        captured.append({"prompt": prompt, "system": system})
         return {"message": {"content": "A coastline at sunrise with soft warm light."}}
 
     monkeypatch.setattr(DocumentTextifier, "_call_ollama_chat_http", fake_call)
@@ -223,27 +230,32 @@ def test_describe_with_model_appends_context_hint_to_prompt(monkeypatch):
         context_hint="Context: local capture time is 06:14 on 2026-04-22 (pre-dawn). Lighting is a morning scene.",
     )
 
-    assert len(captured_prompts) == 1
-    prompt = captured_prompts[0]
-    assert "06:14 on 2026-04-22" in prompt
-    assert "morning scene" in prompt
-    # Base prompt is still present
+    assert len(captured) == 1
+    system, prompt = captured[0]["system"], captured[0]["prompt"]
+    # The facts reach the model, via the system turn
+    assert "06:14 on 2026-04-22" in system
+    assert "morning scene" in system
+    # ...and are explicitly marked as reference-only, not caption material
+    assert "never restate them" in system
+    # The user turn stays a bare instruction
     assert "Describe this photograph" in prompt
+    assert "06:14" not in prompt
 
 
-def test_describe_with_model_without_hint_uses_base_prompt_only(monkeypatch):
+def test_describe_with_model_without_hint_sends_no_reference_facts(monkeypatch):
     textifier = DocumentTextifier()
-    captured_prompts = []
+    captured = []
 
-    def fake_call(self, model, prompt, encoded):  # noqa: ARG001
-        captured_prompts.append(prompt)
+    def fake_call(self, model, prompt, encoded, system=""):  # noqa: ARG001
+        captured.append({"prompt": prompt, "system": system})
         return {"message": {"content": "A building."}}
 
     monkeypatch.setattr(DocumentTextifier, "_call_ollama_chat_http", fake_call)
 
     textifier._describe_with_model("qwen3-vl:8b", "fake-base64", simple_prompt=True)
-    assert len(captured_prompts) == 1
-    assert "Context:" not in captured_prompts[0]
+    assert len(captured) == 1
+    assert "Context:" not in captured[0]["prompt"]
+    assert "Reference facts" not in captured[0]["system"]
 
 
 # ------------------------------------------------------------------
