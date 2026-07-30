@@ -94,3 +94,25 @@ class TestProbes:
 
     def test_describe_selection_is_a_string(self):
         assert isinstance(sel.describe_selection(), str)
+
+
+class TestMeasured32bFootprint:
+    """qwen3-vl:32b is resident at 24GB, not the 22GB originally profiled.
+
+    Measured on the RTX 8000 via `ollama ps` during inference (ctx 32768):
+    `qwen3-vl:32b  24 GB  100% GPU`. At the old 22000 figure the selector would
+    green-light the model with ~23GB free, leaving it sharing a 46GB card with
+    LM Studio's 35b — 45.2GB of 46GB used and only ~424MB spare, which is where
+    the Ollama runner crashes rather than degrades.
+    """
+
+    def test_32b_is_rejected_when_only_the_old_estimate_would_fit(self):
+        # 23.5GB free clears the old 22000+1024 bar but not the measured one.
+        model, _ = sel.select_vision_model(
+            available=["qwen3-vl:32b", "qwen3-vl:8b"], free_mb=23500)
+        assert model == "qwen3-vl:8b"
+
+    def test_32b_is_chosen_when_it_genuinely_fits(self):
+        model, _ = sel.select_vision_model(
+            available=["qwen3-vl:32b", "qwen3-vl:8b"], free_mb=26000)
+        assert model == "qwen3-vl:32b"

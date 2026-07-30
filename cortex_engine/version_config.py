@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.3.2"
+CORTEX_VERSION = "6.3.3"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 3,
-    "patch": 2,
+    "patch": 3,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,8 +24,8 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-07-29",
-    "release_name": "Person-Tag Matching Fixes",
+    "release_date": "2026-07-31",
+    "release_name": "XMP Sidecar Keyword Preservation",
     "description": "Captions record which model wrote them, and photos the fast model cannot describe are retried automatically with a stronger one. Local vision model selection adapts to the free VRAM on the machine, so one install runs well on an 8GB laptop and a 48GB workstation. Reasoning-model output can no longer leak into photo metadata. Photo Processor can run with no network access: local vision model, offline reverse geocoding from a local GeoNames dataset, and post-hoc person-name substitution. Combined with in-place folder enrichment, a Lightroom catalog can be tagged end to end while travelling.",
     "breaking_changes": [],
     "new_features": [
@@ -49,6 +49,9 @@ VERSION_METADATA = {
         "Benchmarked four local vision models on identical photos: gemma4:e2b-it-qat 5/6 clean at 80s/photo and 1.6GB; qwen3-vl:8b best content accuracy but 7.4GB and 127s; llava:7b 2/6; qwen3-vl:4b 3/6 with empty outputs",
     ],
     "bug_fixes": [
+        "Keywords living only in a `<stem>.xmp` sidecar were invisible to enrichment: exiftool does not follow sidecars, so read_exif_keywords saw only the file. Because enrichment writes back existing+AI keywords, an unread sidecar keyword was a silently deleted one. Both sources are now unioned",
+        "A numeric keyword (a year like 2025, which exiftool returns as an int) raised inside read_exif_keywords; the exception was swallowed and the function returned an empty list, discarding every keyword on the photo rather than just the numeric one",
+        "qwen3-vl:32b was profiled at 22000MB but is 24GB resident (measured via `ollama ps` during inference on an RTX 8000). The understated figure let the selector choose it with ~23GB free, leaving only ~424MB spare on a 46GB card once LM Studio's 35b is also loaded — the margin at which the Ollama runner crashes rather than degrades",
         "Person-tag matching now folds separators: a library carrying Paul_C, paul c and paul-c matched only the underscore form, so space-separated tags silently never produced a name. paulc and bare paul still do not match, avoiding false positives",
         "Vision output: a reasoning model that exhausted its token budget returned only chain-of-thought, which the pipeline wrote into photo metadata as the caption — this silently corrupted 44 captions before being caught. The fallback is now off by default and logs the remedy",
         "Token budget is per model family: reasoning models (qwen3-vl, gemma4) need 640 to reach an answer; instruct models (llava, gemma3) need 160 or they overrun the word limit",

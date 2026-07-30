@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.0.9"
+CORTEX_VERSION = "6.3.3"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
-    "minor": 0,
-    "patch": 9,
+    "minor": 3,
+    "patch": 3,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,23 +24,47 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-04-18",
-    "release_name": "Photo Batch Recovery",
-    "description": "Adds disk-backed recovery for the Photo Processor so completed batches survive Streamlit session resets (file-watcher rerun, WebSocket drop, PC sleep).",
+    "release_date": "2026-07-31",
+    "release_name": "XMP Sidecar Keyword Preservation",
+    "description": "Captions record which model wrote them, and photos the fast model cannot describe are retried automatically with a stronger one. Local vision model selection adapts to the free VRAM on the machine, so one install runs well on an 8GB laptop and a 48GB workstation. Reasoning-model output can no longer leak into photo metadata. Photo Processor can run with no network access: local vision model, offline reverse geocoding from a local GeoNames dataset, and post-hoc person-name substitution. Combined with in-place folder enrichment, a Lightroom catalog can be tagged end to end while travelling.",
     "breaking_changes": [],
     "new_features": [
-        "Photo Processor writes a /tmp/cortex_photokw/_last_batch.json manifest incrementally during processing",
-        "A 'Recover last batch' banner appears on the Photo Processor tab when session state is empty but a manifest is on disk",
-        "Recovery re-populates the Results panel and download buttons without re-processing photos"
+        "Photo Processor: 'Folder on disk' source mode — enriches all supported images in a folder (recursively) in place, using real file paths instead of temp copies",
+        "Photo Processor: offline reverse geocoding (cortex_engine/offline_geocoder.py) with Auto / Online only / Offline only modes — no network and no Nominatim rate limit",
+        "Photo Processor: 'Use local vision model only' skips Claude even when ANTHROPIC_API_KEY is set, for fully offline runs",
+        "Photo Processor: person-name substitution (cortex_engine/photo_name_tags.py) rewrites 'A man smiles' to 'Paul smiles' from configurable Tag=Name keywords, applied after the model rather than via the prompt",
+        "VRAM-adaptive vision model selection (cortex_engine/vision_model_selector.py): picks the highest-quality installed model that fits current free VRAM, so an 8GB laptop and a 48GB workstation each get an appropriate model with no configuration",
+        "Caption provenance: every generated description records its author in IPTC:Writer-Editor and XMP-photoshop:CaptionWriter as 'Cortex <version> / <model>', visible in Lightroom's metadata panel",
+        "Two-pass batch enrichment (scripts/photo_enrich_batch.py): a fast VRAM-appropriate model first, then an automatic retry of undescribed photos with the strongest installed model — resumable, and --only-empty treats a placeholder as unprocessed",
+        "scripts/photo_apply_names.py re-applies person names to captions already on disk, for photos tagged after they were captioned — no vision model needed, so it runs in seconds",
     ],
     "improvements": [
-        "Manifest write is atomic (.json.tmp + os.replace) so a crash mid-write cannot corrupt recovery data",
-        "Entries for files that have been deleted are filtered out of the recovery view with a warning"
+        "Photo Processor: folder mode skips exiftool *_original backup files when collecting images",
+        "Offline geocoding degrades loudly with install instructions rather than silently returning empty location fields",
+        "Docs: added docs/photo_processor_spec.md covering the enrichment pipeline, offline mode, name substitution, UI options, and known sharp edges",
+        "Docs: exiftool declared as a required system binary in README, CLAUDE.md, and the Docker image",
+        "Tests: 79 unit tests across VRAM-adaptive selection, caption provenance, placeholder detection, offline geocoding, name substitution, and VLM text normalization",
+        "Setup: gemma4:e2b-it-qat declared as the baseline vision model — 1.6GB resident, so it runs alongside Lightroom on an 8GB laptop",
+        "Photo Processor shows which local model will be used and why, including a warning when nothing fits available VRAM",
+        "Benchmarked four local vision models on identical photos: gemma4:e2b-it-qat 5/6 clean at 80s/photo and 1.6GB; qwen3-vl:8b best content accuracy but 7.4GB and 127s; llava:7b 2/6; qwen3-vl:4b 3/6 with empty outputs",
     ],
     "bug_fixes": [
-        "N/A"
+        "Keywords living only in a `<stem>.xmp` sidecar were invisible to enrichment: exiftool does not follow sidecars, so read_exif_keywords saw only the file. Because enrichment writes back existing+AI keywords, an unread sidecar keyword was a silently deleted one. Both sources are now unioned",
+        "A numeric keyword (a year like 2025, which exiftool returns as an int) raised inside read_exif_keywords; the exception was swallowed and the function returned an empty list, discarding every keyword on the photo rather than just the numeric one",
+        "qwen3-vl:32b was profiled at 22000MB but is 24GB resident (measured via `ollama ps` during inference on an RTX 8000). The understated figure let the selector choose it with ~23GB free, leaving only ~424MB spare on a 46GB card once LM Studio's 35b is also loaded — the margin at which the Ollama runner crashes rather than degrades",
+        "Person-tag matching now folds separators: a library carrying Paul_C, paul c and paul-c matched only the underscore form, so space-separated tags silently never produced a name. paulc and bare paul still do not match, avoiding false positives",
+        "Vision output: a reasoning model that exhausted its token budget returned only chain-of-thought, which the pipeline wrote into photo metadata as the caption — this silently corrupted 44 captions before being caught. The fallback is now off by default and logs the remedy",
+        "Token budget is per model family: reasoning models (qwen3-vl, gemma4) need 640 to reach an answer; instruct models (llava, gemma3) need 160 or they overrun the word limit",
+        "Prompt structure: rules and reference facts moved to the system turn. Concatenated into the user turn, small models paraphrased the facts back instead of describing the image",
+        "Vision model: config.VLM_MODEL was 'llava:7b' while textifier.VISION_MODELS listed 'qwen3-vl:8b' first — model_checker therefore never prompted users to install the model the pipeline actually preferred",
+        "Text normalizer: strip reasoning leakage from local vision models ('The main thing is X. So: Y' now yields only Y), with guards so ordinary prose containing 'so,' or 'in the foreground' survives",
+        "Photo Processor: removed the dead 'Write to original files' toggle, which was never wired into run settings and had no effect",
+        "Dependencies: anthropic SDK pinned in requirements.txt — Claude Haiku vision silently fell back to Ollama when the package was absent",
+        "Dependencies: reverse_geocoder and pycountry pinned for offline geocoding",
     ],
-    "performance": []
+    "performance": [
+        "Offline geocoding removes the ~1 req/sec Nominatim pacing, making offline batches faster than online ones",
+    ]
 }
 
 # ============================================================================

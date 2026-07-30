@@ -23,6 +23,15 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from cortex_engine.utils.logging_utils import get_logger
+from cortex_engine.offline_geocoder import resolve as _resolve_location
+from cortex_engine.photo_name_tags import (
+    DEFAULT_NAME_TAGS,
+    apply_names as _apply_person_names,
+)
+from cortex_engine.vision_model_selector import (
+    num_predict_for as _profile_num_predict,
+    select_vision_model as _select_vision_model,
+)
 
 logger = get_logger(__name__)
 
@@ -80,8 +89,8 @@ class DocumentTextifier:
 
     # Preferred vision models in order of priority
     VISION_MODELS = [
-        "qwen3-vl:32b",
         "qwen3-vl:8b",
+        "qwen3-vl:32b",
         "qwen3-vl:4b",
         "qwen3-vl",
         "qwen2.5vl:7b",
@@ -90,6 +99,59 @@ class DocumentTextifier:
         "qwen2.5vl",
     ]
     VISION_FALLBACK_MODELS = ["llava:7b", "llava:latest", "llava"]
+
+    # Claude vision model — used when ANTHROPIC_API_KEY is set.
+    # Haiku is low-cost and follows complex instructions reliably.
+    CLAUDE_VISION_MODEL = "claude-haiku-4-5-20251001"
+
+    # Output token budget per model family. Reasoning models emit their chain of
+    # thought before the answer and need headroom to reach it — at 140 tokens
+    # qwen3-vl spent the whole budget thinking and returned nothing. Instruct
+    # models need the opposite: a tight cap, or they overrun the 35-word style
+    # limit (llava averaged 36 words at 512 vs 25 at 140).
+    # Keys are matched as prefixes of the model name.
+    VLM_NUM_PREDICT: Dict[str, int] = {
+        "qwen3-vl": 640,   # reasoning — needs room for thinking + answer
+        "qwen2.5vl": 160,
+        "llava": 160,
+        "gemma4": 640,  # reasoning — Gemma 4 thinks before answering, despite the
+                        # "-it" instruction-tuned naming. Verified: 635 chars of
+                        # reasoning and no answer at a 160-token budget.
+        "gemma": 160,   # Gemma 3 and earlier are plain instruct models
+        "minicpm": 160,
+    }
+    VLM_NUM_PREDICT_DEFAULT = 200
+
+    # Descriptions the pipeline emits when it could not describe the image. These
+    # are placeholders, not captions — they must never be treated as a successful
+    # result, and a batch runner should collect them for a retry pass.
+    PLACEHOLDER_PREFIX = "[Image:"
+
+    @staticmethod
+    def is_placeholder_description(description: str) -> bool:
+        """True when the text is a failure placeholder rather than a real caption.
+
+        Note `[Image: logo/icon omitted]` counts as a placeholder for retry
+        purposes even though it is a deliberate outcome — a stronger model often
+        describes a photo the smaller one dismissed as a graphic.
+        """
+        return (description or "").strip().startswith(DocumentTextifier.PLACEHOLDER_PREFIX)
+
+    @classmethod
+    def _num_predict_for(cls, model: str) -> int:
+        """Token budget for a model, overridable via CORTEX_VLM_NUM_PREDICT."""
+        override = os.environ.get("CORTEX_VLM_NUM_PREDICT", "").strip()
+        if override.isdigit():
+            return int(override)
+        # Profile table is authoritative when the model is known to the selector.
+        profiled = _profile_num_predict(model, default=0)
+        if profiled:
+            return profiled
+        name = (model or "").strip().lower()
+        for prefix, budget in cls.VLM_NUM_PREDICT.items():
+            if name.startswith(prefix):
+                return budget
+        return cls.VLM_NUM_PREDICT_DEFAULT
 
     def __init__(
         self,
@@ -101,9 +163,36 @@ class DocumentTextifier:
         docling_timeout_seconds: Optional[float] = None,
         image_description_timeout_seconds: Optional[float] = None,
         image_enrich_max_seconds: Optional[float] = None,
+        geocode_mode: str = "auto",
+        prefer_local_vision: bool = False,
+        name_tags: Optional[Dict[str, str]] = None,
+        auto_select_vision: bool = True,
     ):
         self.use_vision = use_vision
         self.on_progress = on_progress
+        # "online" (Nominatim), "offline" (local GeoNames), or "auto" (online
+        # first, offline fallback). "offline" makes the pipeline network-free.
+        self.geocode_mode = (geocode_mode or "auto").strip().lower()
+        # When True, skip Claude even if ANTHROPIC_API_KEY is set — the
+        # travelling / offline configuration.
+        self.prefer_local_vision = bool(prefer_local_vision)
+        # Person keyword -> display name, applied to generated descriptions.
+        self.name_tags = dict(name_tags) if name_tags else dict(DEFAULT_NAME_TAGS)
+        # Pick the best installed vision model that fits current free VRAM, so the
+        # same install adapts from an 8GB laptop to a 48GB workstation. Explicitly
+        # setting VISION_MODELS after construction still overrides this.
+        self.selected_vision_model: Optional[str] = None
+        # Which model actually produced the most recent description — recorded so
+        # the caption's provenance can be written to IPTC:Writer-Editor.
+        self.last_vision_model_used: Optional[str] = None
+        if auto_select_vision:
+            picked, reason = _select_vision_model()
+            if picked:
+                self.selected_vision_model = picked
+                self.VISION_MODELS = [picked] + [
+                    m for m in type(self).VISION_MODELS if m != picked
+                ]
+                logger.info("Vision model auto-selected: %s (%s)", picked, reason)
         self.pdf_strategy = (pdf_strategy or "docling").strip().lower()
         self.cleanup_provider = (cleanup_provider or "").strip().lower()
         self.cleanup_model = (cleanup_model or "").strip()
@@ -473,6 +562,50 @@ class DocumentTextifier:
             cleaned,
             flags=re.IGNORECASE,
         ).strip()
+        # Strip a leading reasoning clause that hands off to the real answer with
+        # a colon. qwen3-vl narrates its analysis before answering:
+        #   "The main thing is a dark cocktail... So: A dark cocktail in a glass..."
+        # The colon makes the hand-off unambiguous, so this cannot eat ordinary prose.
+        cleaned = re.sub(
+            r"^.{0,200}?\bso:\s+(?=[A-Za-z])",
+            "",
+            cleaned,
+            count=1,
+            flags=re.IGNORECASE | re.DOTALL,
+        ).strip()
+        # Strip leading "The main thing is ..." style analysis sentences, which the
+        # same models emit without the "So:" hand-off.
+        cleaned = re.sub(
+            r"^(?:the (?:main|key|primary) (?:thing|subject|focus|element) is"
+            r"|what stands out is|the photo(?:graph)? (?:is|shows) (?:mainly|primarily))"
+            r"[^.!?]*[.!?]\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        # Strip trailing self-directives. Observed on qwen3-vl when hints were in
+        # the user turn: "...on a summer day. Mention the beach, people, ocean, sky."
+        cleaned = re.sub(
+            r"\s*(?:mention|include|note|describe|list)\s+the\s+[^.!?]*[.!?]?\s*$",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        # Strip "Let's check the elements:" style planning mid-caption.
+        cleaned = re.sub(
+            r"\b(?:let'?s|let us)\s+(?:check|see|look at|start with)[^.!?:]*[.:!?]\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        # Strip a bare task restatement opener ("The photo is of a beach in X, at 15:00.")
+        # only when a real description follows it.
+        cleaned = re.sub(
+            r"^the (?:photo|photograph|image) is (?:of|a)\b[^.!?]*[.!?]\s+(?=[A-Z])",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
         # Strip self-directive sentences from the start ("Focus on X.", "Start with Y.")
         cleaned = re.sub(
             r"^(?:focus on|start with|begin with|note that|describe the)[^.!?]*[.!?]\s*",
@@ -660,19 +793,33 @@ class DocumentTextifier:
         model: str,
         prompt: str,
         encoded_image: str,
+        system: str = "",
     ) -> Dict[str, Any]:
-        """Call Ollama directly over HTTP to avoid opaque client-side empty-dict behavior."""
+        """Call Ollama directly over HTTP to avoid opaque client-side empty-dict behavior.
+
+        Rules and reference facts belong in *system*, not *prompt*. Concatenating
+        them into the user turn makes small models paraphrase the facts back
+        instead of describing the image — they answer the most recent text they
+        read rather than looking at the picture.
+        """
         base_url = str(os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
         url = f"{base_url}/api/chat"
+        messages = []
+        if system.strip():
+            messages.append({"role": "system", "content": system.strip()})
+        messages.append({
+            "role": "user",
+            "content": prompt,
+            "images": [encoded_image],
+        })
         payload = {
             "model": model,
-            "messages": [{
-                "role": "user",
-                "content": prompt,
-                "images": [encoded_image],
-            }],
+            "messages": messages,
             "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 140},
+            "options": {
+                "temperature": 0.1,
+                "num_predict": self._num_predict_for(model),
+            },
         }
         body = json.dumps(payload).encode("utf-8")
         req = Request(
@@ -689,7 +836,7 @@ class DocumentTextifier:
             "error": "",
         }
         try:
-            with urlopen(req, timeout=120) as resp:
+            with urlopen(req, timeout=int(os.environ.get("CORTEX_OLLAMA_HTTP_TIMEOUT", "120"))) as resp:
                 raw = resp.read()
                 text = raw.decode("utf-8", errors="replace")
                 self._last_vlm_http_meta.update(
@@ -729,6 +876,83 @@ class DocumentTextifier:
         context_hint: str = "",
     ) -> str:
         """Call a specific VLM model and normalize the returned text."""
+        # Rules and reference facts go in the system turn. The user turn stays a
+        # bare instruction so the last thing the model reads is "describe the
+        # image", not a list of facts it will otherwise paraphrase back.
+        system = (
+            "You write photo captions. Output only the caption itself.\n"
+            "Style: 1-2 plain declarative sentences, under 35 words, flowing prose, "
+            "starting immediately with the subject or scene.\n"
+            "Write only what is visible in the image.\n"
+            "If the image is primarily a logo, icon, watermark or tiny decorative "
+            "graphic, output exactly: [Image: logo/icon omitted]\n"
+            "Never output: your reasoning, a plan, instructions to yourself, "
+            "questions, markdown, headings, bullet points, or a restatement of the task."
+        )
+        if context_hint:
+            # Marked as reference-only. Phrasing matters: "use these facts" invites
+            # the model to enumerate them, which is what produced captions like
+            # "The photo is of a beach in Gold Coast, Australia, at 15:00".
+            system += (
+                "\n\nReference facts about this photo (already known — use them only "
+                "to avoid mistakes, never restate them as the caption):\n"
+                + context_hint.strip()
+            )
+        prompt = "Describe this photograph."
+        if not simple_prompt:
+            prompt += " /no_think"
+        started = time.monotonic()
+        response = self._call_ollama_chat_http(model, prompt, encoded_image, system=system)
+        message = (response or {}).get("message", {}) if isinstance(response, dict) else {}
+        result = str((message or {}).get("content", "") or "").strip()
+        thinking = str((message or {}).get("thinking", "") or "").strip()
+        cleaned = self._normalize_vlm_text(result)
+        if not cleaned and thinking:
+            # Using the model's raw reasoning as the caption writes text like
+            # "First, the beach: sandy, people are around." into permanent photo
+            # metadata. On 2026-07-28 this silently corrupted 44 of 123 captions.
+            # An empty answer with non-empty thinking means the token budget ran
+            # out mid-reasoning — raise CORTEX_VLM_NUM_PREDICT instead.
+            if os.environ.get("CORTEX_VLM_USE_THINKING_FALLBACK", "").strip().lower() in {"1", "true", "yes"}:
+                logger.warning(
+                    "Model %s returned only reasoning; using it as the description "
+                    "because CORTEX_VLM_USE_THINKING_FALLBACK is set. This writes "
+                    "reasoning into metadata — prefer raising CORTEX_VLM_NUM_PREDICT.",
+                    model,
+                )
+                cleaned = self._normalize_vlm_text(thinking)
+            else:
+                logger.warning(
+                    "Model %s produced %d chars of reasoning but no answer — the token "
+                    "budget was exhausted before the caption. Raise CORTEX_VLM_NUM_PREDICT "
+                    "(currently %s). Returning empty rather than writing reasoning to metadata.",
+                    model, len(thinking), os.environ.get("CORTEX_VLM_NUM_PREDICT", "512"),
+                )
+        elapsed = time.monotonic() - started
+        if not cleaned or self._vlm_debug_enabled():
+            self._log_vlm_response_debug(model, simple_prompt, response, result, cleaned, elapsed)
+        return cleaned
+
+    def _describe_with_claude(
+        self,
+        encoded_image: str,
+        context_hint: str = "",
+        timeout: float = 30.0,
+    ) -> str:
+        """Describe an image using the Anthropic Claude vision API.
+
+        Requires ANTHROPIC_API_KEY in the environment.  Returns an empty string
+        on any error so the caller can fall back to local Ollama models.
+        """
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            return ""
+        try:
+            import anthropic
+        except ImportError:
+            logger.warning("anthropic package not installed — Claude vision unavailable")
+            return ""
+
         prompt = (
             "Describe this photograph in 1-2 short plain declarative sentences (max 35 words total). "
             "Write as flowing prose — do NOT use structural labels like "
@@ -745,20 +969,48 @@ class DocumentTextifier:
         )
         if context_hint:
             prompt += " " + context_hint.strip()
-        if not simple_prompt:
-            prompt += " /no_think"
+
         started = time.monotonic()
-        response = self._call_ollama_chat_http(model, prompt, encoded_image)
-        message = (response or {}).get("message", {}) if isinstance(response, dict) else {}
-        result = str((message or {}).get("content", "") or "").strip()
-        thinking = str((message or {}).get("thinking", "") or "").strip()
-        cleaned = self._normalize_vlm_text(result)
-        if not cleaned and thinking:
-            cleaned = self._normalize_vlm_text(thinking)
-        elapsed = time.monotonic() - started
-        if not cleaned or self._vlm_debug_enabled():
-            self._log_vlm_response_debug(model, simple_prompt, response, result, cleaned, elapsed)
-        return cleaned
+        try:
+            client = anthropic.Anthropic(api_key=api_key)
+            response = client.messages.create(
+                model=self.CLAUDE_VISION_MODEL,
+                max_tokens=120,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": encoded_image,
+                                },
+                            },
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ],
+            )
+            raw = ""
+            for block in response.content or []:
+                if hasattr(block, "text"):
+                    raw = block.text or ""
+                    break
+            elapsed = time.monotonic() - started
+            cleaned = self._normalize_vlm_text(raw.strip())
+            logger.info(
+                "Claude vision (%s) returned %d chars in %.1fs",
+                self.CLAUDE_VISION_MODEL,
+                len(cleaned),
+                elapsed,
+            )
+            return cleaned
+        except Exception as e:
+            elapsed = time.monotonic() - started
+            logger.warning("Claude vision failed after %.1fs: %s", elapsed, e)
+            return ""
 
     def probe_image_vlm(self, image_bytes: bytes, simple_prompt: bool = True) -> Dict[str, Any]:
         """Run a one-shot diagnostic probe for a single image and return raw response metadata."""
@@ -920,15 +1172,35 @@ class DocumentTextifier:
         ``context_hint`` is an optional sentence appended to the prompt — used
         by the photo pipeline to pass local-time / sun-phase context so the
         VLM can distinguish dawn from dusk and sunrise from sunset.
+
+        If ANTHROPIC_API_KEY is set, Claude Haiku is tried first.  On failure
+        or empty result the pipeline falls through to the local Ollama models.
         """
         if not self.use_vision:
             return "[Image: vision model disabled]"
-        self._init_vlm()
-        if self._vlm_client is None:
-            return "[Image: could not be described — vision model unavailable]"
         try:
             prepared_bytes = self._prepare_vlm_image_bytes(image_bytes)
             encoded = base64.b64encode(prepared_bytes).decode("utf-8")
+
+            # ── Claude Haiku (tried first when API key is available) ──────────
+            # prefer_local_vision skips Claude entirely — the offline/travelling
+            # configuration, where reaching the API would fail or cost roaming data.
+            if self.prefer_local_vision:
+                logger.info("Local vision preferred — skipping Claude")
+            elif os.environ.get("ANTHROPIC_API_KEY", "").strip():
+                claude_result = self._describe_with_claude(encoded, context_hint=context_hint)
+                if claude_result:
+                    self.last_vision_model_used = self.CLAUDE_VISION_MODEL
+                    if self._looks_like_logo_icon_description(claude_result):
+                        return "[Image: logo/icon omitted]"
+                    return claude_result
+                logger.info("Claude vision returned empty — falling back to local Ollama model")
+
+            # ── Local Ollama models ───────────────────────────────────────────
+            self._init_vlm()
+            if self._vlm_client is None:
+                return "[Image: could not be described — vision model unavailable]"
+
             models_tried: List[str] = []
             for idx, requested_model in enumerate(self._vlm_model_candidates(include_current=True)):
                 model = requested_model
@@ -943,6 +1215,7 @@ class DocumentTextifier:
                         model = str(self._vlm_model).strip()
                     if not model:
                         continue
+                    self.last_vision_model_used = model
                     result = self._describe_with_model(
                         model, encoded, simple_prompt=False, context_hint=context_hint
                     )
@@ -1009,6 +1282,39 @@ class DocumentTextifier:
             return None
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
+
+    @staticmethod
+    def markdown_to_plaintext(markdown_text: str, width: int = 80) -> str:
+        """Convert markdown to plain text suitable for email or text files.
+
+        Tables are rendered as ruled ASCII boxes, headings as plain text with
+        surrounding whitespace, and bullets as '•'.  Requires the ``rich``
+        library (already a dependency of Streamlit).
+        """
+        import io
+        try:
+            from rich.console import Console
+            from rich.markdown import Markdown as RichMarkdown
+        except ImportError:
+            # Fallback: strip markdown syntax manually
+            import re
+            text = markdown_text or ""
+            text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+            text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+            text = re.sub(r"\*(.+?)\*", r"\1", text)
+            text = re.sub(r"`(.+?)`", r"\1", text)
+            text = re.sub(r"^\|.*\|$", "", text, flags=re.MULTILINE)
+            text = re.sub(r"^[-|: ]+$", "", text, flags=re.MULTILINE)
+            return "\n".join(line.rstrip() for line in text.splitlines())
+
+        buf = io.StringIO()
+        console = Console(
+            file=buf, width=width, highlight=False, markup=False, no_color=True
+        )
+        console.print(RichMarkdown(markdown_text or ""))
+        # Strip trailing whitespace from each line (rich pads to full width)
+        lines = [line.rstrip() for line in buf.getvalue().splitlines()]
+        return "\n".join(lines)
 
     @staticmethod
     def table_to_markdown(rows: List[List[str]]) -> str:
@@ -2564,16 +2870,29 @@ class DocumentTextifier:
 
     @staticmethod
     def read_exif_keywords(file_path: str) -> List[str]:
-        """Read existing XMP Subject / IPTC Keywords from image."""
+        """Read existing XMP Subject / IPTC Keywords from image and its sidecar.
+
+        Lightroom sometimes writes keywords to a `<stem>.xmp` beside the file
+        rather than into it, and exiftool does not follow sidecars. Since
+        enrichment writes back `existing + AI` keywords, a sidecar keyword we
+        fail to read is a keyword we silently delete — so union both sources.
+        """
         import shutil
         import json
         exiftool_path = shutil.which("exiftool")
         if not exiftool_path:
             return []
         try:
+            targets = [file_path]
+            stem = os.path.splitext(file_path)[0]
+            for ext in (".xmp", ".XMP"):
+                sidecar = stem + ext
+                if os.path.isfile(sidecar) and sidecar != file_path:
+                    targets.append(sidecar)
+                    break
             result = subprocess.run(
                 [exiftool_path, "-json", "-XMP-dc:Subject", "-IPTC:Keywords",
-                 file_path],
+                 *targets],
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode != 0:
@@ -2582,12 +2901,15 @@ class DocumentTextifier:
             if not data:
                 return []
             existing = set()
-            for field in ("Subject", "Keywords"):
-                val = data[0].get(field, [])
-                if isinstance(val, str):
-                    val = [val]
-                for v in val:
-                    existing.add(v.strip().lower())
+            for entry in data:
+                for field in ("Subject", "Keywords"):
+                    val = entry.get(field, [])
+                    # exiftool returns a year keyword like 2025 as an int, and a
+                    # single keyword as a bare scalar rather than a list.
+                    if not isinstance(val, list):
+                        val = [val]
+                    for v in val:
+                        existing.add(str(v).strip().lower())
             return sorted(existing)
         except Exception as e:
             logger.warning(f"Read existing keywords failed: {e}")
@@ -2794,6 +3116,22 @@ class DocumentTextifier:
             logger.warning(f"GPS read failed for {file_path}: {e}")
         return None
 
+    def resolve_location(self, lat: float, lon: float) -> Dict[str, str]:
+        """Reverse-geocode using this instance's geocode_mode.
+
+        "online" uses Nominatim, "offline" the local GeoNames dataset, "auto"
+        tries online first and falls back offline. Offline returns the nearest
+        suburb rather than the metro name; state and country are unaffected.
+        """
+        location, source = _resolve_location(
+            lat, lon, mode=self.geocode_mode, online_fn=self.reverse_geocode
+        )
+        if source == "offline":
+            logger.info("Location resolved offline for (%s, %s): %s", lat, lon, location)
+        elif source == "none":
+            logger.warning("No location resolved for (%s, %s)", lat, lon)
+        return location
+
     @staticmethod
     def _merge_location_fields(*locations: Optional[Dict[str, str]]) -> Dict[str, str]:
         """Merge location dicts, keeping the first non-empty value for each field."""
@@ -2905,7 +3243,7 @@ class DocumentTextifier:
         resolved_gps = existing_gps
 
         if resolved_gps:
-            reverse = self.reverse_geocode(resolved_gps[0], resolved_gps[1])
+            reverse = self.resolve_location(resolved_gps[0], resolved_gps[1])
             resolved_location = self._merge_location_fields(seed_location, reverse)
         elif any(seed_location.values()):
             derived_gps = self.geocode_location_hint(
@@ -2915,7 +3253,7 @@ class DocumentTextifier:
             )
             if derived_gps:
                 resolved_gps = derived_gps
-                reverse = self.reverse_geocode(derived_gps[0], derived_gps[1])
+                reverse = self.resolve_location(derived_gps[0], derived_gps[1])
                 resolved_location = self._merge_location_fields(seed_location, reverse)
 
         return {
@@ -2979,6 +3317,45 @@ class DocumentTextifier:
         except Exception as e:
             logger.warning(f"GPS write failed for {file_path}: {e}")
             return {"success": False, "message": str(e)}
+
+    @staticmethod
+    def write_caption_provenance(file_path: str, model: str) -> Dict[str, Any]:
+        """Record which model wrote the caption, in the IPTC field meant for it.
+
+        IPTC:Writer-Editor is the standard "caption writer" field — Lightroom
+        surfaces it in the metadata panel. Keeping provenance here rather than
+        appending it to the caption leaves the description clean and searchable,
+        and stops the attribution travelling into exports as visible text.
+        """
+        import shutil
+
+        model = (model or "").strip()
+        if not model:
+            return {"success": True, "message": "no model recorded", "fields_written": 0}
+
+        exiftool_path = shutil.which("exiftool")
+        if not exiftool_path:
+            return {"success": False, "message": "exiftool not found on PATH", "fields_written": 0}
+
+        try:
+            from cortex_engine.version_config import CORTEX_VERSION
+            writer = f"Cortex {CORTEX_VERSION} / {model}"
+        except Exception:
+            writer = f"Cortex / {model}"
+
+        cmd = [
+            exiftool_path, "-overwrite_original",
+            f"-IPTC:Writer-Editor={writer}",
+            f"-XMP-photoshop:CaptionWriter={writer}",
+            file_path,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        except Exception as exc:
+            return {"success": False, "message": str(exc), "fields_written": 0}
+        if result.returncode != 0:
+            return {"success": False, "message": result.stderr.strip()[:200], "fields_written": 0}
+        return {"success": True, "message": writer, "fields_written": 2}
 
     @staticmethod
     def write_ownership_metadata(file_path: str, ownership_notice: str) -> Dict[str, any]:
@@ -3667,6 +4044,25 @@ class DocumentTextifier:
                 logger.info(f"Keyword hint for {file_name}: {keyword_hint}")
             combined_hint = " ".join(filter(None, [time_hint, keyword_hint]))
             description = self.describe_image(image_bytes, context_hint=combined_hint)
+
+            # Name known people from their keywords ("A man smiles" -> "Paul smiles").
+            # Applied post-hoc so it does not depend on the model following
+            # instructions — small local models are unreliable at that.
+            named = _apply_person_names(description, existing_keywords, self.name_tags)
+            if named != description:
+                logger.info(f"Named people in description for {file_name}")
+                description = named
+
+            # Record who wrote the caption — but only for a real caption. Stamping
+            # provenance on a "[Image: ...]" placeholder would assert authorship of
+            # a failure and make the file look successfully processed.
+            if self.is_placeholder_description(description):
+                logger.warning(
+                    "Vision model %s returned a placeholder for %s: %s",
+                    self.last_vision_model_used, file_name, description,
+                )
+            elif self.last_vision_model_used:
+                self.write_caption_provenance(file_path, self.last_vision_model_used)
 
             self._report(0.5, "Extracting keywords...")
             keywords = self.extract_keywords(description, anchor_keywords=existing_keywords)

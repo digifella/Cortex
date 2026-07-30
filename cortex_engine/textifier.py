@@ -2870,16 +2870,29 @@ class DocumentTextifier:
 
     @staticmethod
     def read_exif_keywords(file_path: str) -> List[str]:
-        """Read existing XMP Subject / IPTC Keywords from image."""
+        """Read existing XMP Subject / IPTC Keywords from image and its sidecar.
+
+        Lightroom sometimes writes keywords to a `<stem>.xmp` beside the file
+        rather than into it, and exiftool does not follow sidecars. Since
+        enrichment writes back `existing + AI` keywords, a sidecar keyword we
+        fail to read is a keyword we silently delete — so union both sources.
+        """
         import shutil
         import json
         exiftool_path = shutil.which("exiftool")
         if not exiftool_path:
             return []
         try:
+            targets = [file_path]
+            stem = os.path.splitext(file_path)[0]
+            for ext in (".xmp", ".XMP"):
+                sidecar = stem + ext
+                if os.path.isfile(sidecar) and sidecar != file_path:
+                    targets.append(sidecar)
+                    break
             result = subprocess.run(
                 [exiftool_path, "-json", "-XMP-dc:Subject", "-IPTC:Keywords",
-                 file_path],
+                 *targets],
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode != 0:
@@ -2888,12 +2901,15 @@ class DocumentTextifier:
             if not data:
                 return []
             existing = set()
-            for field in ("Subject", "Keywords"):
-                val = data[0].get(field, [])
-                if isinstance(val, str):
-                    val = [val]
-                for v in val:
-                    existing.add(v.strip().lower())
+            for entry in data:
+                for field in ("Subject", "Keywords"):
+                    val = entry.get(field, [])
+                    # exiftool returns a year keyword like 2025 as an int, and a
+                    # single keyword as a bare scalar rather than a list.
+                    if not isinstance(val, list):
+                        val = [val]
+                    for v in val:
+                        existing.add(str(v).strip().lower())
             return sorted(existing)
         except Exception as e:
             logger.warning(f"Read existing keywords failed: {e}")
