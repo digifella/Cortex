@@ -8,6 +8,7 @@ import io
 import os
 import re
 import base64
+import csv
 import datetime
 import json
 import subprocess
@@ -557,12 +558,15 @@ class DocumentTextifier:
             # self-directives ("Focus on the architecture", "Start with the scene")
             "focus on the",
             "focus on",
+            "start immediately with",
             "start with the",
             "start with",
+            "begin immediately with",
             "begin with the",
             "begin with",
             "note that",
             "describe the",
+            "output the description",
             # keyword/hint instruction echo-back
             "use these facts",
             "do not list or discuss",
@@ -1293,6 +1297,14 @@ class DocumentTextifier:
     def textify_pdf(self, file_path: str) -> str:
         """Convert a PDF to Markdown using PyMuPDF."""
         strategy = self.pdf_strategy
+        if strategy in {"screenshot_article", "article_screenshot", "apple_news"}:
+            self._report(0.0, "Running screenshot article OCR...")
+            return self._textify_screenshot_article_pdf(file_path)
+
+        if strategy in {"historical_scan", "scanned_book"}:
+            self._report(0.0, "Running historical scan OCR...")
+            return self._textify_historical_scan_pdf(file_path)
+
         if strategy == "opendataloader":
             self._report(0.0, "Trying OpenDataLoader PDF...")
             opendataloader_md = self._try_opendataloader_pdf(file_path)
@@ -1338,6 +1350,10 @@ class DocumentTextifier:
 
         repeated_boilerplate = {line for line, count in header_footer_counts.items() if count >= 2}
 
+        figure_enrich_deadline: Optional[float] = None
+        if self.use_vision and self.image_enrich_max_seconds > 0:
+            figure_enrich_deadline = time.monotonic() + self.image_enrich_max_seconds
+
         for page_num in range(total_pages):
             self._report(page_num / total_pages, f"Page {page_num + 1}/{total_pages}")
             page = doc[page_num]
@@ -1358,8 +1374,15 @@ class DocumentTextifier:
             if text:
                 md_parts.append(text)
                 md_parts.append("")
+                # Describe embedded figures on this text-bearing page
+                if self.use_vision:
+                    for fig_desc in self._describe_page_image_blocks(
+                        page, page_num + 1, figure_enrich_deadline
+                    ):
+                        md_parts.append(fig_desc)
+                        md_parts.append("")
             elif self.use_vision:
-                # If no extractable text, include a vision summary so the page isn't lost.
+                # No extractable text — describe the whole page as an image
                 try:
                     pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
                     desc = self.describe_image(pix.tobytes("png"))
@@ -1367,9 +1390,6 @@ class DocumentTextifier:
                     md_parts.append("")
                 except Exception as e:
                     logger.debug(f"Page image summary failed on page {page_num + 1}: {e}")
-
-            # Strict text-only PDF mode:
-            # intentionally ignore embedded tables/figures/images to avoid noisy pseudo-structured output.
 
             # Explicit page break marker for downstream parsers.
             if page_num < total_pages - 1:
@@ -1393,6 +1413,403 @@ class DocumentTextifier:
                     return out
 
         return normalized
+
+    def _textify_historical_scan_pdf(self, file_path: str) -> str:
+        """
+        Convert scan-only books/manuals to Markdown with OCR-first page handling.
+
+        This path is intended for public-domain/historical technical scans where
+        the important meaning is spread across prose, captions, figures, photos,
+        and occasional rotated plates. It uses Tesseract TSV output so weak OCR can
+        be flagged and routed to a vision summary instead of silently looking good.
+        """
+        import fitz  # PyMuPDF
+
+        if not shutil.which("tesseract"):
+            raise RuntimeError("Historical scan OCR requires the `tesseract` command to be installed.")
+
+        doc = fitz.open(file_path)
+        total_pages = len(doc)
+        md_parts: List[str] = []
+        figure_enrich_deadline: Optional[float] = None
+        if self.use_vision and self.image_enrich_max_seconds > 0:
+            figure_enrich_deadline = time.monotonic() + self.image_enrich_max_seconds
+
+        try:
+            for page_num in range(total_pages):
+                page = doc[page_num]
+                page_number = page_num + 1
+                self._report(page_num / max(total_pages, 1), f"OCR page {page_number}/{total_pages}")
+                md_parts.append(f"## Page {page_number}\n")
+
+                image_bytes = self._render_pdf_page_png(page, zoom=2.0)
+                ocr = self._historical_scan_ocr_image(image_bytes)
+                text = str(ocr.get("text") or "").strip()
+                avg_conf = float(ocr.get("avg_conf") or 0.0)
+                word_count = int(ocr.get("word_count") or 0)
+
+                if text:
+                    md_parts.append(text)
+                    md_parts.append("")
+                else:
+                    md_parts.append("> **[OCR]**: No text was confidently recovered from this scanned page.")
+                    md_parts.append("")
+
+                needs_vision = self._historical_scan_page_needs_vision(page, text, avg_conf, word_count)
+                if self.use_vision and needs_vision:
+                    if figure_enrich_deadline is not None and time.monotonic() > figure_enrich_deadline:
+                        md_parts.append("> **[Page image summary]**: Skipped because the image-description budget was exceeded.")
+                        md_parts.append("")
+                    else:
+                        try:
+                            desc = self._describe_image_with_timeout(image_bytes)
+                            if desc:
+                                md_parts.append(f"> **[Page {page_number} image summary]**: {desc}")
+                                md_parts.append("")
+                        except Exception as e:
+                            logger.debug(f"Historical scan image summary failed on page {page_number}: {e}")
+
+                if avg_conf and avg_conf < 45:
+                    md_parts.append(
+                        f"> **[OCR confidence]**: Low average word confidence ({avg_conf:.1f}); "
+                        "treat this page as requiring visual review."
+                    )
+                    md_parts.append("")
+
+                if page_num < total_pages - 1:
+                    md_parts.append("\n---\n")
+        finally:
+            doc.close()
+
+        self._report(1.0, "Historical scan OCR complete")
+        return self._normalize_markdown_output("\n".join(md_parts))
+
+    def _textify_screenshot_article_pdf(self, file_path: str) -> str:
+        """
+        Convert screenshot-style article PDFs to Markdown.
+
+        This path is intended for PDFs made from tablet/browser screenshots where
+        the article text is embedded as page images and app chrome surrounds the
+        readable column.  It crops to the article pane before OCR so navigation,
+        status bars, and sidebar labels do not pollute the extracted text.
+        """
+        import fitz  # PyMuPDF
+
+        if not shutil.which("tesseract"):
+            raise RuntimeError("Screenshot article OCR requires the `tesseract` command to be installed.")
+
+        doc = fitz.open(file_path)
+        total_pages = len(doc)
+        md_parts: List[str] = []
+        skipped_pages = 0
+
+        try:
+            for page_num in range(total_pages):
+                page = doc[page_num]
+                page_number = page_num + 1
+                self._report(page_num / max(total_pages, 1), f"Article OCR page {page_number}/{total_pages}")
+                md_parts.append(f"## Page {page_number}\n")
+
+                image_bytes = self._render_screenshot_article_page_png(page)
+                ocr = self._screenshot_article_ocr_image(image_bytes)
+                text = self._clean_screenshot_article_ocr_text(ocr)
+                avg_conf = float(ocr.get("avg_conf") or 0.0)
+                word_count = int(ocr.get("word_count") or 0)
+
+                if self._screenshot_article_page_is_low_text(text, avg_conf, word_count):
+                    skipped_pages += 1
+                    md_parts.append("> **[Skipped]**: Low-confidence or low-text screenshot page, likely navigation, image, or advertisement.")
+                    md_parts.append("")
+                else:
+                    md_parts.append(text)
+                    md_parts.append("")
+                    if avg_conf and avg_conf < 55:
+                        md_parts.append(
+                            f"> **[OCR confidence]**: Average word confidence was {avg_conf:.1f}; "
+                            "review this page against the source image."
+                        )
+                        md_parts.append("")
+
+                if page_num < total_pages - 1:
+                    md_parts.append("\n---\n")
+        finally:
+            doc.close()
+
+        self._report(1.0, f"Screenshot article OCR complete ({skipped_pages} page(s) skipped)")
+        return self._normalize_markdown_output("\n".join(md_parts))
+
+    def _render_screenshot_article_page_png(self, page) -> bytes:
+        zoom = float(os.getenv("CORTEX_SCREENSHOT_ARTICLE_RENDER_ZOOM", "3.0") or 3.0)
+        image_bytes = self._render_pdf_page_png(page, zoom=zoom)
+        return self._crop_screenshot_article_image(image_bytes)
+
+    @staticmethod
+    def _screenshot_article_crop_box(width: int, height: int) -> Tuple[int, int, int, int]:
+        left = float(os.getenv("CORTEX_SCREENSHOT_ARTICLE_CROP_LEFT", "0.24") or 0.24)
+        top = float(os.getenv("CORTEX_SCREENSHOT_ARTICLE_CROP_TOP", "0.03") or 0.03)
+        right = float(os.getenv("CORTEX_SCREENSHOT_ARTICLE_CROP_RIGHT", "0.985") or 0.985)
+        bottom = float(os.getenv("CORTEX_SCREENSHOT_ARTICLE_CROP_BOTTOM", "0.98") or 0.98)
+        left, top = max(0.0, min(left, 0.95)), max(0.0, min(top, 0.95))
+        right, bottom = max(left + 0.01, min(right, 1.0)), max(top + 0.01, min(bottom, 1.0))
+        return (
+            int(width * left),
+            int(height * top),
+            int(width * right),
+            int(height * bottom),
+        )
+
+    def _crop_screenshot_article_image(self, image_bytes: bytes) -> bytes:
+        try:
+            from PIL import Image, ImageOps, ImageFilter
+        except Exception:
+            return image_bytes
+
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as img:
+                if img.mode not in ("RGB", "L"):
+                    img = img.convert("RGB")
+                crop_box = self._screenshot_article_crop_box(*img.size)
+                cropped = img.crop(crop_box)
+                gray = ImageOps.grayscale(cropped)
+                gray = ImageOps.autocontrast(gray)
+                gray = gray.filter(ImageFilter.SHARPEN)
+                out = io.BytesIO()
+                gray.save(out, format="PNG")
+                return out.getvalue()
+        except Exception as e:
+            logger.debug("Screenshot article crop failed: %s", e)
+            return image_bytes
+
+    def _screenshot_article_ocr_image(self, image_bytes: bytes) -> Dict[str, Any]:
+        candidates: List[Dict[str, Any]] = []
+        for psm in (6, 4, 11):
+            result = self._run_tesseract_tsv(image_bytes, psm=psm)
+            result["psm"] = psm
+            candidates.append(result)
+            if not self._historical_ocr_result_is_weak(result) and float(result.get("avg_conf") or 0.0) >= 55:
+                break
+        return max(candidates, key=self._screenshot_article_ocr_score)
+
+    @staticmethod
+    def _screenshot_article_ocr_score(result: Dict[str, Any]) -> float:
+        text = str(result.get("text") or "")
+        avg_conf = float(result.get("avg_conf") or 0.0)
+        word_count = int(result.get("word_count") or 0)
+        alpha_count = len(re.findall(r"[A-Za-z]", text))
+        navigation_penalty = 0.0
+        for marker in ("Search", "Today", "News+", "Library", "Saved Stories", "Shared with You"):
+            if re.search(rf"\b{re.escape(marker)}\b", text):
+                navigation_penalty += 12.0
+        return avg_conf + min(word_count, 220) * 0.12 + min(alpha_count, 1200) * 0.01 - navigation_penalty
+
+    @staticmethod
+    def _clean_screenshot_article_ocr_text(result: Dict[str, Any]) -> str:
+        line_items = result.get("lines")
+        if not isinstance(line_items, list):
+            return str(result.get("text") or "").strip()
+
+        cleaned: List[str] = []
+        ad_patterns = (
+            r"\b(advertisement|sponsored|sponsor content)\b",
+            r"\b(senior discounts?|benefits seniors?|entitled to|forget to claim)\b",
+            r"\b(if only they ask|click here|learn more)\b",
+        )
+        for item in line_items:
+            if not isinstance(item, dict):
+                continue
+            line = str(item.get("text") or "").strip()
+            if not line:
+                continue
+            low = line.lower()
+            if any(re.search(pattern, low, flags=re.IGNORECASE) for pattern in ad_patterns):
+                continue
+
+            alpha_count = len(re.findall(r"[A-Za-z]", line))
+            visible_count = len(re.sub(r"\s+", "", line))
+            alpha_ratio = alpha_count / max(visible_count, 1)
+            symbol_count = len(re.findall(r"[^A-Za-z0-9\s.,;:'\"!?()\-—–]", line))
+            symbol_ratio = symbol_count / max(visible_count, 1)
+            avg_conf = float(item.get("avg_conf") or 0.0)
+            word_count = int(item.get("word_count") or 0)
+
+            if alpha_count < 3:
+                continue
+            if avg_conf and avg_conf < 35:
+                continue
+            if len(line) >= 20 and alpha_ratio < 0.45:
+                continue
+            if symbol_ratio > 0.30:
+                continue
+            cleaned.append(line)
+
+        return "\n".join(cleaned).strip()
+
+    @staticmethod
+    def _screenshot_article_page_is_low_text(text: str, avg_conf: float, word_count: int) -> bool:
+        alpha_count = len(re.findall(r"[A-Za-z]", text or ""))
+        if alpha_count < 50 or word_count < 10:
+            return True
+        if avg_conf and avg_conf < 35 and word_count < 45:
+            return True
+        return False
+
+    @staticmethod
+    def _render_pdf_page_png(page, zoom: float = 2.0) -> bytes:
+        import fitz  # PyMuPDF
+
+        pix = page.get_pixmap(matrix=fitz.Matrix(float(zoom), float(zoom)), alpha=False)
+        return pix.tobytes("png")
+
+    def _historical_scan_ocr_image(self, image_bytes: bytes) -> Dict[str, Any]:
+        """
+        OCR a rendered page image and choose the best low-cost Tesseract result.
+
+        PSM 6 works well for normal book pages. PSM 11 is a useful fallback for
+        caption/diagram-heavy pages. Rotated retries are intentionally limited to
+        weak first passes because full-book runs need to remain tractable.
+        """
+        candidates: List[Dict[str, Any]] = []
+        primary = self._run_tesseract_tsv(image_bytes, psm=6)
+        candidates.append(primary)
+        if self._historical_ocr_result_is_weak(primary):
+            candidates.append(self._run_tesseract_tsv(image_bytes, psm=11))
+            for rotated in self._rotate_image_bytes_for_ocr(image_bytes):
+                rotated_result = self._run_tesseract_tsv(rotated, psm=11)
+                rotated_result["rotated"] = True
+                candidates.append(rotated_result)
+
+        return max(candidates, key=self._historical_ocr_score)
+
+    def _run_tesseract_tsv(self, image_bytes: bytes, psm: int = 6) -> Dict[str, Any]:
+        timeout_seconds = float(os.getenv("CORTEX_TEXTIFIER_OCR_PAGE_TIMEOUT_SECONDS", "45"))
+        with tempfile.NamedTemporaryFile(prefix="cortex_scan_page_", suffix=".png", delete=False) as tf:
+            tf.write(image_bytes)
+            image_path = tf.name
+        try:
+            proc = subprocess.run(
+                ["tesseract", image_path, "stdout", "--psm", str(int(psm)), "tsv"],
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+            if proc.returncode != 0 and not proc.stdout.strip():
+                logger.debug("Tesseract OCR failed: %s", proc.stderr.strip())
+                return {"text": "", "avg_conf": 0.0, "word_count": 0, "psm": psm}
+            parsed = self._parse_tesseract_tsv(proc.stdout)
+            parsed["psm"] = psm
+            return parsed
+        except subprocess.TimeoutExpired:
+            logger.warning("Tesseract OCR timed out after %.1fs", timeout_seconds)
+            return {"text": "", "avg_conf": 0.0, "word_count": 0, "psm": psm}
+        except Exception as e:
+            logger.debug("Tesseract OCR unavailable: %s", e)
+            return {"text": "", "avg_conf": 0.0, "word_count": 0, "psm": psm}
+        finally:
+            try:
+                Path(image_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _parse_tesseract_tsv(tsv_text: str) -> Dict[str, Any]:
+        words_by_line: Dict[Tuple[int, int, int], List[str]] = {}
+        confidences_by_line: Dict[Tuple[int, int, int], List[float]] = {}
+        confidences: List[float] = []
+        reader = csv.DictReader(io.StringIO(tsv_text or ""), delimiter="\t", quoting=csv.QUOTE_NONE)
+        for row in reader:
+            if str(row.get("level") or "") != "5":
+                continue
+            text = str(row.get("text") or "").strip()
+            if not text:
+                continue
+            try:
+                conf = float(row.get("conf", "-1"))
+            except Exception:
+                conf = -1.0
+            if conf >= 0:
+                confidences.append(conf)
+            try:
+                key = (
+                    int(row.get("block_num") or 0),
+                    int(row.get("par_num") or 0),
+                    int(row.get("line_num") or 0),
+                )
+            except Exception:
+                key = (0, 0, len(words_by_line))
+            words_by_line.setdefault(key, []).append(text)
+            if conf >= 0:
+                confidences_by_line.setdefault(key, []).append(conf)
+
+        line_items: List[Dict[str, Any]] = []
+        for key, words in sorted(words_by_line.items()):
+            line = " ".join(words).strip()
+            if not line:
+                continue
+            line_confidences = confidences_by_line.get(key) or []
+            line_items.append(
+                {
+                    "text": line,
+                    "avg_conf": statistics.mean(line_confidences) if line_confidences else 0.0,
+                    "word_count": len(words),
+                }
+            )
+        lines = [str(item["text"]) for item in line_items]
+        text = "\n".join(lines).strip()
+        avg_conf = statistics.mean(confidences) if confidences else 0.0
+        return {"text": text, "avg_conf": avg_conf, "word_count": len(confidences), "lines": line_items}
+
+    @staticmethod
+    def _historical_ocr_score(result: Dict[str, Any]) -> float:
+        text = str(result.get("text") or "")
+        word_count = int(result.get("word_count") or 0)
+        avg_conf = float(result.get("avg_conf") or 0.0)
+        alpha_count = len(re.findall(r"[A-Za-z]", text))
+        figure_bonus = 12.0 if re.search(r"\b(?:fig|figure|plate|graph|curve|diagram)\b", text, re.I) else 0.0
+        return avg_conf + min(word_count, 180) * 0.08 + min(alpha_count, 800) * 0.01 + figure_bonus
+
+    @staticmethod
+    def _historical_ocr_result_is_weak(result: Dict[str, Any]) -> bool:
+        text = str(result.get("text") or "")
+        avg_conf = float(result.get("avg_conf") or 0.0)
+        word_count = int(result.get("word_count") or 0)
+        alpha_count = len(re.findall(r"[A-Za-z]", text))
+        return avg_conf < 45 or word_count < 35 or alpha_count < 120
+
+    @staticmethod
+    def _rotate_image_bytes_for_ocr(image_bytes: bytes) -> List[bytes]:
+        try:
+            from PIL import Image
+        except Exception:
+            return []
+
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            rotated: List[bytes] = []
+            for degrees in (90, 270):
+                out = io.BytesIO()
+                img.rotate(degrees, expand=True).save(out, format="PNG")
+                rotated.append(out.getvalue())
+            return rotated
+        except Exception:
+            return []
+
+    @staticmethod
+    def _historical_scan_page_needs_vision(page, text: str, avg_conf: float, word_count: int) -> bool:
+        if avg_conf < 55 or word_count < 45:
+            return True
+        if re.search(r"\b(?:fig|figure|plate|graph|curve|diagram|schematic)\b", text or "", re.I):
+            return True
+        try:
+            image_blocks = [
+                block
+                for block in (page.get_text("dict") or {}).get("blocks", [])
+                if block.get("type") == 1
+            ]
+            # Scanned technical pages often contain a full-page image plus one or
+            # more separately embedded photos/plates.
+            return len(image_blocks) > 1
+        except Exception:
+            return False
 
     def extract_pdf_images(
         self,
@@ -1939,7 +2356,14 @@ class DocumentTextifier:
 
     # Text models for keyword extraction (VLMs need images, so use a text LLM)
     TEXT_MODELS = ["mistral:latest", "mistral-small3.2", "llama3:latest", "gemma:latest"]
-    CLEANUP_MODELS = ["qwen2.5:32b", "qwen2.5:14b", "mistral:latest", "llama3:latest"]
+    CLEANUP_MODELS = [
+        "qwen3.6:27b",
+        "qwen3.5:35b-a3b",
+        "qwen2.5:32b",
+        "qwen2.5:14b",
+        "mistral:latest",
+        "llama3:latest",
+    ]
 
     def extract_keywords(self, description: str, anchor_keywords: Optional[List[str]] = None) -> List[str]:
         """Extract flat keywords from an image description using a text LLM.
@@ -2215,6 +2639,98 @@ class DocumentTextifier:
             except Exception:
                 pass
 
+    def _describe_page_image_blocks(
+        self,
+        page,
+        page_number: int,
+        enrich_deadline: Optional[float] = None,
+    ) -> List[str]:
+        """
+        Describe embedded image blocks on a single PyMuPDF page using the VLM.
+
+        Returns a list of formatted markdown strings, one per qualifying image block.
+        Only called when use_vision is True and the page has extractable text (image-only
+        pages are handled separately by the whole-page fallback in textify_pdf).
+
+        Args:
+            page: A PyMuPDF page object.
+            page_number: 1-based page number, used in the description label.
+            enrich_deadline: monotonic time deadline; skips remaining images if exceeded.
+        """
+        import fitz  # PyMuPDF
+
+        results: List[str] = []
+        try:
+            text_dict = page.get_text("dict") or {}
+            blocks = list(text_dict.get("blocks", []) or [])
+        except Exception:
+            return results
+
+        page_rect = page.rect
+        page_area = max(page_rect.get_area(), 1.0)
+        # Edge-decoration margin: skip image blocks that hug page edges and are thin
+        edge_margin_x = page_rect.width * 0.08
+        edge_margin_y = page_rect.height * 0.08
+
+        # Minimum thresholds for an inline document figure (relaxed vs photo extraction)
+        MIN_INTRINSIC_PX = 150
+        MIN_COVERAGE_PCT = 1.5
+
+        image_count = 0
+        for block in blocks:
+            if block.get("type") != 1:  # type 1 = image block
+                continue
+
+            bbox_raw = block.get("bbox")
+            if not bbox_raw or len(bbox_raw) != 4:
+                continue
+            try:
+                bbox = fitz.Rect(float(bbox_raw[0]), float(bbox_raw[1]),
+                                 float(bbox_raw[2]), float(bbox_raw[3]))
+            except Exception:
+                continue
+
+            bbox = bbox & page_rect
+            if bbox.is_empty or bbox.width < 8 or bbox.height < 8:
+                continue
+
+            intrinsic_w = int(block.get("width", 0) or 0)
+            intrinsic_h = int(block.get("height", 0) or 0)
+            if intrinsic_w < MIN_INTRINSIC_PX or intrinsic_h < MIN_INTRINSIC_PX:
+                continue
+            coverage_pct = (bbox.get_area() / page_area) * 100.0
+            if coverage_pct < MIN_COVERAGE_PCT:
+                continue
+
+            # Skip thin edge decorations (headers/footers/logos)
+            near_top = bbox.y1 <= edge_margin_y
+            near_bottom = bbox.y0 >= (page_rect.height - edge_margin_y)
+            near_left = bbox.x1 <= edge_margin_x
+            near_right = bbox.x0 >= (page_rect.width - edge_margin_x)
+            banner_like = bbox.height <= (page_rect.height * 0.18)
+            icon_like = bbox.width <= (page_rect.width * 0.18)
+            if (near_top or near_bottom or near_left or near_right) and (banner_like or icon_like):
+                continue
+
+            if enrich_deadline is not None and time.monotonic() > enrich_deadline:
+                results.append("> **[Figure skipped]**: Time budget exceeded for this page.")
+                break
+
+            image_count += 1
+            try:
+                pix = page.get_pixmap(
+                    clip=bbox,
+                    matrix=fitz.Matrix(2.0, 2.0),
+                    alpha=False,
+                )
+                desc = self._describe_image_with_timeout(pix.tobytes("png"))
+                label = f"Figure, page {page_number}, image {image_count}"
+                results.append(f"> **[{label}]**: {desc}")
+            except Exception as e:
+                logger.debug(f"Could not describe image block on page {page_number}: {e}")
+
+        return results
+
     def _enrich_docling_image_markers(
         self,
         markdown_text: str,
@@ -2232,13 +2748,6 @@ class DocumentTextifier:
             return text
 
         if not self.use_vision:
-            return text.replace(marker, "> **[Image]**: [Image: vision model disabled]")
-
-        if self._docling_text_is_substantive(text):
-            logger.info(
-                "Skipping Docling image marker enrichment for %s because extracted text is already substantive",
-                Path(file_path).name,
-            )
             return text.replace(marker, "")
 
         figures = figures or []
@@ -4017,6 +4526,8 @@ class DocumentTextifier:
             md = result.document.export_to_markdown()
             if md and md.strip():
                 logger.info("Used Docling for PDF conversion")
+                if str(file_path).lower().endswith(".pdf"):
+                    md = self._enrich_docling_image_markers(md, file_path, [])
                 return self._normalize_markdown_output(md)
         except Exception as e:
             logger.info(f"Direct Docling converter unavailable: {e}")

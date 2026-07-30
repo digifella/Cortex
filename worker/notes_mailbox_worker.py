@@ -7,9 +7,11 @@ import threading
 import html
 import hashlib
 import re
+import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Optional
 import sys
 
 import requests
@@ -20,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from cortex_engine.notes_mailbox import NOTES_MAILBOX_IDENTITY, classify_notes_mailbox_route
+from cortex_engine.article_markdown_extractor import extract_pdf_articles_to_bundle
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -184,6 +187,102 @@ class NotesMailboxProcessor:
             ]
         )
 
+    def _render_article_extract_markdown(
+        self,
+        *,
+        title: str,
+        reason: str,
+        message: dict[str, str],
+        summaries: list[dict[str, str]],
+    ) -> str:
+        base = self._render_markdown(title=title, route="public_stash", reason=reason, message=message).rstrip()
+        lines = [base, "## Article Extraction", ""]
+        if not summaries:
+            lines.extend(["No PDF article bundles were produced.", ""])
+            return "\n".join(lines)
+        for item in summaries:
+            lines.append(f"### {item['source_name']}")
+            lines.append(f"- Bundle: `{item['bundle_path']}`")
+            lines.append(f"- Articles: {item['article_count']}")
+            for article_title in item.get("article_titles", [])[:12]:
+                lines.append(f"- {article_title}")
+            lines.append("")
+        return "\n".join(lines)
+
+    def _process_article_extract_request(self, route: dict[str, str], message: dict[str, Any]) -> dict[str, str]:
+        attachments = list(message.get("attachments") or [])
+        pdf_attachments = [item for item in attachments if str(item.get("name") or "").lower().endswith(".pdf")]
+        if not pdf_attachments:
+            return {
+                "status": "rejected",
+                "route": route["route"],
+                "reason": "article_extract_missing_pdf_attachment",
+                "mailbox_identity": self.config.mailbox_identity,
+            }
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        safe_subject = self._safe_subject(message.get("subject", "extract_articles"))
+        request_root = self.public_dir / f"{timestamp}_{safe_subject}_articles"
+        request_root.mkdir(parents=True, exist_ok=True)
+
+        summaries: list[dict[str, str]] = []
+        for idx, attachment in enumerate(pdf_attachments, start=1):
+            raw = attachment.get("content_bytes_b64")
+            if not raw:
+                continue
+            try:
+                pdf_bytes = base64.b64decode(str(raw), validate=False)
+            except Exception:
+                logger.warning("Notes mailbox attachment decode failed for %s", attachment.get("name", "attachment"))
+                continue
+            source_name = str(attachment.get("name") or f"attachment_{idx}.pdf").strip() or f"attachment_{idx}.pdf"
+            pdf_path = request_root / source_name
+            pdf_path.write_bytes(pdf_bytes)
+            result = extract_pdf_articles_to_bundle(pdf_path, output_dir=request_root / f"{pdf_path.stem}_bundle")
+            bundle_path = Path(result["zip_path"])
+            manifest = dict(result.get("manifest") or {})
+            summaries.append(
+                {
+                    "source_name": source_name,
+                    "bundle_path": str(bundle_path),
+                    "article_count": str(int(manifest.get("article_count") or 0)),
+                    "article_titles": [str(item.get("title") or "").strip() for item in manifest.get("articles") or [] if str(item.get("title") or "").strip()],
+                }
+            )
+
+        title = self._title_from_message(message, "public_stash")
+        vault_path = self._markdown_path(self.public_vault_dir, title, message)
+        vault_path.write_text(
+            self._render_article_extract_markdown(
+                title=title,
+                reason=route["reason"],
+                message=message,
+                summaries=summaries,
+            ),
+            encoding="utf-8",
+        )
+
+        outbox_path = request_root / "article_extract_request.json"
+        outbox_payload = {
+            "mailbox_identity": self.config.mailbox_identity,
+            "source_system": self.config.source_system,
+            "received_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "route": route["route"],
+            "reason": route["reason"],
+            "vault_path": str(vault_path),
+            "bundle_paths": [item["bundle_path"] for item in summaries],
+            "message": message,
+        }
+        outbox_path.write_text(json.dumps(outbox_payload, ensure_ascii=True, indent=2), encoding="utf-8")
+        return {
+            "status": "article_extract_completed",
+            "route": route["route"],
+            "reason": route["reason"],
+            "path": str(outbox_path),
+            "vault_path": str(vault_path),
+            "mailbox_identity": self.config.mailbox_identity,
+        }
+
     def _write_vault_markdown(self, route: str, reason: str, message: dict[str, str]) -> str:
         target_dir = self.private_vault_dir if route == "private_vault" else self.public_vault_dir
         title = self._title_from_message(message, route)
@@ -191,7 +290,7 @@ class NotesMailboxProcessor:
         output_path.write_text(self._render_markdown(title=title, route=route, reason=reason, message=message), encoding="utf-8")
         return str(output_path)
 
-    def process_message(self, message: dict[str, str]) -> dict[str, str]:
+    def process_message(self, message: dict[str, Any]) -> dict[str, str]:
         route = classify_notes_mailbox_route(message.get("subject", ""), message.get("text_body", ""))
         if route["route"] in {"unsupported_market_intel", "rejected_lab_result_error"}:
             return {
@@ -200,6 +299,8 @@ class NotesMailboxProcessor:
                 "reason": route["reason"],
                 "mailbox_identity": self.config.mailbox_identity,
             }
+        if route["route"] == "article_extract_request":
+            return self._process_article_extract_request(route, message)
 
         target_dir = self.private_dir if route["route"] == "private_vault" else self.public_dir
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -293,6 +394,29 @@ class NotesGraphClient:
         payload = response.json()
         return list(payload.get("value") or [])
 
+    def fetch_attachments(self, message_id: str) -> list[dict]:
+        url = f"https://graph.microsoft.com/v1.0/users/{self.config.graph_mailbox}/messages/{message_id}/attachments"
+        response = requests.get(
+            url,
+            headers=self._headers(),
+            params={"$select": "name,contentType,contentBytes,@odata.type"},
+            timeout=self.config.graph_timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        items = []
+        for item in payload.get("value") or []:
+            if str(item.get("@odata.type") or "").strip() != "#microsoft.graph.fileAttachment":
+                continue
+            items.append(
+                {
+                    "name": str(item.get("name") or "").strip(),
+                    "content_type": str(item.get("contentType") or "").strip(),
+                    "content_bytes_b64": str(item.get("contentBytes") or "").strip(),
+                }
+            )
+        return items
+
     def mark_read(self, message_id: str) -> None:
         url = f"https://graph.microsoft.com/v1.0/users/{self.config.graph_mailbox}/messages/{message_id}"
         response = requests.patch(
@@ -309,7 +433,7 @@ def _email_address(value: dict) -> tuple[str, str]:
     return str(addr.get("name") or "").strip(), str(addr.get("address") or "").strip()
 
 
-def _normalize_graph_message(item: dict) -> dict[str, str]:
+def _normalize_graph_message(item: dict, attachments: Optional[list[dict]] = None) -> dict[str, Any]:
     from_name, from_email = _email_address(dict(item.get("from") or {}))
     body = dict(item.get("body") or {})
     body_content = str(body.get("content") or "")
@@ -329,6 +453,7 @@ def _normalize_graph_message(item: dict) -> dict[str, str]:
         "received_at": str(item.get("receivedDateTime") or "").strip(),
         "text_body": text_body,
         "html_body": html_body,
+        "attachments": list(attachments or []),
     }
 
 
@@ -376,7 +501,13 @@ def main() -> int:
             processed = 0
             rejected = 0
             for item in graph_client.list_unread_messages():
-                message = _normalize_graph_message(item)
+                attachments = []
+                if bool(item.get("hasAttachments")):
+                    try:
+                        attachments = graph_client.fetch_attachments(str(item.get("id") or "").strip())
+                    except Exception as exc:
+                        logging.warning("Notes mailbox attachment fetch failed for subject=%s detail=%s", item.get("subject", ""), exc)
+                message = _normalize_graph_message(item, attachments)
                 graph_id = str(message.get("graph_message_id") or "").strip()
                 if processor.has_processed_graph_id(graph_id):
                     logging.debug("Notes mailbox skipping already processed graph message id=%s subject=%s", graph_id, message.get("subject", ""))

@@ -15,11 +15,13 @@ def fake_input(tmp_path: Path) -> Path:
     return p
 
 
-def _patch_textifier(markdown: str = "# Title\n\nBody.\n"):
+def _patch_textifier(markdown: str = "# Title\n\nBody.\n", captured_options: list | None = None):
     """Patch DocumentTextifier so we don't actually run Docling."""
     class _FakeTextifier:
         @classmethod
         def from_options(cls, options, on_progress=None):
+            if captured_options is not None:
+                captured_options.append(dict(options or {}))
             return cls()
 
         def textify_file(self, _path):
@@ -83,3 +85,31 @@ def test_email_markdown_mode_writes_only_md(fake_input):
     md_content = result["output_file"].read_text(encoding="utf-8")
     # Content should be raw markdown (still has the '#').
     assert md_content.lstrip().startswith("#")
+
+
+def test_historical_scan_strategy_is_accepted(fake_input):
+    captured_options = []
+    with _patch_textifier(markdown="# Scan\n", captured_options=captured_options):
+        result = pdf_textify.handle(
+            input_path=fake_input,
+            input_data={"textify_options": {"pdf_strategy": "historical_scan", "use_vision": True}},
+            job={"id": 4},
+        )
+
+    assert result["output_file"].suffix == ".md"
+    assert result["output_data"]["pdf_strategy"] == "historical_scan"
+    assert captured_options[0]["pdf_strategy"] == "historical_scan"
+
+
+def test_screenshot_article_strategy_is_accepted(fake_input):
+    captured_options = []
+    with _patch_textifier(markdown="# Article\n", captured_options=captured_options):
+        result = pdf_textify.handle(
+            input_path=fake_input,
+            input_data={"textify_options": {"pdf_strategy": "screenshot_article", "use_vision": False}},
+            job={"id": 5},
+        )
+
+    assert result["output_file"].suffix == ".md"
+    assert result["output_data"]["pdf_strategy"] == "screenshot_article"
+    assert captured_options[0]["pdf_strategy"] == "screenshot_article"

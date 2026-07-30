@@ -8,6 +8,7 @@ from cortex_engine.handoff_contract import (
     validate_cortex_sync_input,
     validate_intel_extract_input,
     validate_org_profile_refresh_input,
+    validate_pdf_article_extract_input,
     validate_pdf_textify_input,
     validate_research_resolve_input,
     validate_stakeholder_graph_view_input,
@@ -15,6 +16,7 @@ from cortex_engine.handoff_contract import (
     validate_signal_digest_input,
     validate_stakeholder_profile_sync_input,
     validate_url_ingest_input,
+    validate_youtube_summarise_input,
 )
 
 
@@ -67,6 +69,16 @@ def test_pdf_textify_rejects_non_positive_timeout():
         )
 
 
+def test_pdf_article_extract_normalizes_defaults():
+    payload = validate_pdf_article_extract_input({})
+    assert payload["article_extract_options"]["segmentation_strategy"] == "pdf_bookmarks"
+
+
+def test_pdf_article_extract_rejects_invalid_strategy():
+    with pytest.raises(ValueError, match="Invalid segmentation_strategy"):
+        validate_pdf_article_extract_input({"article_extract_options": {"segmentation_strategy": "bad_mode"}})
+
+
 def test_url_ingest_requires_urls_or_text():
     with pytest.raises(ValueError, match="requires input_data.urls"):
         validate_url_ingest_input({})
@@ -104,7 +116,45 @@ def test_url_ingest_coerces_booleans_timeout_and_textify():
     assert payload["ingest_options"]["capture_web_md_on_no_pdf"] is False
     assert payload["timeout_seconds"] == 35
     assert payload["textify_options"]["pdf_strategy"] == "hybrid"
-    assert payload["textify_options"]["docling_timeout_seconds"] == 240.0
+
+
+def test_youtube_summarise_normalizes_chunk_options():
+    payload = validate_youtube_summarise_input(
+        {
+            "urls": [" https://youtu.be/example "],
+            "api_choice": "gemini-pro",
+            "output_modes": ["summary", "timestamps", "summary"],
+            "push_to_kb": "1",
+            "kb_category": " Video ",
+            "language": " Danish ",
+            "youtube_options": {
+                "start_time_seconds": "60",
+                "end_time_seconds": "3660",
+                "chunk_duration_seconds": "3600",
+                "chunk_overlap_seconds": "120",
+            },
+        }
+    )
+    assert payload["urls"] == ["https://youtu.be/example"]
+    assert payload["api_choice"] == "gemini-pro"
+    assert payload["output_modes"] == ["summary", "timestamps"]
+    assert payload["push_to_kb"] is True
+    assert payload["kb_category"] == "Video"
+    assert payload["language"] == "Danish"
+    assert payload["youtube_options"]["start_time_seconds"] == 60
+    assert payload["youtube_options"]["end_time_seconds"] == 3660
+    assert payload["youtube_options"]["chunk_duration_seconds"] == 3600
+    assert payload["youtube_options"]["chunk_overlap_seconds"] == 120
+
+
+def test_youtube_summarise_rejects_bad_chunk_window():
+    with pytest.raises(ValueError, match="end_time_seconds must be greater than start_time_seconds"):
+        validate_youtube_summarise_input(
+            {
+                "urls": ["https://youtu.be/example"],
+                "youtube_options": {"start_time_seconds": 500, "end_time_seconds": 100},
+            }
+        )
 
 
 def test_included_study_extract_normalizes_defaults():

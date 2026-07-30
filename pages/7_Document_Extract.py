@@ -1,5 +1,5 @@
 # ## File: pages/7_Document_Extract.py
-# Version: v6.0.12
+# Version: v6.0.13
 # Date: 2026-01-29
 # Purpose: Document extraction tools — Textifier (document to Markdown) and Anonymizer.
 
@@ -31,6 +31,7 @@ sys.path.insert(0, str(project_root))
 
 # Import core modules
 from cortex_engine.anonymizer import DocumentAnonymizer, AnonymizationMapping, AnonymizationOptions
+from cortex_engine.article_markdown_extractor import extract_pdf_articles_to_bundle
 from cortex_engine.utils import get_logger, convert_windows_to_wsl_path, resolve_db_root_path
 from cortex_engine.config_manager import ConfigManager
 from cortex_engine.version_config import VERSION_STRING
@@ -2518,6 +2519,7 @@ def _extract_study_miner_documents(
 
     mode_map = {
         "OpenDataLoader (fast tables, Docling fallback)": "opendataloader",
+        "Historical scan OCR (books, photos, diagrams)": "historical_scan",
         "Hybrid (Recommended): Docling first, Qwen enhancement, fallback on timeout": "hybrid",
         "Docling only (best layout/tables)": "docling",
         "Qwen 30B cleanup (LLM-first, no Docling)": "qwen30b",
@@ -2525,8 +2527,8 @@ def _extract_study_miner_documents(
     textifier_options = {
         "use_vision": use_vision,
         "pdf_strategy": mode_map.get(pdf_mode_label, "hybrid"),
-        "cleanup_provider": "lmstudio",
-        "cleanup_model": "qwen2.5:32b",
+        "cleanup_provider": "ollama",
+        "cleanup_model": "qwen3.6:27b",
         "docling_timeout_seconds": float(docling_timeout_seconds),
         "image_description_timeout_seconds": float(image_timeout_seconds),
         "image_enrich_max_seconds": float(image_budget_seconds),
@@ -3710,23 +3712,25 @@ def _render_textifier_tab():
             "PDF processing mode",
             options=[
                 "OpenDataLoader (fast tables, Docling fallback)",
+                "Screenshot article OCR (Apple News/browser captures)",
+                "Historical scan OCR (books, photos, diagrams)",
                 "Hybrid (Recommended): Docling first, Qwen enhancement, fallback on timeout",
                 "Docling only (best layout/tables)",
                 "Qwen 30B cleanup (LLM-first, no Docling)",
             ],
             index=0,
             key="txt_pdf_mode",
-            help="OpenDataLoader is fastest for digital PDFs and tables; Docling/PyMuPDF/Qwen remain fallbacks.",
+            help="OpenDataLoader is fastest for digital PDFs; Screenshot article OCR crops app/browser chrome before OCR; Historical scan OCR is for scan-only books, photos, graphs, and old technical manuals.",
         )
         cleanup_provider = st.selectbox(
             "Cleanup LLM provider",
-            options=["lmstudio", "ollama"],
+            options=["ollama", "lmstudio"],
             index=0,
             key="txt_cleanup_provider",
         )
         cleanup_model = st.text_input(
             "Cleanup model",
-            value="qwen2.5:32b",
+            value="qwen3.6:27b",
             key="txt_cleanup_model",
             help="Model name for markdown cleanup when using Qwen/Hybrid modes.",
         )
@@ -3818,6 +3822,8 @@ def _render_textifier_tab():
 
                     mode_map = {
                         "OpenDataLoader (fast tables, Docling fallback)": "opendataloader",
+                        "Screenshot article OCR (Apple News/browser captures)": "screenshot_article",
+                        "Historical scan OCR (books, photos, diagrams)": "historical_scan",
                         "Hybrid (Recommended): Docling first, Qwen enhancement, fallback on timeout": "hybrid",
                         "Docling only (best layout/tables)": "docling",
                         "Qwen 30B cleanup (LLM-first, no Docling)": "qwen30b",
@@ -3865,8 +3871,60 @@ def _render_textifier_tab():
                 if results:
                     st.session_state["textifier_results"] = results
 
+            if st.button("Extract Articles to Markdown", use_container_width=True):
+                article_results = {}
+                article_bundle_bytes = {}
+                progress = st.progress(0.0, "Starting article extraction...")
+                status_text = st.empty()
+
+                pdf_files = [path for path in files_to_process if str(path).lower().endswith(".pdf")]
+                skipped = [path for path in files_to_process if path not in pdf_files]
+                if skipped:
+                    st.warning(
+                        "Article extraction currently supports PDF files only. "
+                        f"Skipped: {', '.join(_user_visible_filename(path) for path in skipped)}"
+                    )
+
+                for file_idx, fpath in enumerate(pdf_files):
+                    fname = _user_visible_stem(fpath)
+                    file_base = file_idx / max(len(pdf_files), 1)
+                    file_span = 1.0 / max(len(pdf_files), 1)
+
+                    def _on_article_progress(frac, msg, _base=file_base, _span=file_span, _name=_user_visible_filename(fpath)):
+                        overall = min(_base + frac * _span, 1.0)
+                        label = f"[{_name}] {msg}" if len(pdf_files) > 1 else msg
+                        progress.progress(overall, label)
+
+                    if len(pdf_files) > 1:
+                        status_text.info(f"File {file_idx + 1}/{len(pdf_files)}: {_user_visible_filename(fpath)}")
+
+                    try:
+                        extracted = extract_pdf_articles_to_bundle(
+                            fpath,
+                            progress_cb=_on_article_progress,
+                        )
+                    except Exception as e:
+                        st.error(f"Failed to extract articles from {_user_visible_filename(fpath)}: {e}")
+                        logger.error(f"Article extraction error for {fpath}: {e}", exc_info=True)
+                        continue
+
+                    manifest = dict(extracted.get("manifest") or {})
+                    zip_path = Path(str(extracted.get("zip_path") or ""))
+                    if zip_path.exists():
+                        article_bundle_bytes[zip_path.name] = zip_path.read_bytes()
+                    article_results[_user_visible_filename(fpath)] = manifest
+
+                progress.progress(1.0, "Done!")
+                status_text.empty()
+
+                if article_results:
+                    st.session_state["article_extract_results"] = article_results
+                    st.session_state["article_extract_bundle_bytes"] = article_bundle_bytes
+
         # Display results
         results = st.session_state.get("textifier_results")
+        article_results = st.session_state.get("article_extract_results")
+        article_bundle_bytes = st.session_state.get("article_extract_bundle_bytes")
         if results:
             st.divider()
             st.subheader("Results")
@@ -3899,8 +3957,41 @@ def _render_textifier_tab():
                 for name, content in results.items():
                     with st.expander(name):
                         st.markdown(content[:3000] + ("\n\n*... truncated ...*" if len(content) > 3000 else ""))
+        if article_results:
+            st.divider()
+            st.subheader("Article Extraction Results")
+            if isinstance(article_bundle_bytes, dict) and article_bundle_bytes:
+                if len(article_bundle_bytes) == 1:
+                    bundle_name, bundle_bytes = next(iter(article_bundle_bytes.items()))
+                    st.download_button(
+                        "Download Article Bundle (ZIP)",
+                        bundle_bytes,
+                        file_name=bundle_name,
+                        mime="application/zip",
+                        use_container_width=True,
+                    )
+                else:
+                    merged = io.BytesIO()
+                    with zipfile.ZipFile(merged, "w", zipfile.ZIP_DEFLATED) as zf:
+                        for bundle_name, bundle_bytes in article_bundle_bytes.items():
+                            zf.writestr(bundle_name, bundle_bytes)
+                    st.download_button(
+                        "Download All Article Bundles (ZIP)",
+                        merged.getvalue(),
+                        file_name="article_markdown_bundles.zip",
+                        mime="application/zip",
+                        use_container_width=True,
+                    )
+            for source_name, manifest in article_results.items():
+                with st.expander(source_name, expanded=len(article_results) == 1):
+                    st.caption(f"Extracted {int(manifest.get('article_count') or 0)} articles")
+                    for article in manifest.get("articles") or []:
+                        st.markdown(
+                            f"- **{article.get('title', 'Untitled')}** "
+                            f"(pages {article.get('start_page', '?')}-{article.get('end_page', '?')})"
+                        )
         elif selected:
-            st.info("Click **Convert to Markdown** to process your document")
+            st.info("Click **Convert to Markdown** or **Extract Articles to Markdown** to process your document")
         else:
             st.info("Select a document from the left panel to get started")
 
@@ -5335,13 +5426,14 @@ def _render_study_miner_tab():
             "Extraction mode",
             options=[
                 "OpenDataLoader (fast tables, Docling fallback)",
+                "Historical scan OCR (books, photos, diagrams)",
                 "Hybrid (Recommended): Docling first, Qwen enhancement, fallback on timeout",
                 "Docling only (best layout/tables)",
                 "Qwen 30B cleanup (LLM-first, no Docling)",
             ],
             index=0,
             key="study_miner_pdf_mode",
-            help="OpenDataLoader is fastest for digital PDFs and tables; Docling/PyMuPDF/Qwen remain fallbacks.",
+            help="OpenDataLoader is fastest for digital PDFs; Historical scan OCR is for scan-only books, photos, graphs, and old technical manuals.",
         )
         docling_timeout_seconds = st.number_input(
             "Docling timeout (seconds)",

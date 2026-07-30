@@ -8,6 +8,7 @@ _PRIVATE_SUBJECT_RE = re.compile(r"(?i)\b(?:private|sensitive|confidential)\b")
 _PRIVATE_PREFIX_RE = re.compile(r"^\s*(?:private|vault)\s*:", re.IGNORECASE)
 _PUBLIC_PREFIX_RE = re.compile(r"^\s*(?:note|notes|memo)\s*:", re.IGNORECASE)
 _INTEL_PREFIX_RE = re.compile(r"^\s*intel\s*:", re.IGNORECASE)
+_ARTICLE_EXTRACT_PREFIX_RE = re.compile(r"^\s*extract\s+articles\s*:", re.IGNORECASE)
 _INTEL_ROUTING_RE = re.compile(r"(?i)(?:^|[\s\[\]()|;>])(?:entity|org|organisation|organization)\s*:")
 _CSV_IMPORT_RE = re.compile(r"(?i)\bprofiles?\b.*\b(?:csv|import)\b")
 _LAB_RESULT_RE = re.compile(r"(?i)\b(?:youtube summariser job|the lab\s*[·-]\s*longboardfella|source_type:\s*youtube_summary)\b")
@@ -27,6 +28,9 @@ def classify_notes_mailbox_route(subject: str, body_text: str = "") -> Dict[str,
 
     if _INTEL_PREFIX_RE.search(clean_subject) or _INTEL_ROUTING_RE.search(clean_subject) or _CSV_IMPORT_RE.search(subject_lower):
         return {"route": "unsupported_market_intel", "reason": "market_intel_shape"}
+
+    if _ARTICLE_EXTRACT_PREFIX_RE.search(clean_subject):
+        return {"route": "article_extract_request", "reason": "explicit_article_extract_command"}
 
     if _PRIVATE_PREFIX_RE.search(clean_subject) or _PRIVATE_SUBJECT_RE.search(clean_subject):
         return {"route": "private_vault", "reason": "subject_marked_private"}

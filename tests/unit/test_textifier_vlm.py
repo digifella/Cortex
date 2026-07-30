@@ -78,3 +78,31 @@ def test_docling_image_marker_enrichment_skips_when_text_is_substantive(monkeypa
 
     assert "<!-- image -->" not in enriched
     assert "Meaningful extracted text." in enriched
+
+
+def test_normalize_strips_trailing_self_directive_with_adverb():
+    text = ("The image has a blue background with a yellow rectangle and a white "
+            "circle on top of the rectangle. Start immediately with the subject.")
+    out = DocumentTextifier._normalize_vlm_text(text)
+    assert "start immediately with the subject" not in out.lower()
+    assert "yellow rectangle" in out
+
+
+def test_normalize_strips_begin_immediately_subject_or_scene():
+    text = "A wooden sailboat moored at a stone jetty. Begin immediately with the subject or scene."
+    out = DocumentTextifier._normalize_vlm_text(text)
+    assert "subject or scene" not in out.lower()
+    assert "wooden sailboat" in out
+
+
+def test_normalize_strips_output_the_description_only():
+    text = "Output the description only. A red tram crosses a cobbled square at dusk."
+    out = DocumentTextifier._normalize_vlm_text(text)
+    assert "output the description" not in out.lower()
+    assert "red tram" in out
+
+
+def test_normalize_preserves_genuine_caption():
+    text = "A red brick church stands beside a calm river under grey clouds."
+    out = DocumentTextifier._normalize_vlm_text(text)
+    assert out == text

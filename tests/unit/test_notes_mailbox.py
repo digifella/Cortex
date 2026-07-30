@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import fitz
+
 from worker.notes_mailbox_worker import NotesGraphClient, NotesMailboxConfig, NotesMailboxProcessor, _normalize_graph_message
 
 
@@ -113,6 +115,49 @@ def test_notes_mailbox_processor_tracks_processed_graph_ids(tmp_path):
     assert reloaded.has_processed_graph_id("graph-1")
 
 
+def test_notes_mailbox_processor_extracts_articles_from_pdf_attachment(tmp_path):
+    cfg = _notes_config(tmp_path)
+    processor = NotesMailboxProcessor(cfg)
+
+    pdf_path = tmp_path / "sample.pdf"
+    doc = fitz.open()
+    page1 = doc.new_page()
+    page1.insert_text((72, 110), "The First Story", fontsize=22)
+    page1.insert_text((72, 180), "Body one", fontsize=11)
+    page2 = doc.new_page()
+    page2.insert_text((72, 110), "The Second Story", fontsize=22)
+    page2.insert_text((72, 180), "Body two", fontsize=11)
+    doc.set_toc([[1, "The First Story", 1], [1, "The Second Story", 2]])
+    doc.save(str(pdf_path))
+    doc.close()
+
+    import base64
+
+    result = processor.process_message(
+        {
+            "subject": "extract articles: sample sciam issue",
+            "text_body": "Please split attached articles.",
+            "from_email": "paul@example.com",
+            "attachments": [
+                {
+                    "name": "sample.pdf",
+                    "content_type": "application/pdf",
+                    "content_bytes_b64": base64.b64encode(pdf_path.read_bytes()).decode("ascii"),
+                }
+            ],
+        }
+    )
+
+    assert result["status"] == "article_extract_completed"
+    assert Path(result["path"]).exists()
+    assert Path(result["vault_path"]).exists()
+    outbox_payload = Path(result["path"]).read_text(encoding="utf-8")
+    assert "bundle_paths" in outbox_payload
+    vault_text = Path(result["vault_path"]).read_text(encoding="utf-8")
+    assert "## Article Extraction" in vault_text
+    assert "sample.pdf" in vault_text
+
+
 class _FakeResponse:
     def __init__(self, payload=None, status_code=200):
         self._payload = payload if payload is not None else {}
@@ -135,13 +180,15 @@ def test_normalize_graph_message_strips_html_body():
             "from": {"emailAddress": {"name": "Paul", "address": "paul@example.com"}},
             "toRecipients": [{"emailAddress": {"name": "Notes", "address": "notes@longboardfella.com.au"}}],
             "body": {"contentType": "html", "content": "<p>Hello<br>World</p>"},
-        }
+        },
+        attachments=[{"name": "sample.pdf", "content_bytes_b64": "abc"}],
     )
 
     assert message["message_id"] == "<msg@example.com>"
     assert message["graph_message_id"] == "graph-1"
     assert message["text_body"] == "Hello World"
     assert message["html_body"] == "<p>Hello<br>World</p>"
+    assert message["attachments"][0]["name"] == "sample.pdf"
 
 
 def test_graph_client_lists_unread_and_marks_read(monkeypatch):
