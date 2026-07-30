@@ -49,6 +49,7 @@ VERSION_METADATA = {
         "Benchmarked four local vision models on identical photos: gemma4:e2b-it-qat 5/6 clean at 80s/photo and 1.6GB; qwen3-vl:8b best content accuracy but 7.4GB and 127s; llava:7b 2/6; qwen3-vl:4b 3/6 with empty outputs",
     ],
     "bug_fixes": [
+        "worker/handlers/youtube_summarise.py imported validate_youtube_summarise_input at module scope but the validator was never committed, so importing worker.handlers raised — taking down every handler, not just this job, and blocking 8 test modules from collecting. Validator restored with a 13-test contract suite",
         "Keywords living only in a `<stem>.xmp` sidecar were invisible to enrichment: exiftool does not follow sidecars, so read_exif_keywords saw only the file. Because enrichment writes back existing+AI keywords, an unread sidecar keyword was a silently deleted one. Both sources are now unioned",
         "A numeric keyword (a year like 2025, which exiftool returns as an int) raised inside read_exif_keywords; the exception was swallowed and the function returned an empty list, discarding every keyword on the photo rather than just the numeric one",
         "qwen3-vl:32b was profiled at 22000MB but is 24GB resident (measured via `ollama ps` during inference on an RTX 8000). The understated figure let the selector choose it with ~23GB free, leaving only ~424MB spare on a 46GB card once LM Studio's 35b is also loaded — the margin at which the Ollama runner crashes rather than degrades",

@@ -13,6 +13,7 @@ SUPPORTED_JOB_TYPES = [
     "pdf_anonymise",
     "pdf_textify",
     "included_study_extract",
+    "youtube_summarise",
     "url_ingest",
     "research_resolve",
     "org_profile_refresh",
@@ -55,6 +56,8 @@ SUPPORTED_TEXTIFY_OPTION_KEYS = {
     "image_description_timeout_seconds",
     "image_enrich_max_seconds",
 }
+SUPPORTED_YOUTUBE_APIS = {"gemini-flash", "gemini-pro", "claude-haiku", "claude-sonnet"}
+SUPPORTED_YOUTUBE_OUTPUT_MODES = {"summary", "timestamps", "meeting_notes", "action_items", "transcript"}
 
 
 def ensure_trace_id(trace_id: Optional[str] = None) -> str:
@@ -123,6 +126,18 @@ def _coerce_positive_int(value: Any, default: int, name: str) -> int:
         raise ValueError(f"Invalid {name}: {value!r}") from e
     if parsed <= 0:
         raise ValueError(f"{name} must be > 0")
+    return parsed
+
+
+def _coerce_non_negative_int(value: Any, default: int, name: str) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        parsed = int(value)
+    except Exception as e:
+        raise ValueError(f"Invalid {name}: {value!r}") from e
+    if parsed < 0:
+        raise ValueError(f"{name} must be >= 0")
     return parsed
 
 
@@ -475,6 +490,76 @@ def validate_included_study_extract_input(input_data: Optional[Dict[str, Any]] =
     return payload
 
 
+def validate_youtube_summarise_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(input_data or {})
+
+    urls = payload.get("urls")
+    if not isinstance(urls, list):
+        raise ValueError("youtube_summarise input_data.urls must be an array of URLs")
+    normalized_urls = [str(item or "").strip() for item in urls if str(item or "").strip()]
+    if not normalized_urls:
+        raise ValueError("youtube_summarise requires input_data.urls")
+    payload["urls"] = normalized_urls
+
+    api_choice = str(payload.get("api_choice") or "gemini-flash").strip().lower() or "gemini-flash"
+    if api_choice not in SUPPORTED_YOUTUBE_APIS:
+        raise ValueError(
+            f"Invalid api_choice: {api_choice!r}. Expected one of {sorted(SUPPORTED_YOUTUBE_APIS)}"
+        )
+    payload["api_choice"] = api_choice
+
+    output_modes = payload.get("output_modes")
+    if output_modes is None:
+        normalized_modes = ["summary"]
+    else:
+        if not isinstance(output_modes, list):
+            raise ValueError("youtube_summarise input_data.output_modes must be an array")
+        normalized_modes = []
+        seen_modes: set[str] = set()
+        for idx, item in enumerate(output_modes):
+            mode = str(item or "").strip().lower()
+            if not mode:
+                continue
+            if mode not in SUPPORTED_YOUTUBE_OUTPUT_MODES:
+                raise ValueError(
+                    f"Invalid output_modes[{idx}]: {mode!r}. Expected one of {sorted(SUPPORTED_YOUTUBE_OUTPUT_MODES)}"
+                )
+            if mode in seen_modes:
+                continue
+            seen_modes.add(mode)
+            normalized_modes.append(mode)
+        if not normalized_modes:
+            normalized_modes = ["summary"]
+    payload["output_modes"] = normalized_modes
+
+    payload["push_to_kb"] = _coerce_bool(payload.get("push_to_kb"), False)
+    payload["kb_category"] = str(payload.get("kb_category") or "").strip()
+    payload["language"] = str(payload.get("language") or "").strip()
+
+    options = payload.get("youtube_options")
+    if options is None:
+        options = {}
+    if not isinstance(options, dict):
+        raise ValueError("youtube_summarise input_data.youtube_options must be an object")
+
+    start_seconds = _coerce_non_negative_int(options.get("start_time_seconds"), 0, "start_time_seconds")
+    end_seconds = _coerce_non_negative_int(options.get("end_time_seconds"), 0, "end_time_seconds")
+    chunk_seconds = _coerce_non_negative_int(options.get("chunk_duration_seconds"), 0, "chunk_duration_seconds")
+    overlap_seconds = _coerce_non_negative_int(options.get("chunk_overlap_seconds"), 0, "chunk_overlap_seconds")
+
+    if end_seconds and start_seconds and end_seconds <= start_seconds:
+        raise ValueError("end_time_seconds must be greater than start_time_seconds")
+    if chunk_seconds and overlap_seconds >= chunk_seconds:
+        raise ValueError("chunk_overlap_seconds must be less than chunk_duration_seconds")
+
+    payload["youtube_options"] = {
+        "start_time_seconds": start_seconds,
+        "end_time_seconds": end_seconds,
+        "chunk_duration_seconds": chunk_seconds,
+        "chunk_overlap_seconds": overlap_seconds,
+    }
+    return payload
+
 def validate_url_ingest_input(input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     payload = dict(input_data or {})
 
@@ -571,6 +656,35 @@ def validate_research_resolve_input(input_data: Optional[Dict[str, Any]] = None)
         "check_open_access": _coerce_bool(options.get("check_open_access"), True),
         "enrich_sjr": _coerce_bool(options.get("enrich_sjr"), True),
         "unpaywall_email": str(options.get("unpaywall_email") or "").strip(),
+    }
+
+    retrieval_options = payload.get("retrieval_options")
+    if retrieval_options is None:
+        retrieval_options = {}
+    if not isinstance(retrieval_options, dict):
+        raise ValueError("research_resolve input_data.retrieval_options must be an object")
+
+    ingest_options = retrieval_options.get("ingest_options")
+    if ingest_options is None:
+        ingest_options = {}
+    if not isinstance(ingest_options, dict):
+        raise ValueError("research_resolve retrieval_options.ingest_options must be an object")
+
+    textify_options = retrieval_options.get("textify_options")
+    if textify_options is None:
+        textify_options = {}
+    if not isinstance(textify_options, dict):
+        raise ValueError("research_resolve retrieval_options.textify_options must be an object")
+
+    payload["retrieval_options"] = {
+        "retrieve_after_resolve": _coerce_bool(retrieval_options.get("retrieve_after_resolve"), False),
+        "timeout_seconds": _coerce_positive_int(retrieval_options.get("timeout_seconds"), 25, "retrieval_options.timeout_seconds"),
+        "ingest_options": {
+            "convert_to_md": _coerce_bool(ingest_options.get("convert_to_md"), True),
+            "use_vision": _coerce_bool(ingest_options.get("use_vision"), False),
+            "capture_web_md_on_no_pdf": _coerce_bool(ingest_options.get("capture_web_md_on_no_pdf"), True),
+        },
+        "textify_options": normalize_textify_options(textify_options),
     }
     return payload
 
