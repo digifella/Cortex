@@ -78,6 +78,10 @@ def _ingest_panel():
 
         source_path = ""
         uploaded = None
+        # Keyed per mode: a shared key would make a Folder -> Single document ->
+        # Folder round-trip look like a changed source and silently re-derive
+        # (discarding) a hand-edited branch name.
+        src_key = f"_vault_ingest_src_{mode}"
 
         if mode == "Folder":
             source_raw = st.text_input(
@@ -86,8 +90,8 @@ def _ingest_panel():
                 disabled=running,
             )
             source_path = convert_windows_to_wsl_path(source_raw.strip()) if source_raw.strip() else ""
-            if source_path and st.session_state.get("_vault_ingest_src") != source_path:
-                st.session_state["_vault_ingest_src"] = source_path
+            if source_path and st.session_state.get(src_key) != source_path:
+                st.session_state[src_key] = source_path
                 derived = Path(source_path).name.lower().replace(" ", "-")
                 st.session_state["vault_ingest_branch"] = derived
                 st.session_state["vault_ingest_dest"] = f"30 Resources/Imported Knowledge/{derived}"
@@ -95,8 +99,8 @@ def _ingest_panel():
             uploaded = st.file_uploader(
                 "Document", type=["pdf", "docx", "pptx", "txt"], disabled=running,
             )
-            if uploaded is not None and st.session_state.get("_vault_ingest_src") != uploaded.name:
-                st.session_state["_vault_ingest_src"] = uploaded.name
+            if uploaded is not None and st.session_state.get(src_key) != uploaded.name:
+                st.session_state[src_key] = uploaded.name
                 derived = Path(uploaded.name).stem.lower().replace(" ", "-")
                 st.session_state["vault_ingest_branch"] = derived
                 st.session_state["vault_ingest_dest"] = f"30 Resources/Imported Knowledge/{derived}"
@@ -151,7 +155,10 @@ def _ingest_panel():
                     run_source = Path(source_path)
                 else:
                     staged = stage_upload(uploaded.getvalue(), uploaded.name)
-                    file_list = VAULT_INGEST_UPLOAD_DIR / ".filelist.txt"
+                    # Kept OUTSIDE the staging dir: it ends in .txt, which is a
+                    # supported extension, and the ingest script does not skip
+                    # dotfiles -- inside, a folder-mode scan would ingest it.
+                    file_list = VAULT_INGEST_UPLOAD_DIR.parent / ".vault-ingest-filelist.txt"
                     file_list.write_text(f"{staged}\n", encoding="utf-8")
                     run_source = VAULT_INGEST_UPLOAD_DIR
 
