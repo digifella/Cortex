@@ -13,6 +13,33 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v6.3.3 - 2026-07-31
+
+### XMP Sidecar Keyword Preservation
+
+Captions record which model wrote them, and photos the fast model cannot describe are retried automatically with a stronger one. Local vision model selection adapts to the free VRAM on the machine, so one install runs well on an 8GB laptop and a 48GB workstation. Reasoning-model output can no longer leak into photo metadata. Photo Processor can run with no network access: local vision model, offline reverse geocoding from a local GeoNames dataset, and post-hoc person-name substitution. Combined with in-place folder enrichment, a Lightroom catalog can be tagged end to end while travelling.
+
+### ✨ New Features
+- Photo Processor: 'Folder on disk' source mode — enriches all supported images in a folder (recursively) in place, using real file paths instead of temp copies
+- Photo Processor: offline reverse geocoding (cortex_engine/offline_geocoder.py) with Auto / Online only / Offline only modes — no network and no Nominatim rate limit
+- Photo Processor: 'Use local vision model only' skips Claude even when ANTHROPIC_API_KEY is set, for fully offline runs
+- Photo Processor: person-name substitution (cortex_engine/photo_name_tags.py) rewrites 'A man smiles' to 'Paul smiles' from configurable Tag=Name keywords, applied after the model rather than via the prompt
+- VRAM-adaptive vision model selection (cortex_engine/vision_model_selector.py): picks the highest-quality installed model that fits current free VRAM, so an 8GB laptop and a 48GB workstation each get an appropriate model with no configuration
+- Caption provenance: every generated description records its author in IPTC:Writer-Editor and XMP-photoshop:CaptionWriter as 'Cortex <version> / <model>', visible in Lightroom's metadata panel
+- Two-pass batch enrichment (scripts/photo_enrich_batch.py): a fast VRAM-appropriate model first, then an automatic retry of undescribed photos with the strongest installed model — resumable, and --only-empty treats a placeholder as unprocessed
+- scripts/photo_apply_names.py re-applies person names to captions already on disk, for photos tagged after they were captioned — no vision model needed, so it runs in seconds
+
+### 🚀 Improvements
+- Photo Processor: folder mode skips exiftool *_original backup files when collecting images
+- Offline geocoding degrades loudly with install instructions rather than silently returning empty location fields
+- Docs: added docs/photo_processor_spec.md covering the enrichment pipeline, offline mode, name substitution, UI options, and known sharp edges
+- Docs: exiftool declared as a required system binary in README, CLAUDE.md, and the Docker image
+- Tests: 79 unit tests across VRAM-adaptive selection, caption provenance, placeholder detection, offline geocoding, name substitution, and VLM text normalization
+- Setup: gemma4:e2b-it-qat declared as the baseline vision model — 1.6GB resident, so it runs alongside Lightroom on an 8GB laptop
+- Photo Processor shows which local model will be used and why, including a warning when nothing fits available VRAM
+- Benchmarked four local vision models on identical photos: gemma4:e2b-it-qat 5/6 clean at 80s/photo and 1.6GB; qwen3-vl:8b best content accuracy but 7.4GB and 127s; llava:7b 2/6; qwen3-vl:4b 3/6 with empty outputs
+
 ## v6.3.2 - 2026-07-29
 
 ### Person-Tag Matching Fixes
