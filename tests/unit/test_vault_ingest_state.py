@@ -12,11 +12,15 @@ from cortex_engine.private_vault_rag import (
 
 
 def _write_state(tmp_path, pid, log_text="", branch="b"):
+    from cortex_engine.private_vault_rag import _pid_start_time
+
     log = tmp_path / "run.log"
     log.write_text(log_text, encoding="utf-8")
     state = tmp_path / "state.json"
+    pid_start = _pid_start_time(pid)  # Get real starttime for the PID
     state.write_text(json.dumps({
         "pid": pid,
+        "pid_start": pid_start,
         "log_path": str(log),
         "branch": branch,
         "started_at": "2026-07-31T10:00:00",
@@ -71,3 +75,60 @@ def test_start_rejects_second_run_while_one_is_live(tmp_path):
     source.mkdir()
     with pytest.raises(ValueError, match="already running"):
         start_vault_ingest(source, "b", state_path=state)
+
+
+def test_status_is_interrupted_when_pid_start_does_not_match(tmp_path):
+    """PID alive but starttime mismatch = pid was reused → interrupted."""
+    state = _write_state(tmp_path, os.getpid(), "[vault-ingest] phase=textify")
+    # Overwrite state with wrong pid_start (simulates reused PID)
+    state.write_text(json.dumps({
+        "pid": os.getpid(),
+        "pid_start": "999999",  # Wrong starttime
+        "log_path": str(tmp_path / "run.log"),
+        "branch": "b",
+        "started_at": "2026-07-31T10:00:00",
+    }), encoding="utf-8")
+    assert vault_ingest_status(state)["state"] == "interrupted"
+
+
+def test_status_is_interrupted_when_pid_key_missing(tmp_path):
+    """Missing pid key should be treated as not alive, not crash."""
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({
+        "log_path": str(tmp_path / "run.log"),
+        "branch": "b",
+        "started_at": "2026-07-31T10:00:00",
+    }), encoding="utf-8")
+    result = vault_ingest_status(state)
+    assert result["state"] == "interrupted"
+
+
+def test_status_is_interrupted_when_pid_is_null(tmp_path):
+    """null pid should be treated as not alive, not crash."""
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({
+        "pid": None,
+        "pid_start": None,
+        "log_path": str(tmp_path / "run.log"),
+        "branch": "b",
+        "started_at": "2026-07-31T10:00:00",
+    }), encoding="utf-8")
+    result = vault_ingest_status(state)
+    assert result["state"] == "interrupted"
+
+
+def test_cancel_returns_false_when_pid_start_does_not_match(tmp_path):
+    """cancel should return False and signal nothing when identity doesn't match."""
+    from cortex_engine.private_vault_rag import cancel_vault_ingest
+
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({
+        "pid": os.getpid(),
+        "pid_start": "999999",  # Wrong starttime
+        "log_path": str(tmp_path / "run.log"),
+        "branch": "b",
+        "started_at": "2026-07-31T10:00:00",
+    }), encoding="utf-8")
+    # Should return False without signaling (we can't easily verify no signal was sent,
+    # but the return value confirms the identity check happened)
+    assert cancel_vault_ingest(state) is False

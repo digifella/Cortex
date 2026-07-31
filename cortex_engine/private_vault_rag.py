@@ -9,6 +9,7 @@ publish path.
 from __future__ import annotations
 
 import datetime as dt
+import fcntl
 import glob
 import json
 import os
@@ -18,6 +19,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -524,12 +526,29 @@ _PHASE_RE = re.compile(r"\[vault-ingest\] phase=(\S+)")
 _DONE_RE = re.compile(r"\[vault-ingest\] phase=done rc=(-?\d+)")
 
 
-def _pid_alive(pid: int) -> bool:
+def _pid_start_time(pid: int) -> str | None:
+    """Read starttime (field 22) from /proc/<pid>/stat. Returns None if unreadable."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    except (OSError, IndexError):
+        return None
+    return fields[19]   # field 22 overall; index 19 after the "comm" split
+
+
+def _pid_alive(pid: int, expected_start: str | None = None) -> bool:
+    """Check if PID exists. If expected_start provided, verify it hasn't been reused."""
     try:
         os.kill(pid, 0)
     except (OSError, TypeError):
         return False
-    return True
+
+    # If no starttime verification needed, process exists
+    if expected_start is None:
+        return True
+
+    # Verify starttime hasn't changed (detects PID reuse)
+    current_start = _pid_start_time(pid)
+    return current_start == expected_start
 
 
 def start_vault_ingest(
@@ -549,51 +568,72 @@ def start_vault_ingest(
     if not source_root.is_dir():
         raise ValueError(f"Source root is not a directory: {source_root}")
 
-    current = vault_ingest_status(state_path)
-    if current["state"] == "running":
-        raise ValueError(f"An ingest is already running (branch {current['branch']})")
-
-    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = VAULT_INGEST_LOG_DIR / f"{stamp}-{branch_name}-ui.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
-    command = [
-        sys.executable, "-u", "-m", "cortex_engine.vault_ingest",
-        "--source-root", str(source_root),
-        "--branch-name", branch_name,
-        "--pdf-strategy", pdf_strategy,
-    ]
-    if dest_root:
-        command += ["--dest-root", str(dest_root)]
-    if limit:
-        command += ["--limit", str(limit)]
-    if use_vision:
-        command.append("--use-vision")
-    if dry_run:
-        command.append("--dry-run")
-
-    env = {**os.environ, "HF_HOME": "/mnt/f/hf-home", "TOKENIZERS_PARALLELISM": "false"}
-    with log_path.open("w", encoding="utf-8") as handle:
-        handle.write(f"$ {' '.join(command)}\n")
-        handle.flush()
-        proc = subprocess.Popen(
-            command,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            cwd=str(Path(__file__).resolve().parent.parent),
-            env=env,
-            start_new_session=True,
-        )
-
-    payload = {
-        "pid": proc.pid,
-        "log_path": str(log_path),
-        "branch": branch_name,
-        "started_at": dt.datetime.now().isoformat(timespec="seconds"),
-    }
+    # Exclusive lock across the check-spawn-write sequence
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    return payload
+    lock_path = state_path.parent / ".vault-ingest-lock"
+    with lock_path.open("w", encoding="utf-8") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise ValueError("Could not acquire lock; another ingest may be starting")
+
+        try:
+            current = vault_ingest_status(state_path)
+            if current["state"] == "running":
+                raise ValueError(f"An ingest is already running (branch {current['branch']})")
+
+            stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            log_path = VAULT_INGEST_LOG_DIR / f"{stamp}-{branch_name}-ui.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+
+            command = [
+                sys.executable, "-u", "-m", "cortex_engine.vault_ingest",
+                "--source-root", str(source_root),
+                "--branch-name", branch_name,
+                "--pdf-strategy", pdf_strategy,
+            ]
+            if dest_root:
+                command += ["--dest-root", str(dest_root)]
+            if limit:
+                command += ["--limit", str(limit)]
+            if use_vision:
+                command.append("--use-vision")
+            if dry_run:
+                command.append("--dry-run")
+
+            env = {**os.environ, "HF_HOME": "/mnt/f/hf-home", "TOKENIZERS_PARALLELISM": "false"}
+            with log_path.open("w", encoding="utf-8") as handle:
+                handle.write(f"$ {' '.join(command)}\n")
+                handle.flush()
+                proc = subprocess.Popen(
+                    command,
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                    cwd=str(Path(__file__).resolve().parent.parent),
+                    env=env,
+                    start_new_session=True,
+                )
+
+            # Record pid's starttime for later reuse detection
+            pid_start = _pid_start_time(proc.pid)
+            payload = {
+                "pid": proc.pid,
+                "pid_start": pid_start,
+                "log_path": str(log_path),
+                "branch": branch_name,
+                "started_at": dt.datetime.now().isoformat(timespec="seconds"),
+            }
+
+            # Atomic write: temp file + os.replace
+            with tempfile.NamedTemporaryFile(mode="w", dir=state_path.parent,
+                                              encoding="utf-8", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+                tmp.write(json.dumps(payload, indent=2))
+                tmp.flush()
+            os.replace(tmp_path, state_path)
+            return payload
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def vault_ingest_status(state_path: Path | None = None, tail_lines: int = 40) -> dict[str, Any]:
@@ -619,11 +659,20 @@ def vault_ingest_status(state_path: Path | None = None, tail_lines: int = 40) ->
     if done:
         rc = int(done.group(1))
         state = "completed" if rc == 0 else "failed"
-    elif _pid_alive(int(payload.get("pid", 0))):
-        state = "running"
-        rc = None
     else:
-        state = "interrupted"
+        # Parse pid defensively: missing, null, or non-integer → not alive
+        pid = payload.get("pid")
+        if pid is None:
+            is_alive = False
+        else:
+            try:
+                pid = int(pid)
+                pid_start = payload.get("pid_start")
+                is_alive = _pid_alive(pid, pid_start)
+            except (ValueError, TypeError):
+                is_alive = False
+
+        state = "running" if is_alive else "interrupted"
         rc = None
 
     elapsed = 0.0
@@ -649,9 +698,18 @@ def cancel_vault_ingest(state_path: Path | None = None) -> bool:
     state_path = Path(state_path) if state_path else VAULT_INGEST_STATE
     try:
         payload = json.loads(state_path.read_text(encoding="utf-8"))
-        pid = int(payload["pid"])
-    except Exception:
+        pid = payload.get("pid")
+        if pid is None:
+            return False
+        pid = int(pid)
+        pid_start = payload.get("pid_start")
+    except (ValueError, TypeError):
         return False
+
+    # Verify identity before signaling: if pid was reused, don't signal
+    if not _pid_alive(pid, pid_start):
+        return False
+
     try:
         os.killpg(os.getpgid(pid), signal.SIGTERM)
     except OSError:
