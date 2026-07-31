@@ -174,8 +174,9 @@ def test_index_failure_surfaces_in_return_code(tmp_path):
     assert rc == 1
 
 
-def test_skip_index_preserves_ingest_rc_on_failure(tmp_path):
-    runner = FakeRunner(DONE.format(c=0, s=0, f=2, d="False"), ingest_rc=2)
+def test_skip_index_uses_real_returncode_not_synthesized(tmp_path):
+    # Fixture deliberately violates ingest script contract: exited 1 but reported failures=2
+    runner = FakeRunner(DONE.format(c=0, s=0, f=2, d="False"), ingest_rc=1)
     rc = run_ingest_then_index(tmp_path, "b", tmp_path / "d", runner=runner)
     assert runner.ran_index is False
-    assert rc == 2
+    assert rc == 1
