@@ -5,8 +5,14 @@
 
 from __future__ import annotations
 
+import argparse
+import os
 import re
+import subprocess
+import sys
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
 
 # Emitted as the final line of nemoclaw-private-knowledge-ingest.py.
 SUMMARY_RE = re.compile(
@@ -47,3 +53,126 @@ def should_index(summary: IngestSummary | None) -> bool:
     if summary.dry_run:
         return False
     return summary.changed > 0
+
+
+HOME = Path.home()
+INGEST_SCRIPT = HOME / "nemoclaw-private-knowledge-ingest.py"
+INDEXER_SCRIPT = HOME / "nemoclaw-vault-indexer.py"
+CORTEX_PYTHON = HOME / "cortex_suite" / "venv" / "bin" / "python"
+VAULT_RAG_PYTHON = HOME / "venvs" / "vault-rag" / "bin" / "python3"
+
+
+def build_ingest_command(
+    source_root: Path,
+    branch_name: str,
+    dest_root: Path | None,
+    *,
+    pdf_strategy: str,
+    use_vision: bool,
+    limit: int,
+    dry_run: bool,
+    manifest_path: Path | None,
+) -> list[str]:
+    command = [
+        str(CORTEX_PYTHON), "-u", str(INGEST_SCRIPT),
+        "--source-root", str(source_root),
+        "--branch-name", branch_name,
+        "--pdf-strategy", pdf_strategy,
+    ]
+    if dest_root:
+        command += ["--dest-root", str(dest_root)]
+    if manifest_path:
+        command += ["--manifest-path", str(manifest_path)]
+    if limit:
+        command += ["--limit", str(limit)]
+    if use_vision:
+        command.append("--use-vision")
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
+def build_index_command() -> list[str]:
+    # Phase 2 runs under the vault-rag interpreter: different chromadb pin.
+    return [str(VAULT_RAG_PYTHON), "-u", str(INDEXER_SCRIPT), "--private-only"]
+
+
+def _default_runner(command: list[str]) -> subprocess.CompletedProcess:
+    env = {**os.environ, "HF_HOME": "/mnt/f/hf-home", "TOKENIZERS_PARALLELISM": "false"}
+    return subprocess.run(command, capture_output=True, text=True, env=env)
+
+
+def run_ingest_then_index(
+    source_root: Path,
+    branch_name: str,
+    dest_root: Path | None = None,
+    *,
+    pdf_strategy: str = "hybrid",
+    use_vision: bool = False,
+    limit: int = 0,
+    dry_run: bool = False,
+    manifest_path: Path | None = None,
+    runner: Callable[[list[str]], subprocess.CompletedProcess] | None = None,
+) -> int:
+    """Textify a source branch into the private vault, then index it."""
+    run = runner or _default_runner
+
+    print(f"[vault-ingest] phase=textify branch={branch_name}", flush=True)
+    ingest = run(build_ingest_command(
+        source_root, branch_name, dest_root,
+        pdf_strategy=pdf_strategy, use_vision=use_vision,
+        limit=limit, dry_run=dry_run, manifest_path=manifest_path,
+    ))
+    if ingest.stdout:
+        print(ingest.stdout, flush=True)
+    if ingest.stderr:
+        print(f"[stderr]\n{ingest.stderr}", flush=True)
+
+    summary = parse_ingest_summary(ingest.stdout)
+    if not should_index(summary):
+        reason = "ingest produced no parseable summary" if summary is None else (
+            "dry run" if summary.dry_run else "nothing changed"
+        )
+        print(f"[vault-ingest] phase=skip-index reason={reason}", flush=True)
+        rc = ingest.returncode if summary is None else (2 if summary.failures else 0)
+        print(f"[vault-ingest] phase=done rc={rc}", flush=True)
+        return rc
+
+    print("[vault-ingest] phase=index", flush=True)
+    index = run(build_index_command())
+    if index.stdout:
+        print(index.stdout, flush=True)
+    if index.stderr:
+        print(f"[stderr]\n{index.stderr}", flush=True)
+
+    # Index failure dominates: the branch is on disk but not searchable.
+    rc = index.returncode or (2 if summary.failures else 0)
+    print(f"[vault-ingest] phase=done rc={rc}", flush=True)
+    return rc
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Textify a branch into the private vault, then index it")
+    parser.add_argument("--source-root", required=True)
+    parser.add_argument("--branch-name", required=True)
+    parser.add_argument("--dest-root", default="")
+    parser.add_argument("--manifest-path", default="")
+    parser.add_argument("--pdf-strategy", default="hybrid", choices=["hybrid", "docling", "pymupdf"])
+    parser.add_argument("--use-vision", action="store_true")
+    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    return run_ingest_then_index(
+        Path(args.source_root),
+        args.branch_name,
+        Path(args.dest_root) if args.dest_root else None,
+        pdf_strategy=args.pdf_strategy,
+        use_vision=args.use_vision,
+        limit=args.limit,
+        dry_run=args.dry_run,
+        manifest_path=Path(args.manifest_path) if args.manifest_path else None,
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())

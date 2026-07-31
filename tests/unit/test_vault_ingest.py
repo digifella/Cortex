@@ -56,3 +56,115 @@ def test_index_skipped_on_dry_run():
 
 def test_index_skipped_when_summary_missing():
     assert should_index(None) is False
+
+
+import subprocess
+from pathlib import Path
+
+from cortex_engine.vault_ingest import (
+    INDEXER_SCRIPT,
+    INGEST_SCRIPT,
+    build_index_command,
+    build_ingest_command,
+    run_ingest_then_index,
+)
+
+
+class FakeRunner:
+    """Records commands and returns canned stdout per phase."""
+
+    def __init__(self, ingest_stdout: str, ingest_rc: int = 0, index_rc: int = 0):
+        self.ingest_stdout = ingest_stdout
+        self.ingest_rc = ingest_rc
+        self.index_rc = index_rc
+        self.commands: list[list[str]] = []
+
+    def __call__(self, command: list[str]) -> subprocess.CompletedProcess:
+        self.commands.append(command)
+        if str(INGEST_SCRIPT) in command:
+            return subprocess.CompletedProcess(
+                command, self.ingest_rc, self.ingest_stdout, ""
+            )
+        return subprocess.CompletedProcess(command, self.index_rc, "indexed", "")
+
+    @property
+    def ran_index(self) -> bool:
+        return any(str(INDEXER_SCRIPT) in cmd for cmd in self.commands)
+
+
+def test_ingest_command_includes_required_flags(tmp_path):
+    command = build_ingest_command(
+        tmp_path, "manuals-hifi", tmp_path / "dest",
+        pdf_strategy="hybrid", use_vision=False, limit=0,
+        dry_run=False, manifest_path=tmp_path / "m.json",
+    )
+    assert "--source-root" in command
+    assert "manuals-hifi" in command
+    assert str(tmp_path / "dest") in command
+    assert str(tmp_path / "m.json") in command
+    # Falsy options must not appear at all.
+    assert "--dry-run" not in command
+    assert "--use-vision" not in command
+    assert "--limit" not in command
+
+
+def test_ingest_command_includes_optional_flags_when_set(tmp_path):
+    command = build_ingest_command(
+        tmp_path, "b", None,
+        pdf_strategy="docling", use_vision=True, limit=25,
+        dry_run=True, manifest_path=None,
+    )
+    assert "--use-vision" in command
+    assert "--dry-run" in command
+    assert command[command.index("--limit") + 1] == "25"
+    assert command[command.index("--pdf-strategy") + 1] == "docling"
+    assert "--dest-root" not in command
+
+
+def test_index_command_targets_private_vault_only():
+    command = build_index_command()
+    assert "--private-only" in command
+    assert "--public-only" not in command
+
+
+def test_phases_run_in_order_on_happy_path(tmp_path):
+    runner = FakeRunner(DONE.format(c=5, s=0, f=0, d="False"))
+    rc = run_ingest_then_index(tmp_path, "b", tmp_path / "d", runner=runner)
+    assert rc == 0
+    assert runner.ran_index is True
+    assert str(INGEST_SCRIPT) in runner.commands[0]
+    assert str(INDEXER_SCRIPT) in runner.commands[1]
+
+
+def test_partial_failure_still_indexes_and_returns_nonzero(tmp_path):
+    runner = FakeRunner(DONE.format(c=97, s=0, f=3, d="False"), ingest_rc=2)
+    rc = run_ingest_then_index(tmp_path, "b", tmp_path / "d", runner=runner)
+    assert runner.ran_index is True
+    assert rc == 2
+
+
+def test_zero_changed_skips_index(tmp_path):
+    runner = FakeRunner(DONE.format(c=0, s=9, f=0, d="False"))
+    rc = run_ingest_then_index(tmp_path, "b", tmp_path / "d", runner=runner)
+    assert runner.ran_index is False
+    assert rc == 0
+
+
+def test_dry_run_skips_index(tmp_path):
+    runner = FakeRunner(DONE.format(c=4, s=0, f=0, d="True"))
+    run_ingest_then_index(tmp_path, "b", tmp_path / "d", dry_run=True, runner=runner)
+    assert runner.ran_index is False
+
+
+def test_crash_without_summary_halts_chain(tmp_path):
+    runner = FakeRunner("segfault", ingest_rc=-9)
+    rc = run_ingest_then_index(tmp_path, "b", tmp_path / "d", runner=runner)
+    assert runner.ran_index is False
+    assert rc != 0
+
+
+def test_index_failure_surfaces_in_return_code(tmp_path):
+    runner = FakeRunner(DONE.format(c=5, s=0, f=0, d="False"), index_rc=1)
+    rc = run_ingest_then_index(tmp_path, "b", tmp_path / "d", runner=runner)
+    assert runner.ran_index is True
+    assert rc == 1
