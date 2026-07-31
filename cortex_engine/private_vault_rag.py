@@ -751,7 +751,10 @@ def stage_upload(data: bytes, filename: str, staging_dir: Path | None = None) ->
     """
     staging_dir = Path(staging_dir) if staging_dir else VAULT_INGEST_UPLOAD_DIR
     staging_dir.mkdir(parents=True, exist_ok=True)
-    target = staging_dir / Path(filename).name
+    safe_name = Path(filename).name
+    if not safe_name or safe_name == "..":
+        raise ValueError(f"Unsafe upload filename: {filename!r}")
+    target = staging_dir / safe_name
 
     if target.exists():
         try:

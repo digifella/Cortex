@@ -6,6 +6,8 @@ unchanged re-upload MUST NOT rewrite the file or de-duplication breaks.
 
 import os
 
+import pytest
+
 from cortex_engine.private_vault_rag import stage_upload
 
 
@@ -51,3 +53,35 @@ def test_filename_is_reduced_to_basename(tmp_path):
     target = stage_upload(b"x", "../../etc/evil.txt", tmp_path)
     assert target == tmp_path / "evil.txt"
     assert target.parent == tmp_path
+
+
+def test_double_dot_raises_valueerror(tmp_path):
+    # A bare ".." in filename would escape to staging_dir's parent.
+    with pytest.raises(ValueError, match="Unsafe upload filename"):
+        stage_upload(b"x", "..", tmp_path)
+    # Verify nothing was written to parent directory
+    assert not (tmp_path.parent / "..").exists() or (tmp_path.parent / "..").is_dir()
+
+
+def test_double_dot_double_dot_raises_valueerror(tmp_path):
+    # Multiple ".." should also be rejected.
+    with pytest.raises(ValueError, match="Unsafe upload filename"):
+        stage_upload(b"x", "../..", tmp_path)
+
+
+def test_single_dot_raises_valueerror(tmp_path):
+    # A single "." would resolve to the staging directory itself.
+    with pytest.raises(ValueError, match="Unsafe upload filename"):
+        stage_upload(b"x", ".", tmp_path)
+
+
+def test_empty_string_raises_valueerror(tmp_path):
+    # An empty filename string would resolve to the staging directory itself.
+    with pytest.raises(ValueError, match="Unsafe upload filename"):
+        stage_upload(b"x", "", tmp_path)
+
+
+def test_slash_raises_valueerror(tmp_path):
+    # A root slash "/" reduces to empty name and should be rejected.
+    with pytest.raises(ValueError, match="Unsafe upload filename"):
+        stage_upload(b"x", "/", tmp_path)
