@@ -76,14 +76,15 @@ def _ingest_panel():
         )
         source_path = convert_windows_to_wsl_path(source_raw.strip()) if source_raw.strip() else ""
 
-        default_branch = Path(source_path).name.lower().replace(" ", "-") if source_path else ""
+        if source_path and st.session_state.get("_vault_ingest_src") != source_path:
+            st.session_state["_vault_ingest_src"] = source_path
+            derived = Path(source_path).name.lower().replace(" ", "-")
+            st.session_state["vault_ingest_branch"] = derived
+            st.session_state["vault_ingest_dest"] = f"30 Resources/Imported Knowledge/{derived}"
+
         col1, col2 = st.columns(2)
-        branch = col1.text_input("Branch name", value=default_branch, disabled=running)
-        dest = col2.text_input(
-            "Destination (relative to vault)",
-            value=f"30 Resources/Imported Knowledge/{branch}" if branch else "",
-            disabled=running,
-        )
+        branch = col1.text_input("Branch name", key="vault_ingest_branch", disabled=running)
+        dest = col2.text_input("Destination (relative to vault)", key="vault_ingest_dest", disabled=running)
 
         col3, col4, col5, col6 = st.columns(4)
         strategy = col3.selectbox("PDF strategy", ["hybrid", "docling", "pymupdf"], disabled=running)
@@ -94,11 +95,25 @@ def _ingest_panel():
         if source_path and not Path(source_path).is_dir():
             st.error(f"Not a directory: `{source_path}`")
 
-        if st.button("Ingest", type="primary", disabled=running or not (source_path and branch)):
+        dest_root = None
+        dest_error = ""
+        if dest.strip():
+            candidate = (PRIVATE_VAULT / dest.strip()).resolve()
+            if candidate.is_relative_to(PRIVATE_VAULT.resolve()):
+                dest_root = candidate
+            else:
+                dest_error = "Destination must stay inside the vault."
+        if dest_error:
+            st.error(dest_error)
+
+        if st.button(
+            "Ingest", type="primary",
+            disabled=running or not (source_path and branch) or not Path(source_path).is_dir() or bool(dest_error),
+        ):
             try:
                 started = start_vault_ingest(
                     Path(source_path), branch.strip(),
-                    PRIVATE_VAULT / dest.strip() if dest.strip() else None,
+                    dest_root,
                     pdf_strategy=strategy, use_vision=use_vision,
                     limit=int(limit), dry_run=dry_run,
                 )
