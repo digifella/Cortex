@@ -11,12 +11,14 @@ import streamlit as st
 from cortex_engine.private_vault_rag import (
     PRIVATE_VAULT,
     PUBLIC_VAULT,
+    VAULT_INGEST_UPLOAD_DIR,
     build_vault_graph,
     cancel_vault_ingest,
     load_vault_note,
     markdown_for_streamlit,
     run_vault_indexer,
     search_vault,
+    stage_upload,
     start_vault_ingest,
     vault_graph_stats,
     vault_index_stats,
@@ -69,31 +71,64 @@ def _ingest_panel():
             "then index them. Runs in the background -- you can close this tab."
         )
 
-        source_raw = st.text_input(
-            "Source folder",
-            placeholder=r"C:\Users\paul\Documents\Manuals  or  /mnt/c/...",
-            disabled=running,
+        mode = st.radio(
+            "Source", ["Folder", "Single document"],
+            horizontal=True, disabled=running, key="vault_ingest_mode",
         )
-        source_path = convert_windows_to_wsl_path(source_raw.strip()) if source_raw.strip() else ""
 
-        if source_path and st.session_state.get("_vault_ingest_src") != source_path:
-            st.session_state["_vault_ingest_src"] = source_path
-            derived = Path(source_path).name.lower().replace(" ", "-")
-            st.session_state["vault_ingest_branch"] = derived
-            st.session_state["vault_ingest_dest"] = f"30 Resources/Imported Knowledge/{derived}"
+        source_path = ""
+        uploaded = None
+
+        if mode == "Folder":
+            source_raw = st.text_input(
+                "Source folder",
+                placeholder=r"C:\Users\paul\Documents\Manuals  or  /mnt/c/...",
+                disabled=running,
+            )
+            source_path = convert_windows_to_wsl_path(source_raw.strip()) if source_raw.strip() else ""
+            if source_path and st.session_state.get("_vault_ingest_src") != source_path:
+                st.session_state["_vault_ingest_src"] = source_path
+                derived = Path(source_path).name.lower().replace(" ", "-")
+                st.session_state["vault_ingest_branch"] = derived
+                st.session_state["vault_ingest_dest"] = f"30 Resources/Imported Knowledge/{derived}"
+        else:
+            uploaded = st.file_uploader(
+                "Document", type=["pdf", "docx", "pptx", "txt"], disabled=running,
+            )
+            if uploaded is not None and st.session_state.get("_vault_ingest_src") != uploaded.name:
+                st.session_state["_vault_ingest_src"] = uploaded.name
+                derived = Path(uploaded.name).stem.lower().replace(" ", "-")
+                st.session_state["vault_ingest_branch"] = derived
+                st.session_state["vault_ingest_dest"] = f"30 Resources/Imported Knowledge/{derived}"
+            st.caption(
+                f"Uploads are staged in `{VAULT_INGEST_UPLOAD_DIR}` and kept, so re-uploading "
+                "the same document is skipped rather than duplicated. Clear that folder manually "
+                "if it grows. The vault note will cite the staged path, not the original location."
+            )
 
         col1, col2 = st.columns(2)
         branch = col1.text_input("Branch name", key="vault_ingest_branch", disabled=running)
         dest = col2.text_input("Destination (relative to vault)", key="vault_ingest_dest", disabled=running)
 
-        col3, col4, col5, col6 = st.columns(4)
-        strategy = col3.selectbox("PDF strategy", ["hybrid", "docling", "pymupdf"], disabled=running)
-        limit = col4.number_input("File limit (0 = all)", min_value=0, value=0, step=10, disabled=running)
-        use_vision = col5.checkbox("Describe images", value=False, disabled=running)
-        dry_run = col6.checkbox("Dry run", value=False, disabled=running)
+        limit = 0
+        cols = st.columns(4 if mode == "Folder" else 3)
+        strategy = cols[0].selectbox("PDF strategy", ["hybrid", "docling", "pymupdf"], disabled=running)
+        nxt = 1
+        if mode == "Folder":
+            limit = cols[1].number_input("File limit (0 = all)", min_value=0, value=0, step=10, disabled=running)
+            nxt = 2
+        use_vision = cols[nxt].checkbox("Describe images", value=False, disabled=running)
+        dry_run = cols[nxt + 1].checkbox("Dry run", value=False, disabled=running)
 
-        if source_path and not Path(source_path).is_dir():
-            st.error(f"Not a directory: `{source_path}`")
+        ready = False
+        if mode == "Folder":
+            if source_path and not Path(source_path).is_dir():
+                st.error(f"Not a directory: `{source_path}`")
+            ready = bool(source_path) and Path(source_path).is_dir()
+        else:
+            if uploaded is not None and uploaded.size == 0:
+                st.error("That file is empty.")
+            ready = uploaded is not None and uploaded.size > 0
 
         dest_root = None
         dest_error = ""
@@ -108,17 +143,25 @@ def _ingest_panel():
 
         if st.button(
             "Ingest", type="primary",
-            disabled=running or not (source_path and branch) or not Path(source_path).is_dir() or bool(dest_error),
+            disabled=running or not ready or not branch or bool(dest_error),
         ):
             try:
+                file_list = None
+                if mode == "Folder":
+                    run_source = Path(source_path)
+                else:
+                    staged = stage_upload(uploaded.getvalue(), uploaded.name)
+                    file_list = VAULT_INGEST_UPLOAD_DIR / ".filelist.txt"
+                    file_list.write_text(f"{staged}\n", encoding="utf-8")
+                    run_source = VAULT_INGEST_UPLOAD_DIR
+
                 started = start_vault_ingest(
-                    Path(source_path), branch.strip(),
-                    dest_root,
+                    run_source, branch.strip(), dest_root,
                     pdf_strategy=strategy, use_vision=use_vision,
-                    limit=int(limit), dry_run=dry_run,
+                    limit=int(limit), dry_run=dry_run, file_list=file_list,
                 )
                 st.success(f"Started (pid {started['pid']}). Log: `{started['log_path']}`")
-            except ValueError as exc:
+            except (ValueError, OSError) as exc:
                 st.error(str(exc))
             st.rerun()
 
