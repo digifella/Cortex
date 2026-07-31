@@ -14,6 +14,7 @@ import json
 import os
 import pickle
 import re
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -514,3 +515,145 @@ def run_vault_indexer(vault: str = "private", full: bool = False, timeout: int =
 
 def run_private_indexer(full: bool = False, timeout: int = 1800) -> subprocess.CompletedProcess[str]:
     return run_vault_indexer("private", full, timeout)
+
+
+VAULT_INGEST_STATE = HOME / ".nemoclaw" / "vault-ingest-ui.json"
+VAULT_INGEST_LOG_DIR = HOME / ".nemoclaw" / "logs" / "private-knowledge-imports"
+
+_PHASE_RE = re.compile(r"\[vault-ingest\] phase=(\S+)")
+_DONE_RE = re.compile(r"\[vault-ingest\] phase=done rc=(-?\d+)")
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except (OSError, TypeError):
+        return False
+    return True
+
+
+def start_vault_ingest(
+    source_root: Path,
+    branch_name: str,
+    dest_root: Path | None = None,
+    *,
+    pdf_strategy: str = "hybrid",
+    use_vision: bool = False,
+    limit: int = 0,
+    dry_run: bool = False,
+    state_path: Path | None = None,
+) -> dict[str, Any]:
+    """Spawn the two-phase ingest detached; return its pid and log path."""
+    state_path = state_path or VAULT_INGEST_STATE
+    source_root = Path(source_root)
+    if not source_root.is_dir():
+        raise ValueError(f"Source root is not a directory: {source_root}")
+
+    current = vault_ingest_status(state_path)
+    if current["state"] == "running":
+        raise ValueError(f"An ingest is already running (branch {current['branch']})")
+
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = VAULT_INGEST_LOG_DIR / f"{stamp}-{branch_name}-ui.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    command = [
+        sys.executable, "-u", "-m", "cortex_engine.vault_ingest",
+        "--source-root", str(source_root),
+        "--branch-name", branch_name,
+        "--pdf-strategy", pdf_strategy,
+    ]
+    if dest_root:
+        command += ["--dest-root", str(dest_root)]
+    if limit:
+        command += ["--limit", str(limit)]
+    if use_vision:
+        command.append("--use-vision")
+    if dry_run:
+        command.append("--dry-run")
+
+    env = {**os.environ, "HF_HOME": "/mnt/f/hf-home", "TOKENIZERS_PARALLELISM": "false"}
+    with log_path.open("w", encoding="utf-8") as handle:
+        handle.write(f"$ {' '.join(command)}\n")
+        handle.flush()
+        proc = subprocess.Popen(
+            command,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            cwd=str(Path(__file__).resolve().parent.parent),
+            env=env,
+            start_new_session=True,
+        )
+
+    payload = {
+        "pid": proc.pid,
+        "log_path": str(log_path),
+        "branch": branch_name,
+        "started_at": dt.datetime.now().isoformat(timespec="seconds"),
+    }
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return payload
+
+
+def vault_ingest_status(state_path: Path | None = None, tail_lines: int = 40) -> dict[str, Any]:
+    """Resolve the state of the most recent ingest run."""
+    state_path = Path(state_path) if state_path else VAULT_INGEST_STATE
+    idle = {"state": "idle", "phase": "", "branch": "", "started_at": "",
+            "elapsed": 0.0, "log_tail": "", "rc": None}
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        return idle
+
+    log_text = ""
+    try:
+        log_text = Path(payload.get("log_path", "")).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+    done = _DONE_RE.search(log_text)
+    phases = _PHASE_RE.findall(log_text)
+    phase = phases[-1] if phases else ""
+
+    if done:
+        rc = int(done.group(1))
+        state = "completed" if rc == 0 else "failed"
+    elif _pid_alive(int(payload.get("pid", 0))):
+        state = "running"
+        rc = None
+    else:
+        state = "interrupted"
+        rc = None
+
+    elapsed = 0.0
+    try:
+        started = dt.datetime.fromisoformat(payload.get("started_at", ""))
+        elapsed = (dt.datetime.now() - started).total_seconds()
+    except Exception:
+        pass
+
+    return {
+        "state": state,
+        "phase": phase,
+        "branch": payload.get("branch", ""),
+        "started_at": payload.get("started_at", ""),
+        "elapsed": elapsed,
+        "log_tail": "\n".join(log_text.splitlines()[-tail_lines:]),
+        "rc": rc,
+    }
+
+
+def cancel_vault_ingest(state_path: Path | None = None) -> bool:
+    """SIGTERM the detached ingest's process group. Safe: the manifest commits per file."""
+    state_path = Path(state_path) if state_path else VAULT_INGEST_STATE
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        pid = int(payload["pid"])
+    except Exception:
+        return False
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except OSError:
+        return False
+    return True
