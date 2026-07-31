@@ -257,3 +257,25 @@ def test_start_writes_state_that_status_reads_back(tmp_path, monkeypatch):
     assert (real_state.stat().st_mtime if real_state.exists() else None) == real_state_before
     assert (real_manifest.stat().st_mtime if real_manifest.exists() else None) == manifest_before
     assert not (tmp_path / "dest").exists()
+
+
+def test_start_vault_ingest_forwards_file_list(tmp_path, monkeypatch):
+    # start_vault_ingest logs the command it spawned as the log's first line,
+    # so that line is the contract we can assert against without a real ingest.
+    from cortex_engine import private_vault_rag as pvr
+
+    monkeypatch.setattr(pvr, "VAULT_INGEST_LOG_DIR", tmp_path / "logs")
+    source = tmp_path / "staging"
+    source.mkdir()
+    (source / "doc.txt").write_text("hello", encoding="utf-8")
+    listing = source / ".filelist.txt"
+    listing.write_text(f"{source / 'doc.txt'}\n", encoding="utf-8")
+
+    started = pvr.start_vault_ingest(
+        source, "upload-doc", tmp_path / "dest",
+        dry_run=True, file_list=listing, state_path=tmp_path / "state.json",
+    )
+
+    first_line = Path(started["log_path"]).read_text(encoding="utf-8").splitlines()[0]
+    assert "--file-list" in first_line
+    assert str(listing) in first_line

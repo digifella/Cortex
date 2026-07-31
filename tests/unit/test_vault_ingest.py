@@ -211,3 +211,32 @@ def test_skip_index_uses_real_returncode_not_synthesized(tmp_path):
     rc = run_ingest_then_index(tmp_path, "b", tmp_path / "d", runner=runner)
     assert runner.ran_index is False
     assert rc == 1
+
+
+def test_ingest_command_includes_file_list_when_given(tmp_path):
+    listing = tmp_path / ".filelist.txt"
+    command = build_ingest_command(
+        tmp_path, "b", None,
+        pdf_strategy="hybrid", use_vision=False, limit=0,
+        dry_run=False, manifest_path=None, file_list=listing,
+    )
+    assert command[command.index("--file-list") + 1] == str(listing)
+
+
+def test_ingest_command_omits_file_list_by_default(tmp_path):
+    # Regression guard: the folder-path mode must build exactly the command it
+    # built before --file-list existed.
+    command = build_ingest_command(
+        tmp_path, "b", None,
+        pdf_strategy="hybrid", use_vision=False, limit=0,
+        dry_run=False, manifest_path=None,
+    )
+    assert "--file-list" not in command
+
+
+def test_run_passes_file_list_to_phase_one(tmp_path):
+    listing = tmp_path / ".filelist.txt"
+    runner = FakeRunner(DONE.format(c=1, s=0, f=0, d="False"))
+    run_ingest_then_index(tmp_path, "b", tmp_path / "d", file_list=listing, runner=runner)
+    assert "--file-list" in runner.commands[0]
+    assert str(listing) in runner.commands[0]

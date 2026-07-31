@@ -583,6 +583,7 @@ def start_vault_ingest(
     use_vision: bool = False,
     limit: int = 0,
     dry_run: bool = False,
+    file_list: Path | None = None,
     state_path: Path | None = None,
 ) -> dict[str, Any]:
     """Spawn the two-phase ingest detached; return its pid and log path."""
@@ -617,6 +618,8 @@ def start_vault_ingest(
             ]
             if dest_root:
                 command += ["--dest-root", str(dest_root)]
+            if file_list:
+                command += ["--file-list", str(file_list)]
             if limit:
                 command += ["--limit", str(limit)]
             if use_vision:
