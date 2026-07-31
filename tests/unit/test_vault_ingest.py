@@ -62,8 +62,10 @@ import subprocess
 from pathlib import Path
 
 from cortex_engine.vault_ingest import (
+    CORTEX_PYTHON,
     INDEXER_SCRIPT,
     INGEST_SCRIPT,
+    VAULT_RAG_PYTHON,
     build_index_command,
     build_ingest_command,
     run_ingest_then_index,
@@ -98,6 +100,7 @@ def test_ingest_command_includes_required_flags(tmp_path):
         pdf_strategy="hybrid", use_vision=False, limit=0,
         dry_run=False, manifest_path=tmp_path / "m.json",
     )
+    assert str(CORTEX_PYTHON) in command
     assert "--source-root" in command
     assert "manuals-hifi" in command
     assert str(tmp_path / "dest") in command
@@ -123,6 +126,7 @@ def test_ingest_command_includes_optional_flags_when_set(tmp_path):
 
 def test_index_command_targets_private_vault_only():
     command = build_index_command()
+    assert str(VAULT_RAG_PYTHON) in command
     assert "--private-only" in command
     assert "--public-only" not in command
 
@@ -168,3 +172,10 @@ def test_index_failure_surfaces_in_return_code(tmp_path):
     rc = run_ingest_then_index(tmp_path, "b", tmp_path / "d", runner=runner)
     assert runner.ran_index is True
     assert rc == 1
+
+
+def test_skip_index_preserves_ingest_rc_on_failure(tmp_path):
+    runner = FakeRunner(DONE.format(c=0, s=0, f=2, d="False"), ingest_rc=2)
+    rc = run_ingest_then_index(tmp_path, "b", tmp_path / "d", runner=runner)
+    assert runner.ran_index is False
+    assert rc == 2

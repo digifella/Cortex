@@ -134,7 +134,7 @@ def run_ingest_then_index(
             "dry run" if summary.dry_run else "nothing changed"
         )
         print(f"[vault-ingest] phase=skip-index reason={reason}", flush=True)
-        rc = ingest.returncode if summary is None else (2 if summary.failures else 0)
+        rc = ingest.returncode
         print(f"[vault-ingest] phase=done rc={rc}", flush=True)
         return rc
 
