@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -98,8 +99,29 @@ def build_index_command() -> list[str]:
 
 
 def _default_runner(command: list[str]) -> subprocess.CompletedProcess:
+    """Run a phase, echoing each line as it arrives, and return the full output.
+
+    Buffering the phase (capture_output=True) hides the ingest script's per-file
+    `[private-ingest] i/N -> file` progress until the phase ends -- hours, for a
+    large folder -- and loses it entirely if the run is cancelled mid-phase. So we
+    stream: print each line immediately, and accumulate it for parse_ingest_summary.
+    stderr is merged into stdout so the interleaving in the log matches reality.
+    """
     env = {**os.environ, "HF_HOME": "/mnt/f/hf-home", "TOKENIZERS_PARALLELISM": "false"}
-    return subprocess.run(command, capture_output=True, text=True, env=env)
+    lines: list[str] = []
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        env=env,
+    )
+    with proc.stdout:
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+            lines.append(line)
+    return subprocess.CompletedProcess(command, proc.wait(), "".join(lines), "")
 
 
 def run_ingest_then_index(
@@ -114,41 +136,45 @@ def run_ingest_then_index(
     manifest_path: Path | None = None,
     runner: Callable[[list[str]], subprocess.CompletedProcess] | None = None,
 ) -> int:
-    """Textify a source branch into the private vault, then index it."""
-    run = runner or _default_runner
+    """Textify a source branch into the private vault, then index it.
 
-    print(f"[vault-ingest] phase=textify branch={branch_name}", flush=True)
-    ingest = run(build_ingest_command(
-        source_root, branch_name, dest_root,
-        pdf_strategy=pdf_strategy, use_vision=use_vision,
-        limit=limit, dry_run=dry_run, manifest_path=manifest_path,
-    ))
-    if ingest.stdout:
-        print(ingest.stdout, flush=True)
-    if ingest.stderr:
-        print(f"[stderr]\n{ingest.stderr}", flush=True)
+    Any unexpected exception is caught and still reported as a done marker with a
+    non-zero rc. The UI resolves a run with no done marker by checking whether the
+    detached pid is alive, so an uncaught crash here (missing interpreter, missing
+    script) would otherwise leave the panel wedged on "running".
+    """
+    try:
+        run = runner or _default_runner
 
-    summary = parse_ingest_summary(ingest.stdout)
-    if not should_index(summary):
-        reason = "ingest produced no parseable summary" if summary is None else (
-            "dry run" if summary.dry_run else "nothing changed"
-        )
-        print(f"[vault-ingest] phase=skip-index reason={reason}", flush=True)
-        rc = ingest.returncode
+        print(f"[vault-ingest] phase=textify branch={branch_name}", flush=True)
+        # The runner echoes phase output line by line as it arrives -- do not re-print.
+        ingest = run(build_ingest_command(
+            source_root, branch_name, dest_root,
+            pdf_strategy=pdf_strategy, use_vision=use_vision,
+            limit=limit, dry_run=dry_run, manifest_path=manifest_path,
+        ))
+
+        summary = parse_ingest_summary(ingest.stdout)
+        if not should_index(summary):
+            reason = "ingest produced no parseable summary" if summary is None else (
+                "dry run" if summary.dry_run else "nothing changed"
+            )
+            print(f"[vault-ingest] phase=skip-index reason={reason}", flush=True)
+            rc = ingest.returncode
+            print(f"[vault-ingest] phase=done rc={rc}", flush=True)
+            return rc
+
+        print("[vault-ingest] phase=index", flush=True)
+        index = run(build_index_command())
+
+        # Index failure dominates: the branch is on disk but not searchable.
+        rc = index.returncode or (2 if summary.failures else 0)
         print(f"[vault-ingest] phase=done rc={rc}", flush=True)
         return rc
-
-    print("[vault-ingest] phase=index", flush=True)
-    index = run(build_index_command())
-    if index.stdout:
-        print(index.stdout, flush=True)
-    if index.stderr:
-        print(f"[stderr]\n{index.stderr}", flush=True)
-
-    # Index failure dominates: the branch is on disk but not searchable.
-    rc = index.returncode or (2 if summary.failures else 0)
-    print(f"[vault-ingest] phase=done rc={rc}", flush=True)
-    return rc
+    except Exception:
+        traceback.print_exc(file=sys.stdout)
+        print("[vault-ingest] phase=done rc=1", flush=True)
+        return 1
 
 
 def main() -> int:

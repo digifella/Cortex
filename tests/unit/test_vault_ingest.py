@@ -59,6 +59,7 @@ def test_index_skipped_when_summary_missing():
 
 
 import subprocess
+import sys
 from pathlib import Path
 
 from cortex_engine.vault_ingest import (
@@ -172,6 +173,36 @@ def test_index_failure_surfaces_in_return_code(tmp_path):
     rc = run_ingest_then_index(tmp_path, "b", tmp_path / "d", runner=runner)
     assert runner.ran_index is True
     assert rc == 1
+
+
+def test_unexpected_exception_still_prints_done_marker(tmp_path, capsys):
+    """A crash must resolve to `failed`, not leave the UI wedged on `running`.
+
+    The UI falls back to a pid-liveness check when there is no done marker, so an
+    uncaught exception here (missing interpreter, missing script) would strand the
+    panel. Catch it, log it, and emit a non-zero done marker.
+    """
+    def boom(command):
+        raise FileNotFoundError("no such interpreter")
+
+    rc = run_ingest_then_index(tmp_path, "b", tmp_path / "d", runner=boom)
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "[vault-ingest] phase=done rc=1" in out
+    assert "FileNotFoundError" in out   # traceback goes to the log
+
+
+def test_default_runner_streams_and_accumulates_output(capsys):
+    from cortex_engine.vault_ingest import _default_runner
+
+    result = _default_runner(
+        [sys.executable, "-u", "-c", "import sys; print('one'); print('two', file=sys.stderr)"]
+    )
+    assert result.returncode == 0
+    # Same lines both echoed live and returned for parse_ingest_summary.
+    assert "one" in capsys.readouterr().out
+    assert "one" in result.stdout
+    assert "two" in result.stdout   # stderr merged into stdout
 
 
 def test_skip_index_uses_real_returncode_not_synthesized(tmp_path):

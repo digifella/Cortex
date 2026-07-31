@@ -526,20 +526,42 @@ _PHASE_RE = re.compile(r"\[vault-ingest\] phase=(\S+)")
 _DONE_RE = re.compile(r"\[vault-ingest\] phase=done rc=(-?\d+)")
 
 
-def _pid_start_time(pid: int) -> str | None:
-    """Read starttime (field 22) from /proc/<pid>/stat. Returns None if unreadable."""
+def _pid_stat(pid: int) -> tuple[str, str] | None:
+    """Read (state, starttime) from /proc/<pid>/stat. Returns None if unreadable.
+
+    After splitting off the parenthesised `comm` field, index 0 is the state
+    character and index 19 is starttime (field 22 overall).
+    """
     try:
         fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
     except (OSError, IndexError):
         return None
-    return fields[19]   # field 22 overall; index 19 after the "comm" split
+    return fields[0], fields[19]
+
+
+def _pid_start_time(pid: int) -> str | None:
+    """Read starttime (field 22) from /proc/<pid>/stat. Returns None if unreadable."""
+    stat = _pid_stat(pid)
+    return stat[1] if stat else None
 
 
 def _pid_alive(pid: int, expected_start: str | None = None) -> bool:
-    """Check if PID exists. If expected_start provided, verify it hasn't been reused."""
-    try:
-        os.kill(pid, 0)
-    except (OSError, TypeError):
+    """Check if PID is a live process. If expected_start given, verify it wasn't reused.
+
+    The ingest is spawned detached but Streamlit stays its parent and never
+    wait()s it, so a finished child lingers as a ZOMBIE: /proc/<pid>/stat still
+    exists, starttime is unchanged and os.kill(pid, 0) still succeeds. Reading
+    the state character is the only reliable liveness test here.
+    """
+    if not pid:   # None, 0 (== "our own process group" to kill/getpgid) or ""
+        return False
+
+    stat = _pid_stat(pid)
+    if stat is None:
+        return False
+
+    state, current_start = stat
+    if state == "Z":   # reaped-pending corpse, not a running ingest
         return False
 
     # If no starttime verification needed, process exists
@@ -547,7 +569,6 @@ def _pid_alive(pid: int, expected_start: str | None = None) -> bool:
         return True
 
     # Verify starttime hasn't changed (detects PID reuse)
-    current_start = _pid_start_time(pid)
     return current_start == expected_start
 
 
@@ -660,9 +681,9 @@ def vault_ingest_status(state_path: Path | None = None, tail_lines: int = 40) ->
         rc = int(done.group(1))
         state = "completed" if rc == 0 else "failed"
     else:
-        # Parse pid defensively: missing, null, or non-integer → not alive
+        # Parse pid defensively: missing, null, 0, or non-integer → not alive
         pid = payload.get("pid")
-        if pid is None:
+        if not pid:
             is_alive = False
         else:
             try:
@@ -699,7 +720,7 @@ def cancel_vault_ingest(state_path: Path | None = None) -> bool:
     try:
         payload = json.loads(state_path.read_text(encoding="utf-8"))
         pid = payload.get("pid")
-        if pid is None:
+        if not pid:   # pid 0 would make killpg/getpgid target Streamlit's own group
             return False
         pid = int(pid)
         pid_start = payload.get("pid_start")
