@@ -4,6 +4,7 @@
 # Purpose: Local-only public/private vault GraphRAG search and maintenance UI.
 
 import subprocess
+from pathlib import Path
 
 import streamlit as st
 
@@ -11,14 +12,18 @@ from cortex_engine.private_vault_rag import (
     PRIVATE_VAULT,
     PUBLIC_VAULT,
     build_vault_graph,
+    cancel_vault_ingest,
     load_vault_note,
     markdown_for_streamlit,
     run_vault_indexer,
     search_vault,
+    start_vault_ingest,
     vault_graph_stats,
     vault_index_stats,
+    vault_ingest_status,
 )
 from cortex_engine.ui_theme import apply_theme
+from cortex_engine.utils import convert_windows_to_wsl_path
 from cortex_engine.version_config import VERSION_STRING
 
 
@@ -52,6 +57,84 @@ def _status_cards():
         for stats in [private_graph, public_graph]:
             if stats.get("mtime"):
                 st.caption(f"{stats.get('vault')} graph last built: {stats['mtime']}")
+
+
+def _ingest_panel():
+    status = vault_ingest_status()
+    running = status["state"] == "running"
+
+    with st.expander("Ingest documents", expanded=running):
+        st.caption(
+            "Convert PDF, DOCX, PPTX and TXT files into private vault markdown, "
+            "then index them. Runs in the background -- you can close this tab."
+        )
+
+        source_raw = st.text_input(
+            "Source folder",
+            placeholder=r"C:\Users\paul\Documents\Manuals  or  /mnt/c/...",
+            disabled=running,
+        )
+        source_path = convert_windows_to_wsl_path(source_raw.strip()) if source_raw.strip() else ""
+
+        default_branch = Path(source_path).name.lower().replace(" ", "-") if source_path else ""
+        col1, col2 = st.columns(2)
+        branch = col1.text_input("Branch name", value=default_branch, disabled=running)
+        dest = col2.text_input(
+            "Destination (relative to vault)",
+            value=f"30 Resources/Imported Knowledge/{branch}" if branch else "",
+            disabled=running,
+        )
+
+        col3, col4, col5, col6 = st.columns(4)
+        strategy = col3.selectbox("PDF strategy", ["hybrid", "docling", "pymupdf"], disabled=running)
+        limit = col4.number_input("File limit (0 = all)", min_value=0, value=0, step=10, disabled=running)
+        use_vision = col5.checkbox("Describe images", value=False, disabled=running)
+        dry_run = col6.checkbox("Dry run", value=False, disabled=running)
+
+        if source_path and not Path(source_path).is_dir():
+            st.error(f"Not a directory: `{source_path}`")
+
+        if st.button("Ingest", type="primary", disabled=running or not (source_path and branch)):
+            try:
+                started = start_vault_ingest(
+                    Path(source_path), branch.strip(),
+                    PRIVATE_VAULT / dest.strip() if dest.strip() else None,
+                    pdf_strategy=strategy, use_vision=use_vision,
+                    limit=int(limit), dry_run=dry_run,
+                )
+                st.success(f"Started (pid {started['pid']}). Log: `{started['log_path']}`")
+            except ValueError as exc:
+                st.error(str(exc))
+            st.rerun()
+
+        if status["state"] != "idle":
+            _render_ingest_status(status)
+
+
+def _render_ingest_status(status):
+    label = {
+        "running": "Running",
+        "completed": "Completed",
+        "failed": "Finished with errors",
+        "interrupted": "Interrupted (process died -- rerun to resume)",
+    }.get(status["state"], status["state"])
+
+    col1, col2, col3 = st.columns([2, 2, 1])
+    col1.metric("Status", label)
+    col2.metric("Phase", status["phase"] or "-")
+    col3.metric("Elapsed", f"{status['elapsed'] / 60:.1f} min")
+
+    if status["state"] == "running":
+        if st.button("Cancel", key="vault_ingest_cancel"):
+            if cancel_vault_ingest():
+                st.warning("Cancel signal sent. Converted files are kept -- rerun to resume.")
+            else:
+                st.error("Could not signal the process.")
+            st.rerun()
+        st.caption("Refresh the page to update progress.")
+
+    if status["log_tail"]:
+        st.code(status["log_tail"])
 
 
 def _maintenance_panel():
@@ -225,6 +308,7 @@ def main():
     st.title("Vault GraphRAG")
     st.caption(f"Local public/private vault search via NemoClaw RAG and Cortex graph helpers. Cortex {VERSION_STRING}.")
     _status_cards()
+    _ingest_panel()
     _maintenance_panel()
     _search_panel()
 
