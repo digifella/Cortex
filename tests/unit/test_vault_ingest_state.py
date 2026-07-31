@@ -276,6 +276,14 @@ def test_start_vault_ingest_forwards_file_list(tmp_path, monkeypatch):
         dry_run=True, file_list=listing, state_path=tmp_path / "state.json",
     )
 
-    first_line = Path(started["log_path"]).read_text(encoding="utf-8").splitlines()[0]
-    assert "--file-list" in first_line
-    assert str(listing) in first_line
+    try:
+        first_line = Path(started["log_path"]).read_text(encoding="utf-8").splitlines()[0]
+        assert "--file-list" in first_line
+        assert str(listing) in first_line
+    finally:
+        if started["pid"] > 0:
+            try:
+                os.kill(started["pid"], 0)
+                os.kill(started["pid"], 15)
+            except OSError:
+                pass
