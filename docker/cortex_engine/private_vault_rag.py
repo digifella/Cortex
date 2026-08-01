@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import fcntl
 import glob
+import hashlib
 import json
 import os
 import pickle
@@ -521,6 +522,7 @@ def run_private_indexer(full: bool = False, timeout: int = 1800) -> subprocess.C
 
 VAULT_INGEST_STATE = HOME / ".nemoclaw" / "vault-ingest-ui.json"
 VAULT_INGEST_LOG_DIR = HOME / ".nemoclaw" / "logs" / "private-knowledge-imports"
+VAULT_INGEST_UPLOAD_DIR = HOME / ".nemoclaw" / "vault-ingest-uploads"
 
 _PHASE_RE = re.compile(r"\[vault-ingest\] phase=(\S+)")
 _DONE_RE = re.compile(r"\[vault-ingest\] phase=done rc=(-?\d+)")
@@ -581,6 +583,7 @@ def start_vault_ingest(
     use_vision: bool = False,
     limit: int = 0,
     dry_run: bool = False,
+    file_list: Path | None = None,
     state_path: Path | None = None,
 ) -> dict[str, Any]:
     """Spawn the two-phase ingest detached; return its pid and log path."""
@@ -615,6 +618,8 @@ def start_vault_ingest(
             ]
             if dest_root:
                 command += ["--dest-root", str(dest_root)]
+            if file_list:
+                command += ["--file-list", str(file_list)]
             if limit:
                 command += ["--limit", str(limit)]
             if use_vision:
@@ -736,3 +741,30 @@ def cancel_vault_ingest(state_path: Path | None = None) -> bool:
     except OSError:
         return False
     return True
+
+
+def stage_upload(data: bytes, filename: str, staging_dir: Path | None = None) -> Path:
+    """Write an uploaded document to the staging dir, preserving mtime when unchanged.
+
+    Streamlit's uploader supplies bytes and a name but no path, so uploads must be
+    written somewhere the ingest script can read them. The manifest keys on the
+    absolute source path and treats a file as unchanged by comparing mtime_ns and
+    size -- so rewriting identical bytes would defeat de-duplication and re-ingest
+    the same document. Skip the write when the staged copy already matches.
+    """
+    staging_dir = Path(staging_dir) if staging_dir else VAULT_INGEST_UPLOAD_DIR
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = Path(filename).name
+    if not safe_name or safe_name == "..":
+        raise ValueError(f"Unsafe upload filename: {filename!r}")
+    target = staging_dir / safe_name
+
+    if target.exists():
+        try:
+            if hashlib.sha256(target.read_bytes()).hexdigest() == hashlib.sha256(data).hexdigest():
+                return target
+        except OSError:
+            pass
+
+    target.write_bytes(data)
+    return target

@@ -73,6 +73,7 @@ def build_ingest_command(
     limit: int,
     dry_run: bool,
     manifest_path: Path | None,
+    file_list: Path | None = None,
 ) -> list[str]:
     command = [
         str(CORTEX_PYTHON), "-u", str(INGEST_SCRIPT),
@@ -84,6 +85,8 @@ def build_ingest_command(
         command += ["--dest-root", str(dest_root)]
     if manifest_path:
         command += ["--manifest-path", str(manifest_path)]
+    if file_list:
+        command += ["--file-list", str(file_list)]
     if limit:
         command += ["--limit", str(limit)]
     if use_vision:
@@ -134,6 +137,7 @@ def run_ingest_then_index(
     limit: int = 0,
     dry_run: bool = False,
     manifest_path: Path | None = None,
+    file_list: Path | None = None,
     runner: Callable[[list[str]], subprocess.CompletedProcess] | None = None,
 ) -> int:
     """Textify a source branch into the private vault, then index it.
@@ -152,6 +156,7 @@ def run_ingest_then_index(
             source_root, branch_name, dest_root,
             pdf_strategy=pdf_strategy, use_vision=use_vision,
             limit=limit, dry_run=dry_run, manifest_path=manifest_path,
+            file_list=file_list,
         ))
 
         summary = parse_ingest_summary(ingest.stdout)
@@ -187,6 +192,7 @@ def main() -> int:
     parser.add_argument("--use-vision", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--file-list", default="")
     args = parser.parse_args()
     return run_ingest_then_index(
         Path(args.source_root),
@@ -197,6 +203,7 @@ def main() -> int:
         limit=args.limit,
         dry_run=args.dry_run,
         manifest_path=Path(args.manifest_path) if args.manifest_path else None,
+        file_list=Path(args.file_list) if args.file_list else None,
     )
 
 

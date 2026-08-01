@@ -79,6 +79,14 @@ def enrich(paths, model, label, state_path, dry_run=False):
                           auto_select_vision=False)
     t.VISION_MODELS = [model]
     t.VISION_FALLBACK_MODELS = []
+    # Keyword extraction defaults to the first installed TEXT_MODELS entry, which
+    # here is mistral-small3.2 (~23GB resident). Unlike photo_batch.py this script
+    # keeps a local VLM resident too, so the pair saturates the GPU — measured
+    # 43.2GB/46GB on the RTX 8000 alongside LM Studio, which stalls the host and
+    # added ~45s per photo. Deriving keywords from a two-sentence caption needs a
+    # small model, not a large one: llama3.2:3b does it in ~1-2s with ~3.4GB.
+    # Prepended rather than replaced so a machine without this tag still resolves.
+    t.TEXT_MODELS = ["llama3.2:3b-instruct-q8_0", *t.TEXT_MODELS]
 
     ok = failed = 0
     placeholders = []

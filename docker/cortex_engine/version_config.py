@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.4.0"
+CORTEX_VERSION = "6.5.0"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
-    "minor": 4,
+    "minor": 5,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -24,17 +24,16 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-07-31",
-    "release_name": "Private Vault Ingest UI",
-    "description": "Folder-path document ingest into the private vault from the Vault GraphRAG page",
+    "release_date": "2026-08-01",
+    "release_name": "Single-Document Vault Upload",
+    "description": "Upload one document straight into the private vault from the ingest panel",
     "breaking_changes": [],
     "new_features": [
-        "Ingest documents panel on the Vault GraphRAG page: folder path in, vault markdown out",
-        "Textify and index chained in one background run that survives closing the browser tab",
-        "Live log tail, elapsed timer and cancel for in-flight ingests",
+        "Folder / Single document mode toggle on the Vault GraphRAG ingest panel",
+        "Browser file dialog for ingesting one PDF, DOCX, PPTX or TXT",
     ],
     "improvements": [
-        "Partial ingest failures now still index the files that converted successfully",
+        "Uploaded documents stage to a stable path with content-aware writes, so re-uploading the same file is skipped rather than duplicated",
     ],
     "bug_fixes": [],
 }

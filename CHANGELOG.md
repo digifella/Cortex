@@ -15,6 +15,20 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v6.5.0 - 2026-08-01
+
+### Single-Document Vault Upload
+
+Upload one document straight into the private vault from the ingest panel
+
+### ✨ New Features
+- Folder / Single document mode toggle on the Vault GraphRAG ingest panel
+- Browser file dialog for ingesting one PDF, DOCX, PPTX or TXT
+
+### 🚀 Improvements
+- Uploaded documents stage to a stable path with content-aware writes, so re-uploading the same file is skipped rather than duplicated
+
 ## v6.4.0 - 2026-07-31
 
 ### Private Vault Ingest UI
