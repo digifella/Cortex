@@ -116,6 +116,37 @@ Do not add new `/.dockerenv` branches. In WSL and on the host, always use
 **GOLDEN RULE (unchanged)**: never hardcode paths — always use the user's
 configured database path.
 
+## 👁️ Vision (image descriptions)
+
+`DocumentTextifier.describe_image` tries providers in this order:
+
+1. **Claude Haiku** — when `ANTHROPIC_API_KEY` is set and `prefer_local_vision` is False.
+2. **LM Studio** — a VLM **already loaded** there. Added v6.6.0.
+3. **Ollama** — the VRAM-adaptive local selection.
+
+**LM Studio only ever uses an already-loaded model.** It never asks LM Studio to
+load one: the entire point is to reuse a resident VLM rather than making Ollama
+evict it to load a smaller model into leftover VRAM. If nothing is loaded, or the
+endpoint is unreachable, it returns `""` and the chain falls through to Ollama —
+so this is a silent no-op on machines without LM Studio.
+
+```bash
+CORTEX_LMSTUDIO_BASE_URL=http://192.168.0.118:1234/v1   # in .env — see below
+CORTEX_LMSTUDIO_VISION_MODEL=...                        # optional: pin a model, skips probing
+```
+
+Gotchas:
+
+- **LM Studio runs on the Windows host, not in WSL**, so the `http://localhost:1234/v1`
+  default does NOT reach it. `.env` sets the LAN address. If that IP changes,
+  vision silently falls back to Ollama — check `curl http://<host>:1234/api/v0/models`.
+- **The loaded/type fields are only on the native `/api/v0/models` API**, not `/v1`.
+- **`reasoning_effort: "none"` is mandatory.** Without it qwen3.6 spends the whole
+  token budget on reasoning and returns empty content — the same trap the wiki loop
+  documents. Verified: a 30-token cap returned `""`; reasoning off returned the
+  answer in 5 tokens.
+- First call costs ~30s of warmup; steady state is ~1.2-1.9s per image.
+
 ## 📋 Major Release Workflow
 
 ### Complete Release Process for Major Updates

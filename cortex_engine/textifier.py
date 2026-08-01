@@ -182,6 +182,10 @@ class DocumentTextifier:
         # same install adapts from an 8GB laptop to a 48GB workstation. Explicitly
         # setting VISION_MODELS after construction still overrides this.
         self.selected_vision_model: Optional[str] = None
+        # LM Studio's already-loaded VLM, resolved lazily on first image and
+        # cached — a miss must not re-probe the network per image.
+        self._lmstudio_vlm: Optional[str] = None
+        self._lmstudio_vlm_cached: bool = False
         # Which model actually produced the most recent description — recorded so
         # the caption's provenance can be written to IPTC:Writer-Editor.
         self.last_vision_model_used: Optional[str] = None
@@ -192,7 +196,11 @@ class DocumentTextifier:
                 self.VISION_MODELS = [picked] + [
                     m for m in type(self).VISION_MODELS if m != picked
                 ]
-                logger.info("Vision model auto-selected: %s (%s)", picked, reason)
+                # debug, not info: this only NAMES a candidate Ollama model, it
+                # loads nothing. Logged at info it read as "a model was loaded",
+                # which misled a reader into diagnosing a VRAM problem that did
+                # not exist on a run where vision was never invoked.
+                logger.debug("Ollama vision candidate: %s (%s)", picked, reason)
         self.pdf_strategy = (pdf_strategy or "docling").strip().lower()
         self.cleanup_provider = (cleanup_provider or "").strip().lower()
         self.cleanup_model = (cleanup_model or "").strip()
@@ -1012,6 +1020,119 @@ class DocumentTextifier:
             logger.warning("Claude vision failed after %.1fs: %s", elapsed, e)
             return ""
 
+    def _lmstudio_loaded_vlm(self) -> Optional[str]:
+        """Id of a vision model already loaded in LM Studio, or None.
+
+        Only an ALREADY-LOADED model is used. The whole point is to reuse a VLM
+        that is resident in VRAM rather than making Ollama evict it to load a
+        smaller one; asking LM Studio to load a model on demand would recreate
+        the eviction fight this avoids.
+
+        Cached per instance — a miss must not re-probe the network for every
+        image in a document.
+        """
+        if self._lmstudio_vlm_cached:
+            return self._lmstudio_vlm
+        self._lmstudio_vlm_cached = True
+        self._lmstudio_vlm = None
+
+        override = os.environ.get("CORTEX_LMSTUDIO_VISION_MODEL", "").strip()
+        base = os.environ.get("CORTEX_LMSTUDIO_BASE_URL", "http://localhost:1234/v1").strip()
+        if override:
+            self._lmstudio_vlm = override
+            return self._lmstudio_vlm
+
+        # The loaded/type fields live on LM Studio's native API, not /v1.
+        root = base[: -len("/v1")] if base.endswith("/v1") else base
+        try:
+            import urllib.request
+
+            with urllib.request.urlopen(f"{root}/api/v0/models", timeout=5) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            logger.debug("LM Studio not reachable at %s: %s", root, exc)
+            return None
+
+        for entry in payload.get("data", []):
+            if entry.get("type") == "vlm" and entry.get("state") == "loaded":
+                self._lmstudio_vlm = entry.get("id")
+                logger.info("LM Studio vision model in use: %s", self._lmstudio_vlm)
+                return self._lmstudio_vlm
+
+        logger.debug("LM Studio reachable but no vision model is loaded")
+        return None
+
+    def _describe_with_lmstudio(
+        self,
+        encoded_image: str,
+        context_hint: str = "",
+        timeout: float = 120.0,
+    ) -> str:
+        """Describe an image with a VLM already loaded in LM Studio.
+
+        Returns "" on any failure so the caller falls through to Ollama.
+        """
+        model = self._lmstudio_loaded_vlm()
+        if not model:
+            return ""
+        try:
+            from openai import OpenAI
+        except ImportError:
+            logger.debug("openai package not installed — LM Studio vision unavailable")
+            return ""
+
+        prompt = (
+            "Describe this image in 1-2 short plain declarative sentences (max 35 words total). "
+            "Write as flowing prose — do NOT use structural labels like "
+            "'The main subject is...' or 'The setting is...'. "
+            "Output the description only — begin immediately with the subject or scene. "
+            "Do not include reasoning, analysis, parenthetical asides, or transitional conclusions. "
+            "Write statements only — do not ask questions or use question marks. "
+            "If the image is primarily a logo/icon/watermark or tiny decorative graphic, "
+            "return exactly: [Image: logo/icon omitted]. "
+            "Do not use markdown, headings, or bullet points."
+        )
+        if context_hint:
+            prompt += " " + context_hint.strip()
+
+        started = time.monotonic()
+        try:
+            client = OpenAI(
+                base_url=os.environ.get("CORTEX_LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
+                api_key=os.environ.get("CORTEX_LMSTUDIO_API_KEY", "lm-studio"),
+                timeout=timeout,
+            )
+            response = client.chat.completions.create(
+                model=model,
+                max_tokens=200,
+                temperature=0,
+                # Without this, qwen3.6 spends the entire budget on reasoning
+                # tokens and returns empty content. Verified against the live
+                # endpoint: 30-token cap returned "", disabling reasoning
+                # returned the answer in 5 tokens.
+                extra_body={"reasoning_effort": "none"},
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url",
+                         "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"}},
+                    ],
+                }],
+            )
+            raw = (response.choices[0].message.content or "") if response.choices else ""
+            cleaned = self._normalize_vlm_text(raw.strip())
+            logger.info(
+                "LM Studio vision (%s) returned %d chars in %.1fs",
+                model, len(cleaned), time.monotonic() - started,
+            )
+            return cleaned
+        except Exception as e:
+            logger.warning(
+                "LM Studio vision failed after %.1fs: %s", time.monotonic() - started, e
+            )
+            return ""
+
     def probe_image_vlm(self, image_bytes: bytes, simple_prompt: bool = True) -> Dict[str, Any]:
         """Run a one-shot diagnostic probe for a single image and return raw response metadata."""
         original_bytes = image_bytes or b""
@@ -1194,7 +1315,19 @@ class DocumentTextifier:
                     if self._looks_like_logo_icon_description(claude_result):
                         return "[Image: logo/icon omitted]"
                     return claude_result
-                logger.info("Claude vision returned empty — falling back to local Ollama model")
+                logger.info("Claude vision returned empty — falling back to local vision")
+
+            # ── LM Studio (a VLM already resident in VRAM) ─────────────────────
+            # Preferred over Ollama: reuses a loaded model instead of making
+            # Ollama evict it to load a smaller one into whatever VRAM is left.
+            # Silently returns "" when LM Studio is unreachable or has no VLM
+            # loaded, so this is a no-op on machines without it.
+            lmstudio_result = self._describe_with_lmstudio(encoded, context_hint=context_hint)
+            if lmstudio_result:
+                self.last_vision_model_used = self._lmstudio_vlm
+                if self._looks_like_logo_icon_description(lmstudio_result):
+                    return "[Image: logo/icon omitted]"
+                return lmstudio_result
 
             # ── Local Ollama models ───────────────────────────────────────────
             self._init_vlm()
@@ -2150,8 +2283,16 @@ class DocumentTextifier:
                 anchor_section = (
                     f"The photographer has already tagged this image with: {anchor_list}. "
                     "Treat these as ground-truth — include the relevant ones verbatim in your output "
-                    "rather than replacing specific terms with vague equivalents "
-                    "(e.g. keep 'condor' not 'bird', keep 'Antarctica' not 'remote location'). "
+                    "rather than replacing specific terms with vague equivalents: keep the "
+                    "photographer's exact species, place and person names instead of generic "
+                    "category words. "
+                    # Illustrative nouns used to live here ('condor', 'Antarctica'); small
+                    # models copy them straight into the output as if they were content.
+                    # Measured: llama3.2:3b leaked 'condor' in 2 of 6 extractions, and even
+                    # mistral-small3.2 did it twice in 8,619 catalog keywords. Describe the
+                    # rule instead of naming examples, and forbid invention explicitly.
+                    "Every tag must come from the description or the tag list above — "
+                    "never introduce a subject that appears in neither. "
                 )
 
             response = client.chat(

@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.5.1"
+CORTEX_VERSION = "6.6.0"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
-    "minor": 5,
-    "patch": 1,
+    "minor": 6,
+    "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,18 +25,17 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-08-01",
-    "release_name": "Docker Removal and Version Sync Fix",
-    "description": "Delete the unused Docker distribution and make --sync-all actually sync VERSION_INFO",
+    "release_name": "LM Studio Vision Provider",
+    "description": "Reuse a VLM already loaded in LM Studio instead of making Ollama evict it for a smaller model",
     "breaking_changes": [],
-    "new_features": [],
+    "new_features": [
+        "Image descriptions prefer a vision model already resident in LM Studio, falling back to Ollama when it is unreachable or has no VLM loaded",
+    ],
     "improvements": [
-        "Docker distribution removed - it was unused and its hand-synced copies drifted from source every release",
-        "Release workflow no longer has a Docker sync step, and warns against git add -A",
+        "Only an already-loaded LM Studio model is used, so vision costs no extra VRAM and never evicts a resident model",
+        "The Ollama vision candidate log moved to debug - at info it read as 'a model was loaded' when it only names one",
     ],
-    "bug_fixes": [
-        "version_manager --sync-all now updates the VERSION_INFO major/minor/patch dict, which it never touched before; two releases running left it stale and failed test_version_config",
-        "The CHANGELOG ordering bug is gone with the Docker copy step that caused it",
-    ],
+    "bug_fixes": [],
 }
 
 # ============================================================================

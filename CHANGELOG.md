@@ -17,6 +17,20 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v6.6.0 - 2026-08-01
+
+### LM Studio Vision Provider
+
+Reuse a VLM already loaded in LM Studio instead of making Ollama evict it for a smaller model
+
+### ✨ New Features
+- Image descriptions prefer a vision model already resident in LM Studio, falling back to Ollama when it is unreachable or has no VLM loaded
+
+### 🚀 Improvements
+- Only an already-loaded LM Studio model is used, so vision costs no extra VRAM and never evicts a resident model
+- The Ollama vision candidate log moved to debug - at info it read as 'a model was loaded' when it only names one
+
 ## v6.5.1 - 2026-08-01
 
 ### Docker Removal and Version Sync Fix
