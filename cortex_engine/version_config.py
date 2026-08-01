@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.6.0"
+CORTEX_VERSION = "6.6.1"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 6,
-    "patch": 0,
+    "patch": 1,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,17 +25,14 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-08-01",
-    "release_name": "LM Studio Vision Provider",
-    "description": "Reuse a VLM already loaded in LM Studio instead of making Ollama evict it for a smaller model",
+    "release_name": "Reclaimable VRAM in Vision Model Selection",
+    "description": "Count VRAM held by Ollama's own idle models as available, since Ollama evicts them on demand",
     "breaking_changes": [],
-    "new_features": [
-        "Image descriptions prefer a vision model already resident in LM Studio, falling back to Ollama when it is unreachable or has no VLM loaded",
+    "new_features": [],
+    "improvements": [],
+    "bug_fixes": [
+        "Vision model selection no longer drops to the weakest installed model on a workstation whose VRAM is held by Ollama's own idle models; nvidia-smi cannot distinguish reclaimable memory from another app's, so ollama ps is now consulted. Measured on the RTX 8000: llava:7b -> qwen3-vl:32b",
     ],
-    "improvements": [
-        "Only an already-loaded LM Studio model is used, so vision costs no extra VRAM and never evicts a resident model",
-        "The Ollama vision candidate log moved to debug - at info it read as 'a model was loaded' when it only names one",
-    ],
-    "bug_fixes": [],
 }
 
 # ============================================================================

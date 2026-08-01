@@ -84,9 +84,78 @@ class TestProfiles:
         assert sel.PROFILES_BY_NAME["qwen3-vl:8b"].vram_mb == 7400
 
 
+class TestOllamaResidentVramIsReclaimable:
+    """Ollama evicts its own models, so their VRAM must count as available.
+
+    Regression: after enriching one photo the VLM and the keyword model stayed
+    resident, nvidia-smi reported ~5GB free on a 46GB RTX 8000, and the selector
+    dropped to llava:7b — the weakest model installed.
+    """
+
+    def _ps(self, monkeypatch, stdout, rc=0):
+        monkeypatch.setattr(sel.shutil, "which", lambda _: "/usr/bin/ollama")
+        monkeypatch.setattr(
+            sel.subprocess, "run",
+            lambda *a, **k: type("R", (), {"returncode": rc, "stdout": stdout})(),
+        )
+
+    def test_sums_gb_and_mb_sizes(self, monkeypatch):
+        self._ps(monkeypatch,
+                 "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL\n"
+                 "qwen3-vl:8b    901c    8.0 GB    100% GPU    32768    4 minutes from now\n"
+                 "llama3.2:3b    e410    512 MB    100% GPU    32768    4 minutes from now\n")
+        assert sel.ollama_resident_mb() == 8 * 1024 + 512
+
+    def test_bare_context_number_is_not_parsed_as_a_size(self, monkeypatch):
+        self._ps(monkeypatch,
+                 "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL\n"
+                 "qwen3-vl:8b    901c    8.0 GB    100% GPU    32768    4 minutes from now\n")
+        assert sel.ollama_resident_mb() == 8 * 1024
+
+    def test_no_models_loaded_is_zero(self, monkeypatch):
+        self._ps(monkeypatch, "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL\n")
+        assert sel.ollama_resident_mb() == 0
+
+    def test_unreadable_ollama_is_zero_not_a_crash(self, monkeypatch):
+        self._ps(monkeypatch, "", rc=1)
+        assert sel.ollama_resident_mb() == 0
+
+    def test_available_adds_reclaimable_to_free(self, monkeypatch):
+        monkeypatch.setattr(sel, "free_vram_mb", lambda: 5000)
+        monkeypatch.setattr(sel, "ollama_resident_mb", lambda: 18000)
+        assert sel.available_vram_mb() == 23000
+
+    def test_available_is_none_without_a_gpu(self, monkeypatch):
+        monkeypatch.setattr(sel, "free_vram_mb", lambda: None)
+        assert sel.available_vram_mb() is None
+
+    def test_workstation_keeps_the_good_model_after_a_photo(self, monkeypatch):
+        """The actual regression: 5GB free + 18GB reclaimable must not pick llava."""
+        monkeypatch.setattr(sel, "free_vram_mb", lambda: 5000)
+        monkeypatch.setattr(sel, "ollama_resident_mb", lambda: 18000)
+        monkeypatch.setattr(sel, "installed_models", lambda: LAPTOP_MODELS)
+        model, _ = sel.select_vision_model()
+        assert model == "qwen3-vl:8b"
+
+    def test_other_apps_vram_is_still_respected(self, monkeypatch):
+        """LM Studio's VRAM is not reclaimable, so a genuinely full GPU still downshifts."""
+        monkeypatch.setattr(sel, "free_vram_mb", lambda: 3000)
+        monkeypatch.setattr(sel, "ollama_resident_mb", lambda: 0)
+        monkeypatch.setattr(sel, "installed_models", lambda: LAPTOP_MODELS)
+        model, _ = sel.select_vision_model()
+        assert model == "gemma4:e2b-it-qat"
+
+
 class TestProbes:
     def test_free_vram_returns_int_or_none(self):
         v = sel.free_vram_mb()
+        assert v is None or isinstance(v, int)
+
+    def test_ollama_resident_returns_int(self):
+        assert isinstance(sel.ollama_resident_mb(), int)
+
+    def test_available_vram_returns_int_or_none(self):
+        v = sel.available_vram_mb()
         assert v is None or isinstance(v, int)
 
     def test_installed_models_returns_list(self):

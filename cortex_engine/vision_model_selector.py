@@ -21,6 +21,7 @@ Quality ordering below reflects *content accuracy*, which is what ends up in the
 catalog as keywords. Style problems are recoverable by re-running; a wrong noun
 is not, because nobody re-reads 10,000 captions.
 """
+import re
 import shutil
 import subprocess
 from typing import Dict, List, Optional, Tuple
@@ -92,6 +93,48 @@ def free_vram_mb() -> Optional[int]:
         return None
 
 
+def ollama_resident_mb() -> int:
+    """VRAM held by models Ollama has already loaded.
+
+    Ollama evicts its own idle models to make room for a new one, so this memory
+    is *reclaimable*. VRAM held by another process — LM Studio, Lightroom — is
+    not, and `nvidia-smi` reports both identically as "used".
+
+    Without this correction the selector reads a machine that has just finished a
+    photo as though it were nearly full: on the RTX 8000, a resident VLM plus the
+    keyword model left ~5GB free and the selector dropped to `llava:7b`, the
+    weakest model installed, on a 46GB workstation. Returns 0 when Ollama is
+    absent or unreadable, which preserves the old conservative behaviour.
+    """
+    if not shutil.which("ollama"):
+        return 0
+    try:
+        out = subprocess.run(["ollama", "ps"], capture_output=True, text=True, timeout=15)
+        if out.returncode != 0:
+            return 0
+    except Exception as exc:
+        logger.debug("Could not read loaded Ollama models: %s", exc)
+        return 0
+
+    total_mb = 0.0
+    for line in out.stdout.splitlines()[1:]:
+        # SIZE column, e.g. "8.0 GB" / "1.6 GB" / "512 MB". The bare CONTEXT
+        # number that follows has no unit suffix, so it cannot match.
+        match = re.search(r"\s(\d+(?:\.\d+)?)\s*(GB|MB)\b", line, re.IGNORECASE)
+        if match:
+            value = float(match.group(1))
+            total_mb += value * 1024 if match.group(2).upper() == "GB" else value
+    return int(total_mb)
+
+
+def available_vram_mb() -> Optional[int]:
+    """Free VRAM plus whatever Ollama can evict. None when there is no GPU."""
+    free = free_vram_mb()
+    if free is None:
+        return None
+    return free + ollama_resident_mb()
+
+
 def installed_models() -> List[str]:
     """Model names present in `ollama list`. Empty when Ollama is unreachable."""
     if not shutil.which("ollama"):
@@ -127,7 +170,7 @@ def select_vision_model(
         return None, f"none of the {len(available)} installed models is a known vision model"
 
     if free_mb is None:
-        free_mb = free_vram_mb()
+        free_mb = available_vram_mb()
 
     if free_mb is None:
         pick = min(known, key=lambda p: p.vram_mb)
@@ -157,9 +200,9 @@ def num_predict_for(model: str, default: int = 200) -> int:
 
 def describe_selection() -> str:
     """Human-readable summary for the UI."""
-    free = free_vram_mb()
+    free = available_vram_mb()
     model, reason = select_vision_model(free_mb=free)
-    free_txt = f"{free}MB free VRAM" if free is not None else "no GPU detected"
+    free_txt = f"{free}MB usable VRAM" if free is not None else "no GPU detected"
     if not model:
         return f"{free_txt} — {reason}"
     return f"{free_txt} → {model} ({reason})"

@@ -18,6 +18,13 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v6.6.1 - 2026-08-01
+
+### Reclaimable VRAM in Vision Model Selection
+
+Count VRAM held by Ollama's own idle models as available, since Ollama evicts them on demand
+
 ## v6.6.0 - 2026-08-01
 
 ### LM Studio Vision Provider

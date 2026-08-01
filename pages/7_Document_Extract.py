@@ -1,5 +1,5 @@
 # ## File: pages/7_Document_Extract.py
-# Version: v6.6.0
+# Version: v6.6.1
 # Date: 2026-01-29
 # Purpose: Document extraction tools — Textifier (document to Markdown) and Anonymizer.
 
