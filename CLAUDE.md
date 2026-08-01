@@ -92,85 +92,29 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 git push origin main
 ```
 
-#### 4. Docker Distribution Sync
-```bash
-# Copy updated files to Docker directory
-cp Cortex_Suite.py docker/
-cp -r pages/* docker/pages/
-cp -r api/* docker/api/
-cp -r cortex_engine/* docker/cortex_engine/
+## 🐳 Docker (removed 2026-08-01)
 
-# Commit Docker updates
-git add docker/
-git commit -m "sync: Update Docker distribution with latest changes"
-git push origin main
-```
+The Docker distribution was **deleted** in v6.5.1 — it was no longer used and its
+copies of `cortex_engine/`, `pages/` and `api/` had to be hand-synced on every
+release, which repeatedly went stale. Recover it from git history before that
+commit if it is ever needed.
 
-## 🐳 Docker Distribution & Packaging
+`scripts/version_manager.py` no longer syncs anything to `docker/`, and the
+release workflow has no Docker step.
 
-### Docker Distribution Rules
-- **Single .dockerignore**: Keep ONLY in `/docker/.dockerignore` (remove any from project root)
-- **Minimal Documentation**: Only `/docker/README.md` needed
-- **Clean Package**: Exclude ALL user data, databases, proposals, external_research, logs, media files
-- **Fresh Installation**: Every Docker deployment creates completely fresh databases and configurations
+### Legacy `/.dockerenv` branches in the code
 
-### Required Docker Files Structure
-```
-docker/
-├── README.md                 # Single consolidated guide
-├── .dockerignore            # Excludes user data/Windows folders  
-├── run-cortex.bat          # Windows installer
-├── run-cortex.sh           # Unix installer
-├── Dockerfile              # Build instructions
-├── docker-compose.yml      # Container orchestration
-├── .env.example            # Configuration template
-└── requirements.txt        # Python dependencies (REQUIRED for Docker build)
-```
+44 files still branch on `os.path.exists('/.dockerenv')` to decide whether to
+apply `convert_windows_to_wsl_path()`. Those branches are now **dead code** — the
+condition can never be true without the distribution. They were left in place
+because removing them touches path handling across the whole codebase, which is a
+separate change with real regression risk.
 
-### Docker Distribution Checklist
-When preparing a Docker distribution:
+Do not add new `/.dockerenv` branches. In WSL and on the host, always use
+`convert_windows_to_wsl_path()` for Windows-style paths.
 
-#### Required Files
-- `requirements.txt` - Python dependencies needed by Dockerfile
-- `Cortex_Suite.py` - Main application entry point
-- `Dockerfile` - Container build instructions
-- `.env.example` - Configuration template
-- `run-cortex-FIXED.bat` - Windows launcher script
-
-#### Required Directories (copy entire directories)
-- `api/` - API server module
-- `cortex_engine/` - Core business logic and data processing
-- `pages/` - Streamlit page components
-- `scripts/` - Utility scripts (optional but recommended)
-
-### Critical Docker Path Handling
-
-**CRITICAL**: This is a recurring issue that causes functionality to break.
-
-#### Path Handling Rules by Environment
-
-**1. Docker Container Environment (`os.path.exists('/.dockerenv')`):**
-- ✅ **Use paths EXACTLY as configured** by the user
-- ❌ **DO NOT** use `convert_windows_to_wsl_path()` - Docker handles volume mapping
-- **User path**: `/data/ai_databases` → **Use**: `/data/ai_databases` 
-- **User path**: `C:\ai_databases` → **Use**: `C:\ai_databases` (mapped by Docker volume)
-- **WHY**: Docker volumes automatically map host paths to container paths
-
-**2. WSL Environment (Windows Subsystem for Linux):**
-- ✅ **Use** `convert_windows_to_wsl_path()` for Windows-style paths
-- **User path**: `C:\ai_databases` → **Convert to**: `/mnt/c/ai_databases`
-
-#### Detection Pattern
-```python
-if os.path.exists('/.dockerenv'):
-    # Docker container - use path as-is, Docker volumes handle mapping
-    final_path = user_configured_path
-else:
-    # WSL/Host - use conversion if needed  
-    final_path = convert_windows_to_wsl_path(user_configured_path)
-```
-
-**GOLDEN RULE**: NEVER hardcode paths. Always use user's configured database path and let Docker/WSL handle the underlying mapping.
+**GOLDEN RULE (unchanged)**: never hardcode paths — always use the user's
+configured database path.
 
 ## 📋 Major Release Workflow
 
@@ -202,22 +146,16 @@ else:
    python scripts/version_manager.py --check
    ```
 
-#### Phase 3: Docker Distribution Sync
-1. **Copy updated files** to docker directory:
-   ```bash
-   cp cortex_engine/version_config.py docker/cortex_engine/
-   cp pages/*.py docker/pages/
-   ```
+#### Phase 3: Commit & Release
 
-2. **Verify docker distribution completeness**:
-   - Main application files (Cortex_Suite.py)
-   - All page files with latest versions
-   - Updated batch install files (.bat, .sh)
-   - Synchronized documentation (README.md)
+⚠️ **Never `git add -A` or `git add .`** — this working tree routinely carries
+unrelated user files (loose PDFs, `.claude/` edits, untracked scratch), and a
+blanket add sweeps them into the release commit. Stage tracked changes with those
+excluded, then *verify before committing*:
 
-#### Phase 4: Commit & Release
 ```bash
-git add -A
+git add -u -- ':!*.pdf' ':!*Zone.Identifier' ':!.claude'
+git status --short          # confirm nothing unrelated is staged
 git commit -m "release: Version X.Y.Z - Feature Name
 
 ## 🚀 Major Release: vX.Y.Z
@@ -235,7 +173,6 @@ git commit -m "release: Version X.Y.Z - Feature Name
 
 ## 📋 Synchronized Components
 - ✅ Version consistency verified
-- ✅ Docker distribution updated
 - ✅ Documentation synchronized
 
 🤖 Generated with [Claude Code](https://claude.ai/code)
@@ -251,7 +188,6 @@ git push origin main
 - [ ] Version sync run across all components  
 - [ ] Changelog updated with release information
 - [ ] Version consistency verified (check command passes)
-- [ ] Docker distribution synchronized
 - [ ] Comprehensive commit message created
 - [ ] Changes pushed to remote repository
 
@@ -321,19 +257,16 @@ from cortex_engine.utils.model_checker import model_checker
 ### 🚨 Development Rules
 1. **Always follow version management workflow** before making changes
 2. **Use centralized utilities** instead of duplicating functionality
-3. **Test Docker distribution** after major changes
-4. **Keep version numbers consistent** across all components
-5. **Document changes** with clear commit messages
+3. **Keep version numbers consistent** across all components
+4. **Document changes** with clear commit messages
 
 ### Common Issues
 - **Path issues in WSL**: All paths support both Linux and Windows formats
 - **Windows batch file errors**: Ensure proper CRLF line endings with `sed -i 's/$/\r/' filename.bat`
-- **Docker build context issues**: Copy `.dockerignore` to parent build context directory
 - **Version inconsistencies**: Always run version sync commands after updates
 
 **FAILURE TO FOLLOW GUIDELINES RESULTS IN:**
 - Inconsistent version numbers across components
-- Broken Docker distributions for users
 - Missing functionality in deployed versions
 - User confusion about feature availability
 

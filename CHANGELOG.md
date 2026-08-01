@@ -16,6 +16,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v6.5.1 - 2026-08-01
+
+### Docker Removal and Version Sync Fix
+
+Delete the unused Docker distribution and make --sync-all actually sync VERSION_INFO
+
+### 🚀 Improvements
+- Docker distribution removed - it was unused and its hand-synced copies drifted from source every release
+- Release workflow no longer has a Docker sync step, and warns against git add -A
+
 ## v6.5.0 - 2026-08-01
 
 ### Single-Document Vault Upload

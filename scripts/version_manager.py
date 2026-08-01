@@ -23,9 +23,10 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from cortex_engine.version_config import (
-    get_version_string, 
-    get_changelog_entry, 
+    get_version_string,
+    get_changelog_entry,
     get_full_version_info,
+    CORTEX_VERSION,
     VERSION_METADATA
 )
 
@@ -46,11 +47,7 @@ class VersionManager:
         # Files to check for version consistency
         files_to_check = [
             "Cortex_Suite.py",
-            "docker/Cortex_Suite.py", 
-            "docker/run-cortex.bat",
-            "docker/run-cortex.sh",
             "README.md",
-            "docker/README.md"
         ]
         
         inconsistent_files = []
@@ -165,27 +162,58 @@ class VersionManager:
         success = True
         current_version = get_version_string()
         
+        # Update the VERSION_INFO dict in version_config.py
+        if not self._update_version_info():
+            success = False
+
         # Update main app file
         if not self._update_main_app_version(current_version):
             success = False
-        
-        # Update Docker files
-        if not self._update_docker_files(current_version):
-            success = False
-        
+
         # Update page files
         if not self._update_page_files(current_version):
             success = False
-        
+
         # Update README files
         if not self._update_readme_files(current_version):
             success = False
-        
-        # Sync changelog to docker directory
-        if not self._sync_changelog():
-            success = False
-        
+
         return success
+
+    def _update_version_info(self) -> bool:
+        """Sync the VERSION_INFO major/minor/patch dict to CORTEX_VERSION.
+
+        VERSION_INFO is a hand-maintained dict that duplicates CORTEX_VERSION.
+        It used to be missed by --sync-all entirely, so every release left it
+        stale and failed tests/unit/test_version_config.py.
+        """
+        config_file = self.project_root / "cortex_engine" / "version_config.py"
+        if not config_file.exists():
+            print("❌ version_config.py not found")
+            return False
+
+        try:
+            major, minor, patch = (int(p) for p in CORTEX_VERSION.split("."))
+        except ValueError:
+            print(f"❌ CORTEX_VERSION is not major.minor.patch: {CORTEX_VERSION}")
+            return False
+
+        try:
+            content = config_file.read_text(encoding='utf-8')
+            updated = re.sub(
+                r'(VERSION_INFO = \{\s*\n\s*"major":\s*)\d+(,\s*\n\s*"minor":\s*)\d+(,\s*\n\s*"patch":\s*)\d+',
+                rf'\g<1>{major}\g<2>{minor}\g<3>{patch}',
+                content,
+            )
+            if updated == content:
+                print("⚠️ VERSION_INFO already current, or its shape changed — check by hand")
+            else:
+                config_file.write_text(updated, encoding='utf-8')
+            print(f"✅ Updated VERSION_INFO to {major}.{minor}.{patch}")
+            return True
+        except Exception as e:
+            print(f"❌ Error updating VERSION_INFO: {e}")
+            return False
     
     def _update_main_app_version(self, version: str) -> bool:
         """Update version in main app file"""
@@ -218,35 +246,7 @@ class VersionManager:
             print(f"❌ Error updating {app_file.name}: {e}")
             return False
     
-    def _update_docker_files(self, version: str) -> bool:
-        """Update version in Docker installation files"""
-        files = ["docker/run-cortex.bat", "docker/run-cortex.sh"]
-        success = True
-        
-        for file_path in files:
-            full_path = self.project_root / file_path
-            if not full_path.exists():
-                continue
-                
-            try:
-                content = full_path.read_text(encoding='utf-8')
-                
-                # Update version references
-                content = re.sub(
-                    r'v\d+\.\d+\.\d+',
-                    version,
-                    content
-                )
-                
-                full_path.write_text(content, encoding='utf-8')
-                print(f"✅ Updated {file_path}")
-                
-            except Exception as e:
-                print(f"❌ Error updating {file_path}: {e}")
-                success = False
-        
-        return success
-    
+
     def _update_page_files(self, version: str) -> bool:
         """Update version in page files"""
         pages_dir = self.project_root / "pages"
@@ -287,7 +287,7 @@ class VersionManager:
     
     def _update_readme_files(self, version: str) -> bool:
         """Update version in README files"""
-        readme_files = ["README.md", "docker/README.md"]
+        readme_files = ["README.md"]
         success = True
         
         for file_path in readme_files:
@@ -314,24 +314,7 @@ class VersionManager:
         
         return success
     
-    def _sync_changelog(self) -> bool:
-        """Sync CHANGELOG.md to docker directory"""
-        try:
-            changelog_file = self.project_root / "CHANGELOG.md"
-            docker_changelog = self.project_root / "docker" / "CHANGELOG.md"
-            
-            if changelog_file.exists():
-                import shutil
-                shutil.copy2(changelog_file, docker_changelog)
-                print("✅ Synced CHANGELOG.md to docker directory")
-                return True
-            else:
-                print("⚠️ CHANGELOG.md not found in project root")
-                return False
-        except Exception as e:
-            print(f"❌ Error syncing changelog: {e}")
-            return False
-    
+
     def show_version_info(self):
         """Display current version information"""
         info = get_full_version_info()

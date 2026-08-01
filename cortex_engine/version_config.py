@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.5.0"
+CORTEX_VERSION = "6.5.1"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 5,
-    "patch": 0,
+    "patch": 1,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,17 +25,18 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-08-01",
-    "release_name": "Single-Document Vault Upload",
-    "description": "Upload one document straight into the private vault from the ingest panel",
+    "release_name": "Docker Removal and Version Sync Fix",
+    "description": "Delete the unused Docker distribution and make --sync-all actually sync VERSION_INFO",
     "breaking_changes": [],
-    "new_features": [
-        "Folder / Single document mode toggle on the Vault GraphRAG ingest panel",
-        "Browser file dialog for ingesting one PDF, DOCX, PPTX or TXT",
-    ],
+    "new_features": [],
     "improvements": [
-        "Uploaded documents stage to a stable path with content-aware writes, so re-uploading the same file is skipped rather than duplicated",
+        "Docker distribution removed - it was unused and its hand-synced copies drifted from source every release",
+        "Release workflow no longer has a Docker sync step, and warns against git add -A",
     ],
-    "bug_fixes": [],
+    "bug_fixes": [
+        "version_manager --sync-all now updates the VERSION_INFO major/minor/patch dict, which it never touched before; two releases running left it stale and failed test_version_config",
+        "The CHANGELOG ordering bug is gone with the Docker copy step that caused it",
+    ],
 }
 
 # ============================================================================
