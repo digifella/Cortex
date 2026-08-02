@@ -79,6 +79,33 @@ After the model loads, `ollama ps` is authoritative — it prints the CPU/GPU sp
 
 Anything other than `100% GPU` means it is spilling and will run 10–100× slower. A crash shows in the server log as `llama runner terminated, exit status 2`, and surfaces to the caller as an empty description or HTTP 500 `model runner has unexpectedly stopped`.
 
+### The second model nobody remembers: keyword extraction
+
+Captioning loads **two** models, not one. After the VLM writes the description, `extract_keywords()` derives tags from it using a **text** LLM (VLMs return empty for text-only prompts). That model is picked as the first installed entry of `DocumentTextifier.TEXT_MODELS`, which is **not VRAM-aware at all** — it defaults to `mistral-small3.2`, ~23 GB resident, for the trivial job of tagging a two-sentence caption.
+
+Measured on the RTX 8000 (2026-08-01), enriching alongside LM Studio:
+
+| Resident | VRAM |
+|---|---|
+| LM Studio (Hermes/NemoClaw) | ~34 GB |
+| `qwen3-vl:8b` (vision) | 8 GB |
+| `mistral-small3.2` (keywords) | 23 GB |
+| **Total** | **43.2 / 46 GB — 2.5 GB free, load climbing** |
+
+It also cost ~45 s per photo, dwarfing the 21 s of actual vision inference.
+
+**A big GPU does not protect you** — "sufficient machine" is not the same as "sufficient *free* VRAM". On this host LM Studio is a permanent tenant, so the headroom that matters is whatever it leaves behind. `scripts/photo_enrich_batch.py` now prepends `llama3.2:3b-instruct-q8_0` (3.4 GB) to `TEXT_MODELS`, matching what `photo_batch.py` has always done. Prepended, not replaced, so a machine without that tag still resolves down the original list.
+
+If a run ever feels inexplicably slow, **check `ollama ps` for a second resident model before blaming the VLM** — the vision model is the one you chose, the text model is the one you didn't.
+
+#### Never put example nouns in the keyword prompt
+
+Dropping to a 3B keyword model exposed a latent bug. The `extract_keywords` anchor prompt used to illustrate its rule with real nouns — *"keep 'condor' not 'bird', keep 'Antarctica' not 'remote location'"* — and models copy those straight into the tag list as though they were content. `llama3.2:3b` leaked `condor` in **2 of 6** extractions; `mistral-small3.2` did it too, twice in **8,619** catalog keywords, so the bug predated the model change and was merely rare enough to hide.
+
+The prompt now states the rule abstractly and forbids invention outright (*"every tag must come from the description or the tag list above"*). Re-measured: **0 leaks in 12 trials**, with anchor tags still preserved verbatim.
+
+The general lesson, since this pipeline writes permanent catalog metadata: **a smaller model doesn't invent new failure modes so much as expose the ones a larger model was papering over.** When swapping in a smaller model, re-verify output *content*, not just that it ran. And grep the library for any concrete noun a prompt hands the model — `2` bad tags in 8,619 is invisible in a spot-check but permanent in the catalog.
+
 ## Model choice is automatic — don't hardcode one
 
 `cortex_engine/vision_model_selector.py` picks the best installed model that fits **current** free VRAM. It adapts to the machine, so on Paul's RTX 8000 it will select a larger model than on the laptop with no config change. Check what it will do:
