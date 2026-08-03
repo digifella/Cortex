@@ -19,6 +19,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 
+
+## v6.7.0 - 2026-08-03
+
+### Audio Cleanup Page
+
+New Audio Cleanup page running SAM-Audio voice separation via the sam-audio project's CLI
+
+### ✨ New Features
+- Audio Cleanup page (pages/21_Audio_Cleanup.py): upload audio or video, describe the sound to EXTRACT, and get back a cleaned target plus the removed background as a residual. Runs sam-audio's clean_cli.py as a subprocess in ITS OWN venv, so no torch or SAM dependencies enter the cortex venv; progress streams back as JSON lines and the result downloads as a ZIP with both stems and metadata.
+
 ## v6.6.1 - 2026-08-01
 
 ### Reclaimable VRAM in Vision Model Selection

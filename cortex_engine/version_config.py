@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.6.1"
+CORTEX_VERSION = "6.7.0"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
-    "minor": 6,
-    "patch": 1,
+    "minor": 7,
+    "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,15 +24,15 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-08-01",
-    "release_name": "Reclaimable VRAM in Vision Model Selection",
-    "description": "Count VRAM held by Ollama's own idle models as available, since Ollama evicts them on demand",
+    "release_date": "2026-08-03",
+    "release_name": "Audio Cleanup Page",
+    "description": "New Audio Cleanup page running SAM-Audio voice separation via the sam-audio project's CLI",
     "breaking_changes": [],
-    "new_features": [],
-    "improvements": [],
-    "bug_fixes": [
-        "Vision model selection no longer drops to the weakest installed model on a workstation whose VRAM is held by Ollama's own idle models; nvidia-smi cannot distinguish reclaimable memory from another app's, so ollama ps is now consulted. Measured on the RTX 8000: llava:7b -> qwen3-vl:32b",
+    "new_features": [
+        "Audio Cleanup page (pages/21_Audio_Cleanup.py): upload audio or video, describe the sound to EXTRACT, and get back a cleaned target plus the removed background as a residual. Runs sam-audio's clean_cli.py as a subprocess in ITS OWN venv, so no torch or SAM dependencies enter the cortex venv; progress streams back as JSON lines and the result downloads as a ZIP with both stems and metadata.",
     ],
+    "improvements": [],
+    "bug_fixes": [],
 }
 
 # ============================================================================
