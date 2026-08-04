@@ -201,9 +201,8 @@ def init_chroma_client(db_path):
             st.error(f"Failed to connect to ChromaDB: {e}")
         return None
 
-st.set_page_config(layout="wide", page_title="Cortex Collection Management")
 st.title("📚 4. Collection Management")
-st.caption("Manage your curated Working Collections. For knowledge base maintenance, see the Maintenance page (page 13).")
+st.caption("Manage your curated Working Collections. For knowledge base maintenance, use the Maintenance page under System.")
 
 # Add info box about knowledge base management
 st.info("""

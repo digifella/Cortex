@@ -152,8 +152,6 @@ def install_missing_models(missing_models: list) -> bool:
         st.error(f"Failed to install models automatically: {e}")
         return False
 
-st.set_page_config(layout="wide", page_title="Knowledge Ingest")
-
 # Apply refined editorial theme
 apply_theme()
 

@@ -6,6 +6,23 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## v6.8.0 - 2026-08-04
+
+### Grouped Streamlit Navigation
+
+Organises Cortex Suite pages into a curated, task-focused navigation structure.
+
+### ✨ New Features
+- Explicit Streamlit navigation grouped into Start, Core Workflow, Research & Documents, Media & Metadata, Proposals, Specialist Tools, and System sections.
+
+### 🚀 Improvements
+- Moved the home dashboard into `cortex_ui/` so `Cortex_Suite.py` remains a small application shell.
+- Removed superseded proposal pages and duplicate compatibility surfaces from the visible sidebar while retaining their files.
+- Centralised page configuration and navigation metadata.
+
+### 🐛 Bug Fixes
+- Replaced the broken Maintenance terminal page link with guidance to the integrated Terminal tab.
+- Updated the Setup Wizard proposal link to the canonical Proposal Manager.
 
 
 

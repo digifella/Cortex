@@ -12,13 +12,6 @@ from pathlib import Path
 from datetime import date
 import yaml
 
-# Set page config
-st.set_page_config(
-    page_title="Entity Profile Manager",
-    page_icon="🏢",
-    layout="wide"
-)
-
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

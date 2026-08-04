@@ -45,13 +45,6 @@ from pages.components._Maintenance_Dedup import (
     render_database_dedup_section as shared_render_database_dedup_section,
 )
 
-# Configure page
-st.set_page_config(
-    page_title="Maintenance", 
-    page_icon="🔧",
-    layout="wide"
-)
-
 # Page configuration
 PAGE_VERSION = None
 
@@ -479,14 +472,9 @@ def delete_ingested_document_database_simple(db_path):
 
 def display_header():
     """Display page header with navigation and information"""
-    st.title("🔧 7. Maintenance & Administration")
+    st.title("🔧 Maintenance & Administration")
     st.caption(f"Version: {PAGE_VERSION} • Consolidated System Maintenance Interface")
-    
-    # Quick access to System Terminal
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("💻 Open System Terminal", use_container_width=True, help="Access the secure system terminal for command execution"):
-            st.switch_page("pages/_System_Terminal.py")
+    st.caption("Use the Terminal tab below for secure command execution.")
     
     st.markdown("""
     **⚠️ Important:** This page contains powerful system maintenance functions that can modify or delete data.  

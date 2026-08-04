@@ -11,13 +11,6 @@ from pathlib import Path
 
 import streamlit as st
 
-# Set page config FIRST (before any other Streamlit commands)
-st.set_page_config(
-    page_title="Knowledge Synthesizer",
-    page_icon="✨",
-    layout="wide"
-)
-
 # Add the project root to the Python path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))

@@ -775,7 +775,7 @@ def display_step_complete():
     
     with col3:
         if st.button("📝 Generate Proposal", use_container_width=True):
-            st.switch_page("pages/6_Proposal_Step_2_Make.py")
+            st.switch_page("pages/13_Proposal_Manager.py")
 
 def display_debug_log(logs: List[str]):
     """Display debug log window."""

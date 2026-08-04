@@ -28,13 +28,6 @@ from cortex_engine.utils import get_logger
 # Set up logging
 logger = get_logger(__name__)
 
-# Page configuration
-st.set_page_config(
-    page_title="Document Dialog",
-    layout="wide",
-    page_icon="💬"
-)
-
 # Page metadata
 PAGE_VERSION = VERSION_STRING
 

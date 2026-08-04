@@ -14,13 +14,6 @@ import pandas as pd
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 
-# Set page config FIRST (before any other Streamlit commands)
-st.set_page_config(
-    page_title="Metadata & Tag Management",
-    page_icon="🔖",
-    layout="wide"
-)
-
 # Import dependencies
 from cortex_engine.ui_theme import apply_theme, section_header
 from cortex_engine.ui_components import error_display, render_version_footer

@@ -10,12 +10,12 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.7.0"
+CORTEX_VERSION = "6.8.0"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
-    "minor": 7,
+    "minor": 8,
     "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
@@ -24,15 +24,22 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-08-03",
-    "release_name": "Audio Cleanup Page",
-    "description": "New Audio Cleanup page running SAM-Audio voice separation via the sam-audio project's CLI",
+    "release_date": "2026-08-04",
+    "release_name": "Grouped Streamlit Navigation",
+    "description": "Organises Cortex Suite pages into a curated, task-focused navigation structure.",
     "breaking_changes": [],
     "new_features": [
-        "Audio Cleanup page (pages/21_Audio_Cleanup.py): upload audio or video, describe the sound to EXTRACT, and get back a cleaned target plus the removed background as a residual. Runs sam-audio's clean_cli.py as a subprocess in ITS OWN venv, so no torch or SAM dependencies enter the cortex venv; progress streams back as JSON lines and the result downloads as a ZIP with both stems and metadata.",
+        "Explicit Streamlit navigation grouped into Start, Core Workflow, Research & Documents, Media & Metadata, Proposals, Specialist Tools, and System sections.",
     ],
-    "improvements": [],
-    "bug_fixes": [],
+    "improvements": [
+        "Moved the home dashboard into cortex_ui so Cortex_Suite.py remains a small application shell.",
+        "Removed superseded proposal pages and duplicate compatibility surfaces from the visible sidebar while retaining their files.",
+        "Centralised page configuration and navigation metadata.",
+    ],
+    "bug_fixes": [
+        "Replaced the broken Maintenance terminal page link with guidance to the integrated Terminal tab.",
+        "Updated the Setup Wizard proposal link to the canonical Proposal Manager.",
+    ],
 }
 
 # ============================================================================

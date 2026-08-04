@@ -25,12 +25,6 @@ from cortex_engine.utils.path_utils import convert_to_docker_mount_path
 # Configure logging
 logger = get_logger(__name__)
 
-st.set_page_config(
-    page_title="Knowledge Analytics",
-    page_icon="📊",
-    layout="wide"
-)
-
 class KnowledgeAnalytics:
     """Analytics engine for knowledge base insights and metrics"""
     

@@ -9,9 +9,6 @@ from cortex_engine.stakeholder_signal_store import StakeholderSignalStore
 from cortex_engine.version_config import VERSION_STRING
 
 
-st.set_page_config(page_title="Stakeholder Signals", layout="wide", page_icon="🎯")
-
-
 TARGET_TYPES = ["person", "organisation", "industry", "theme"]
 PROFILE_STATUSES = ["active", "watch", "inactive", "former"]
 WATCH_STATUSES = ["off", "watch"]

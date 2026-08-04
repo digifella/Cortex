@@ -27,10 +27,6 @@ from cortex_engine.llm_metadata_sync.sync import run_sync
 PAGE_VERSION = VERSION_STRING
 MAX_BATCH_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
 
-st.set_page_config(
-    page_title="Photo & Metadata Tools", layout="wide", page_icon="📷"
-)
-
 logger = get_logger(__name__)
 
 

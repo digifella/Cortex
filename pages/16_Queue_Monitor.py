@@ -31,9 +31,6 @@ PRIVATE_QUEUE_MANUAL_LOG = Path("/home/longboardfella/.nemoclaw/logs/private-kno
 PRIVATE_BATCH_DIR = Path("/home/longboardfella/.nemoclaw/private-knowledge-batches")
 PRIVATE_SUPPORTED_EXTS = {".pdf", ".docx", ".pptx", ".txt"}
 
-st.set_page_config(page_title="Queue Monitor", layout="wide", page_icon="📡")
-
-
 def _load_env_file(path: Path) -> Dict[str, str]:
     values: Dict[str, str] = {}
     if not path.exists():

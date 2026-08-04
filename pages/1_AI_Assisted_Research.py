@@ -25,8 +25,6 @@ from cortex_engine.synthesise import (
 )
 from cortex_engine.version_config import VERSION_STRING
 
-st.set_page_config(page_title="Cortex AI Research Assistant", layout="wide")
-
 # Page configuration
 PAGE_VERSION = VERSION_STRING
 

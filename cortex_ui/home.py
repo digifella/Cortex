@@ -1,0 +1,479 @@
+# ## File: cortex_ui/home.py
+# Date: 2025-08-30
+# Purpose: Main entry point for the Cortex Suite application
+
+import streamlit as st
+import sys
+import os
+from pathlib import Path
+import time
+import threading
+
+# Add the project root to the Python path for imports
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+def _import_cortex_engine():
+    """Import cortex_engine modules with one retry on importlib race conditions.
+
+    Rapid st.rerun() cycles can corrupt sys.modules mid-import, producing a
+    KeyError inside frozen importlib._bootstrap._load_unlocked.  Clearing the
+    stale entries and retrying once reliably recovers from this.
+    """
+    for attempt in range(2):
+        try:
+            global system_status, get_version_display, VERSION_METADATA
+            global model_checker, help_system, get_logger
+            global QWEN3_VL_RERANKER_ENABLED, QWEN3_VL_RERANKER_SIZE
+            global QWEN3_VL_RERANKER_WARMUP_ENABLED
+            from cortex_engine.system_status import system_status
+            from cortex_engine.version_config import get_version_display, VERSION_METADATA
+            from cortex_engine.utils.model_checker import model_checker
+            from cortex_engine.help_system import help_system
+            from cortex_engine.utils import get_logger
+            from cortex_engine.config import (
+                QWEN3_VL_RERANKER_ENABLED,
+                QWEN3_VL_RERANKER_SIZE,
+                QWEN3_VL_RERANKER_WARMUP_ENABLED,
+            )
+            return
+        except KeyError:
+            if attempt == 0:
+                for key in list(sys.modules.keys()):
+                    if key.startswith("cortex_engine"):
+                        del sys.modules[key]
+            else:
+                raise
+
+_import_cortex_engine()
+
+logger = get_logger(__name__)
+
+
+def _embedding_warmup_enabled() -> bool:
+    """Embedding warmup is opt-in to avoid competing with vision/photo workloads."""
+    raw = str(os.environ.get("CORTEX_EMBEDDING_WARMUP_ENABLED", "0")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _warmup_embedding_model():
+    """Background warmup for embedding model at app startup."""
+    try:
+        from cortex_engine.embedding_service import embed_query
+        logger.info("🔄 Global warmup: Loading embedding model from Cortex_Suite...")
+        _ = embed_query("global warmup")
+        logger.info("✅ Global warmup: Embedding model ready")
+    except Exception as e:
+        logger.warning(f"Global embedding warmup failed: {e}")
+
+
+def _warmup_reranker_model():
+    """Background warmup for reranker model at app startup."""
+    try:
+        from cortex_engine.qwen3_vl_reranker_service import (
+            _load_reranker,
+            Qwen3VLRerankerConfig,
+            Qwen3VLRerankerSize,
+            get_reranker_health,
+        )
+
+        health = get_reranker_health()
+        if not health.get("can_attempt_load", True):
+            logger.warning(
+                f"Skipping global reranker warmup during cooldown ({health.get('cooldown_remaining_seconds', 0)}s)"
+            )
+            return
+
+        size = str(QWEN3_VL_RERANKER_SIZE or "AUTO").upper()
+        if size == "2B":
+            config = Qwen3VLRerankerConfig.for_model_size(Qwen3VLRerankerSize.SMALL)
+        elif size == "8B":
+            config = Qwen3VLRerankerConfig.for_model_size(Qwen3VLRerankerSize.LARGE)
+        else:
+            config = Qwen3VLRerankerConfig.auto_select()
+
+        logger.info(f"🔄 Global warmup: Loading reranker model from Cortex_Suite ({size})...")
+        _load_reranker(config)
+        logger.info("✅ Global warmup: Reranker model ready")
+    except Exception as e:
+        logger.warning(f"Global reranker warmup failed: {e}")
+
+
+def start_global_model_warmup():
+    """Kick off one-time background model warmup when app starts."""
+    if os.environ.get("CORTEX_GLOBAL_WARMUP_STARTED") == "1":
+        return
+
+    os.environ["CORTEX_GLOBAL_WARMUP_STARTED"] = "1"
+
+    if _embedding_warmup_enabled() and not st.session_state.get("global_embedding_warmup_started"):
+        st.session_state.global_embedding_warmup_started = True
+        threading.Thread(target=_warmup_embedding_model, daemon=True).start()
+        logger.info("🚀 Started global embedding warmup thread")
+    else:
+        logger.info("Skipping global embedding warmup (disabled by default)")
+
+    if (
+        QWEN3_VL_RERANKER_ENABLED
+        and QWEN3_VL_RERANKER_WARMUP_ENABLED
+        and not st.session_state.get("global_reranker_warmup_started")
+    ):
+        st.session_state.global_reranker_warmup_started = True
+        threading.Thread(target=_warmup_reranker_model, daemon=True).start()
+        logger.info("🚀 Started global reranker warmup thread")
+
+def load_recent_changelog_entries(max_versions=3):
+    """Load recent changelog entries for What's New section"""
+    try:
+        # Try to find CHANGELOG.md in project directory or docker directory
+        changelog_paths = [
+            project_root / "CHANGELOG.md",  # Project root
+            project_root / "docker" / "CHANGELOG.md"  # Docker directory
+        ]
+
+        changelog_content = None
+        for changelog_path in changelog_paths:
+            if changelog_path.exists():
+                with open(changelog_path, 'r', encoding='utf-8') as f:
+                    changelog_content = f.read()
+                break
+
+        if not changelog_content:
+            return "📋 Changelog not found - using version config information instead."
+
+        # Parse recent version entries
+        lines = changelog_content.split('\n')
+        versions = []
+        current_version = None
+        current_content = []
+
+        for line in lines:
+            # Look for version headers (## v4.4.0 - Release Name)
+            if line.startswith('## v') and len(versions) < max_versions:
+                # Save previous version if exists
+                if current_version and current_content:
+                    versions.append({
+                        'header': current_version,
+                        'content': '\n'.join(current_content).strip()
+                    })
+                    current_content = []
+
+                current_version = line.replace('## ', '### ')  # Convert to smaller header for display
+
+            elif current_version and line.strip():  # Only collect non-empty lines
+                # Skip certain sections we don't want in What's New
+                if not any(skip in line.lower() for skip in ['### 🔥 breaking changes', '### breaking changes']):
+                    current_content.append(line)
+
+        # Add the last version
+        if current_version and current_content and len(versions) < max_versions:
+            versions.append({
+                'header': current_version,
+                'content': '\n'.join(current_content).strip()
+            })
+
+        if not versions:
+            return f"📋 **Latest Version:** {get_version_display()}\n\n{VERSION_METADATA.get('description', 'Latest updates and improvements.')}"
+
+        # Format for display
+        result = ""
+        for version in versions:
+            result += f"{version['header']}\n{version['content']}\n\n"
+
+        return result.strip()
+
+    except Exception as e:
+        # Fallback to version config if changelog parsing fails
+        return f"📋 **Latest Version:** {get_version_display()}\n\n{VERSION_METADATA.get('description', 'Recent updates and improvements.')}\n\n*For complete version history, see CHANGELOG.md*"
+
+# Check system setup status
+try:
+    setup_info = system_status.get_setup_progress()
+    setup_complete = setup_info.get("setup_complete", False)
+except Exception:
+    setup_complete = False
+    setup_info = {"progress_percent": 0, "status_message": "⚠️ System status check failed"}
+
+if setup_complete:
+    start_global_model_warmup()
+
+if not setup_complete:
+    # Show setup progress page
+    st.title("🔧 Cortex Suite Setup in Progress")
+    st.caption(get_version_display())
+
+    # Progress bar
+    progress_percent = setup_info.get("progress_percent", 0)
+    st.progress(progress_percent / 100.0)
+
+    # Status message
+    status_message = setup_info.get("status_message", "Setting up...")
+    st.markdown(f"### {status_message}")
+
+    # Detailed status
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("#### Services Status")
+        ollama_status = "✅ Running" if setup_info.get("ollama_running") else "🔄 Starting..."
+        api_status = "✅ Running" if setup_info.get("api_running") else "🔄 Starting..."
+        st.write(f"🤖 Ollama Service: {ollama_status}")
+        st.write(f"🔗 API Server: {api_status}")
+
+    with col2:
+        st.markdown("#### AI Models")
+        models = setup_info.get("models", [])
+        for model in models:
+            status_icon = "✅" if model["available"] else "⬇️"
+            model_name = model["name"].split(":")[-1] if ":" in model["name"] else model["name"]
+            st.write(f"{status_icon} {model_name} ({model['size_gb']}GB)")
+
+    # Error messages
+    errors = setup_info.get("errors", [])
+    if errors:
+        st.markdown("#### Issues")
+        for error in errors:
+            st.error(error)
+
+    # Instructions
+    st.markdown("""
+    ---
+    ### What's happening?
+
+    🚀 **Good news!** The Cortex Suite interface is running and accessible.
+
+    ⬇️ **AI models are downloading** in the background (this can take 15-30 minutes for ~20GB total).
+
+    ✨ **You can already explore** the interface and configure settings while models download.
+
+    🎯 **Full AI features** will become available automatically once downloads complete.
+
+    ### While you wait:
+    - Browse the navigation menu to see available tools
+    - Check out the Knowledge Search and Collection Management
+    - Review the system documentation
+    """)
+
+    # Auto-refresh
+    st.markdown("*This page will auto-refresh every 30 seconds...*")
+    time.sleep(30)
+    st.rerun()
+
+else:
+    # Normal main page
+    st.title("🚀 Welcome to the Project Cortex Suite")
+    st.caption(get_version_display())
+
+    # What's New section - automatically loaded from CHANGELOG.md
+    with st.expander("✨ What's New in Recent Updates", expanded=False):
+        changelog_content = load_recent_changelog_entries(max_versions=3)
+        st.markdown(changelog_content)
+
+        # Add link to full changelog
+        st.markdown("---")
+        st.markdown("📋 **[View Complete Changelog](./CHANGELOG.md)** • All version history and detailed changes")
+
+st.markdown("""
+This is the central hub for the Cortex Suite, an integrated workbench for building a knowledge base and using it for AI-assisted proposal development.
+
+Use the grouped sidebar to move through the main workflow:
+
+1. **Research and ingest** source material.
+2. **Search and organise** evidence into working collections.
+3. **Process and analyse** documents with the specialist tools you need.
+4. **Build proposals** from curated evidence and entity profiles.
+
+Less frequently used operational and specialist tools are grouped separately so
+the core workflow remains easy to scan.
+""")
+
+st.divider()
+
+# Add model status check in sidebar
+with st.sidebar:
+    st.markdown("---")
+    st.subheader("🔧 System Status")
+
+    # Display platform configuration and hybrid backend info
+    try:
+        setup_info = system_status.get_setup_progress()
+        if "platform_config" in setup_info:
+            st.info(setup_info["platform_config"])
+
+        # Display backend information if available
+        if "backends" in setup_info and setup_info["backends"]:
+            st.markdown("**🚀 AI Backends:**")
+            for backend in setup_info["backends"]:
+                name = backend["name"].replace("_", " ").title()
+                status_icon = "🟢" if backend["available"] else "🔴"
+                tier_icon = "⭐" if backend["performance_tier"] == "premium" else "📦"
+                model_info = f"({backend['model_count']} models)" if backend['model_count'] > 0 else "(no models)"
+
+                st.caption(f"{status_icon} {tier_icon} {name} {model_info}")
+
+            # Show active strategy
+            if "hybrid_strategy" in setup_info and setup_info["hybrid_strategy"]:
+                strategy_display = setup_info["hybrid_strategy"].replace("_", " ").title()
+                st.caption(f"🎯 **Strategy:** {strategy_display}")
+
+    except Exception:
+        st.info("💻 Platform: Detecting...")
+
+    # Quick model availability check
+    ingestion_check = model_checker.check_ingestion_requirements(include_images=True)
+    research_check = model_checker.check_research_requirements()
+
+    if ingestion_check["can_proceed"]:
+        st.success("✅ Ingestion: Ready")
+    else:
+        st.error("❌ Ingestion: Missing models")
+        with st.expander("View Details"):
+            st.markdown(model_checker.format_status_message(ingestion_check))
+
+    if research_check["local_research_available"]:
+        st.success("✅ Research: Ready")
+    elif research_check["ollama_running"]:
+        st.warning("⚠️ Research: Cloud only")
+        st.caption("Local research model not available")
+    else:
+        st.error("❌ Research: Ollama down")
+
+    st.divider()
+
+    # Database Status Check
+    st.subheader("💾 Database Status")
+
+    # Import required modules for database checking
+    try:
+        from cortex_engine.session_state import initialize_app_session_state
+        from cortex_engine.utils import convert_windows_to_wsl_path
+        import os
+
+        # Initialize session state to get database path
+        initialize_app_session_state()
+
+        current_db_path = st.session_state.get("db_path_input", "")
+
+        if current_db_path:
+            # Convert and check paths
+            wsl_path = convert_windows_to_wsl_path(current_db_path)
+            chroma_path = os.path.join(wsl_path, "knowledge_hub_db")
+
+            # Display current path
+            st.caption(f"📁 **Path:** `{current_db_path}`")
+
+            # Check base directory
+            if os.path.exists(wsl_path):
+                st.success("✅ Base directory exists")
+
+                # Check knowledge base
+                if os.path.exists(chroma_path):
+                    st.success("✅ Knowledge base found")
+
+                    # Try to count documents
+                    try:
+                        import chromadb
+                        from chromadb.config import Settings as ChromaSettings
+                        from cortex_engine.config import COLLECTION_NAME
+
+                        db_settings = ChromaSettings(anonymized_telemetry=False)
+                        db = chromadb.PersistentClient(path=chroma_path, settings=db_settings)
+                        collection = db.get_or_create_collection(COLLECTION_NAME)
+                        doc_count = collection.count()
+
+                        if doc_count > 0:
+                            st.info(f"📚 **{doc_count} documents** in knowledge base")
+                        else:
+                            st.warning("⚠️ Knowledge base is empty")
+                            st.caption("Run Knowledge Ingest to add documents")
+
+                    except Exception as db_e:
+                        st.warning("⚠️ Cannot inspect knowledge base")
+                        st.caption(f"Error: {str(db_e)[:50]}...")
+                else:
+                    st.error("❌ Knowledge base missing")
+                    st.caption("Run Knowledge Ingest to create it")
+            else:
+                st.error("❌ Database directory not found")
+                st.caption("Check path in Knowledge Search")
+        else:
+            st.warning("⚠️ No database path configured")
+            st.caption("Configure in Knowledge Search")
+
+        # Quick fix button
+        if st.button("🔧 Fix Database Path", use_container_width=True):
+            st.info("💡 Go to **Knowledge Search** page to configure the database path")
+
+    except Exception as status_e:
+        st.error("❌ Database status check failed")
+        st.caption(f"Error: {str(status_e)[:50]}...")
+
+# Add help system
+help_system.show_help_menu()
+
+# Show help modal if requested
+if st.session_state.get("show_help_modal", False):
+    help_topic = st.session_state.get("help_topic", "overview")
+    help_system.show_help_modal(help_topic)
+else:
+    st.info("💡 **Need help?** Use the Help menu in the sidebar to get detailed guidance on any module.")
+
+    # Quick start guide on main page
+    with st.expander("🚀 Quick Start Guide"):
+        st.markdown("""
+        ### New to Cortex Suite? Follow these steps:
+
+        **1. 📚 Build Your Knowledge Base**
+        - Use **Knowledge Ingest** to add your documents (case studies, CVs, policies, past proposals)
+        - **Batch Mode** for large collections, **Standard Mode** for careful curation
+
+        **2. 🔍 Organize with Collections**
+        - Use **Knowledge Search** to explore your documents
+        - Create **Working Collections** to group relevant evidence for proposals
+        - Use **Collection Management** to curate and export collections
+
+        **3. 👤 Set Up Entity Profiles**
+        - Create profiles in **Entity Profile Manager** with company details
+        - Include ABN, addresses, contact info for auto-completion
+
+        **4. 📝 Create Proposals**
+        - Open **Proposal Manager** to create a workspace and upload the tender
+        - Bind an entity profile and review the extracted sections
+        - Complete substantive questions with evidence from your collections
+
+        **5. 📊 Monitor with Analytics**
+        - Track knowledge patterns and identify gaps
+        - Understand system effectiveness
+
+        **💡 Pro Tip**: Build a good knowledge collection FIRST - the quality of your proposals depends on the evidence available!
+        """)
+
+st.info("To get started, click on one of the pages in the navigation sidebar.")
+
+st.divider()
+
+# Attribution footer
+# Latest code changes footer
+st.markdown("---")
+st.markdown(
+    f"""
+    <div style='text-align: center; color: #666; font-size: 0.85em; margin: 1em 0;'>
+        <strong>🕒 Latest Code Changes:</strong> {VERSION_METADATA['release_date']}<br>
+        <em>{VERSION_METADATA['description']}</em>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+st.markdown("""
+<div style="text-align: center; padding: 20px; background-color: #f0f2f6; border-radius: 5px; margin-top: 20px;">
+    <p style="margin: 0; color: #666; font-size: 14px;">
+        <strong>System designed and built by Paul Cooper, Director of Longboardfella Consulting Pty Ltd.</strong><br>
+        <a href="https://www.longboardfella.com.au" target="_blank" style="color: #1f77b4;">www.longboardfella.com.au</a><br><br>
+        Design and concepts demonstrated in the Cortex Suite may be freely shared provided attribution to Paul Cooper is made.<br>
+        System is a beta - no support available. Code may not be fully stable.<br>
+        Feedback is welcome and can be made via email to <a href="mailto:paul@longboardfella.com.au" style="color: #1f77b4;">paul@longboardfella.com.au</a>
+    </p>
+</div>
+""", unsafe_allow_html=True)

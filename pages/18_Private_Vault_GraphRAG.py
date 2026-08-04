@@ -29,7 +29,6 @@ from cortex_engine.utils import convert_windows_to_wsl_path
 from cortex_engine.version_config import VERSION_STRING
 
 
-st.set_page_config(page_title="Vault GraphRAG", layout="wide")
 apply_theme()
 
 

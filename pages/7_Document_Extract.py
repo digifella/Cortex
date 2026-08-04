@@ -82,9 +82,6 @@ from cortex_engine.url_ingestor_ui import render_url_ingestor_ui
 # Set up logging
 logger = get_logger(__name__)
 
-# Page configuration
-st.set_page_config(page_title="Document & Photo Processing", layout="wide", page_icon="📝")
-
 # Page metadata
 PAGE_VERSION = VERSION_STRING
 MAX_BATCH_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB

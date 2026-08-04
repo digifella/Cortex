@@ -7,8 +7,6 @@ from pathlib import Path
 import streamlit as st
 
 
-st.set_page_config(page_title="Researcher Assistant", layout="wide", page_icon="🔎")
-
 _PAGE_PATH = Path(__file__).resolve().parent / "7_Document_Extract.py"
 _SPEC = importlib.util.spec_from_file_location("cortex_document_extract_page_for_researcher", _PAGE_PATH)
 if _SPEC is None or _SPEC.loader is None:

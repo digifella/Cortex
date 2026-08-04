@@ -17,13 +17,6 @@ from typing import List, Dict, Optional
 import tempfile
 import shutil
 
-# Configure page
-st.set_page_config(
-    page_title="Visual Analysis Dashboard", 
-    page_icon="👁️",
-    layout="wide"
-)
-
 # Page configuration
 PAGE_VERSION = None
 

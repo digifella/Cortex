@@ -24,7 +24,6 @@ SAM_PYTHON = SAM_ROOT / ".venv" / "bin" / "python"
 CLEAN_CLI = SAM_ROOT / "clean_cli.py"
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 
-st.set_page_config(page_title="Audio Cleanup", layout="wide", page_icon="🎙️")
 logger = get_logger(__name__)
 
 

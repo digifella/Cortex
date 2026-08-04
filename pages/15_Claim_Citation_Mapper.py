@@ -29,7 +29,6 @@ def _resolve_db_root() -> Path:
     return db_root
 
 
-st.set_page_config(page_title="Claim Citation Mapper", layout="wide", page_icon="🧷")
 apply_theme()
 
 st.title("Claim Citation Mapper")

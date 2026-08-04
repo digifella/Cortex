@@ -28,9 +28,6 @@ from cortex_engine.version_config import VERSION_STRING
 # Set up logging
 logger = get_logger(__name__)
 
-# Page configuration
-st.set_page_config(page_title="Document Summarizer", layout="wide", page_icon="📄")
-
 # Page metadata
 PAGE_VERSION = VERSION_STRING
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB

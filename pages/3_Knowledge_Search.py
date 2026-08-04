@@ -115,8 +115,6 @@ def _get_chroma_client_threadsafe(chroma_db_path: str):
 # Page configuration
 PAGE_VERSION = VERSION_STRING
 
-st.set_page_config(page_title="Knowledge Search", layout="wide")
-
 # Apply refined editorial theme
 apply_theme()
 

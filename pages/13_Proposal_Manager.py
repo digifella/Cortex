@@ -22,12 +22,6 @@ from datetime import datetime
 from typing import List, Dict, Optional
 from collections import defaultdict
 
-st.set_page_config(
-    page_title="Proposal Manager - Cortex Suite",
-    page_icon="📋",
-    layout="wide"
-)
-
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))

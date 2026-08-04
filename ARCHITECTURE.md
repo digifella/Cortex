@@ -19,7 +19,7 @@ The system runs locally in WSL2 or Docker, uses Ollama for LLM inference, and su
 ```
 +------------------------------------------------------------+
 |                     Streamlit Frontend                      |
-|  (Cortex_Suite.py + 18 page modules in pages/)             |
+|  (grouped st.navigation router + task-focused pages)       |
 +-----------------------------+------------------------------+
                               |
               +---------------+---------------+
@@ -52,7 +52,7 @@ The system runs locally in WSL2 or Docker, uses Ollama for LLM inference, and su
 | Embeddings | SentenceTransformers / Qwen3-VL | Document and query vectorisation |
 | NER | spaCy | Named entity recognition |
 | Document Parsing | Docling / PyMuPDF / python-docx / python-pptx | Multi-format document reading |
-| Containerisation | Docker / Docker Compose | Deployment and distribution |
+| Runtime | Local Python / WSL | Desktop application and supporting workers |
 
 ---
 
@@ -61,6 +61,9 @@ The system runs locally in WSL2 or Docker, uses Ollama for LLM inference, and su
 ```
 cortex_suite/
 ├── Cortex_Suite.py              # Main entry point
+├── cortex_ui/                  # Streamlit shell metadata and home UI
+│   ├── navigation.py           # Sidebar sections, labels, icons, routes
+│   └── home.py                 # Home dashboard
 ├── cortex_config.json           # User configuration (persisted)
 ├── CHANGELOG.md                 # Release history
 │
@@ -79,7 +82,7 @@ cortex_suite/
 │   ├── utils/                   # Path handling, logging, GPU, caching
 │   └── ...
 │
-├── pages/                       # Streamlit page modules
+├── pages/                       # Streamlit page modules registered by the router
 │   ├── 1_AI_Assisted_Research.py
 │   ├── 2_Knowledge_Ingest.py
 │   ├── 3_Knowledge_Search.py
@@ -92,11 +95,10 @@ cortex_suite/
 │   ├── 10_Visual_Analysis.py
 │   ├── 11_Metadata_Management.py
 │   ├── 12_Document_Dialog.py
-│   ├── Proposal_Workspace.py
-│   ├── Proposal_Chunk_Review_V2.py
-│   ├── Proposal_Intelligent_Completion.py
+│   ├── 13_Proposal_Manager.py
 │   ├── Entity_Profile_Manager.py
-│   └── components/              # Setup wizard, system terminal
+│   ├── components/              # Shared ingest and maintenance UI
+│   └── ...                      # Specialist and media tools
 │
 ├── api/
 │   └── main.py                  # FastAPI REST API
@@ -107,12 +109,7 @@ cortex_suite/
 │   ├── embedding_migrator.py    # Migrate between embedding models
 │   └── graphrag_retroactive_extraction.py
 │
-└── docker/                      # Docker distribution
-    ├── Dockerfile
-    ├── docker-compose.yml
-    ├── .env.example
-    ├── run-cortex.bat / .sh
-    └── (mirrored source files)
+└── tests/                       # Unit, integration, and UI coverage
 ```
 
 ---
@@ -444,22 +441,23 @@ Authentication: Optional HTTPBearer token.
 
 ## 12. Page Modules Reference
 
-### Knowledge Management
+Navigation labels and grouping are declared in `cortex_ui/navigation.py`; filenames no longer determine the visible sidebar order.
+
+### Core Workflow
 
 | Page | File | Purpose |
 |------|------|---------|
-| AI Research | `1_AI_Assisted_Research.py` | Multi-agent external research with synthesis |
+| Discovery Research | `1_AI_Assisted_Research.py` | Multi-agent external research with synthesis |
 | Knowledge Ingest | `2_Knowledge_Ingest.py` | Document ingestion with batch mode |
 | Knowledge Search | `3_Knowledge_Search.py` | Vector/GraphRAG/hybrid search |
 | Collection Mgmt | `4_Collection_Management.py` | CRUD for working collections |
 | Analytics | `5_Knowledge_Analytics.py` | Usage patterns, knowledge gaps |
-| Maintenance | `6_Maintenance.py` | DB cleanup, backup/restore |
 
-### Document Tools
+### Research and Document Tools
 
 | Page | File | Purpose |
 |------|------|---------|
-| Document Extract | `7_Document_Extract.py` | Textifier (doc→Markdown) + Anonymizer |
+| Document Processing | `7_Document_Extract.py` | Conversion, research review, URL ingest, image extraction, and anonymisation |
 | Summarizer | `8_Document_Summarizer.py` | Multi-level summarisation |
 | Synthesizer | `9_Knowledge_Synthesizer.py` | Synthesise collection into structured output |
 | Visual Analysis | `10_Visual_Analysis.py` | Theme network visualisation |
@@ -470,10 +468,10 @@ Authentication: Optional HTTPBearer token.
 
 | Page | File | Purpose |
 |------|------|---------|
-| Workspace | `Proposal_Workspace.py` | Create proposal workspace |
-| Chunk Review | `Proposal_Chunk_Review_V2.py` | Review extracted tender sections |
-| Completion | `Proposal_Intelligent_Completion.py` | AI-assisted response generation |
+| Proposal Manager | `13_Proposal_Manager.py` | Consolidated setup, completion, review, and export workflow |
 | Entity Profiles | `Entity_Profile_Manager.py` | Company/personnel profiles |
+
+The superseded proposal pages, standalone URL ingestor wrapper, and duplicate Researcher Assistant are retained for compatibility but are intentionally omitted from navigation.
 
 ---
 
