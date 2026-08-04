@@ -23,6 +23,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from cortex_engine.utils.logging_utils import get_logger
+from cortex_engine.llm_interface import DEFAULT_LMSTUDIO_MODEL
 from cortex_engine.offline_geocoder import resolve as _resolve_location
 from cortex_engine.photo_name_tags import (
     DEFAULT_NAME_TAGS,
@@ -2247,7 +2248,13 @@ class DocumentTextifier:
 
     # Text models for keyword extraction (VLMs need images, so use a text LLM)
     TEXT_MODELS = ["mistral:latest", "mistral-small3.2", "llama3:latest", "gemma:latest"]
-    CLEANUP_MODELS = ["qwen2.5:32b", "qwen2.5:14b", "mistral:latest", "llama3:latest"]
+    CLEANUP_MODELS = [
+        os.getenv("CORTEX_LMSTUDIO_MODEL", DEFAULT_LMSTUDIO_MODEL),
+        "qwen2.5:32b",
+        "qwen2.5:14b",
+        "mistral:latest",
+        "llama3:latest",
+    ]
 
     def extract_keywords(self, description: str, anchor_keywords: Optional[List[str]] = None) -> List[str]:
         """Extract flat keywords from an image description using a text LLM.

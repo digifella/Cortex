@@ -299,7 +299,7 @@ def get_database_embedding_dimension(db_path: str) -> Optional[int]:
         if embeddings is not None and len(embeddings) > 0:
             sample_embedding = embeddings[0]
             dimension = len(sample_embedding)
-            logger.info(f"Detected database embedding dimension: {dimension}")
+            logger.debug(f"Detected database embedding dimension: {dimension}")
             return dimension
 
         logger.warning("Could not retrieve sample embedding from database")

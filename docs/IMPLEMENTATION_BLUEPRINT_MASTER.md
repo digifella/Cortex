@@ -137,5 +137,5 @@ While critical path work is underway, retain backlog sequencing:
 Execution begins with:
 
 1. Handoff contract code changes in `api/main.py` + worker trace/idempotency propagation.
-2. Granular anonymiser options in `cortex_engine/anonymizer.py`, `worker/handlers/pdf_anonymise.py`, and `pages/7_Document_Extract.py`.
+2. Granular anonymiser options in `cortex_engine/anonymizer.py`, `worker/handlers/pdf_anonymise.py`, and `cortex_pages/7_Document_Extract.py`.
 3. Targeted tests in `tests/unit/`.

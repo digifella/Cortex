@@ -6,7 +6,6 @@ import streamlit as st
 import sys
 import os
 from pathlib import Path
-import time
 import threading
 
 # Add the project root to the Python path for imports
@@ -24,12 +23,11 @@ def _import_cortex_engine():
     for attempt in range(2):
         try:
             global system_status, get_version_display, VERSION_METADATA
-            global model_checker, help_system, get_logger
+            global help_system, get_logger
             global QWEN3_VL_RERANKER_ENABLED, QWEN3_VL_RERANKER_SIZE
             global QWEN3_VL_RERANKER_WARMUP_ENABLED
             from cortex_engine.system_status import system_status
             from cortex_engine.version_config import get_version_display, VERSION_METADATA
-            from cortex_engine.utils.model_checker import model_checker
             from cortex_engine.help_system import help_system
             from cortex_engine.utils import get_logger
             from cortex_engine.config import (
@@ -112,7 +110,7 @@ def start_global_model_warmup():
         threading.Thread(target=_warmup_embedding_model, daemon=True).start()
         logger.info("🚀 Started global embedding warmup thread")
     else:
-        logger.info("Skipping global embedding warmup (disabled by default)")
+        logger.debug("Skipping global embedding warmup (disabled by default)")
 
     if (
         QWEN3_VL_RERANKER_ENABLED
@@ -216,18 +214,20 @@ if not setup_complete:
 
     with col1:
         st.markdown("#### Services Status")
-        ollama_status = "✅ Running" if setup_info.get("ollama_running") else "🔄 Starting..."
+        lmstudio_status = "✅ Running" if setup_info.get("lmstudio_running") else "❌ Unreachable"
         api_status = "✅ Running" if setup_info.get("api_running") else "🔄 Starting..."
-        st.write(f"🤖 Ollama Service: {ollama_status}")
+        st.write(f"🤖 LM Studio Server: {lmstudio_status}")
         st.write(f"🔗 API Server: {api_status}")
 
     with col2:
         st.markdown("#### AI Models")
         models = setup_info.get("models", [])
         for model in models:
-            status_icon = "✅" if model["available"] else "⬇️"
-            model_name = model["name"].split(":")[-1] if ":" in model["name"] else model["name"]
-            st.write(f"{status_icon} {model_name} ({model['size_gb']}GB)")
+            status_icon = "✅" if model["available"] else "⚠️"
+            state = "loaded" if model.get("loaded") else "loads on first use"
+            st.write(f"{status_icon} {model['name']}")
+            if model["available"]:
+                st.caption(state)
 
     # Error messages
     errors = setup_info.get("errors", [])
@@ -243,22 +243,16 @@ if not setup_complete:
 
     🚀 **Good news!** The Cortex Suite interface is running and accessible.
 
-    ⬇️ **AI models are downloading** in the background (this can take 15-30 minutes for ~20GB total).
+    Cortex now uses the OpenAI-compatible **LM Studio server** for its default
+    text-generation model. Startup checks availability only; it does not pull
+    Ollama models or ask LM Studio to load a model.
 
-    ✨ **You can already explore** the interface and configure settings while models download.
-
-    🎯 **Full AI features** will become available automatically once downloads complete.
-
-    ### While you wait:
-    - Browse the navigation menu to see available tools
-    - Check out the Knowledge Search and Collection Management
-    - Review the system documentation
+    Start LM Studio and make sure the configured Qwen model appears in its model
+    list. It may remain unloaded until the first generation request.
     """)
 
-    # Auto-refresh
-    st.markdown("*This page will auto-refresh every 30 seconds...*")
-    time.sleep(30)
-    st.rerun()
+    if st.button("🔄 Check LM Studio again"):
+        st.rerun()
 
 else:
     # Normal main page
@@ -320,24 +314,11 @@ with st.sidebar:
     except Exception:
         st.info("💻 Platform: Detecting...")
 
-    # Quick model availability check
-    ingestion_check = model_checker.check_ingestion_requirements(include_images=True)
-    research_check = model_checker.check_research_requirements()
-
-    if ingestion_check["can_proceed"]:
-        st.success("✅ Ingestion: Ready")
+    if setup_info.get("setup_complete"):
+        st.success("✅ Default generation: Ready")
+        st.caption(f"LM Studio • {setup_info.get('default_model', 'configured model')}")
     else:
-        st.error("❌ Ingestion: Missing models")
-        with st.expander("View Details"):
-            st.markdown(model_checker.format_status_message(ingestion_check))
-
-    if research_check["local_research_available"]:
-        st.success("✅ Research: Ready")
-    elif research_check["ollama_running"]:
-        st.warning("⚠️ Research: Cloud only")
-        st.caption("Local research model not available")
-    else:
-        st.error("❌ Research: Ollama down")
+        st.error("❌ Default generation: LM Studio unavailable")
 
     st.divider()
 

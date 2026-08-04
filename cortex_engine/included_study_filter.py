@@ -1,6 +1,6 @@
 """Paper-type filter for included-study extraction results.
 
-Supports five UI checkboxes (see pages/7_Document_Extract.py):
+Supports five UI checkboxes (see cortex_pages/7_Document_Extract.py):
     all_clinical       - keep every clinical study (default on; acts as 'no filter')
     rct_only           - keep only randomized/controlled trials
     leukemia_only      - keep only leukemia (any subtype)

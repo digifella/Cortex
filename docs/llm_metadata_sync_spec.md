@@ -124,7 +124,7 @@ Modular, testable. Suggested file layout inside the existing repo:
 
 ```
 your_streamlit_app/
-├── pages/
+├── cortex_pages/
 │   └── llm_metadata_sync.py        # Streamlit page — UI only
 ├── llm_metadata_sync/
 │   ├── __init__.py
@@ -185,7 +185,7 @@ class SyncReport:
 - **`exiftool_runner.py`** — wraps `subprocess.run` for exiftool calls. Two functions: `clear_keyword_lists(target, target_type)` and `write_metadata(jpg, target, target_type, keywords, description, keep_backups)`. Returns a result object with stdout/stderr captured. Validates exiftool is on PATH at startup.
 - **`merger.py`** — pure functions. `build_keyword_union(existing, new, filter_list)` returns the deduplicated, filtered, ordered list. `read_existing_keywords(target)` reads via exiftool. `read_jpg_metadata(jpg)` reads JPG keywords + description.
 - **`sync.py`** — orchestrates a full run. Accepts config + the two paths, produces a `SyncReport`. Generator-style API so the UI can show progress per file.
-- **`pages/llm_metadata_sync.py`** — Streamlit only. Imports from the module. Handles UI state, progress bars, result display.
+- **`cortex_pages/llm_metadata_sync.py`** — Streamlit only. Imports from the module. Handles UI state, progress bars, result display.
 
 ### Configuration
 

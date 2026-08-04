@@ -59,7 +59,7 @@ def initialize_managers():
 
 st.title("Proposal Workspace")
 st.warning("**This page has been superseded by Proposal Manager.** Use the new consolidated workflow for a better experience.")
-st.page_link("pages/13_Proposal_Manager.py", label="Go to Proposal Manager", icon="📋")
+st.page_link("cortex_pages/13_Proposal_Manager.py", label="Go to Proposal Manager", icon="📋")
 st.divider()
 st.markdown("Create workspaces, upload tender documents, and bind entity profiles")
 
@@ -303,7 +303,7 @@ else:
 
             **Use when:** You want to review what was extracted from the tender document.
             """)
-            st.page_link("pages/Proposal_Chunk_Review_V2.py", label="Go to Chunk Review", icon="📋")
+            st.page_link("cortex_pages/Proposal_Chunk_Review_V2.py", label="Go to Chunk Review", icon="📋")
 
         with col2:
             st.markdown("""
@@ -313,7 +313,7 @@ else:
 
             **Use when:** You want to generate responses to tender questions.
             """)
-            st.page_link("pages/Proposal_Intelligent_Completion.py", label="Go to Intelligent Completion", icon="🧠")
+            st.page_link("cortex_pages/Proposal_Intelligent_Completion.py", label="Go to Intelligent Completion", icon="🧠")
 
         st.divider()
 

@@ -1,4 +1,4 @@
-# ## File: pages/12_Document_Dialog.py
+# ## File: cortex_pages/12_Document_Dialog.py
 # Version: v6.7.0
 # Date: 2026-01-26
 # Purpose: Conversational Q&A interface for document collections.
@@ -213,7 +213,7 @@ def initialize_session_if_needed(
         session = engine.initialize_session(collection_name)
         st.session_state.dialog_session = session
         st.session_state.dialog_messages = []
-        logger.info(f"Created new dialog session for collection '{collection_name}'")
+        logger.debug(f"Created new dialog session for collection '{collection_name}'")
 
     return st.session_state.dialog_session
 
@@ -392,7 +392,7 @@ def main():
     render_action_buttons(engine, session)
 
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__page__"}:
     main()
 
 # Consistent version footer

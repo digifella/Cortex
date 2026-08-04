@@ -21,7 +21,7 @@ Non‑Negotiables
 Key Modules
 - Ingest: `cortex_engine/ingest_cortex.py` (staging + finalization + graph build)
 - Async ingest: `cortex_engine/async_ingest.py` (adds embeddings explicitly)
-- Search UI: `pages/3_Knowledge_Search.py` (direct Chroma, GraphRAG wrapper)
+- Search UI: `cortex_pages/3_Knowledge_Search.py` (direct Chroma, GraphRAG wrapper)
 - Graph: `cortex_engine/graphrag_integration.py`, `graph_query.py`
 - Paths/utilities: `cortex_engine/utils/*`, `collection_manager.py`
 

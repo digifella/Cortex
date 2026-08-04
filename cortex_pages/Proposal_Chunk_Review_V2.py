@@ -52,7 +52,7 @@ db_path = str(resolved_root) if resolved_root else convert_windows_to_wsl_path(r
 # Initialize managers
 workspace_manager = WorkspaceManager(Path(db_path) / "workspaces")
 entity_manager = EntityProfileManager(Path(db_path))
-llm = LLMInterface(model="qwen2.5:72b-instruct-q4_K_M")
+llm = LLMInterface()
 markup_engine = MarkupEngine(entity_manager, llm)
 chunker = DocumentChunker(target_chunk_size=4000, max_chunk_size=6000)
 
@@ -150,7 +150,7 @@ st.markdown("""
 # Title
 st.markdown('<div class="main-header">📑 Tender Document Review</div>', unsafe_allow_html=True)
 st.warning("**This page has been superseded by Proposal Manager.** Use the new consolidated workflow for a better experience.")
-st.page_link("pages/13_Proposal_Manager.py", label="Go to Proposal Manager", icon="📋")
+st.page_link("cortex_pages/13_Proposal_Manager.py", label="Go to Proposal Manager", icon="📋")
 st.divider()
 st.caption("Professional batch analysis and review workflow")
 

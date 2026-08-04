@@ -198,7 +198,7 @@ class DesignAuditor:
 
 if __name__ == "__main__":
     # Run audit
-    pages_dir = Path(__file__).parent.parent / "pages"
+    pages_dir = Path(__file__).parent.parent / "cortex_pages"
     auditor = DesignAuditor(pages_dir)
 
     # Generate and save report

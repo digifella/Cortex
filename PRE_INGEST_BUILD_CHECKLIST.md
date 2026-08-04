@@ -49,7 +49,7 @@ Implement a resumable pre-ingest organizer workflow that scans source directorie
 - Initial request confirmed to proceed with implementation and maintain this checklist for crash/session recovery.
 - Phase 1 baseline implemented:
   - `cortex_engine/pre_ingest_organizer.py`
-  - `pages/2_Knowledge_Ingest.py` pre-ingest organizer UI expander and trigger
+  - `cortex_pages/2_Knowledge_Ingest.py` pre-ingest organizer UI expander and trigger
   - `tests/unit/test_pre_ingest_organizer.py`
   - `docs/PRE_INGEST_ORGANIZER_QUICKSTART.md`
 - Expanded Phase 1 UX completed:

@@ -206,7 +206,7 @@ def init_managers():
         st.session_state.pm_workspace_manager = WorkspaceManager(Path(db_path) / "workspaces")
         st.session_state.pm_entity_manager = EntityProfileManager(Path(db_path))
         st.session_state.pm_field_classifier = FieldClassifier()
-        st.session_state.pm_llm = LLMInterface(model="qwen2.5:72b-instruct-q4_K_M")
+        st.session_state.pm_llm = LLMInterface()
         st.session_state.pm_chunker = DocumentChunker(target_chunk_size=4000, max_chunk_size=6000)
         st.session_state.pm_db_path = db_path
         st.session_state.pm_export_engine = ProposalExportEngine(

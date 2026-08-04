@@ -670,5 +670,5 @@ def render_worker_queue() -> None:
             )
 
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__page__"}:
     main()

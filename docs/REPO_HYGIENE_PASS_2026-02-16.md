@@ -65,8 +65,8 @@ Tracked modified files still present from broader active streams, e.g.:
 - `cortex_engine/utils/persistent_cache.py`
 - `cortex_engine/utils/smart_model_selector.py`
 - Docker mirrors of the above
-- `pages/1_AI_Assisted_Research.py`
-- `pages/components/_Maintenance_ResetRecovery.py`
+- `cortex_pages/1_AI_Assisted_Research.py`
+- `cortex_pages/components/_Maintenance_ResetRecovery.py`
 - `requirements-docling.txt`
 - `tests/unit/test_path_utils.py`
 

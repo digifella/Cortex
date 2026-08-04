@@ -82,7 +82,7 @@ cortex_suite/
 │   ├── utils/                   # Path handling, logging, GPU, caching
 │   └── ...
 │
-├── pages/                       # Streamlit page modules registered by the router
+├── cortex_pages/                # Streamlit page modules registered by the router
 │   ├── 1_AI_Assisted_Research.py
 │   ├── 2_Knowledge_Ingest.py
 │   ├── 3_Knowledge_Search.py

@@ -264,10 +264,10 @@ YOUTUBE_API_KEY="your_google_api_key_for_youtube_search"
 GRAPHVIZ_DOT_EXECUTABLE="/usr/bin/dot"
 
 # Proposal/document generation provider for cortex_engine/llm_interface.py
-# Use "ollama" (default) or "lmstudio" (OpenAI-compatible local server)
-CORTEX_LLM_PROVIDER="ollama"
+CORTEX_LLM_PROVIDER="lmstudio"
 CORTEX_LMSTUDIO_BASE_URL="http://localhost:1234/v1"
 CORTEX_LMSTUDIO_API_KEY="lm-studio"  # optional; LM Studio commonly accepts a dummy key
+CORTEX_LMSTUDIO_MODEL="qwen3-coder-30b-a3b-instruct"
 
 # (Optional) Explicit path to Graphviz 'dot' executable to help resolve mind map issues.
 # Find this path by running `which dot` in your Ubuntu/WSL terminal.
@@ -537,7 +537,11 @@ grep -P '[^\x20-\x7E]' docker/run-cortex.bat || echo "Clean ASCII"
     -   `task_engine.py`: Backend for AI task execution in the Proposal Co-pilot.
     -   `utils.py`: Shared, low-dependency helper functions.
 
--   **`pages/`**: The individual Streamlit UI pages.
+-   **`cortex_pages/`**: The individual Streamlit UI pages registered by
+    `cortex_ui/navigation.py`. Do not rename this directory to `pages/`; that
+    reserved name enables Streamlit's legacy page discovery and conflicts with
+    the explicit router. Automatic source watching is disabled for PyTorch
+    compatibility, so restart Streamlit after editing application code.
     -   `1_AI_Assisted_Research.py`: UI for the multi-agent research engine.
     -   `2_Knowledge_Ingest.py`: UI for the three-stage document ingestion process.
     -   `3_Knowledge_Search.py`: UI for searching the knowledge base. Includes a robust fix for complex filter combinations.

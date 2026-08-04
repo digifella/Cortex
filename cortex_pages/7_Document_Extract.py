@@ -1,4 +1,4 @@
-# ## File: pages/7_Document_Extract.py
+# ## File: cortex_pages/7_Document_Extract.py
 # Version: v6.7.0
 # Date: 2026-01-29
 # Purpose: Document extraction tools — Textifier (document to Markdown) and Anonymizer.
@@ -37,6 +37,7 @@ from cortex_engine.version_config import VERSION_STRING
 from cortex_engine.journal_authority import classify_journal_authority
 from cortex_engine.preface_classification import classify_credibility_tier
 from cortex_engine.document_preface import add_document_preface
+from cortex_engine.llm_interface import DEFAULT_LMSTUDIO_MODEL
 from cortex_engine.handoff_contract import normalize_handoff_metadata, validate_research_resolve_input
 from cortex_engine.included_study_extractor import (
     IncludedStudyExtractorQuotaError,
@@ -2523,7 +2524,7 @@ def _extract_study_miner_documents(
         "use_vision": use_vision,
         "pdf_strategy": mode_map.get(pdf_mode_label, "hybrid"),
         "cleanup_provider": "lmstudio",
-        "cleanup_model": "qwen2.5:32b",
+        "cleanup_model": os.getenv("CORTEX_LMSTUDIO_MODEL", DEFAULT_LMSTUDIO_MODEL),
         "docling_timeout_seconds": float(docling_timeout_seconds),
         "image_description_timeout_seconds": float(image_timeout_seconds),
         "image_enrich_max_seconds": float(image_budget_seconds),
@@ -3201,7 +3202,7 @@ def _extract_json_block(raw: str) -> Optional[dict]:
 def _extract_preface_metadata_with_llm(file_path: str, md_content: str, source_hint: str) -> Optional[dict]:
     try:
         from cortex_engine.llm_interface import LLMInterface
-        llm = LLMInterface(model="mistral:latest", temperature=0.1)
+        llm = LLMInterface(temperature=0.1)
     except Exception as e:
         logger.warning(f"Could not initialize LLM for preface extraction: {e}")
         return None
@@ -3723,7 +3724,7 @@ def _render_textifier_tab():
         )
         cleanup_model = st.text_input(
             "Cleanup model",
-            value="qwen2.5:32b",
+            value=os.getenv("CORTEX_LMSTUDIO_MODEL", DEFAULT_LMSTUDIO_MODEL),
             key="txt_cleanup_model",
             help="Model name for markdown cleanup when using Qwen/Hybrid modes.",
         )
@@ -6488,7 +6489,7 @@ def main():
         _render_anonymizer_tab()
 
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__page__"}:
     main()
 
 # Consistent version footer

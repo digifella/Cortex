@@ -14,6 +14,10 @@ from enum import Enum
 import time
 import asyncio
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 class ServiceStatus(Enum):
     RUNNING = "running"
     STARTING = "starting"
@@ -33,6 +37,7 @@ class ModelInfo:
     size_gb: float
     download_progress: Optional[float] = None  # 0.0 to 1.0
     error_message: Optional[str] = None
+    loaded: bool = False
 
 @dataclass
 class PlatformInfo:
@@ -52,6 +57,7 @@ class BackendInfo:
 @dataclass
 class SystemHealth:
     ollama_status: ServiceStatus
+    lmstudio_status: ServiceStatus
     api_status: ServiceStatus
     models: List[ModelInfo]
     backends: List[BackendInfo]
@@ -63,16 +69,19 @@ class SystemHealth:
 
 class SystemStatusChecker:
     """Checks the status of all Cortex Suite components"""
+
+    DEFAULT_LMSTUDIO_MODEL = "qwen3-coder-30b-a3b-instruct"
     
-    REQUIRED_MODELS = [
-        ("mistral:7b-instruct-v0.3-q4_K_M", 4.4),
-        ("mistral-small3.2", 15.0),
-        ("gemma4:26b", 18.0),
-    ]
-    
-    def __init__(self, model_distribution_strategy: str = "hybrid_ollama_preferred"):
+    def __init__(self, model_distribution_strategy: str = "lmstudio_default"):
         self.ollama_url = "http://localhost:11434"
         self.api_url = "http://localhost:8000"
+        self.llm_provider = os.getenv("CORTEX_LLM_PROVIDER", "lmstudio").strip().lower()
+        self.lmstudio_base_url = os.getenv(
+            "CORTEX_LMSTUDIO_BASE_URL", "http://localhost:1234/v1"
+        ).rstrip("/")
+        self.default_lmstudio_model = os.getenv(
+            "CORTEX_LMSTUDIO_MODEL", self.DEFAULT_LMSTUDIO_MODEL
+        ).strip()
         self.hybrid_strategy = model_distribution_strategy
         self.hybrid_manager = None  # Will be initialized async
     
@@ -301,6 +310,52 @@ class SystemStatusChecker:
         
         return backends
     
+    def _lmstudio_root_url(self) -> str:
+        """Return the LM Studio server root from its OpenAI-compatible URL."""
+        if self.lmstudio_base_url.endswith("/v1"):
+            return self.lmstudio_base_url[:-3]
+        return self.lmstudio_base_url
+
+    def get_lmstudio_models(self) -> List[Dict]:
+        """Return LM Studio model metadata without requesting a model load."""
+        try:
+            response = requests.get(
+                f"{self._lmstudio_root_url()}/api/v0/models",
+                timeout=3,
+            )
+            if response.status_code == 200:
+                return response.json().get("data", [])
+        except Exception:
+            pass
+        return []
+
+    def check_lmstudio_status(self) -> ServiceStatus:
+        """Check the LM Studio OpenAI-compatible server without loading a model."""
+        try:
+            response = requests.get(f"{self.lmstudio_base_url}/models", timeout=3)
+            return ServiceStatus.RUNNING if response.status_code == 200 else ServiceStatus.ERROR
+        except requests.exceptions.ConnectionError:
+            return ServiceStatus.STOPPED
+        except Exception:
+            return ServiceStatus.ERROR
+
+    def check_lmstudio_model_status(
+        self, model_name: str
+    ) -> Tuple[ModelStatus, Optional[str], bool]:
+        """Check whether a model is registered and whether it is already loaded."""
+        models = self.get_lmstudio_models()
+        if not models:
+            if self.check_lmstudio_status() == ServiceStatus.RUNNING:
+                return ModelStatus.MISSING, "LM Studio returned no registered models", False
+            return ModelStatus.ERROR, "Cannot connect to LM Studio", False
+
+        for model in models:
+            if str(model.get("id") or "").strip() == model_name:
+                loaded = str(model.get("state") or "").lower() == "loaded"
+                return ModelStatus.AVAILABLE, None, loaded
+
+        return ModelStatus.MISSING, f"Model '{model_name}' is not registered in LM Studio", False
+
     def check_ollama_status(self) -> ServiceStatus:
         """Check if Ollama service is running"""
         try:
@@ -370,51 +425,67 @@ class SystemStatusChecker:
         platform_info = self.detect_platform_info()
         
         # Check service statuses
-        ollama_status = self.check_ollama_status()
+        # Ollama is no longer part of application startup. Specialist tools
+        # probe it on demand when a user explicitly selects an Ollama path.
+        ollama_status = ServiceStatus.STOPPED
+        if self.llm_provider == "ollama":
+            ollama_status = self.check_ollama_status()
+        lmstudio_status = self.check_lmstudio_status()
         api_status = self.check_api_status()
-        
-        if ollama_status != ServiceStatus.RUNNING:
-            error_messages.append("Ollama service is not running")
-        
-        # Check model statuses
-        models = []
-        for model_name, size_gb in self.REQUIRED_MODELS:
-            status, error = self.check_model_status(model_name)
-            models.append(ModelInfo(
-                name=model_name,
-                status=status,
-                size_gb=size_gb,
-                error_message=error
-            ))
-            
-            if status == ModelStatus.ERROR and error:
-                error_messages.append(f"Model {model_name}: {error}")
-        
-        # Check backend availability (sync wrapper for async method)
-        backends = []
-        try:
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            backends = loop.run_until_complete(self._check_backend_availability())
-            loop.close()
-        except Exception as e:
-            # Fallback to basic ollama info
-            backends = [BackendInfo(
-                name="ollama",
-                status=ollama_status,
-                model_count=len(self.get_installed_models()) if ollama_status == ServiceStatus.RUNNING else 0,
-                performance_tier="standard"
-            )]
-        
-        # Determine if setup is complete
+
+        model_status, model_error, model_loaded = self.check_lmstudio_model_status(
+            self.default_lmstudio_model
+        )
+        models = [
+            ModelInfo(
+                name=self.default_lmstudio_model,
+                status=model_status,
+                size_gb=0.0,
+                error_message=model_error,
+                loaded=model_loaded,
+            )
+        ]
+
+        if lmstudio_status != ServiceStatus.RUNNING:
+            error_messages.append(
+                f"LM Studio is not reachable at {self.lmstudio_base_url}"
+            )
+        elif model_status != ModelStatus.AVAILABLE and model_error:
+            error_messages.append(model_error)
+
+        lmstudio_models = self.get_lmstudio_models()
+        loaded_count = sum(
+            1 for model in lmstudio_models
+            if str(model.get("state") or "").lower() == "loaded"
+        )
+        backends = [
+            BackendInfo(
+                name="LM Studio",
+                status=lmstudio_status,
+                model_count=loaded_count,
+                performance_tier="premium",
+            )
+        ]
+        if self.llm_provider == "ollama" and ollama_status == ServiceStatus.RUNNING:
+            backends.append(
+                BackendInfo(
+                    name="Ollama (specialist fallback)",
+                    status=ollama_status,
+                    model_count=len(self.get_installed_models()),
+                    performance_tier="standard",
+                )
+            )
+
+        # LM Studio may load the configured model on its first generation call.
+        # Merely checking readiness must never trigger a model load or download.
         setup_complete = (
-            ollama_status == ServiceStatus.RUNNING and
-            all(model.status == ModelStatus.AVAILABLE for model in models)
+            lmstudio_status == ServiceStatus.RUNNING
+            and model_status == ModelStatus.AVAILABLE
         )
         
         return SystemHealth(
             ollama_status=ollama_status,
+            lmstudio_status=lmstudio_status,
             api_status=api_status,
             models=models,
             backends=backends,
@@ -428,32 +499,28 @@ class SystemStatusChecker:
     def get_setup_progress(self) -> Dict:
         """Get setup progress as a percentage and status message"""
         health = self.get_system_health()
-        
-        total_steps = 2 + len(self.REQUIRED_MODELS)  # Ollama + API + models
-        completed_steps = 0
-        
-        if health.ollama_status == ServiceStatus.RUNNING:
-            completed_steps += 1
-        
-        if health.api_status == ServiceStatus.RUNNING:
-            completed_steps += 1
-        
-        completed_steps += sum(1 for model in health.models 
-                             if model.status == ModelStatus.AVAILABLE)
-        
-        progress_percent = (completed_steps / total_steps) * 100
+
+        completed_steps = int(health.lmstudio_status == ServiceStatus.RUNNING)
+        completed_steps += int(
+            bool(health.models)
+            and health.models[0].status == ModelStatus.AVAILABLE
+        )
+        progress_percent = (completed_steps / 2) * 100
         
         # Generate status message
         if health.setup_complete:
-            status_message = "✅ Setup complete! All features are available."
-        elif health.ollama_status != ServiceStatus.RUNNING:
-            status_message = "🤖 Starting Ollama service..."
+            loaded_suffix = "loaded" if health.models[0].loaded else "available; loads on first use"
+            status_message = (
+                f"✅ LM Studio ready: {health.models[0].name} ({loaded_suffix})"
+            )
+        elif health.lmstudio_status != ServiceStatus.RUNNING:
+            status_message = "🤖 Waiting for the LM Studio server..."
         elif any(model.status == ModelStatus.MISSING for model in health.models):
-            downloading_models = [model.name for model in health.models 
-                                if model.status == ModelStatus.MISSING]
-            status_message = f"⬇️ Downloading AI models: {', '.join(downloading_models)}"
+            status_message = (
+                f"⚠️ Default LM Studio model is not registered: {self.default_lmstudio_model}"
+            )
         else:
-            status_message = "🔄 Finalizing setup..."
+            status_message = "🔄 Checking LM Studio readiness..."
         
         # Generate platform configuration message
         platform_info = health.platform_info
@@ -471,6 +538,9 @@ class SystemStatusChecker:
             "platform_config": platform_config,
             "setup_complete": health.setup_complete,
             "ollama_running": health.ollama_status == ServiceStatus.RUNNING,
+            "lmstudio_running": health.lmstudio_status == ServiceStatus.RUNNING,
+            "llm_provider": self.llm_provider,
+            "default_model": self.default_lmstudio_model,
             "api_running": health.api_status == ServiceStatus.RUNNING,
             "hybrid_strategy": health.hybrid_strategy,
             "backends": [
@@ -495,7 +565,8 @@ class SystemStatusChecker:
                     "name": model.name,
                     "status": model.status.value,
                     "size_gb": model.size_gb,
-                    "available": model.status == ModelStatus.AVAILABLE
+                    "available": model.status == ModelStatus.AVAILABLE,
+                    "loaded": model.loaded,
                 }
                 for model in health.models
             ],
@@ -505,6 +576,6 @@ class SystemStatusChecker:
 # Global instance for easy access
 system_status = SystemStatusChecker()
 
-def get_system_status_with_strategy(strategy: str = "hybrid_ollama_preferred") -> SystemStatusChecker:
+def get_system_status_with_strategy(strategy: str = "lmstudio_default") -> SystemStatusChecker:
     """Get system status checker with specific hybrid strategy."""
     return SystemStatusChecker(model_distribution_strategy=strategy)

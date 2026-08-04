@@ -804,7 +804,7 @@ def show_recommendations(analytics: KnowledgeAnalytics):
             elif rel_to_entity_ratio > 3:
                 st.success("✅ Rich relationship network")
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__page__"}:
     main()
 
 # Consistent version footer

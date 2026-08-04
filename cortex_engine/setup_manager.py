@@ -742,6 +742,26 @@ No valid API keys were provided. You can:
     
     async def _step_model_installation(self, user_input: Dict[str, Any]) -> SetupStepResult:
         """Install required AI models."""
+        if os.getenv("CORTEX_LLM_PROVIDER", "lmstudio").strip().lower() == "lmstudio":
+            model = os.getenv(
+                "CORTEX_LMSTUDIO_MODEL", "qwen3-coder-30b-a3b-instruct"
+            ).strip()
+            return SetupStepResult(
+                step=SetupStep.MODEL_INSTALLATION,
+                status=SetupStatus.COMPLETED,
+                message=(
+                    "✅ **LM Studio configuration selected**\n\n"
+                    f"Cortex will use `{model}` through the configured LM Studio server. "
+                    "No Ollama models will be downloaded by setup."
+                ),
+                details={
+                    "provider": "lmstudio",
+                    "model": model,
+                    "installed_models": [],
+                },
+                next_step=SetupStep.SYSTEM_VALIDATION,
+            )
+
         strategy = self._progress.configuration.get("model_distribution_strategy", "auto_optimal")
         
         if "install_models" not in user_input:
@@ -898,6 +918,27 @@ Your AI models are ready for use!
     
     async def _step_system_validation(self) -> SetupStepResult:
         """Validate the entire system is working."""
+        if os.getenv("CORTEX_LLM_PROVIDER", "lmstudio").strip().lower() == "lmstudio":
+            from .system_status import SystemStatusChecker
+
+            progress = SystemStatusChecker().get_setup_progress()
+            model = progress.get("default_model", "configured model")
+            ready = bool(progress.get("setup_complete"))
+            result = SetupStepResult(
+                step=SetupStep.SYSTEM_VALIDATION,
+                status=SetupStatus.COMPLETED,
+                message=(
+                    f"{'✅' if ready else '⚠️'} **LM Studio validation "
+                    f"{'complete' if ready else 'needs attention'}**\n\n"
+                    f"Default model: `{model}`\n\n"
+                    f"{progress.get('status_message', '')}"
+                ),
+                details=progress,
+                next_step=SetupStep.COMPLETE,
+            )
+            self._update_progress(SetupStep.SYSTEM_VALIDATION, result)
+            return result
+
         validation_results = {}
         all_passed = True
         

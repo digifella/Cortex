@@ -175,7 +175,7 @@ class DocumentDialogEngine:
         doc_ids = mgr.get_doc_ids_by_name(collection_name)
 
         if not doc_ids:
-            logger.warning(f"Collection '{collection_name}' is empty or not found")
+            logger.debug(f"Collection '{collection_name}' is empty or not found")
 
         session = DialogSession(
             session_id=str(uuid.uuid4()),
@@ -184,7 +184,7 @@ class DocumentDialogEngine:
             model_name=self.model_name
         )
 
-        logger.info(f"Initialized dialog session {session.session_id} with {len(doc_ids)} documents")
+        logger.debug(f"Initialized dialog session {session.session_id} with {len(doc_ids)} documents")
         return session
 
     def query(

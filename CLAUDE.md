@@ -11,7 +11,9 @@ The Cortex Suite is a Streamlit-based AI-powered knowledge management and propos
 ### Core Components
 - **Streamlit Application**: `Cortex_Suite.py` - Main entry point with multi-page UI
 - **Backend Engine**: `cortex_engine/` - Core business logic and data processing
-- **Page Components**: `pages/` - Individual UI pages for different workflows
+- **Page Components**: `cortex_pages/` - Individual UI pages for different workflows.
+  Keep these outside a top-level `pages/` directory: that name activates
+  Streamlit's legacy auto-discovery and conflicts with `st.navigation`.
 - **Knowledge Storage**: ChromaDB vector store + NetworkX knowledge graph
 
 ### Key Workflows
@@ -116,6 +118,22 @@ Do not add new `/.dockerenv` branches. In WSL and on the host, always use
 **GOLDEN RULE (unchanged)**: never hardcode paths — always use the user's
 configured database path.
 
+## 🤖 Default text generation
+
+The shared Cortex text interface defaults to the OpenAI-compatible LM Studio
+server and the registered Qwen 30B model:
+
+```bash
+CORTEX_LLM_PROVIDER=lmstudio
+CORTEX_LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
+CORTEX_LMSTUDIO_MODEL=qwen3-coder-30b-a3b-instruct
+```
+
+Startup checks that LM Studio is reachable and that the model is registered. It
+must not pull Ollama models or load the Qwen model merely to render the UI. LM
+Studio may load it on the first real generation request. Specialist features
+with explicit Ollama model selectors remain opt-in fallbacks.
+
 ## 👁️ Vision (image descriptions)
 
 `DocumentTextifier.describe_image` tries providers in this order:
@@ -131,15 +149,16 @@ endpoint is unreachable, it returns `""` and the chain falls through to Ollama �
 so this is a silent no-op on machines without LM Studio.
 
 ```bash
-CORTEX_LMSTUDIO_BASE_URL=http://192.168.0.118:1234/v1   # in .env — see below
+CORTEX_LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1   # in .env — nemoclaw-lmstudio-relay to the Windows host (DHCP pin removed 2026-08-02; never hardcode 192.168.x)
 CORTEX_LMSTUDIO_VISION_MODEL=...                        # optional: pin a model, skips probing
 ```
 
 Gotchas:
 
-- **LM Studio runs on the Windows host, not in WSL**, so the `http://localhost:1234/v1`
-  default does NOT reach it. `.env` sets the LAN address. If that IP changes,
-  vision silently falls back to Ollama — check `curl http://<host>:1234/api/v0/models`.
+- **LM Studio runs on the Windows host, not in WSL.** The nemoclaw relay exposes
+  it at `http://127.0.0.1:1234/v1`, avoiding a hard-coded DHCP address. If the
+  relay is down, vision silently falls back to Ollama — check
+  `curl http://127.0.0.1:1234/api/v0/models`.
 - **The loaded/type fields are only on the native `/api/v0/models` API**, not `/v1`.
 - **`reasoning_effort: "none"` is mandatory.** Without it qwen3.6 spends the whole
   token budget on reasoning and returns empty content — the same trap the wiki loop
@@ -239,11 +258,8 @@ pip install -r requirements.txt
 # Download spaCy language model
 python -m spacy download en_core_web_sm
 
-# Install required model for proposals
-ollama pull mistral-small3.2
-
-# Install required vision model for photo/image description (6.1GB)
-ollama pull qwen3-vl:8b
+# Start LM Studio with its local-server option enabled. Cortex defaults to the
+# registered qwen3-coder-30b-a3b-instruct model through the local relay.
 
 # Start the application
 streamlit run Cortex_Suite.py

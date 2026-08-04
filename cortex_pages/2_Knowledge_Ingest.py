@@ -1,4 +1,4 @@
-# ## File: pages/2_Knowledge_Ingest.py [MAIN VERSION]
+# ## File: cortex_pages/2_Knowledge_Ingest.py [MAIN VERSION]
 # Version: v6.7.0
 # Date: 2026-01-27
 # Purpose: GUI for knowledge base ingestion.
@@ -74,38 +74,38 @@ from cortex_engine.model_manager import (
     get_model_info_summary,
     get_pytorch_cuda_install_command
 )
-from pages.components._Ingest_Maintenance import (
+from cortex_pages.components._Ingest_Maintenance import (
     render_maintenance_link,
     check_recovery_needed as shared_check_recovery_needed,
     render_recovery_section as shared_render_recovery_section,
     render_recovery_quick_actions,
     recover_collection_from_ingest_log,
 )
-from pages.components._Ingest_Workflow import (
+from cortex_pages.components._Ingest_Workflow import (
     detect_orphaned_session_from_log,
     render_orphaned_session_notice,
     render_stage as render_ingest_stage,
 )
-from pages.components._Ingest_Batch import (
+from cortex_pages.components._Ingest_Batch import (
     render_active_batch_management as shared_render_active_batch_management,
     render_batch_processing_ui as shared_render_batch_processing_ui,
 )
-from pages.components._Ingest_Processing import (
+from cortex_pages.components._Ingest_Processing import (
     render_log_and_review_ui as shared_render_log_and_review_ui,
 )
-from pages.components._Ingest_Review import (
+from cortex_pages.components._Ingest_Review import (
     render_metadata_review_ui as shared_render_metadata_review_ui,
 )
-from pages.components._Ingest_DocTypes import (
+from cortex_pages.components._Ingest_DocTypes import (
     render_document_type_management as shared_render_document_type_management,
 )
-from pages.components._Ingest_Recovery import (
+from cortex_pages.components._Ingest_Recovery import (
     render_recovery_panels as shared_render_recovery_panels,
 )
-from pages.components._Ingest_ServiceStatus import (
+from cortex_pages.components._Ingest_ServiceStatus import (
     render_ollama_status_panel as shared_render_ollama_status_panel,
 )
-from pages.components._Ingest_Shell import (
+from cortex_pages.components._Ingest_Shell import (
     render_ingest_page_shell as shared_render_ingest_page_shell,
 )
 
@@ -707,7 +707,7 @@ def initialize_state(force_reset: bool = False):
 
 # Path handling now handled by centralized utilities
 
-# Note: delete_knowledge_base function moved to pages/6_Maintenance.py
+# Note: delete_knowledge_base function moved to cortex_pages/6_Maintenance.py
 
 @st.cache_data
 def get_full_file_content(file_path_str: str) -> str:
@@ -1134,7 +1134,7 @@ def resume_from_scan_config(batch_manager: BatchState, scan_config: dict) -> boo
         logger.error(f"Auto-resume failed: {e}")
         return False
 
-# Note: clear_ingestion_log_file function moved to pages/6_Maintenance.py
+# Note: clear_ingestion_log_file function moved to cortex_pages/6_Maintenance.py
 
 def render_model_status_bar():
     """Render persistent model configuration status bar at top of page"""
@@ -2871,7 +2871,7 @@ def render_config_and_scan_ui():
         st.info("🔎 Select files or directories above to enable scanning.")
 
     render_maintenance_link(
-        "pages/6_Maintenance.py",
+        "cortex_pages/6_Maintenance.py",
         button_key="ingest_open_maintenance_top",
     )
 

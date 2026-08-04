@@ -96,7 +96,7 @@ class PerformanceMonitor:
         self._session_start = time.time()
         self._session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        logger.info(f"📊 Performance monitor initialized (session: {self._session_id})")
+        logger.debug(f"Performance monitor initialized (session: {self._session_id})")
 
     def record_operation(
         self,

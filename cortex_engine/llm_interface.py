@@ -15,13 +15,16 @@ from .utils import get_logger
 
 logger = get_logger(__name__)
 
+DEFAULT_LMSTUDIO_MODEL = "qwen3-coder-30b-a3b-instruct"
+DEFAULT_OLLAMA_MODEL = "mistral-small3.2"
+
 
 class LLMInterface:
     """Simple LLM interface using Ollama or LM Studio (OpenAI-compatible)."""
 
     def __init__(
         self,
-        model: str = "mistral-small3.2",
+        model: Optional[str] = None,
         temperature: float = 0.7,
         request_timeout: float = 90.0,
         provider: Optional[str] = None,
@@ -32,17 +35,23 @@ class LLMInterface:
         Initialize LLM interface.
 
         Args:
-            model: Model name
+            model: Optional model override. Provider defaults are used when omitted.
             temperature: Generation temperature
             request_timeout: HTTP timeout in seconds
             provider: Optional provider override (ollama|lmstudio)
             base_url: Optional provider base URL override
             api_key: Optional provider API key override
         """
-        self.model = model
         self.temperature = temperature
         self.request_timeout = request_timeout
-        self.provider = (provider or os.getenv("CORTEX_LLM_PROVIDER", "ollama")).strip().lower()
+        self.provider = (provider or os.getenv("CORTEX_LLM_PROVIDER", "lmstudio")).strip().lower()
+
+        if model:
+            self.model = model
+        elif self.provider == "lmstudio":
+            self.model = os.getenv("CORTEX_LMSTUDIO_MODEL", DEFAULT_LMSTUDIO_MODEL).strip()
+        else:
+            self.model = os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL).strip()
 
         if self.provider == "lmstudio":
             lmstudio_base_url = (base_url or os.getenv("CORTEX_LMSTUDIO_BASE_URL", "http://localhost:1234/v1")).strip()
@@ -54,7 +63,7 @@ class LLMInterface:
             raise ValueError("Unsupported provider. Use 'ollama' or 'lmstudio'.")
 
         logger.info(
-            f"LLMInterface initialized with provider={self.provider}, model={model} (timeout={request_timeout}s)"
+            f"LLMInterface initialized with provider={self.provider}, model={self.model} (timeout={request_timeout}s)"
         )
 
     def generate(
@@ -94,6 +103,7 @@ class LLMInterface:
                     messages=messages,
                     temperature=self.temperature,
                     max_tokens=max_tokens or 2048,
+                    extra_body={"reasoning_effort": "none"},
                 )
                 content = (response.choices[0].message.content or "").strip()
                 return content

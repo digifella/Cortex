@@ -1,4 +1,4 @@
-# ## File: pages/14_Document_Summarizer.py
+# ## File: cortex_pages/14_Document_Summarizer.py
 # Version: v6.7.0
 # Date: 2026-01-26
 # Purpose: Advanced Document Summarizer with multiple detail levels.
@@ -660,11 +660,11 @@ def display_summary_results(result: SummaryResult):
 
         with col_nav1:
             if st.button("📥 Go to Knowledge Ingest", use_container_width=True):
-                st.switch_page("pages/2_Knowledge_Ingest.py")
+                st.switch_page("cortex_pages/2_Knowledge_Ingest.py")
 
         with col_nav2:
             if st.button("💬 Go to Document Dialog", use_container_width=True):
-                st.switch_page("pages/12_Document_Dialog.py")
+                st.switch_page("cortex_pages/12_Document_Dialog.py")
 
         st.caption("💡 This page is for quick one-off analysis. For persistent knowledge base Q&A, use the ingest workflow above.")
 
@@ -706,7 +706,7 @@ def display_summary_results(result: SummaryResult):
         # Option to save to knowledge base (future feature)
         st.button("💾 Save to Knowledge Base", use_container_width=True, disabled=True, help="Coming soon: Save summaries directly to your knowledge base")
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__page__"}:
     main()
 
 # Consistent version footer

@@ -6,7 +6,7 @@ Purpose: document the local Cortex workflow for reviewing `research_resolve_bund
 
 Open:
 
-- `pages/7_Document_Extract.py`
+- `cortex_pages/7_Document_Extract.py`
 - tab: `Research Resolver`
 - section: `Review Retrieval Results`
 

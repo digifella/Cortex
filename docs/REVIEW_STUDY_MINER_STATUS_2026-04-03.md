@@ -4,7 +4,7 @@ Date: 2026-04-03
 
 ## Current State
 
-The `Study Miner` workflow in [pages/7_Document_Extract.py](/home/longboardfella/cortex_suite/pages/7_Document_Extract.py) now supports:
+The `Study Miner` workflow in [cortex_pages/7_Document_Extract.py](/home/longboardfella/cortex_suite/cortex_pages/7_Document_Extract.py) now supports:
 
 - batch review screening for likely systematic reviews
 - human confirmation of which reviews to mine

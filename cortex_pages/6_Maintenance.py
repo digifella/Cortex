@@ -1,4 +1,4 @@
-# ## File: pages/6_Maintenance.py
+# ## File: cortex_pages/6_Maintenance.py
 # Version: v6.7.0
 # Date: 2026-01-17
 # Purpose: Consolidated maintenance and administrative functions for the Cortex Suite.
@@ -26,22 +26,22 @@ import contextlib
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
-from pages.components._Maintenance_ResetRecovery import (
+from cortex_pages.components._Maintenance_ResetRecovery import (
     render_reset_recovery_section as shared_render_reset_recovery_section,
 )
-from pages.components._Maintenance_HealthCheck import (
+from cortex_pages.components._Maintenance_HealthCheck import (
     render_database_health_check_section as shared_render_database_health_check_section,
 )
-from pages.components._Maintenance_EmbeddingStatus import (
+from cortex_pages.components._Maintenance_EmbeddingStatus import (
     render_embedding_model_status_panel as shared_render_embedding_model_status_panel,
 )
-from pages.components._Maintenance_EmbeddingInspector import (
+from cortex_pages.components._Maintenance_EmbeddingInspector import (
     render_database_embedding_inspector_panel as shared_render_database_embedding_inspector_panel,
 )
-from pages.components._Maintenance_PathTools import (
+from cortex_pages.components._Maintenance_PathTools import (
     render_database_path_tools as shared_render_database_path_tools,
 )
-from pages.components._Maintenance_Dedup import (
+from cortex_pages.components._Maintenance_Dedup import (
     render_database_dedup_section as shared_render_database_dedup_section,
 )
 
@@ -2356,7 +2356,7 @@ def main():
         
         st.markdown(f"**Page Version:** {PAGE_VERSION} | **Date:** 2025-08-27")
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__page__"}:
     main()
 
 # Consistent version footer

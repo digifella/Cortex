@@ -2065,5 +2065,5 @@ def main() -> None:
     _render_page_footer()
 
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__page__"}:
     main()

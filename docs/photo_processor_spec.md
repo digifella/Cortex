@@ -1,6 +1,6 @@
 # Photo Processor — Enrichment Stage Spec
 
-Tab 1 of `pages/20_Photo_Metadata_Tools.py`. Enriches Lightroom-exported JPGs in place with resolved location metadata, an AI-generated description, and keywords — producing the tagged JPGs that Tab 2 (LLM Metadata Sync) later splices back into the catalog sources.
+Tab 1 of `cortex_pages/20_Photo_Metadata_Tools.py`. Enriches Lightroom-exported JPGs in place with resolved location metadata, an AI-generated description, and keywords — producing the tagged JPGs that Tab 2 (LLM Metadata Sync) later splices back into the catalog sources.
 
 This document was written retrospectively. The tab was moved verbatim out of `7_Document_Extract.py` (see `docs/superpowers/specs/2026-04-25-photo-metadata-tools-page-design.md`), and that migration spec deliberately recorded no behaviour — "renders identically to today". This fills that gap.
 

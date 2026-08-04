@@ -439,5 +439,5 @@ def main():
             st.json(signal)
 
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__page__"}:
     main()

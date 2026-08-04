@@ -103,7 +103,7 @@ def _extract_keywords_simple(md_content: str, limit: int = 8) -> List[str]:
 
 def _extract_preface_metadata_with_llm(file_path: str, md_content: str, source_hint: str) -> Optional[dict]:
     try:
-        llm = LLMInterface(model="mistral:latest", temperature=0.1, request_timeout=60.0)
+        llm = LLMInterface(temperature=0.1, request_timeout=60.0)
     except Exception as e:
         logger.warning(f"Could not initialize LLM for preface extraction: {e}")
         return None

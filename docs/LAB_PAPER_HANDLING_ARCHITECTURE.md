@@ -184,7 +184,7 @@ Primary role:
 Implemented in:
 
 - website review stage, documented in [RETRIEVAL_REVIEW_STAGE_SPEC.md](/home/longboardfella/cortex_suite/docs/RETRIEVAL_REVIEW_STAGE_SPEC.md)
-- local Streamlit stage in [7_Document_Extract.py](/home/longboardfella/cortex_suite/pages/7_Document_Extract.py), documented in [STREAMLIT_RETRIEVAL_REVIEW_WORKFLOW.md](/home/longboardfella/cortex_suite/docs/STREAMLIT_RETRIEVAL_REVIEW_WORKFLOW.md)
+- local Streamlit stage in [7_Document_Extract.py](/home/longboardfella/cortex_suite/cortex_pages/7_Document_Extract.py), documented in [STREAMLIT_RETRIEVAL_REVIEW_WORKFLOW.md](/home/longboardfella/cortex_suite/docs/STREAMLIT_RETRIEVAL_REVIEW_WORKFLOW.md)
 
 This exists because publisher access is the weakest part of automation.
 

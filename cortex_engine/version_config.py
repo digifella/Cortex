@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.8.0"
+CORTEX_VERSION = "6.8.1"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 8,
-    "patch": 0,
+    "patch": 1,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,20 +25,22 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-08-04",
-    "release_name": "Grouped Streamlit Navigation",
-    "description": "Organises Cortex Suite pages into a curated, task-focused navigation structure.",
+    "release_name": "LM Studio Startup Default",
+    "description": "Uses LM Studio with Qwen 30B for shared generation without obsolete Ollama startup gating.",
     "breaking_changes": [],
-    "new_features": [
-        "Explicit Streamlit navigation grouped into Start, Core Workflow, Research & Documents, Media & Metadata, Proposals, Specialist Tools, and System sections.",
-    ],
+    "new_features": [],
     "improvements": [
-        "Moved the home dashboard into cortex_ui so Cortex_Suite.py remains a small application shell.",
-        "Removed superseded proposal pages and duplicate compatibility surfaces from the visible sidebar while retaining their files.",
-        "Centralised page configuration and navigation metadata.",
+        "The shared LLM interface now defaults to LM Studio and qwen3-coder-30b-a3b-instruct.",
+        "Startup readiness checks inspect LM Studio registration without loading or downloading a model.",
+        "The setup wizard skips Ollama model installation when LM Studio is selected.",
+        "Page modules now live outside Streamlit's reserved pages directory when using the explicit router.",
+        "Routine page initialization messages are logged at quieter severity levels.",
     ],
     "bug_fixes": [
-        "Replaced the broken Maintenance terminal page link with guidance to the integrated Terminal tab.",
-        "Updated the Setup Wizard proposal link to the canonical Proposal Manager.",
+        "Removed the misleading startup claim that missing legacy Ollama models were downloading.",
+        "Removed the blocking 30-second startup refresh loop.",
+        "Routed pages now execute their UI entry points under Streamlit's explicit navigation runtime.",
+        "Disabled Streamlit source watching to prevent false torch.classes path errors.",
     ],
 }
 

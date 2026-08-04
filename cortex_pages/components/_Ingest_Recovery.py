@@ -30,7 +30,7 @@ def render_recovery_panels(
         shared_render_recovery_section_fn(
             check_recovery_needed_fn=_check_recovery_needed,
             config_manager_cls=config_manager_cls,
-            maintenance_page="pages/6_Maintenance.py",
+            maintenance_page="cortex_pages/6_Maintenance.py",
             logger=logger,
         )
 

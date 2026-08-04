@@ -1,2 +1,5 @@
 [server]
-fileWatcherType = "poll"
+# PyTorch exposes a dynamic ``torch.classes`` namespace that Streamlit's source
+# watcher mistakes for a Python package. Cortex Suite is run as an application,
+# so automatic source-code reloads are less valuable than clean, stable logs.
+fileWatcherType = "none"

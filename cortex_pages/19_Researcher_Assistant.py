@@ -51,7 +51,7 @@ def main() -> None:
         _MODULE._render_url_ingestor_tab()
 
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__page__"}:
     main()
 
 try:

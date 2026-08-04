@@ -767,15 +767,15 @@ def display_step_complete():
     
     with col1:
         if st.button("📚 Start with Knowledge Ingest", use_container_width=True):
-            st.switch_page("pages/2_Knowledge_Ingest.py")
+            st.switch_page("cortex_pages/2_Knowledge_Ingest.py")
     
     with col2:
         if st.button("🤖 Try AI Research", use_container_width=True):
-            st.switch_page("pages/1_AI_Assisted_Research.py")
+            st.switch_page("cortex_pages/1_AI_Assisted_Research.py")
     
     with col3:
         if st.button("📝 Generate Proposal", use_container_width=True):
-            st.switch_page("pages/13_Proposal_Manager.py")
+            st.switch_page("cortex_pages/13_Proposal_Manager.py")
 
 def display_debug_log(logs: List[str]):
     """Display debug log window."""

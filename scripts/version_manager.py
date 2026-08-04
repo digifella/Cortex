@@ -61,11 +61,11 @@ class VersionManager:
                 print(f"⚠️  File not found: {file_path}")
         
         # Check all page files
-        pages_dir = self.project_root / "pages"
+        pages_dir = self.project_root / "cortex_pages"
         if pages_dir.exists():
             for page_file in pages_dir.glob("*.py"):
                 if not self._check_file_version(page_file, current_version):
-                    inconsistent_files.append(f"pages/{page_file.name}")
+                    inconsistent_files.append(f"cortex_pages/{page_file.name}")
         
         if inconsistent_files:
             print(f"❌ Version inconsistencies found in {len(inconsistent_files)} files:")
@@ -249,7 +249,7 @@ class VersionManager:
 
     def _update_page_files(self, version: str) -> bool:
         """Update version in page files"""
-        pages_dir = self.project_root / "pages"
+        pages_dir = self.project_root / "cortex_pages"
         if not pages_dir.exists():
             return False
         

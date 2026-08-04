@@ -17,7 +17,7 @@ Improve Cortex Suite ingestion quality and speed by adding a pre-ingestion organ
 
 Existing capabilities already provide a strong base:
 
-- `pages/2_Knowledge_Ingest.py`
+- `cortex_pages/2_Knowledge_Ingest.py`
   - recursive directory scanning and pre-filters
   - common-folder exclusion
   - pattern exclusion
@@ -28,7 +28,7 @@ Existing capabilities already provide a strong base:
   - duplicate guards based on `doc_id` hash
 - `cortex_engine/document_type_manager.py`
   - keyword-based document type suggestions
-- `credibility_spec.md`, `pages/6_Maintenance.py`
+- `credibility_spec.md`, `cortex_pages/6_Maintenance.py`
   - credibility and source-integrity normalization/retrofit patterns
 - Search + synthesizer paths consume metadata filters (credibility and source integrity in places)
 
@@ -66,7 +66,7 @@ For each candidate file, collect:
 
 - path, filename, extension, size, modified time
 - file hash (`get_file_hash`) for exact dedupe
-- lightweight text sample (first N chars/pages/paragraphs)
+- lightweight text sample (first N chars/cortex_pages/paragraphs)
 - header/footer/title tokens where possible (see sensitivity section)
 
 Output to external DB root, not repo:

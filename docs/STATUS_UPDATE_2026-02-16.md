@@ -13,7 +13,7 @@
    - `pdf_textify` end-to-end website -> cortex -> website working
    - `url_ingest` handler added and working
 6. Queue visibility and control:
-   - New `Queue Monitor` page (`pages/16_Queue_Monitor.py`)
+   - New `Queue Monitor` page (`cortex_pages/16_Queue_Monitor.py`)
    - Worker telemetry store (`cortex_engine/queue_monitor.py`)
    - Cancel/clear controls and event history
 7. Ingestion consistency:

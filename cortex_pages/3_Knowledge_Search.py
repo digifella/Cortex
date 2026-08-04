@@ -1,4 +1,4 @@
-# ## File: pages/3_Knowledge_Search.py
+# ## File: cortex_pages/3_Knowledge_Search.py
 # Version: v6.7.0
 # Date: 2026-01-28
 # Purpose: Advanced knowledge search interface with vector + graph search capabilities.
@@ -2730,5 +2730,5 @@ def main():
         pass
 
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__page__"}:
     main()

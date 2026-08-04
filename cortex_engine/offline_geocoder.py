@@ -38,7 +38,7 @@ def _load() -> bool:
         import pycountry  # noqa: WPS433
     except ImportError as exc:
         _import_failed = True
-        logger.warning(
+        logger.debug(
             "Offline geocoding unavailable (%s). Install with: "
             "pip install reverse_geocoder pycountry",
             exc,

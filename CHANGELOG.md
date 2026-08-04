@@ -6,6 +6,25 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## v6.8.1 - 2026-08-04
+
+### LM Studio Startup Default
+
+Uses LM Studio with Qwen 30B for shared generation without obsolete Ollama startup gating.
+
+### 🚀 Improvements
+- The shared LLM interface now defaults to LM Studio and `qwen3-coder-30b-a3b-instruct`.
+- Startup readiness checks inspect LM Studio registration without loading or downloading a model.
+- The setup wizard skips Ollama model installation when LM Studio is selected.
+- Moved routed modules from the reserved `pages/` directory to `cortex_pages/`.
+- Reduced routine page initialization log noise.
+
+### 🐛 Bug Fixes
+- Removed the misleading startup claim that missing legacy Ollama models were downloading.
+- Removed the blocking 30-second startup refresh loop.
+- Fixed blank Document Processing, Document Summarizer, Document Dialog, and other routed pages under grouped Streamlit navigation.
+- Disabled Streamlit source watching to prevent false `torch.classes` path errors.
+
 ## v6.8.0 - 2026-08-04
 
 ### Grouped Streamlit Navigation

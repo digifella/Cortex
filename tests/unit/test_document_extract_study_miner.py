@@ -11,7 +11,7 @@ import pytest
 
 
 def _load_document_extract_module():
-    path = Path("/home/longboardfella/cortex_suite/pages/7_Document_Extract.py")
+    path = Path(__file__).resolve().parents[2] / "cortex_pages/7_Document_Extract.py"
     spec = importlib.util.spec_from_file_location("doc_extract_page", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
