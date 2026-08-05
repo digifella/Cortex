@@ -1,0 +1,20 @@
+[Unit]
+Description=Hermes fixed-recipient document delivery broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/home/longboardfella/cortex_suite/worker/config.env
+ExecStart=/home/longboardfella/cortex_suite/venv/bin/python /home/longboardfella/cortex_suite/worker/hermes_delivery_service.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/longboardfella/vault-rag-db
+
+[Install]
+WantedBy=default.target
