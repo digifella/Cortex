@@ -6,6 +6,21 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Hermes fixed-recipient document delivery
+
+- Added a Tailscale-only Fastfella broker for outbound Hermes attachments using
+  a dedicated Microsoft 365 shared mailbox and Exchange Application RBAC.
+- Fixed the recipient in protected host configuration and rejected all request
+  attempts to supply To, CC, BCC, reply-to, or another destination.
+- Added attachment type/size validation, hourly rate limiting, redacted provider
+  failures, content-free SHA-256 audit records, and a hardened systemd user unit.
+- Added an SP4 client and Hermes plugin policy requiring a new human approval
+  for every email request while blocking direct broker and credential access.
+- Added an interactive secret-safe configurator that prevents the sender shared
+  mailbox from being accidentally configured as its own destination.
+- Documented provisioning, recovery, secret rotation, revocation, verification,
+  Outlook expectations, and the successful 2026-08-05 commissioning test.
+
 ## v6.8.1 - 2026-08-04
 
 ### LM Studio Startup Default

@@ -1,0 +1,3 @@
+name: email-delivery-approval
+version: "1.0"
+description: Require a fresh human approval for every fixed-recipient document delivery

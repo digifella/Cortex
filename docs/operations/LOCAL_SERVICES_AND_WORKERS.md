@@ -36,6 +36,7 @@ All units live in `~/.config/systemd/user/`. Backups checked into
 | `cortex-uvicorn.service` | `cortex_suite/api/main.py` | Cortex Suite HTTP API on `0.0.0.0:8000`. | yes |
 | `cortex-intel-mailbox.service` | `cortex_suite/worker/intel_mailbox_worker.py` | Polls the `intel@` mailbox (Market Radar intel notes). Continuous loop with internal poll interval. | yes |
 | `cortex-notes-mailbox.service` | `cortex_suite/worker/notes_mailbox_worker.py` | Polls the `notes@` mailbox (note ingestion to AI-Vault). Continuous loop. | yes |
+| `hermes-delivery.service` | `cortex_suite/worker/hermes_delivery_service.py` | Tailscale-only, fixed-recipient document delivery broker for the SP4 Hermes agent. | yes |
 | `nemoclaw-lab-mailbox-worker.service` (+ `.timer`) | `cortex_suite/worker/lab_mailbox_worker.py --once` | Triggered by the timer **every 2 minutes**. Polls `lab@` mailbox, fetches attachments via Graph (when `LAB_FETCH_ATTACHMENTS=1`), and posts each email to the website's job webhook. | yes (timer) |
 | `lbf-market-radar-worker.service` | `longboardfella_website/worker/worker.py` | Market Radar / signal_episode / portal_classify worker (separate `SUPPORTED_TYPES` from cortex-queue-worker — they don't overlap). | **disabled** by default |
 
@@ -76,6 +77,7 @@ Restart the relevant service so the new code is loaded into memory:
 systemctl --user restart cortex-queue-worker      # for handler / worker.py changes
 systemctl --user restart cortex-intel-mailbox     # for intel_mailbox_worker.py changes
 systemctl --user restart cortex-notes-mailbox     # for notes_mailbox_worker.py changes
+systemctl --user restart hermes-delivery          # for hermes_delivery_service.py/config changes
 systemctl --user restart cortex-uvicorn           # for api/* changes
 ```
 
@@ -188,6 +190,7 @@ systemctl --user enable --now \
     cortex-uvicorn \
     cortex-intel-mailbox \
     cortex-notes-mailbox \
+    hermes-delivery \
     nemoclaw-lab-mailbox-worker.timer
 # Optionally:
 # systemctl --user enable --now lbf-market-radar-worker
