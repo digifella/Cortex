@@ -69,6 +69,43 @@ def test_write_metadata_png_uses_xmp_only(monkeypatch, tmp_path):
     assert args[-1] == str(target)
 
 
+def test_write_metadata_bumps_metadata_date_after_tagsfromfile(monkeypatch, tmp_path):
+    """Lightroom flags "changed on disk" from xmp:MetadataDate, not file mtime.
+
+    Without this the write is invisible in LrC — the file changes but the catalog
+    never offers to re-read it. It must also come *after* -tagsfromfile, or a
+    MetadataDate copied from the source JPG would clobber the fresh stamp.
+    """
+    jpg = tmp_path / "source.jpg"
+    target = tmp_path / "shot.tif"
+    jpg.touch()
+    target.touch()
+    captured: dict[str, list[str]] = {}
+
+    monkeypatch.setattr(exiftool_runner, "exiftool_path", lambda: "/usr/bin/exiftool")
+
+    def fake_run(args: list[str]):
+        captured["args"] = args
+        return exiftool_runner.RunResult(0, "", "", args)
+
+    monkeypatch.setattr(exiftool_runner, "_run", fake_run)
+
+    exiftool_runner.write_metadata(
+        jpg=jpg,
+        target=target,
+        target_type=TargetType.EMBEDDED,
+        keywords=["tiara"],
+        description="A diamond tiara.",
+        keep_backups=True,
+        location_fields={"city"},
+    )
+
+    args = captured["args"]
+    assert "-XMP-xmp:MetadataDate=now" in args
+    assert args.index("-XMP-xmp:MetadataDate=now") > args.index("-tagsfromfile")
+    assert args[-1] == str(target)
+
+
 def test_clear_keyword_lists_without_backups_uses_in_place_overwrite(monkeypatch, tmp_path):
     target = tmp_path / "shot.png"
     target.touch()
