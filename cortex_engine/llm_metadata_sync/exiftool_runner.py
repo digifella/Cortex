@@ -164,5 +164,13 @@ def write_metadata(
     if copy_tags:
         args += ["-tagsfromfile", str(jpg)] + copy_tags
 
+    # Lightroom decides "metadata was changed externally" by comparing
+    # xmp:MetadataDate against what the catalog recorded, NOT by file mtime.
+    # Without bumping it the write is invisible in LrC: the badge never appears
+    # and there is nothing prompting a Read Metadata from File. Lightroom stamps
+    # this itself whenever it saves metadata. Must come after -tagsfromfile so a
+    # copied MetadataDate cannot overwrite it.
+    args.append("-XMP-xmp:MetadataDate=now")
+
     args.append(str(target))
     return _run(args)
