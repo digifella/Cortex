@@ -2256,11 +2256,108 @@ class DocumentTextifier:
         "llama3:latest",
     ]
 
+    def _keyword_prompt(self, description: str, anchor_keywords: Optional[List[str]] = None) -> str:
+        """Build the keyword-extraction prompt (shared by every provider)."""
+        anchor_section = ""
+        if anchor_keywords:
+            anchor_list = ", ".join(anchor_keywords[:20])
+            anchor_section = (
+                f"The photographer has already tagged this image with: {anchor_list}. "
+                "Treat these as ground-truth — include the relevant ones verbatim in your output "
+                "rather than replacing specific terms with vague equivalents: keep the "
+                "photographer's exact species, place and person names instead of generic "
+                "category words. "
+                # Illustrative nouns used to live here ('condor', 'Antarctica'); small
+                # models copy them straight into the output as if they were content.
+                # Measured: llama3.2:3b leaked 'condor' in 2 of 6 extractions, and even
+                # mistral-small3.2 did it twice in 8,619 catalog keywords. Describe the
+                # rule instead of naming examples, and forbid invention explicitly.
+                "Every tag must come from the description or the tag list above — "
+                "never introduce a subject that appears in neither. "
+            )
+        return (
+            "Extract 10-15 photo tags from this image description. "
+            "Return ONLY a comma-separated list. Each tag should be 1-2 "
+            "simple lowercase words (no underscores, no hyphens). "
+            "Good tags: specific subjects, species, colours, season, "
+            "location type, weather. "
+            "Do NOT include photography jargon (bokeh, depth of field, "
+            "backlit, composition, close up) or vague words (atmosphere, "
+            "mood, scene, tones). Maximum 15 tags.\n\n"
+            + anchor_section
+            + f"Description: {description}"
+        )
+
+    def _keywords_from_lmstudio(self, prompt: str) -> Optional[str]:
+        """Ask the VLM already loaded in LM Studio. None if unavailable/failed.
+
+        Mirrors _describe_with_lmstudio: never asks LM Studio to load a model,
+        so this is a silent no-op when nothing is resident.
+        """
+        model = self._lmstudio_loaded_vlm()
+        if not model:
+            return None
+        try:
+            from openai import OpenAI
+            client = OpenAI(
+                base_url=os.environ.get("CORTEX_LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
+                api_key=os.environ.get("CORTEX_LMSTUDIO_API_KEY", "lm-studio"),
+                timeout=120,
+            )
+            started = time.monotonic()
+            response = client.chat.completions.create(
+                model=model,
+                max_tokens=200,
+                temperature=0.1,
+                # Mandatory — see extract_keywords docstring. Without this the
+                # whole budget goes to reasoning and content comes back empty.
+                extra_body={"reasoning_effort": "none"},
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = (response.choices[0].message.content or "") if response.choices else ""
+            logger.info(
+                "LM Studio keywords (%s) returned %d chars in %.1fs",
+                model, len(raw), time.monotonic() - started,
+            )
+            return raw.strip() or None
+        except Exception as e:
+            logger.warning(f"LM Studio keyword extraction failed: {e}")
+            return None
+
+    def _keywords_from_ollama(self, prompt: str) -> Optional[str]:
+        """Fallback: first installed TEXT_MODELS entry. None if unavailable."""
+        try:
+            import ollama
+            client = ollama.Client(timeout=180)
+            text_model = None
+            for model in self.TEXT_MODELS:
+                if self._ollama_model_available(client, model):
+                    text_model = model
+                    break
+            if not text_model:
+                logger.warning("No text model available for keyword extraction")
+                return None
+            response = client.chat(
+                model=text_model,
+                messages=[{"role": "user", "content": prompt}],
+                options={"temperature": 0.1, "num_predict": 200},
+            )
+            return (response["message"]["content"] or "").strip() or None
+        except Exception as e:
+            logger.warning(f"Ollama keyword extraction failed: {e}")
+            return None
+
     def extract_keywords(self, description: str, anchor_keywords: Optional[List[str]] = None) -> List[str]:
         """Extract flat keywords from an image description using a text LLM.
 
-        Uses a text model (Mistral etc.) rather than the VLM, because VLMs
-        like Qwen3-VL return empty responses for text-only prompts.
+        Prefers the model already loaded in LM Studio, falling back to a local
+        Ollama text model, then to a naive splitter.
+
+        The long-standing note here claimed VLMs "return empty responses for
+        text-only prompts". The symptom was real but the cause was not the VLM:
+        it is the reasoning budget. Verified against the live endpoint on
+        qwen3.6-35b-a3b — without reasoning_effort="none" this exact prompt
+        returned an empty string every time; with it, tags come back in ~1s.
 
         anchor_keywords: existing EXIF tags from the photographer — passed as
         strong hints so specific names (species, places) are preserved verbatim.
@@ -2269,59 +2366,15 @@ class DocumentTextifier:
         if not description or description.startswith("[Image:"):
             logger.warning("No valid description available — skipping keyword extraction")
             return []
+
+        prompt = self._keyword_prompt(description, anchor_keywords)
+        raw = self._keywords_from_lmstudio(prompt)
+        if raw is None:
+            raw = self._keywords_from_ollama(prompt)
+        if not raw:
+            return self._extract_keywords_simple(description)
+
         try:
-            import ollama
-            client = ollama.Client(timeout=180)
-
-            # Find an available text model
-            text_model = None
-            for model in self.TEXT_MODELS:
-                if self._ollama_model_available(client, model):
-                    text_model = model
-                    break
-
-            if not text_model:
-                logger.warning("No text model available for keyword extraction")
-                return self._extract_keywords_simple(description)
-
-            anchor_section = ""
-            if anchor_keywords:
-                anchor_list = ", ".join(anchor_keywords[:20])
-                anchor_section = (
-                    f"The photographer has already tagged this image with: {anchor_list}. "
-                    "Treat these as ground-truth — include the relevant ones verbatim in your output "
-                    "rather than replacing specific terms with vague equivalents: keep the "
-                    "photographer's exact species, place and person names instead of generic "
-                    "category words. "
-                    # Illustrative nouns used to live here ('condor', 'Antarctica'); small
-                    # models copy them straight into the output as if they were content.
-                    # Measured: llama3.2:3b leaked 'condor' in 2 of 6 extractions, and even
-                    # mistral-small3.2 did it twice in 8,619 catalog keywords. Describe the
-                    # rule instead of naming examples, and forbid invention explicitly.
-                    "Every tag must come from the description or the tag list above — "
-                    "never introduce a subject that appears in neither. "
-                )
-
-            response = client.chat(
-                model=text_model,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        "Extract 10-15 photo tags from this image description. "
-                        "Return ONLY a comma-separated list. Each tag should be 1-2 "
-                        "simple lowercase words (no underscores, no hyphens). "
-                        "Good tags: specific subjects, species, colours, season, "
-                        "location type, weather. "
-                        "Do NOT include photography jargon (bokeh, depth of field, "
-                        "backlit, composition, close up) or vague words (atmosphere, "
-                        "mood, scene, tones). Maximum 15 tags.\n\n"
-                        + anchor_section
-                        + f"Description: {description}"
-                    ),
-                }],
-                options={"temperature": 0.1, "num_predict": 200},
-            )
-            raw = response["message"]["content"].strip()
             # Parse comma-separated keywords, clean up
             keywords = [k.strip().lower().strip('"\'') for k in raw.split(",")]
             # Replace underscores with spaces
