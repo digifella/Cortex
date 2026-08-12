@@ -267,10 +267,9 @@ def tag_one(path: Path, ownership_notice: str, local_vision: bool = False) -> di
     # 15-50s of mistral inference per photo. A small local model derives photo
     # keywords from the caption just as well in ~1-2s with ~10GB.
     #
-    # NOTE: extract_keywords is still Ollama-only (cortex_engine/textifier.py).
-    # Captions can come from LM Studio, but keywords cannot — with ollama down
-    # this silently degrades to the naive _extract_keywords_simple splitter
-    # rather than failing loudly.
+    # This is now only the *fallback*: extract_keywords prefers the model already
+    # loaded in LM Studio (~2s, no extra VRAM), dropping to this Ollama list only
+    # when LM Studio is unreachable or has nothing resident.
     t.TEXT_MODELS = ["llama3.2:3b-instruct-q8_0", *t.TEXT_MODELS]
     return t.keyword_image(
         str(path),
