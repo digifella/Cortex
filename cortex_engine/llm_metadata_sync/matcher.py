@@ -112,26 +112,19 @@ def build_raw_index(raw_root: Path, config: SyncConfig) -> dict[str, list[Path]]
                     # through a synthetic XMP sidecar path.
                     for key in _candidate_keys(stem, config):
                         index.setdefault(key, []).append(path)
-                elif ext in ("tif", "tiff", "psd", "psb"):
-                    # Edited raster master (e.g. a Photoshop TIF) with no derivative
-                    # suffix — embed metadata into the file itself (that's where
-                    # Lightroom reads TIF/PSD metadata from, not a sidecar). These
-                    # often keep the export rating suffix (-N) in their filename
-                    # while the source JPG has it stripped, so key off the stripped
-                    # stem to align the two.
+                else:
+                    # Edited raster master (e.g. a Photoshop TIF) or a DNG with no
+                    # derivative suffix — embed metadata into the file itself. That is
+                    # where Lightroom reads TIF/PSD/DNG metadata from: for DNG it writes
+                    # XMP *into* the file and ignores .xmp sidecars entirely (sidecars
+                    # are only consulted for proprietary raws), so a sidecar written here
+                    # would be silently inert. Covers rendered/Linear-Raw DNGs, which are
+                    # effectively a TIF in a DNG wrapper. These often keep the export
+                    # rating suffix (-N) in their filename while the source JPG has it
+                    # stripped, so key off the stripped stem to align the two.
                     base_stem = strip_rating_suffix(stem, config.rating_suffix_range)
                     for key in _candidate_keys(base_stem, config):
                         index.setdefault(key, []).append(path)
-                else:
-                    # Standalone original DNG capture (no suffix) → XMP sidecar.
-                    # Some catalogs (e.g. "Pre-Dig" scanned-film years) keep the export
-                    # rating suffix (-N) baked into the DNG filename itself, identical
-                    # to the jpg_dir source — strip it so those still match (same
-                    # rationale as the TIF/PSD embed path above).
-                    sidecar = dir_path / f"{stem}.xmp"
-                    base_stem = strip_rating_suffix(stem, config.rating_suffix_range)
-                    for key in _candidate_keys(base_stem, config):
-                        index.setdefault(key, []).append(sidecar)
 
             elif ext in raw_exts:
                 # rstrip("- ") handles empty camera-model stems like "2025-10-10 10-15-24-"
