@@ -385,7 +385,17 @@ def hash_catalog(catalog_dir: Path, cache_path: Path) -> dict:
             print(f"  hashed {i}/{len(todo)}", flush=True)
             cache_path.write_text(json.dumps(cache, indent=1))
     cache_path.write_text(json.dumps(cache, indent=1))
-    return {k: v for k, v in cache.items() if v.get("phash")}
+    # The cache is never invalidated, so a catalog file renamed since the last run
+    # (Lightroom rewrites the name when a capture time is corrected) would still be
+    # offered as a link target and `apply` would fail on "File not found" — which is
+    # exactly what happened to 1988 between its link and apply stages.
+    live = {k: v for k, v in cache.items()
+            if v.get("phash") and v.get("path") and Path(v["path"]).exists()}
+    dropped = len(cache) - len(live)
+    if dropped:
+        print(f"catalog: {dropped} cached entr{'y' if dropped == 1 else 'ies'} "
+              f"no longer on disk — ignored", flush=True)
+    return live
 
 
 def ratio_of(w, h) -> float | None:
