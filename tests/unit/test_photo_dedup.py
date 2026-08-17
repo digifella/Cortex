@@ -66,6 +66,34 @@ class TestDuplicateMarking:
         assert "(1 to mark Duplicate)" in capsys.readouterr().out
 
 
+class TestPreexistingCaption:
+    """`describe` stores no caption for a photo that already had one on disk, so
+    `apply` wrote an empty description and the catalog master kept none at all —
+    5 masters on the 2001 run. The export's on-disk caption is the fallback."""
+
+    def test_on_disk_caption_reaches_the_catalog(self, tmp_path, monkeypatch):
+        (tmp_path / "a.jpg").write_bytes(b"x")
+        target = tmp_path / "cat.tif"
+        target.write_bytes(b"x")
+        write_state(
+            tmp_path,
+            {"a.jpg": {"phash": "0" * 16, "preexisting": True, "keywords": []}},
+            links={"a.jpg": {"catalog": "cat.tif", "distance": 0, "paths": [str(target)]}},
+        )
+        monkeypatch.setattr(photo_dedup, "read_descriptions_bulk",
+                            lambda paths: {str(tmp_path / "a.jpg"): "A caption already on disk."})
+        monkeypatch.setattr(photo_dedup, "read_keywords_bulk", lambda paths: {})
+        written = {}
+
+        def fake_write(path, keywords, description, place, keep_backup):
+            written[str(path)] = description
+            return True, ""
+
+        monkeypatch.setattr(photo_dedup, "write_tags", fake_write)
+        photo_dedup.cmd_apply(Args(tmp_path, apply=True))
+        assert written[str(target)] == "A caption already on disk."
+
+
 class TestPlaceResolution:
     def test_gps_beats_haiku_landmark_guess(self):
         rec = {"city": "Hoi An", "country": "Vietnam",

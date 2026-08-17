@@ -670,6 +670,21 @@ def read_keywords_bulk(paths: list[Path]) -> dict:
     return result
 
 
+def read_descriptions_bulk(paths: list) -> dict:
+    """On-disk captions, keyed by path. A `preexisting` record holds no caption in
+    the checkpoint (describe declined to pay for one), so without this the catalog
+    master never receives the caption its export already carries — 5 masters on the
+    2001 run had no description at all."""
+    if not paths:
+        return {}
+    out = subprocess.run(["exiftool", "-j", "-SourceFile", "-XMP-dc:Description"]
+                         + [str(p) for p in paths], capture_output=True, text=True)
+    if not out.stdout.strip():
+        return {}
+    return {r.get("SourceFile", ""): str(r.get("Description") or "").strip()
+            for r in json.loads(out.stdout)}
+
+
 def place_of(rec: dict) -> dict:
     """City/state/country for a photo. GPS wins over Haiku's landmark guess."""
     geo = rec.get("geo") or {}
@@ -780,6 +795,9 @@ def cmd_apply(args) -> None:
         return
 
     existing = read_keywords_bulk([p for p, _, _ in catalog_plan])
+    # Captions that were already on the export before this run live only on disk.
+    on_disk = read_descriptions_bulk(
+        [directory / s for _, s, _ in catalog_plan if state[s].get("preexisting")])
     ok = fail = 0
     for i, (path, source, mark) in enumerate(catalog_plan, start=1):
         rec = state[source]
@@ -787,8 +805,8 @@ def cmd_apply(args) -> None:
         kws = list(dict.fromkeys(
             existing.get(str(path), []) + rec.get("keywords", []) +
             place_keywords(rec) + ([DUPLICATE_KEYWORD] if mark else [])))
-        good, err = write_tags(path, kws, rec.get("caption", ""), place,
-                               keep_backup=True)
+        caption = rec.get("caption") or on_disk.get(str(directory / source), "")
+        good, err = write_tags(path, kws, caption, place, keep_backup=True)
         ok, fail = ok + good, fail + (not good)
         flag = "DUP" if mark else "   "
         print(f"[{i}/{len(catalog_plan)}] {flag} {'OK ' if good else 'FAIL'} "
