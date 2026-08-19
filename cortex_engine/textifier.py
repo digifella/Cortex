@@ -128,6 +128,14 @@ class DocumentTextifier:
     # result, and a batch runner should collect them for a retry pass.
     PLACEHOLDER_PREFIX = "[Image:"
 
+    # Catalog bookkeeping tags that describe the *record*, not the picture.
+    # Fed to a VLM as "Known subjects" they actively mislead it: `icon` and
+    # `artwork` are what made both Haiku and the local VLM answer
+    # "[Image: logo/icon omitted]" for ordinary photographs.
+    HINT_STOP_TAGS = frozenset({
+        "icon", "artwork", "adobe_cloud_sync", "exclude_temp",
+    })
+
     @staticmethod
     def is_placeholder_description(description: str) -> bool:
         """True when the text is a failure placeholder rather than a real caption.
@@ -3018,6 +3026,12 @@ class DocumentTextifier:
         return " ".join(pieces)
 
     @staticmethod
+    def _is_hint_noise(tag: str) -> bool:
+        """True for catalog tags that must not reach the VLM prompt as subjects."""
+        t = (tag or "").strip().lower()
+        return t in DocumentTextifier.HINT_STOP_TAGS or t.endswith("_icon")
+
+    @staticmethod
     def _build_keyword_hint(
         keywords: List[str],
         location: Optional[Dict[str, str]] = None,
@@ -3040,8 +3054,9 @@ class DocumentTextifier:
         if loc_parts:
             pieces.append(f"Location: {', '.join(loc_parts)}.")
 
-        if keywords:
-            kw_list = ", ".join(keywords[:20])
+        useful = [k for k in (keywords or []) if not DocumentTextifier._is_hint_noise(k)]
+        if useful:
+            kw_list = ", ".join(useful[:20])
             pieces.append(f"Known subjects: {kw_list}.")
 
         if not pieces:
@@ -3172,7 +3187,9 @@ class DocumentTextifier:
         # - XMP-dc:Description → LRC "Caption" in metadata panel
         # - IPTC:Caption-Abstract → legacy caption
         # - EXIF:ImageDescription → EXIF-level caption
-        if description:
+        # A placeholder is a failure marker, not a caption. Guarding here rather
+        # than at each call site means every caller inherits the invariant.
+        if description and not DocumentTextifier.is_placeholder_description(description):
             caption = DocumentTextifier._sanitize_for_exif(description)[:2000]
             cmd.append(f"-XMP-dc:Description={caption}")
             cmd.append(f"-IPTC:Caption-Abstract={caption}")
