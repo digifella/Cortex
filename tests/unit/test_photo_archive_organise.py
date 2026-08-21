@@ -144,3 +144,20 @@ def test_unique_returns_collision_flag():
     assert organise._unique("P:/a/x.jpg", taken) == ("P:/a/x.jpg", False)
     assert organise._unique("P:/a/x.jpg", taken) == ("P:/a/x-2.jpg", True)
     assert organise._unique("P:/a/x.jpg", taken) == ("P:/a/x-3.jpg", True)
+
+
+def test_non_photo_files_are_left_alone(conn, tmp_path):
+    # Google Drive leaves 164-byte .gdrive stubs beside real photos. This tool
+    # organises photographs; relocating arbitrary files is scope it should not
+    # take, and sweeping them into _UNDATED would be surprising.
+    db.upsert_file(conn, path=r"P:\a\x.jpg.gdrive", top_folder="a", rel_dir="",
+                   filename="x.jpg.gdrive", ext=".gdrive", size=164, mtime=1.0,
+                   kind="other")
+    db.upsert_file(conn, path=r"P:\a\real.jpg", top_folder="a", rel_dir="",
+                   filename="real.jpg", ext=".jpg", size=1, mtime=1.0,
+                   kind="image", exif_dt="2019-03-04T10:00:00")
+    out = tmp_path / "plan.csv"
+    organise.plan_organise(conn, "P:", str(out))
+    srcs = [r["src"] for r in csv.DictReader(out.open())]
+    assert r"P:\a\real.jpg" in srcs
+    assert r"P:\a\x.jpg.gdrive" not in srcs

@@ -1,7 +1,19 @@
 """Stage 4 - duplicate grouping and keeper selection."""
 import csv
+import os
+import re
 
 DEMOTE_MARKERS = ("dupes", "backup", "_dupes")
+
+# Google Drive names a re-upload "IMG_0176 (1).JPG"; Windows uses "x - Copy".
+# Anchored to the END of the stem so a real name like "Trip (Italy) 2019" is
+# untouched.
+_COPY_RE = re.compile(r"(?:\s*-\s*Copy)?\s*\(\d+\)$|\s*-\s*Copy$", re.I)
+
+
+def _is_copy(filename: str) -> bool:
+    """True if the name carries a duplicate-upload suffix."""
+    return bool(_COPY_RE.search(os.path.splitext(filename)[0]))
 
 
 def _demoted(row) -> int:
@@ -10,9 +22,15 @@ def _demoted(row) -> int:
 
 
 def _sort_key(row):
-    """Lower sorts better. Mirrors the spec's keeper rule, in order."""
+    """Lower sorts better. Mirrors the spec's keeper rule, in order.
+
+    The copy-suffix test sits second because mtime cannot decide it: a bulk
+    Google Drive download stamps every copy within minutes in arbitrary order,
+    so "oldest wins" picked "BH_2010_278 (3).jpg" over the original.
+    """
     return (
         _demoted(row),
+        1 if _is_copy(row["filename"]) else 0,
         0 if row["exif_dt"] else 1,
         0 if row["camera_model"] else 1,
         len([p for p in str(row["rel_dir"]).split("\\") if p]),

@@ -44,7 +44,8 @@ def plan_organise(conn, drive_root: str, out_csv: str) -> dict:
     stats = {"planned": 0, "undated": 0, "collisions": 0}
     rows = conn.execute(
         "SELECT * FROM files WHERE state NOT IN "
-        "('quarantined', 'evacuated', 'organised') ORDER BY path").fetchall()
+        "('quarantined', 'evacuated', 'organised') "
+        "AND kind != 'other' ORDER BY path").fetchall()
     taken: set = set()
     assigned: dict = {}
 
