@@ -118,3 +118,24 @@ def test_sidecars_and_other_files_are_not_read(idx):
     _add(idx, r"P:\a\b.txt", kind="other", ext=".txt")
     stats = exif.read_exif_into_index(idx, reader=_FakeReader({}))
     assert stats["read"] == 0
+
+
+def test_exiftool_args_strip_long_path_prefix():
+    """exiftool 12.85 REJECTS \\\\?\\ paths - it reads '?' as a wildcard and
+    returns "Wildcards don't work in the directory specification".
+
+    walk.py stores every Windows path with that prefix, so passing stored paths
+    straight through makes EVERY exif read fail silently: read_many returns {},
+    every photo is marked undated, and the whole archive routes to _UNDATED
+    with no error. Verified against real exiftool on Windows 2026-08-21.
+    """
+    args = exif._exiftool_args(["\\\\?\\P:\\a\\b.jpg", "P:\\c\\d.jpg"])
+    assert not any(a.startswith("\\\\?\\") for a in args)
+    assert args[-2:] == ["P:\\a\\b.jpg", "P:\\c\\d.jpg"]
+
+
+def test_exiftool_args_include_all_date_tags():
+    args = exif._exiftool_args(["x.jpg"])
+    for tag in ("-DateTimeOriginal", "-SubSecDateTimeOriginal", "-CreateDate",
+                "-Model", "-json", "-fast2"):
+        assert tag in args

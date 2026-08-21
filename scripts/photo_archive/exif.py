@@ -38,6 +38,25 @@ def sanitise_model(model) -> str:
     return re.sub(r"-{2,}", "-", cleaned).strip("-. ")
 
 
+def _exiftool_args(paths: list[str]) -> list[str]:
+    """Build the exiftool argument list, stripping the \\?\\ long-path prefix.
+
+    exiftool 12.85 REJECTS \\?\\ paths outright - it parses the '?' as a
+    wildcard and answers "Wildcards don't work in the directory specification",
+    even for a short path. walk.py stores every Windows path with that prefix,
+    so passing stored paths through unmodified makes every read fail SILENTLY:
+    read_many returns {}, every photo is marked undated, and the entire archive
+    routes to _UNDATED without a single error. Verified against real exiftool
+    under Windows Python, 2026-08-21.
+
+    Safe because no path on P: exceeds 260 characters (longest measured: 194),
+    so the plain form always reaches the file.
+    """
+    return ["-json", "-fast2", "-charset", "filename=utf8",
+            "-DateTimeOriginal", "-SubSecDateTimeOriginal",
+            "-CreateDate", "-Model", "-Make"] + [strip_long(p) for p in paths]
+
+
 class ExifReader:
     """Persistent exiftool process. Always close() it."""
 
@@ -51,10 +70,7 @@ class ExifReader:
     def read_many(self, paths: list[str]) -> dict[str, dict]:
         if not paths:
             return {}
-        args = ["-json", "-fast2", "-charset", "filename=utf8",
-                "-DateTimeOriginal", "-SubSecDateTimeOriginal",
-                "-CreateDate", "-Model", "-Make"]
-        args += paths
+        args = _exiftool_args(paths)
         self.proc.stdin.write("\n".join(args) + "\n-execute\n")
         self.proc.stdin.flush()
 
