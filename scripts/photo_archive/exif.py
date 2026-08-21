@@ -4,6 +4,7 @@
 Per-file exiftool invocations run about 7s each on these drives; batch mode
 is the only workable approach at this scale.
 """
+import csv
 import json
 import os
 import re
@@ -16,18 +17,24 @@ _DATE_RE = re.compile(r"^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})")
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
+def parse_dt(raw) -> str | None:
+    """Parse one exiftool date to ISO, rejecting nulls like 0000:00:00."""
+    if not raw:
+        return None
+    m = _DATE_RE.match(str(raw))
+    if not m:
+        return None
+    y, mo, d, h, mi, s = m.groups()
+    if y == "0000" or mo == "00" or d == "00":
+        return None
+    return f"{y}-{mo}-{d}T{h}:{mi}:{s}"
+
+
 def pick_datetime(tags: dict) -> tuple[str | None, str | None]:
     for tag in DATE_TAGS:
-        raw = tags.get(tag)
-        if not raw:
-            continue
-        m = _DATE_RE.match(str(raw))
-        if not m:
-            continue
-        y, mo, d, h, mi, s = m.groups()
-        if y == "0000" or mo == "00" or d == "00":
-            continue
-        return f"{y}-{mo}-{d}T{h}:{mi}:{s}", tag
+        parsed = parse_dt(tags.get(tag))
+        if parsed:
+            return parsed, tag
     return None, None
 
 
@@ -130,8 +137,9 @@ def read_exif_into_index(conn, reader=None, exiftool: str = "exiftool",
                 model = sanitise_model(tags.get("Model")) or None
                 conn.execute(
                     "UPDATE files SET exif_dt = ?, exif_dt_source = ?, "
-                    "camera_model = ?, state = 'exif_read' WHERE id = ?",
-                    (dt, src, model, row["id"]))
+                    "exif_create_dt = ?, camera_model = ?, state = 'exif_read' "
+                    "WHERE id = ?",
+                    (dt, src, parse_dt(tags.get("CreateDate")), model, row["id"]))
                 stats["read"] += 1
                 stats["dated" if dt else "undated"] += 1
             conn.commit()
@@ -139,3 +147,36 @@ def read_exif_into_index(conn, reader=None, exiftool: str = "exiftool",
         if owned:
             reader.close()
     return stats
+
+
+CONFLICT_FIELDS = ["path", "top_folder", "exif_dt", "exif_dt_source",
+                   "exif_create_dt", "camera_model"]
+
+
+def report_date_conflicts(conn, out_csv: str) -> dict:
+    """List files whose DateTimeOriginal and CreateDate disagree on the YEAR.
+
+    Neither tag can be trusted blindly, and the two failure modes are opposite:
+
+      * SMS_Photos: DateTimeOriginal is corrupt (2003 for a true 2023 iPhone
+        shot) and CreateDate is right.
+      * Scans: DateTimeOriginal is right (1986, when the photo was taken) and
+        CreateDate is merely when it was digitised (2000).
+
+    So no precedence rule serves both. The chosen date is left alone -
+    DateTimeOriginal wins, which is correct for scans - and the disagreement is
+    reported here for a human to adjudicate before organising.
+    """
+    rows = conn.execute(
+        "SELECT path, top_folder, exif_dt, exif_dt_source, exif_create_dt, "
+        "camera_model FROM files "
+        "WHERE exif_dt IS NOT NULL AND exif_create_dt IS NOT NULL "
+        "AND substr(exif_dt, 1, 4) != substr(exif_create_dt, 1, 4) "
+        "ORDER BY path").fetchall()
+    with open(out_csv, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=CONFLICT_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row[k] for k in CONFLICT_FIELDS})
+    return {"conflicts": len(rows),
+            "folders": len({r["top_folder"] for r in rows})}

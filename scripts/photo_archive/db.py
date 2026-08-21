@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS files (
     percept_hash   TEXT,
     exif_dt        TEXT,
     exif_dt_source TEXT,
+    exif_create_dt TEXT,
     camera_model   TEXT,
     sidecar_of     INTEGER REFERENCES files(id),
     state          TEXT NOT NULL DEFAULT 'walked'
@@ -49,6 +50,13 @@ def connect(db_path: str) -> sqlite3.Connection:
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # CREATE TABLE IF NOT EXISTS will not add a column to an index built by an
+    # earlier version, so bring older databases forward rather than failing on
+    # an unknown column halfway through a multi-hour run.
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(files)")}
+    for col in ("exif_create_dt",):
+        if col not in existing:
+            conn.execute(f"ALTER TABLE files ADD COLUMN {col} TEXT")
     conn.commit()
 
 

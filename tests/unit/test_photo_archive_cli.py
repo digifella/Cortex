@@ -29,3 +29,7 @@ def test_cli_exif_stage_is_wired(tmp_path):
     rc = cli.main(["exif", "--db", str(tmp_path / "i.db"),
                    "--journal", str(tmp_path / "j.csv")])
     assert rc == 0
+
+
+def test_date_conflicts_stage_is_registered():
+    assert cli.parse_args(["date-conflicts", "--db", "x.db"]).command == "date-conflicts"

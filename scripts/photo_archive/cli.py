@@ -7,8 +7,8 @@ import sys
 
 from . import config, db, dupes, execute, exif, hashing, journal, organise, walk
 
-STAGES = ("walk", "exif", "hash", "plan-dupes", "quarantine",
-          "plan-organise", "organise", "undo")
+STAGES = ("walk", "exif", "date-conflicts", "hash", "plan-dupes",
+          "quarantine", "plan-organise", "organise", "undo")
 
 
 def parse_args(argv):
@@ -37,6 +37,8 @@ def main(argv=None) -> int:
         print(walk.walk_scope(conn, args.drive, config.SCOPE_ROOTS))
     elif args.command == "exif":
         print(exif.read_exif_into_index(conn))
+    elif args.command == "date-conflicts":
+        print(exif.report_date_conflicts(conn, args.plan))
     elif args.command == "hash":
         print(hashing.hash_candidates(conn))
     elif args.command == "plan-dupes":

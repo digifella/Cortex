@@ -1,4 +1,5 @@
 # tests/unit/test_photo_archive_exif.py
+import csv
 from scripts.photo_archive import exif
 
 
@@ -139,3 +140,65 @@ def test_exiftool_args_include_all_date_tags():
     for tag in ("-DateTimeOriginal", "-SubSecDateTimeOriginal", "-CreateDate",
                 "-Model", "-json", "-fast2"):
         assert tag in args
+
+
+def test_parse_dt_returns_iso_or_none():
+    assert exif.parse_dt("2023:01:19 16:13:13") == "2023-01-19T16:13:13"
+    assert exif.parse_dt("0000:00:00 00:00:00") is None
+    assert exif.parse_dt(None) is None
+    assert exif.parse_dt("rubbish") is None
+
+
+def test_create_date_is_stored_alongside_original(idx):
+    _add(idx, r"P:\a\b.jpg")
+    reader = _FakeReader({r"P:\a\b.jpg": {"DateTimeOriginal": "2003:01:19 16:13:13",
+                                          "CreateDate": "2023:01:19 16:13:13"}})
+    exif.read_exif_into_index(idx, reader=reader)
+    row = idx.execute("SELECT exif_dt, exif_create_dt FROM files").fetchone()
+    assert row["exif_dt"] == "2003-01-19T16:13:13"      # precedence unchanged
+    assert row["exif_create_dt"] == "2023-01-19T16:13:13"
+
+
+def test_year_mismatch_is_reported(idx, tmp_path):
+    # The real SMS_Photos case: DateTimeOriginal corrupt, CreateDate correct.
+    _add(idx, r"P:\a\sms.jpg")
+    exif.read_exif_into_index(idx, reader=_FakeReader(
+        {r"P:\a\sms.jpg": {"DateTimeOriginal": "2003:01:19 16:13:13",
+                           "CreateDate": "2023:01:19 16:13:13",
+                           "Model": "iPhone 13 Pro"}}))
+    out = tmp_path / "conflicts.csv"
+    stats = exif.report_date_conflicts(idx, str(out))
+    assert stats["conflicts"] == 1
+    row = next(csv.DictReader(out.open()))
+    assert row["exif_dt"].startswith("2003")
+    assert row["exif_create_dt"].startswith("2023")
+    assert row["camera_model"] == "iPhone 13 Pro"
+
+
+def test_matching_years_are_not_reported(idx, tmp_path):
+    _add(idx, r"P:\a\ok.jpg")
+    exif.read_exif_into_index(idx, reader=_FakeReader(
+        {r"P:\a\ok.jpg": {"DateTimeOriginal": "2019:03:04 10:11:12",
+                          "CreateDate": "2019:03:04 10:11:12"}}))
+    out = tmp_path / "c.csv"
+    assert exif.report_date_conflicts(idx, str(out))["conflicts"] == 0
+
+
+def test_scan_mismatch_is_reported_but_date_kept(idx, tmp_path):
+    # A 1986 photo scanned in 2000: DateTimeOriginal is CORRECT here.
+    # We still report it, but must not change the chosen date.
+    _add(idx, r"P:\a\scan.jpg")
+    exif.read_exif_into_index(idx, reader=_FakeReader(
+        {r"P:\a\scan.jpg": {"DateTimeOriginal": "1986:07:01 12:00:00",
+                            "CreateDate": "2000:05:05 09:00:00"}}))
+    assert idx.execute("SELECT exif_dt FROM files").fetchone()[0].startswith("1986")
+    out = tmp_path / "c.csv"
+    assert exif.report_date_conflicts(idx, str(out))["conflicts"] == 1
+
+
+def test_missing_create_date_is_not_a_conflict(idx, tmp_path):
+    _add(idx, r"P:\a\one.jpg")
+    exif.read_exif_into_index(idx, reader=_FakeReader(
+        {r"P:\a\one.jpg": {"DateTimeOriginal": "2019:03:04 10:11:12"}}))
+    out = tmp_path / "c.csv"
+    assert exif.report_date_conflicts(idx, str(out))["conflicts"] == 0
