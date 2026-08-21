@@ -22,3 +22,10 @@ def test_all_stages_are_registered():
 def test_unknown_stage_exits_nonzero():
     with pytest.raises(SystemExit):
         cli.parse_args(["banana", "--db", "x.db"])
+
+
+def test_cli_exif_stage_is_wired(tmp_path):
+    # Empty index: returns 0 without ever constructing an ExifReader.
+    rc = cli.main(["exif", "--db", str(tmp_path / "i.db"),
+                   "--journal", str(tmp_path / "j.csv")])
+    assert rc == 0

@@ -5,7 +5,7 @@ Every writing command requires an explicit --apply.
 import argparse
 import sys
 
-from . import config, db, dupes, execute, hashing, journal, organise, walk
+from . import config, db, dupes, execute, exif, hashing, journal, organise, walk
 
 STAGES = ("walk", "exif", "hash", "plan-dupes", "quarantine",
           "plan-organise", "organise", "undo")
@@ -35,6 +35,8 @@ def main(argv=None) -> int:
 
     if args.command == "walk":
         print(walk.walk_scope(conn, args.drive, config.SCOPE_ROOTS))
+    elif args.command == "exif":
+        print(exif.read_exif_into_index(conn))
     elif args.command == "hash":
         print(hashing.hash_candidates(conn))
     elif args.command == "plan-dupes":

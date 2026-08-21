@@ -9,6 +9,8 @@ import os
 import re
 import subprocess
 
+from .paths import strip_long
+
 DATE_TAGS = ("SubSecDateTimeOriginal", "DateTimeOriginal", "CreateDate")
 _DATE_RE = re.compile(r"^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})")
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -74,3 +76,50 @@ class ExifReader:
             self.proc.wait(timeout=10)
         except (OSError, subprocess.TimeoutExpired):
             self.proc.kill()
+
+
+def _norm(path: str) -> str:
+    """exiftool echoes SourceFile with forward slashes and no \\?\\ prefix.
+
+    Without normalising both sides, the lookup misses every record and every
+    photo silently comes back undated.
+    """
+    return strip_long(path).replace("\\", "/").lower()
+
+
+def read_exif_into_index(conn, reader=None, exiftool: str = "exiftool",
+                         batch_size: int = 200) -> dict:
+    """Batch capture date and camera model from disk into the index.
+
+    Resumable: only rows still in state 'walked' are read, and every row
+    touched is marked 'exif_read' whether or not a date was found.
+    """
+    stats = {"read": 0, "dated": 0, "undated": 0}
+    rows = conn.execute(
+        "SELECT id, path FROM files WHERE state = 'walked' "
+        "AND kind IN ('image', 'raw', 'video') ORDER BY id").fetchall()
+    if not rows:
+        return stats
+
+    owned = reader is None
+    reader = reader or ExifReader(exiftool)
+    try:
+        for start in range(0, len(rows), batch_size):
+            batch = rows[start:start + batch_size]
+            got = reader.read_many([r["path"] for r in batch])
+            lookup = {_norm(k): v for k, v in got.items()}
+            for row in batch:
+                tags = lookup.get(_norm(row["path"]), {})
+                dt, src = pick_datetime(tags)
+                model = sanitise_model(tags.get("Model")) or None
+                conn.execute(
+                    "UPDATE files SET exif_dt = ?, exif_dt_source = ?, "
+                    "camera_model = ?, state = 'exif_read' WHERE id = ?",
+                    (dt, src, model, row["id"]))
+                stats["read"] += 1
+                stats["dated" if dt else "undated"] += 1
+            conn.commit()
+    finally:
+        if owned:
+            reader.close()
+    return stats

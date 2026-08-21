@@ -42,3 +42,79 @@ def test_model_sanitised_for_filesystem():
 def test_empty_model_returns_empty_string():
     assert exif.sanitise_model("") == ""
     assert exif.sanitise_model(None) == ""
+
+
+import pytest
+from scripts.photo_archive import db
+
+
+class _FakeReader:
+    """Stands in for ExifReader so tests never spawn exiftool."""
+    def __init__(self, mapping):
+        self.mapping = mapping
+        self.closed = False
+        self.batches = []
+
+    def read_many(self, paths):
+        self.batches.append(list(paths))
+        return {p: self.mapping.get(p, {}) for p in paths}
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def idx():
+    c = db.connect(":memory:")
+    db.init_schema(c)
+    return c
+
+
+def _add(conn, path, kind="image", ext=".jpg"):
+    return db.upsert_file(conn, path=path, top_folder="t", rel_dir="",
+                          filename=path.split("\\")[-1], ext=ext, size=1,
+                          mtime=1.0, kind=kind)
+
+
+def test_norm_matches_exiftool_forward_slash_reporting():
+    # exiftool echoes SourceFile with forward slashes; our paths use backslashes.
+    assert exif._norm(r"P:\a\b.jpg") == exif._norm("P:/a/b.jpg")
+    assert exif._norm("\\\\?\\P:\\a\\b.jpg") == exif._norm("P:/a/b.jpg")
+
+
+def test_read_exif_writes_date_and_model(idx):
+    _add(idx, r"P:\a\b.jpg")
+    reader = _FakeReader({r"P:\a\b.jpg": {"DateTimeOriginal": "2019:03:04 10:11:12",
+                                          "Model": "X-T5"}})
+    stats = exif.read_exif_into_index(idx, reader=reader)
+    row = idx.execute("SELECT exif_dt, exif_dt_source, camera_model, state "
+                      "FROM files").fetchone()
+    assert row["exif_dt"] == "2019-03-04T10:11:12"
+    assert row["exif_dt_source"] == "DateTimeOriginal"
+    assert row["camera_model"] == "X-T5"
+    assert row["state"] == "exif_read"
+    assert stats["dated"] == 1
+
+
+def test_undated_row_is_still_marked_read(idx):
+    # Otherwise every run re-reads them forever and the stage never finishes.
+    _add(idx, r"P:\a\b.jpg")
+    stats = exif.read_exif_into_index(idx, reader=_FakeReader({}))
+    row = idx.execute("SELECT exif_dt, state FROM files").fetchone()
+    assert row["exif_dt"] is None
+    assert row["state"] == "exif_read"
+    assert stats["undated"] == 1
+
+
+def test_second_run_reads_nothing(idx):
+    _add(idx, r"P:\a\b.jpg")
+    exif.read_exif_into_index(idx, reader=_FakeReader({}))
+    stats = exif.read_exif_into_index(idx, reader=_FakeReader({}))
+    assert stats["read"] == 0
+
+
+def test_sidecars_and_other_files_are_not_read(idx):
+    _add(idx, r"P:\a\b.xmp", kind="sidecar", ext=".xmp")
+    _add(idx, r"P:\a\b.txt", kind="other", ext=".txt")
+    stats = exif.read_exif_into_index(idx, reader=_FakeReader({}))
+    assert stats["read"] == 0
