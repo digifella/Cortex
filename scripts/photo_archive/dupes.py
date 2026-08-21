@@ -3,7 +3,13 @@ import csv
 import os
 import re
 
-DEMOTE_MARKERS = ("dupes", "backup", "_dupes")
+# Demotion is RANKED, not binary. Paul's Lightroom catalog on L: holds the
+# authoritative location for every digital photo, so which copy survives
+# matters little for metadata - but it matters a great deal for which folder
+# can later be deleted wholesale. A survivor must never be stranded in a
+# rejects folder when an organised copy exists.
+REJECT_MARKERS = ("dupes", "_dupes", "0 and 1 star")   # rank 2 - worst
+BACKUP_MARKERS = ("backup",)                            # rank 1
 
 # Google Drive names a re-upload "IMG_0176 (1).JPG"; Windows uses "x - Copy".
 # macOS uses "_N4A5939 2". All anchored to the END of the stem, and the bare
@@ -25,7 +31,11 @@ def _is_copy(filename: str) -> bool:
 
 def _demoted(row) -> int:
     haystack = f"{row['top_folder']}/{row['rel_dir']}".lower()
-    return 1 if any(m in haystack for m in DEMOTE_MARKERS) else 0
+    if any(m in haystack for m in REJECT_MARKERS):
+        return 2
+    if any(m in haystack for m in BACKUP_MARKERS):
+        return 1
+    return 0
 
 
 def _sort_key(row):

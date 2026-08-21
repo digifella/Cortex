@@ -155,3 +155,36 @@ def test_three_digit_catalog_names_are_not_treated_as_copies():
     assert dupes._is_copy("Crowfam 2011.jpg") is False
     assert dupes._is_copy("_N4A5939 2.jpg") is True
     assert dupes._is_copy("_N4A5939 12.jpg") is True
+
+
+def test_rejects_folder_loses_to_backup_folder(conn):
+    # Both are "demoted", but they are not equally bad. A survivor must never
+    # be left in the rejects folder when an organised copy exists - Paul may
+    # delete that folder wholesale, and it would take the survivors with it.
+    _add(conn, r"P:\0 and 1 star photos originals and dupes\1 star\x.tif",
+         top="0 and 1 star photos originals and dupes", rel="1 star")
+    _add(conn, r"P:\Backup Consolidated Photos\2025\Argentina\x.tif",
+         top="Backup Consolidated Photos", rel=r"2025\Argentina")
+    keeper = dupes.choose_keeper(_rows(conn))
+    assert keeper["top_folder"] == "Backup Consolidated Photos"
+
+
+def test_rejects_rank_is_worse_than_backup_rank(conn):
+    _add(conn, r"P:\0 and 1 star photos originals and dupes\a.jpg",
+         top="0 and 1 star photos originals and dupes")
+    _add(conn, r"P:\Backup Consolidated Photos\b.jpg",
+         top="Backup Consolidated Photos")
+    _add(conn, r"P:\family_Randoms\c.jpg", top="family_Randoms")
+    ranks = {r["top_folder"]: dupes._demoted(r) for r in _rows(conn)}
+    assert ranks["family_Randoms"] == 0
+    assert ranks["Backup Consolidated Photos"] == 1
+    assert ranks["0 and 1 star photos originals and dupes"] == 2
+
+
+def test_undated_shallow_reject_still_loses_to_deep_organised(conn):
+    # The exact live case: shallow path in the rejects folder was winning.
+    _add(conn, r"P:\0 and 1 star photos originals and dupes\1 star\XT5A0756-Edit.tif",
+         top="0 and 1 star photos originals and dupes", rel="1 star")
+    _add(conn, r"P:\Backup Consolidated Photos\2025\Imported\Argentina\Buenos Aires\XT5A0756-Edit.tif",
+         top="Backup Consolidated Photos", rel=r"2025\Imported\Argentina\Buenos Aires")
+    assert dupes.choose_keeper(_rows(conn))["top_folder"] == "Backup Consolidated Photos"
