@@ -105,8 +105,6 @@ def test_colliding_timestamps_get_distinct_destinations(conn, tmp_path):
     # distinguisher. Letting the first arrival keep the clean name would
     # discard that one file's information while preserving the others'.
     assert stats["collisions"] == 3
-    assert all("-" in d.rsplit("-", 1)[-1] or d.endswith(("a.jpg", "b.jpg", "c.jpg"))
-               for d in dsts)
 
 
 def test_collision_suffixes_are_deterministic(conn, tmp_path):
@@ -215,3 +213,44 @@ def test_identical_distinguishers_still_fall_back_to_counter(conn, tmp_path):
     organise.plan_organise(conn, "P:", str(out))
     dsts = [r["dst"] for r in csv.DictReader(out.open())]
     assert len(set(dsts)) == 2
+
+
+def test_is_meaningful_rejects_camera_noise():
+    for noise in ("IMG_20210131_120141", "XS107577", "_N4A5939", "DSC0001",
+                  "PXL_20250420_052556140", "20200410_082421", "P1020304"):
+        assert organise._is_meaningful(noise) is False, noise
+
+
+def test_is_meaningful_accepts_real_description():
+    for good in ("Melb_Dawn_19 April 2020", "2020_3852_Mt Beauty",
+                 "WA_5640 x 3760", "Holiday_5640 x 3760",
+                 "Sophie_Wedding-1800 x 119", "Crowfam_Photos"):
+        assert organise._is_meaningful(good) is True, good
+
+
+def test_meaningful_text_kept_even_without_a_collision(conn, tmp_path):
+    # "Melb_Dawn" was lost because the name did not collide. It must survive.
+    db.upsert_file(conn, path=r"P:\Google Drive Photos\Melb_Dawn_19 April 2020.mp4",
+                   top_folder="Google Drive Photos", rel_dir="",
+                   filename="Melb_Dawn_19 April 2020.mp4", ext=".mp4", size=1,
+                   mtime=1.0, kind="video", exif_dt="2020-04-19T10:02:33")
+    out = tmp_path / "p.csv"
+    organise.plan_organise(conn, "P:", str(out))
+    dst = next(csv.DictReader(out.open()))["dst"]
+    assert "Melb" in dst and "Dawn" in dst
+
+
+def test_camera_noise_dropped_even_when_it_collides(conn, tmp_path):
+    # Two shots a second apart from the same phone: IMG_ serials say nothing,
+    # so a counter is correct and the name stays short.
+    for n, dt in (("IMG_20210131_120141", "2021-01-31T12:01:42"),
+                  ("IMG_20210131_120144", "2021-01-31T12:01:42")):
+        db.upsert_file(conn, path=rf"P:\Google Drive Photos\{n}.jpg",
+                       top_folder="Google Drive Photos", rel_dir="",
+                       filename=f"{n}.jpg", ext=".jpg", size=1, mtime=1.0,
+                       kind="image", exif_dt=dt, camera_model="BLA-L29")
+    out = tmp_path / "p.csv"
+    organise.plan_organise(conn, "P:", str(out))
+    dsts = [r["dst"] for r in csv.DictReader(out.open())]
+    assert len(set(dsts)) == 2
+    assert not any("IMG_" in d for d in dsts)

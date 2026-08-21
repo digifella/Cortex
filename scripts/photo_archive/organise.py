@@ -19,6 +19,23 @@ _LEADING_DT = re.compile(r"^\d{4}[-:]\d{2}[-:]\d{2}[ _T-]\d{2}[-:]\d{2}[-:]\d{2}
 _UNSAFE_STEM = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
+# Camera serials say nothing a timestamp does not already say. "IMG_20210131",
+# "XS107577", "PXL_20250420" are letters glued to a long number; real
+# descriptions ("Melb_Dawn", "Mt Beauty", "WA", "Sophie_Wedding") are not.
+# A KNOWN camera prefix glued to a number. Deliberately a whitelist: guessing
+# structurally ate "WA_5640" (Western Australia) as if it were a serial.
+_SERIAL = re.compile(
+    r"\b(?:img|imgp|dsc|dscn|dscf|pict|vid|mvi|mov|pxl|gopr|dji|xs|xt|mg|p|"
+    r"n\da|scn)[-_]?\d{3,}", re.I)
+_LONGNUM = re.compile(r"\d{4,}")
+
+
+def _is_meaningful(text: str) -> bool:
+    """True if the text says something a date-and-model name would not."""
+    t = _LONGNUM.sub(" ", _SERIAL.sub(" ", text))
+    return bool(re.search(r"[A-Za-z]{2,}", t))
+
+
 def _distinguisher(filename: str, model) -> str:
     """The part of the original name that the new name does not already say."""
     stem = os.path.splitext(filename)[0]
@@ -93,11 +110,13 @@ def plan_organise(conn, drive_root: str, out_csv: str) -> dict:
             tdir = target_dir(drive_root, row["exif_dt"])
             candidate = os.path.join(tdir, name)
             collided = contested[candidate] > 1
-            if collided:
-                extra = _distinguisher(row["filename"], row["camera_model"])
-                if extra:
-                    stem, ext = os.path.splitext(name)
-                    candidate = os.path.join(tdir, f"{stem}-{extra}{ext}")
+            # Keep genuinely descriptive text ALWAYS, not only on collision -
+            # and drop camera noise even when it does collide, letting the
+            # counter separate those instead.
+            extra = _distinguisher(row["filename"], row["camera_model"])
+            if extra and _is_meaningful(extra):
+                stem, ext = os.path.splitext(name)
+                candidate = os.path.join(tdir, f"{stem}-{extra}{ext}")
             dst, _ = _unique(candidate, taken)
             reason = "dated"
             stats["planned"] += 1
