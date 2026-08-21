@@ -2,11 +2,15 @@
 
 DRIVE = "P:"
 
+# NOTE: "Catalogued Photos_Predig and Preraw backups_19 Aug 2026" (22,453 files
+# / 284 GB) was in scope at design time but Paul removed it from P: on
+# 2026-08-21, mid-project. Confirmed deliberate. Not present on any mounted
+# volume as of that date. Removed from scope rather than left to fail the
+# walk - restore this line if it ever comes back.
 SCOPE_ROOTS = [
     "0 and 1 star photos originals and dupes",
     "Backup Consolidated Photos",
     "3+ Star_RAW_Backups",
-    "Catalogued Photos_Predig and Preraw backups_19 Aug 2026",
     "family_Randoms",
     "2024-RAW",
     "Fully Tagged Photos",

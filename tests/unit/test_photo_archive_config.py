@@ -48,7 +48,7 @@ def test_kind_classification():
 
 
 def test_scope_and_exclusions_are_disjoint():
-    assert len(config.SCOPE_ROOTS) == 12
+    assert len(config.SCOPE_ROOTS) == 11
     assert not (set(config.SCOPE_ROOTS) & config.HARD_EXCLUDE)
 
 
