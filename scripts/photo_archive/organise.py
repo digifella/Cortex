@@ -24,42 +24,71 @@ def target_dir(drive_root: str, exif_dt: str) -> str:
     return os.path.join(drive_root, year, f"{year}-{month}")
 
 
+def _unique(dst: str, taken: set) -> tuple[str, bool]:
+    """Reserve dst, suffixing -2, -3 ... if already taken. Mirrors safe_move."""
+    if dst not in taken:
+        taken.add(dst)
+        return dst, False
+    stem, ext = os.path.splitext(dst)
+    n = 2
+    while f"{stem}-{n}{ext}" in taken:
+        n += 1
+    final = f"{stem}-{n}{ext}"
+    taken.add(final)
+    return final, True
+
+
 def plan_organise(conn, drive_root: str, out_csv: str) -> dict:
-    stats = {"planned": 0, "undated": 0}
+    """Two passes: real files claim their names first, then sidecars follow
+    their parent's FINAL name so a collision suffix propagates to the sidecar."""
+    stats = {"planned": 0, "undated": 0, "collisions": 0}
     rows = conn.execute(
         "SELECT * FROM files WHERE state NOT IN "
-        "('quarantined', 'evacuated', 'organised')").fetchall()
-    by_id = {r["id"]: r for r in rows}
+        "('quarantined', 'evacuated', 'organised') ORDER BY path").fetchall()
+    taken: set = set()
+    assigned: dict = {}
+
+    def undated_dst(row):
+        return os.path.join(drive_root, UNDATED_DIR, row["top_folder"],
+                            row["rel_dir"], row["filename"])
+
+    for row in rows:
+        if row["kind"] == "sidecar":
+            continue
+        if row["exif_dt"]:
+            name = target_name(row["exif_dt"], row["camera_model"], row["ext"])
+            dst, collided = _unique(
+                os.path.join(target_dir(drive_root, row["exif_dt"]), name), taken)
+            reason = "dated"
+            stats["planned"] += 1
+        else:
+            dst, collided = _unique(undated_dst(row), taken)
+            reason = "undated"
+            stats["undated"] += 1
+        stats["collisions"] += int(collided)
+        assigned[row["id"]] = (dst, reason)
+
+    for row in rows:
+        if row["kind"] != "sidecar":
+            continue
+        parent = assigned.get(row["sidecar_of"])
+        if parent is None or parent[1] == "undated":
+            dst, collided = _unique(undated_dst(row), taken)
+            reason = "undated"
+            stats["undated"] += 1
+        else:
+            dst, collided = _unique(
+                os.path.splitext(parent[0])[0] + row["ext"].lower(), taken)
+            reason = "sidecar_follows_parent"
+            stats["planned"] += 1
+        stats["collisions"] += int(collided)
+        assigned[row["id"]] = (dst, reason)
 
     with open(out_csv, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=PLAN_FIELDS)
         writer.writeheader()
         for row in rows:
-            if row["kind"] == "sidecar":
-                parent = by_id.get(row["sidecar_of"])
-                if parent is None or not parent["exif_dt"]:
-                    dst = os.path.join(drive_root, UNDATED_DIR,
-                                       row["top_folder"], row["rel_dir"],
-                                       row["filename"])
-                    reason = "undated"
-                    stats["undated"] += 1
-                else:
-                    name = target_name(parent["exif_dt"],
-                                       parent["camera_model"], row["ext"])
-                    dst = os.path.join(target_dir(drive_root, parent["exif_dt"]),
-                                       name)
-                    reason = "sidecar_follows_parent"
-                    stats["planned"] += 1
-            elif row["exif_dt"]:
-                name = target_name(row["exif_dt"], row["camera_model"], row["ext"])
-                dst = os.path.join(target_dir(drive_root, row["exif_dt"]), name)
-                reason = "dated"
-                stats["planned"] += 1
-            else:
-                dst = os.path.join(drive_root, UNDATED_DIR, row["top_folder"],
-                                   row["rel_dir"], row["filename"])
-                reason = "undated"
-                stats["undated"] += 1
+            dst, reason = assigned[row["id"]]
             writer.writerow({"id": row["id"], "src": row["path"], "dst": dst,
                              "kind": row["kind"], "reason": reason})
     return stats

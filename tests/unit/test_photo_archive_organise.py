@@ -88,3 +88,59 @@ def test_quarantined_rows_are_not_organised(conn, tmp_path):
     out = tmp_path / "plan.csv"
     stats = organise.plan_organise(conn, "P:", str(out))
     assert stats["planned"] == 0
+
+
+def test_colliding_timestamps_get_distinct_destinations(conn, tmp_path):
+    for n in ("a", "b", "c"):
+        db.upsert_file(conn, path=rf"P:\family_Randoms\{n}.jpg",
+                       top_folder="family_Randoms", rel_dir="", filename=f"{n}.jpg",
+                       ext=".jpg", size=1, mtime=1.0, kind="image",
+                       exif_dt="1994-01-01T21:03:33", camera_model="HP pstc5200")
+    out = tmp_path / "plan.csv"
+    stats = organise.plan_organise(conn, "P:", str(out))
+    dsts = [r["dst"] for r in csv.DictReader(out.open())]
+    assert len(dsts) == 3
+    assert len(set(dsts)) == 3, "plan must not list the same destination twice"
+    assert stats["collisions"] == 2
+
+
+def test_collision_suffixes_are_deterministic(conn, tmp_path):
+    for n in ("a", "b"):
+        db.upsert_file(conn, path=rf"P:\family_Randoms\{n}.jpg",
+                       top_folder="family_Randoms", rel_dir="", filename=f"{n}.jpg",
+                       ext=".jpg", size=1, mtime=1.0, kind="image",
+                       exif_dt="1994-01-01T21:03:33", camera_model="X")
+    first = tmp_path / "1.csv"
+    second = tmp_path / "2.csv"
+    organise.plan_organise(conn, "P:", str(first))
+    organise.plan_organise(conn, "P:", str(second))
+    assert first.read_text() == second.read_text()
+
+
+def test_sidecar_inherits_parent_collision_suffix(conn, tmp_path):
+    # Two RAWs share a timestamp; each has its own sidecar. Each .xmp must
+    # follow ITS OWN parent, suffix included - never the other one's.
+    for n in ("a", "b"):
+        pid = db.upsert_file(conn, path=rf"P:\family_Randoms\{n}.raf",
+                             top_folder="family_Randoms", rel_dir="",
+                             filename=f"{n}.raf", ext=".raf", size=1, mtime=1.0,
+                             kind="raw", exif_dt="2019-03-04T10:00:00",
+                             camera_model="X-T5")
+        db.upsert_file(conn, path=rf"P:\family_Randoms\{n}.xmp",
+                       top_folder="family_Randoms", rel_dir="", filename=f"{n}.xmp",
+                       ext=".xmp", size=1, mtime=1.0, kind="sidecar", sidecar_of=pid)
+    out = tmp_path / "plan.csv"
+    organise.plan_organise(conn, "P:", str(out))
+    plan = {r["src"]: r["dst"] for r in csv.DictReader(out.open())}
+    for n in ("a", "b"):
+        raw = plan[rf"P:\family_Randoms\{n}.raf"]
+        side = plan[rf"P:\family_Randoms\{n}.xmp"]
+        assert os.path.splitext(raw)[0] == os.path.splitext(side)[0]
+    assert len(set(plan.values())) == 4
+
+
+def test_unique_returns_collision_flag():
+    taken = set()
+    assert organise._unique("P:/a/x.jpg", taken) == ("P:/a/x.jpg", False)
+    assert organise._unique("P:/a/x.jpg", taken) == ("P:/a/x-2.jpg", True)
+    assert organise._unique("P:/a/x.jpg", taken) == ("P:/a/x-3.jpg", True)
