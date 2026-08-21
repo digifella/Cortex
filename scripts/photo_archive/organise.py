@@ -1,13 +1,33 @@
 # scripts/photo_archive/organise.py
 """Stage 8 - rename to the house convention and file under YYYY/YYYY-MM."""
+import collections
 import csv
 import os
+import re
 
 from .exif import sanitise_model
 from .execute import safe_move
 from .paths import win_long
 
 UNDATED_DIR = "_UNDATED"
+
+# Film scans carry batch-assigned timestamps - 151 different photographs can
+# share "1985-01-01 00-00-00". A bare -2..-151 counter would discard the only
+# thing telling them apart, which lives in the current filename (_WA_,
+# _Holiday_, Sophie_Wedding, pixel dimensions). On collision we keep that.
+_LEADING_DT = re.compile(r"^\d{4}[-:]\d{2}[-:]\d{2}[ _T-]\d{2}[-:]\d{2}[-:]\d{2}")
+_UNSAFE_STEM = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _distinguisher(filename: str, model) -> str:
+    """The part of the original name that the new name does not already say."""
+    stem = os.path.splitext(filename)[0]
+    stem = _LEADING_DT.sub("", stem)
+    if model:
+        stem = stem.replace(str(model), "")
+    stem = _UNSAFE_STEM.sub("-", stem)
+    stem = re.sub(r"[-_\s]{2,}", "-", stem).strip("-_ .")
+    return stem[:60].strip("-_ .")
 PLAN_FIELDS = ["id", "src", "dst", "kind", "reason"]
 
 
@@ -49,6 +69,18 @@ def plan_organise(conn, drive_root: str, out_csv: str) -> dict:
     taken: set = set()
     assigned: dict = {}
 
+    # Pass 0 - which target names are contested? If a name is claimed by more
+    # than one file, EVERY claimant gets its distinguisher. Letting the first
+    # arrival keep the clean name would arbitrarily discard that one file's
+    # information while preserving everyone else's.
+    contested: collections.Counter = collections.Counter()
+    for row in rows:
+        if row["kind"] == "sidecar" or not row["exif_dt"]:
+            continue
+        contested[os.path.join(
+            target_dir(drive_root, row["exif_dt"]),
+            target_name(row["exif_dt"], row["camera_model"], row["ext"]))] += 1
+
     def undated_dst(row):
         return os.path.join(drive_root, UNDATED_DIR, row["top_folder"],
                             row["rel_dir"], row["filename"])
@@ -58,8 +90,15 @@ def plan_organise(conn, drive_root: str, out_csv: str) -> dict:
             continue
         if row["exif_dt"]:
             name = target_name(row["exif_dt"], row["camera_model"], row["ext"])
-            dst, collided = _unique(
-                os.path.join(target_dir(drive_root, row["exif_dt"]), name), taken)
+            tdir = target_dir(drive_root, row["exif_dt"])
+            candidate = os.path.join(tdir, name)
+            collided = contested[candidate] > 1
+            if collided:
+                extra = _distinguisher(row["filename"], row["camera_model"])
+                if extra:
+                    stem, ext = os.path.splitext(name)
+                    candidate = os.path.join(tdir, f"{stem}-{extra}{ext}")
+            dst, _ = _unique(candidate, taken)
             reason = "dated"
             stats["planned"] += 1
         else:

@@ -101,7 +101,12 @@ def test_colliding_timestamps_get_distinct_destinations(conn, tmp_path):
     dsts = [r["dst"] for r in csv.DictReader(out.open())]
     assert len(dsts) == 3
     assert len(set(dsts)) == 3, "plan must not list the same destination twice"
-    assert stats["collisions"] == 2
+    # All three are contested, so all three are counted and all three carry a
+    # distinguisher. Letting the first arrival keep the clean name would
+    # discard that one file's information while preserving the others'.
+    assert stats["collisions"] == 3
+    assert all("-" in d.rsplit("-", 1)[-1] or d.endswith(("a.jpg", "b.jpg", "c.jpg"))
+               for d in dsts)
 
 
 def test_collision_suffixes_are_deterministic(conn, tmp_path):
@@ -161,3 +166,52 @@ def test_non_photo_files_are_left_alone(conn, tmp_path):
     srcs = [r["src"] for r in csv.DictReader(out.open())]
     assert r"P:\a\real.jpg" in srcs
     assert r"P:\a\x.jpg.gdrive" not in srcs
+
+
+def test_distinguisher_strips_redundant_date_and_model():
+    # "1992-09-03 14-43-35_WA_5640 x 3760_Film Scanner.jpg" already repeats the
+    # date and model that the new name carries; only "_WA_5640 x 3760" is new.
+    d = organise._distinguisher("1992-09-03 14-43-35_WA_5640 x 3760_Film Scanner.jpg",
+                                "Film Scanner")
+    assert "1992" not in d
+    assert "Film Scanner" not in d
+    assert "WA" in d and "5640" in d
+
+
+def test_distinguisher_sanitises_and_caps_length():
+    d = organise._distinguisher('a<b>c:d"e/f\\g|h?i*j.jpg', None)
+    assert not any(ch in d for ch in '<>:"/\\|?*')
+    long = organise._distinguisher("x" * 200 + ".jpg", None)
+    assert len(long) <= 60
+
+
+def test_collision_preserves_original_information(conn, tmp_path):
+    for stem in ("1992-09-03 14-43-35_WA_5640 x 3760_Film Scanner",
+                 "1992-09-03 14-43-35_Holiday_3760 x 5640_Film Scanner"):
+        db.upsert_file(conn, path=rf"P:\family_Randoms\{stem}.jpg",
+                       top_folder="family_Randoms", rel_dir="",
+                       filename=f"{stem}.jpg", ext=".jpg", size=1, mtime=1.0,
+                       kind="image", exif_dt="1992-09-03T14:43:35",
+                       camera_model="Film Scanner")
+    out = tmp_path / "plan.csv"
+    organise.plan_organise(conn, "P:", str(out))
+    dsts = [r["dst"] for r in csv.DictReader(out.open())]
+    assert len(set(dsts)) == 2
+    joined = " ".join(dsts)
+    # BOTH must keep their distinguishing text - neither is privileged.
+    assert "WA" in joined and "Holiday" in joined
+    assert not any(d.endswith("-2.jpg") for d in dsts)
+
+
+def test_identical_distinguishers_still_fall_back_to_counter(conn, tmp_path):
+    # Same original stem in two folders - the distinguisher cannot separate
+    # them, so the numeric suffix must still guarantee uniqueness.
+    for folder in ("family_Randoms", "Google Drive Photos"):
+        db.upsert_file(conn, path=rf"P:\{folder}\beach.jpg", top_folder=folder,
+                       rel_dir="", filename="beach.jpg", ext=".jpg", size=1,
+                       mtime=1.0, kind="image", exif_dt="2019-03-04T10:00:00",
+                       camera_model="X-T5")
+    out = tmp_path / "plan.csv"
+    organise.plan_organise(conn, "P:", str(out))
+    dsts = [r["dst"] for r in csv.DictReader(out.open())]
+    assert len(set(dsts)) == 2
