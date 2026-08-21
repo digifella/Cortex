@@ -202,3 +202,38 @@ def test_missing_create_date_is_not_a_conflict(idx, tmp_path):
         {r"P:\a\one.jpg": {"DateTimeOriginal": "2019:03:04 10:11:12"}}))
     out = tmp_path / "c.csv"
     assert exif.report_date_conflicts(idx, str(out))["conflicts"] == 0
+
+
+def test_implausible_year_is_reported_even_when_tags_agree(idx, tmp_path):
+    # Real case: Africa_Wendy_0041.JPG dated 2426-03-07 by a failed camera
+    # clock. BOTH tags agree, so the year-mismatch test cannot see it, yet it
+    # would create a P:\2426\ folder.
+    _add(idx, r"P:\a\future.jpg")
+    exif.read_exif_into_index(idx, reader=_FakeReader(
+        {r"P:\a\future.jpg": {"DateTimeOriginal": "2426:03:07 17:14:13",
+                              "CreateDate": "2426:03:07 17:14:13"}}))
+    out = tmp_path / "c.csv"
+    stats = exif.report_date_conflicts(idx, str(out))
+    assert stats["implausible"] == 1
+    row = next(r for r in csv.DictReader(out.open()) if r["reason"] == "implausible_year")
+    assert row["exif_dt"].startswith("2426")
+
+
+def test_plausible_old_scan_year_is_not_flagged_implausible(idx, tmp_path):
+    # 1910 family photos are real on this drive and must not be flagged.
+    _add(idx, r"P:\a\old.jpg")
+    exif.read_exif_into_index(idx, reader=_FakeReader(
+        {r"P:\a\old.jpg": {"DateTimeOriginal": "1910:06:01 12:00:00",
+                           "CreateDate": "1910:06:01 12:00:00"}}))
+    out = tmp_path / "c.csv"
+    assert exif.report_date_conflicts(idx, str(out))["implausible"] == 0
+
+
+def test_conflict_rows_carry_a_reason(idx, tmp_path):
+    _add(idx, r"P:\a\m.jpg")
+    exif.read_exif_into_index(idx, reader=_FakeReader(
+        {r"P:\a\m.jpg": {"DateTimeOriginal": "2003:01:19 16:13:13",
+                         "CreateDate": "2023:01:19 16:13:13"}}))
+    out = tmp_path / "c.csv"
+    exif.report_date_conflicts(idx, str(out))
+    assert next(csv.DictReader(out.open()))["reason"] == "year_mismatch"

@@ -149,8 +149,13 @@ def read_exif_into_index(conn, reader=None, exiftool: str = "exiftool",
     return stats
 
 
-CONFLICT_FIELDS = ["path", "top_folder", "exif_dt", "exif_dt_source",
+CONFLICT_FIELDS = ["reason", "path", "top_folder", "exif_dt", "exif_dt_source",
                    "exif_create_dt", "camera_model"]
+
+# Photography predates 1826, and a capture date in the future is a dead camera
+# clock. Real example: 2426-03-07 from an Olympus u1050SW, where BOTH tags
+# agreed - so the year-mismatch test could never have caught it.
+PLAUSIBLE_MIN_YEAR = 1826
 
 
 def report_date_conflicts(conn, out_csv: str) -> dict:
@@ -167,16 +172,30 @@ def report_date_conflicts(conn, out_csv: str) -> dict:
     DateTimeOriginal wins, which is correct for scans - and the disagreement is
     reported here for a human to adjudicate before organising.
     """
-    rows = conn.execute(
-        "SELECT path, top_folder, exif_dt, exif_dt_source, exif_create_dt, "
-        "camera_model FROM files "
-        "WHERE exif_dt IS NOT NULL AND exif_create_dt IS NOT NULL "
+    import datetime
+    next_year = str(datetime.date.today().year + 1)
+    cols = ("path", "top_folder", "exif_dt", "exif_dt_source",
+            "exif_create_dt", "camera_model")
+    sel = "SELECT " + ", ".join(cols) + " FROM files "
+
+    mismatched = conn.execute(
+        sel + "WHERE exif_dt IS NOT NULL AND exif_create_dt IS NOT NULL "
         "AND substr(exif_dt, 1, 4) != substr(exif_create_dt, 1, 4) "
         "ORDER BY path").fetchall()
+    implausible = conn.execute(
+        sel + "WHERE exif_dt IS NOT NULL AND (substr(exif_dt, 1, 4) < ? "
+        "OR substr(exif_dt, 1, 4) > ?) ORDER BY path",
+        (str(PLAUSIBLE_MIN_YEAR), next_year)).fetchall()
+
     with open(out_csv, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=CONFLICT_FIELDS)
         writer.writeheader()
-        for row in rows:
-            writer.writerow({k: row[k] for k in CONFLICT_FIELDS})
-    return {"conflicts": len(rows),
-            "folders": len({r["top_folder"] for r in rows})}
+        for reason, rows in (("year_mismatch", mismatched),
+                             ("implausible_year", implausible)):
+            for row in rows:
+                rec = {k: row[k] for k in cols}
+                rec["reason"] = reason
+                writer.writerow(rec)
+    return {"conflicts": len(mismatched),
+            "implausible": len(implausible),
+            "folders": len({r["top_folder"] for r in mismatched + implausible})}

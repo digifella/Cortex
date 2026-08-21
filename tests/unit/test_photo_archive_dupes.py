@@ -138,3 +138,20 @@ def test_is_copy_suffixed_detects_forms():
     assert dupes._is_copy("IMG_0176.JPG") is False
     # A legitimate name that merely contains brackets must NOT be flagged.
     assert dupes._is_copy("Trip (Italy) 2019.jpg") is False
+
+
+def test_keeper_prefers_clean_name_over_macos_space_number(conn):
+    # macOS names duplicates "_N4A5939 2.jpg". Seen 10,809 times on P:.
+    _add(conn, r"P:\family_Randoms\_N4A5939 3.jpg", mtime=1.0)
+    _add(conn, r"P:\family_Randoms\_N4A5939 2.jpg", mtime=2.0)
+    _add(conn, r"P:\family_Randoms\_N4A5939.jpg", mtime=999.0)
+    assert dupes.choose_keeper(_rows(conn))["path"].endswith("_N4A5939.jpg")
+
+
+def test_three_digit_catalog_names_are_not_treated_as_copies():
+    # "Family 158.jpg" is a real catalog name on P:, not a copy of "Family".
+    # Restricting to 1-2 digits keeps macOS copies without eating these.
+    assert dupes._is_copy("Family 158.jpg") is False
+    assert dupes._is_copy("Crowfam 2011.jpg") is False
+    assert dupes._is_copy("_N4A5939 2.jpg") is True
+    assert dupes._is_copy("_N4A5939 12.jpg") is True

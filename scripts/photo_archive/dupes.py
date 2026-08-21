@@ -6,9 +6,16 @@ import re
 DEMOTE_MARKERS = ("dupes", "backup", "_dupes")
 
 # Google Drive names a re-upload "IMG_0176 (1).JPG"; Windows uses "x - Copy".
-# Anchored to the END of the stem so a real name like "Trip (Italy) 2019" is
-# untouched.
-_COPY_RE = re.compile(r"(?:\s*-\s*Copy)?\s*\(\d+\)$|\s*-\s*Copy$", re.I)
+# macOS uses "_N4A5939 2". All anchored to the END of the stem, and the bare
+# space-number form is capped at TWO digits so real catalog names like
+# "Family 158.jpg" and "Crowfam 2011.jpg" are not eaten. This only ever
+# discriminates within a byte-identical group, so a false positive costs
+# nothing but a filename preference.
+_COPY_RE = re.compile(
+    r"(?:\s*-\s*Copy)?\s*\(\d+\)$"   # Google Drive / Windows "(1)"
+    r"|\s*-\s*Copy$"                    # Windows "- Copy"
+    r"|\s\d{1,2}$",                     # macOS "_N4A5939 2"
+    re.I)
 
 
 def _is_copy(filename: str) -> bool:
