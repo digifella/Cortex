@@ -21,6 +21,8 @@ spec makes tiers 2 and 3 reviewable, because a perceptual match is a judgement
 and a byte match is a fact.
 """
 import csv
+import os
+import re
 
 from .paths import win_long
 
@@ -62,10 +64,13 @@ def _candidate_sql(extra: str = "") -> str:
 
 
 def hash_candidates(conn, limit: int | None = None,
-                    progress_every: int = 0) -> dict:
+                    progress_every: int = 0, min_size: int = 0) -> dict:
     """Decode and hash every candidate still. Resumable: skips rows already done."""
     stats = {"hashed": 0, "errors": 0, "candidates": 0}
-    rows = conn.execute(_candidate_sql("AND percept_hash IS NULL")).fetchall()
+    extra = "AND percept_hash IS NULL"
+    if min_size:
+        extra += f" AND size > {int(min_size)}"
+    rows = conn.execute(_candidate_sql(extra)).fetchall()
     stats["candidates"] = len(rows)
     if limit:
         rows = rows[:limit]
@@ -88,7 +93,25 @@ def hash_candidates(conn, limit: int | None = None,
     return stats
 
 
-FIELDS = ["group_id", "role", "path", "top_folder", "rel_dir", "size",
+_EDIT = re.compile(r"[-_](edit|edited)\b", re.I)
+
+
+def _classify(names: list[str]) -> str:
+    """Why this group matched - so false positives can be filtered, not spotted.
+
+    An original and its -Edit are perceptually near-identical BY DESIGN; the
+    edit is work, not waste. A TIF master and its JPG export are both
+    intentional. Neither should ever be proposed for removal.
+    """
+    edits = [bool(_EDIT.search(os.path.splitext(n)[0])) for n in names]
+    if any(edits) and not all(edits):
+        return "edit_pair"
+    if len({os.path.splitext(n)[1].lower() for n in names}) > 1:
+        return "cross_format"
+    return "candidate"
+
+
+FIELDS = ["group_id", "flag", "role", "path", "top_folder", "rel_dir", "size",
           "ext", "exif_dt", "camera_model", "percept_hash"]
 
 
@@ -121,12 +144,15 @@ def plan_tier3(conn, out_csv: str) -> dict:
             if len(members) < 2:
                 continue
             stats["groups"] += 1
+            flag = _classify([os.path.basename(m["path"]) for m in members])
+            stats.setdefault(flag, 0)
+            stats[flag] += 1
             keeper = members[0]
             for row in members:
                 role = "keep" if row["id"] == keeper["id"] else "review"
-                if role == "review":
+                if role == "review" and flag == "candidate":
                     stats["candidates_for_review"] += 1
                     stats["bytes_if_applied"] += row["size"]
                 writer.writerow({k: row[k] for k in FIELDS if k in row.keys()}
-                                | {"group_id": gid, "role": role})
+                                | {"group_id": gid, "role": role, "flag": flag})
     return stats

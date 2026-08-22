@@ -107,3 +107,44 @@ def test_plan_is_report_only_and_never_marks_state(conn, tmp_path):
     perceptual.plan_tier3(conn, str(tmp_path / "t3.csv"))
     states = {r[0] for r in conn.execute("SELECT state FROM files")}
     assert states == {"exif_read"}, "tier 3 is reviewable only - it must not act"
+
+
+def test_min_size_filter_skips_small_files(conn, tmp_path):
+    small = _img(tmp_path / "s1.jpg", (2, 2, 2), size=(40, 30))
+    _img(tmp_path / "s2.jpg", (2, 2, 2), size=(40, 30))
+    import os
+    for p in ("s1.jpg", "s2.jpg"):
+        db.upsert_file(conn, path=str(tmp_path / p), top_folder="t", rel_dir="",
+                       filename=p, ext=".jpg", size=os.path.getsize(tmp_path / p),
+                       mtime=1.0, kind="image", exif_dt="2019-03-04T10:00:00")
+    assert perceptual.hash_candidates(conn, min_size=10_000_000)["hashed"] == 0
+    assert perceptual.hash_candidates(conn, min_size=0)["hashed"] == 2
+
+
+def test_group_flags_separate_edits_and_formats(conn, tmp_path):
+    def add(name, ext):
+        p = tmp_path / name
+        _img(p, (44, 88, 122))
+        db.upsert_file(conn, path=str(p), top_folder="t", rel_dir="",
+                       filename=name, ext=ext, size=100, mtime=1.0,
+                       kind="image", exif_dt="2019-03-04T10:00:00")
+    add("shot.jpg", ".jpg")
+    add("shot-Edit.jpg", ".jpg")
+    perceptual.hash_candidates(conn, min_size=0)
+    out = tmp_path / "t3.csv"
+    perceptual.plan_tier3(conn, str(out))
+    flags = {r["flag"] for r in csv.DictReader(out.open())}
+    assert flags == {"edit_pair"}, "an original/-Edit pair must be flagged, not proposed"
+
+
+def test_same_format_no_edit_is_flagged_reviewable(conn, tmp_path):
+    for name in ("one.jpg", "two.jpg"):
+        p = tmp_path / name
+        _img(p, (17, 17, 90))
+        db.upsert_file(conn, path=str(p), top_folder="t", rel_dir="",
+                       filename=name, ext=".jpg", size=100, mtime=1.0,
+                       kind="image", exif_dt="2019-03-04T10:00:00")
+    perceptual.hash_candidates(conn, min_size=0)
+    out = tmp_path / "t3.csv"
+    perceptual.plan_tier3(conn, str(out))
+    assert {r["flag"] for r in csv.DictReader(out.open())} == {"candidate"}
