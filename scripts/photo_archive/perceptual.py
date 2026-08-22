@@ -103,9 +103,14 @@ def _classify(names: list[str]) -> str:
     edit is work, not waste. A TIF master and its JPG export are both
     intentional. Neither should ever be proposed for removal.
     """
-    edits = [bool(_EDIT.search(os.path.splitext(n)[0])) for n in names]
-    if any(edits) and not all(edits):
+    stems = [os.path.splitext(n)[0] for n in names]
+    depths = [len(_EDIT.findall(s)) for s in stems]
+    if any(depths) and 0 in depths:
         return "edit_pair"
+    # "-Edit" vs "-Edit-Edit-Edit" are successive GENERATIONS of the same work,
+    # not copies of each other. They match perceptually by design.
+    if any(depths) and len(set(depths)) > 1:
+        return "edit_chain"
     if len({os.path.splitext(n)[1].lower() for n in names}) > 1:
         return "cross_format"
     return "candidate"

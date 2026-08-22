@@ -148,3 +148,18 @@ def test_same_format_no_edit_is_flagged_reviewable(conn, tmp_path):
     out = tmp_path / "t3.csv"
     perceptual.plan_tier3(conn, str(out))
     assert {r["flag"] for r in csv.DictReader(out.open())} == {"candidate"}
+
+
+def test_edit_chain_is_flagged_not_proposed():
+    # "-Edit" vs "-Edit-Edit-Edit" are successive generations of the user's own
+    # work. They match perceptually BY DESIGN. The old rule let them through
+    # because ALL members carried "-Edit".
+    assert perceptual._classify(["shot-Edit.tif", "shot-Edit-Edit.tif"]) == "edit_chain"
+    assert perceptual._classify(
+        ["a-Edit.tif", "a-Edit-Edit-Edit.tif", "a-Edit-Edit.tif"]) == "edit_chain"
+
+
+def test_same_edit_depth_is_still_a_candidate():
+    # Two files at the SAME edit generation really can be redundant copies.
+    assert perceptual._classify(["a-Edit.tif", "b-Edit.tif"]) == "candidate"
+    assert perceptual._classify(["a.tif", "b.tif"]) == "candidate"
