@@ -127,17 +127,30 @@ def plan_organise(conn, drive_root: str, out_csv: str) -> dict:
         stats["collisions"] += int(collided)
         assigned[row["id"]] = (dst, reason)
 
-    for row in rows:
-        if row["kind"] != "sidecar":
-            continue
+    # RAW parents first: Lightroom only consults sidecars for proprietary raws,
+    # so when two sidecars reduce to the same name the RAW must win the plain
+    # <stem>.xmp and the other takes an extension-qualified <stem>.jpg.xmp.
+    # Previously the loser became <stem>-2.xmp and detached from its parent.
+    by_id = {r["id"]: r for r in rows}
+
+    def _sidecar_order(r):
+        parent = by_id.get(r["sidecar_of"])
+        return (0 if parent is not None and parent["kind"] == "raw" else 1,
+                r["path"])
+
+    for row in sorted((r for r in rows if r["kind"] == "sidecar"),
+                      key=_sidecar_order):
         parent = assigned.get(row["sidecar_of"])
         if parent is None or parent[1] == "undated":
             dst, collided = _unique(undated_dst(row), taken)
             reason = "undated"
             stats["undated"] += 1
         else:
-            dst, collided = _unique(
-                os.path.splitext(parent[0])[0] + row["ext"].lower(), taken)
+            pstem, pext = os.path.splitext(parent[0])
+            wanted = pstem + row["ext"].lower()
+            if wanted in taken:
+                wanted = pstem + pext.lower() + row["ext"].lower()
+            dst, collided = _unique(wanted, taken)
             reason = "sidecar_follows_parent"
             stats["planned"] += 1
         stats["collisions"] += int(collided)

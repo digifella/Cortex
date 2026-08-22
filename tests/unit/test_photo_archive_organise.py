@@ -254,3 +254,50 @@ def test_camera_noise_dropped_even_when_it_collides(conn, tmp_path):
     dsts = [r["dst"] for r in csv.DictReader(out.open())]
     assert len(set(dsts)) == 2
     assert not any("IMG_" in d for d in dsts)
+
+
+def test_two_sidecars_for_same_stem_stay_attached(conn, tmp_path):
+    # A .raf and a .jpg of one photo, each with its own .xmp, reduce to the
+    # same stem. Both sidecars wanted <stem>.xmp; the loser used to become
+    # <stem>-2.xmp and detach from its parent entirely.
+    for ext, kind in ((".raf", "raw"), (".jpg", "image")):
+        pid = db.upsert_file(conn, path=rf"P:\family_Randoms\shot{ext}",
+                             top_folder="family_Randoms", rel_dir="",
+                             filename=f"shot{ext}", ext=ext, size=1, mtime=1.0,
+                             kind=kind, exif_dt="2019-04-07T14:57:22",
+                             camera_model="X-T1")
+        db.upsert_file(conn, path=rf"P:\family_Randoms\shot{ext}.xmp",
+                       top_folder="family_Randoms", rel_dir="",
+                       filename=f"shot{ext}.xmp", ext=".xmp", size=1, mtime=1.0,
+                       kind="sidecar", sidecar_of=pid)
+    out = tmp_path / "p.csv"
+    organise.plan_organise(conn, "P:", str(out))
+    plan = {r["src"]: r["dst"] for r in csv.DictReader(out.open())}
+    for ext in (".raf", ".jpg"):
+        parent = plan[rf"P:\family_Randoms\shot{ext}"]
+        side = plan[rf"P:\family_Randoms\shot{ext}.xmp"]
+        assert os.path.dirname(parent) == os.path.dirname(side)
+        # the sidecar must start with its OWN parent's full stem
+        assert os.path.basename(side).startswith(
+            os.path.splitext(os.path.basename(parent))[0])
+    assert not any(d.endswith("-2.xmp") for d in plan.values())
+
+
+def test_raw_parent_keeps_the_plain_sidecar_name(conn, tmp_path):
+    # Lightroom only consults sidecars for proprietary raws, so the RAW must
+    # win the unqualified <stem>.xmp when two compete for it.
+    for ext, kind in ((".jpg", "image"), (".raf", "raw")):
+        pid = db.upsert_file(conn, path=rf"P:\family_Randoms\s{ext}",
+                             top_folder="family_Randoms", rel_dir="",
+                             filename=f"s{ext}", ext=ext, size=1, mtime=1.0,
+                             kind=kind, exif_dt="2019-04-07T14:57:22",
+                             camera_model="X-T1")
+        db.upsert_file(conn, path=rf"P:\family_Randoms\s{ext}.xmp",
+                       top_folder="family_Randoms", rel_dir="",
+                       filename=f"s{ext}.xmp", ext=".xmp", size=1, mtime=1.0,
+                       kind="sidecar", sidecar_of=pid)
+    out = tmp_path / "p.csv"
+    organise.plan_organise(conn, "P:", str(out))
+    plan = {r["src"]: r["dst"] for r in csv.DictReader(out.open())}
+    raw_side = os.path.basename(plan[r"P:\family_Randoms\s.raf.xmp"])
+    assert raw_side.count(".") == 1, f"raw sidecar should be plain: {raw_side}"
