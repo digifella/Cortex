@@ -2332,6 +2332,47 @@ class DocumentTextifier:
             logger.warning(f"LM Studio keyword extraction failed: {e}")
             return None
 
+    def _keywords_from_claude(self, prompt: str) -> Optional[str]:
+        """Ask Claude Haiku for the keywords. None if disabled/unavailable.
+
+        Opt-in via CORTEX_CLAUDE_KEYWORDS=1. Measured 2026-09-01 against the
+        resident LM Studio VLM on the same prompt: Haiku 0.88s median and
+        near-zero variance (0.9s on 4/4 runs), LM Studio 2.84s median swinging
+        0.9-5.2s with GPU contention. Keyword extraction is a short text task
+        (~242 in / 30 out tokens, ~$0.0004/photo), so moving it off the GPU
+        removes the contention that made per-photo time unpredictable, and
+        leaves the GPU free for vision — which stays on LM Studio because
+        Haiku saved little there.
+        """
+        if os.environ.get("CORTEX_CLAUDE_KEYWORDS", "").strip().lower() not in {"1", "true", "yes"}:
+            return None
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            logger.warning("CORTEX_CLAUDE_KEYWORDS set but ANTHROPIC_API_KEY missing")
+            return None
+        try:
+            import anthropic
+        except ImportError:
+            logger.warning("anthropic package not installed — Claude keywords unavailable")
+            return None
+        try:
+            started = time.monotonic()
+            client = anthropic.Anthropic(api_key=api_key)
+            response = client.messages.create(
+                model=self.CLAUDE_VISION_MODEL,
+                max_tokens=256,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = "".join(b.text for b in response.content if getattr(b, "type", "") == "text")
+            logger.info(
+                "Claude keywords (%s) returned %d chars in %.1fs",
+                self.CLAUDE_VISION_MODEL, len(raw), time.monotonic() - started,
+            )
+            return raw.strip() or None
+        except Exception as e:
+            logger.warning(f"Claude keyword extraction failed: {e}")
+            return None
+
     def _keywords_from_ollama(self, prompt: str) -> Optional[str]:
         """Fallback: first installed TEXT_MODELS entry. None if unavailable."""
         try:
@@ -2376,7 +2417,11 @@ class DocumentTextifier:
             return []
 
         prompt = self._keyword_prompt(description, anchor_keywords)
-        raw = self._keywords_from_lmstudio(prompt)
+        # Claude first when opted in (off the GPU, ~3x faster, no variance),
+        # then the resident LM Studio model, then Ollama, then the splitter.
+        raw = self._keywords_from_claude(prompt)
+        if raw is None:
+            raw = self._keywords_from_lmstudio(prompt)
         if raw is None:
             raw = self._keywords_from_ollama(prompt)
         if not raw:
@@ -2802,7 +2847,6 @@ class DocumentTextifier:
                     "-json",
                     "-DateTimeOriginal",
                     "-OffsetTimeOriginal",
-                    "-OffsetTime",
                     "-CreateDate",
                     file_path,
                 ],
@@ -2832,8 +2876,18 @@ class DocumentTextifier:
             )
         except ValueError:
             return None
+        # Only OffsetTimeOriginal is trusted. Per EXIF, OffsetTime qualifies
+        # DateTime (last-modified), not DateTimeOriginal, so it is the wrong
+        # frame for a capture time — and in this archive it is routinely a
+        # spurious host-timezone stamp: a 2012 X-Pro/X-E body predates the tag
+        # entirely (EXIF 2.31, 2016) yet carries one, master and export disagree
+        # (+11:00 vs +10:00) on the same photo, and an iPhone shot holds a
+        # genuine OffsetTimeOriginal of +08:00 beside an injected +10:00.
+        # Trusting it put a Dubai midday shot 6 hours out and labelled it
+        # "pre-dawn". With it dropped, a GPS-tagged photo falls through to the
+        # longitude-derived zone below, which is right to within an hour.
         offset_minutes = DocumentTextifier._parse_exif_tz_offset_minutes(
-            str(row.get("OffsetTimeOriginal") or row.get("OffsetTime") or "")
+            str(row.get("OffsetTimeOriginal") or "")
         )
         return {"datetime_naive": dt_naive, "offset_minutes": offset_minutes, "source": "exif"}
 

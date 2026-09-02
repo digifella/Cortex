@@ -663,6 +663,24 @@ written yet — this is for deciding which subjects to collapse further.</p>
 DUPLICATE_KEYWORD = "Duplicate"
 
 
+def merge_keywords(*groups) -> list:
+    """Union of keyword groups, case-insensitive, first spelling wins.
+
+    A plain list-concat doubled every place tag ("Melbourne" + "melbourne"),
+    so dedupe on the lowercased form while keeping the earliest casing — which
+    is the master's own, i.e. Lightroom's.
+    """
+    out, seen = [], set()
+    for g in groups:
+        for k in (g or []):
+            k = str(k).strip()
+            lk = k.lower()
+            if k and lk not in seen:
+                seen.add(lk)
+                out.append(k)
+    return out
+
+
 def read_keywords_bulk(paths: list[Path]) -> dict:
     """One exiftool call for every target; avoids a read round-trip per file on L:."""
     if not paths:
@@ -808,13 +826,25 @@ def cmd_apply(args) -> None:
     # Captions that were already on the export before this run live only on disk.
     on_disk = read_descriptions_bulk(
         [directory / s for _, s, _ in catalog_plan if state[s].get("preexisting")])
+    # ...and so do their KEYWORDS. `describe` marks an already-captioned export
+    # `preexisting` and stores caption=None, keywords=None, so rec["keywords"] is
+    # empty for every photo this pipeline captioned before syncing — which is all
+    # of them (photo_batch tags first, photo_dedup syncs after). The caption had a
+    # read-from-disk path; keywords did not, so masters received the caption but
+    # none of the VLM keywords. Found 2026-09-03: 2016 exports carried 13-18
+    # keywords while their masters had only Paul's own 2-6.
+    on_disk_kw = read_keywords_bulk(
+        [directory / s for _, s, _ in catalog_plan if state[s].get("preexisting")])
     ok = fail = 0
     for i, (path, source, mark) in enumerate(catalog_plan, start=1):
         rec = state[source]
         place = place_of(rec)
-        kws = list(dict.fromkeys(
-            existing.get(str(path), []) + rec.get("keywords", []) +
-            place_keywords(rec) + ([DUPLICATE_KEYWORD] if mark else [])))
+        kws = merge_keywords(
+            existing.get(str(path), []),
+            on_disk_kw.get(str(directory / source), []),
+            rec.get("keywords", []),
+            place_keywords(rec),
+            [DUPLICATE_KEYWORD] if mark else [])
         caption = rec.get("caption") or on_disk.get(str(directory / source), "")
         good, err = write_tags(path, kws, caption, place, keep_backup=True)
         ok, fail = ok + good, fail + (not good)

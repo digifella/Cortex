@@ -123,6 +123,7 @@ def build_sync_config(
     keep_backups: bool = True,
     filter_keywords=None,
     timestamp_tolerance: int = 0,
+    name_prefix: str | None = None,
 ):
     """Build a SyncConfig with the same defaults the Streamlit page uses."""
     from cortex_engine.llm_metadata_sync.models import SyncConfig
@@ -134,6 +135,7 @@ def build_sync_config(
         keep_backups=keep_backups,
         timestamp_tolerance_seconds=timestamp_tolerance,
         dry_run=dry_run,
+        jpg_name_prefix=name_prefix,
     )
 
 
@@ -143,10 +145,14 @@ def scan_actions(cfg):
     Returns (actions, orphaned_jpgs). Read-only — builds the index and resolves
     matches, writes nothing.
     """
-    from cortex_engine.llm_metadata_sync.matcher import build_raw_index, resolve_jpg
+    from cortex_engine.llm_metadata_sync.matcher import (
+        build_raw_index,
+        list_source_jpgs,
+        resolve_jpg,
+    )
 
     index = build_raw_index(cfg.raw_root, cfg)
-    jpgs = sorted(list(cfg.jpg_dir.glob("*.jpg")) + list(cfg.jpg_dir.glob("*.JPG")))
+    jpgs = list_source_jpgs(cfg)
     actions = []
     orphaned = []
     for jpg in jpgs:
@@ -166,6 +172,7 @@ def sync_photos(
     keep_backups: bool = True,
     filter_keywords=None,
     timestamp_tolerance: int = 0,
+    name_prefix: str | None = None,
 ) -> dict:
     """Dry-run scan (always), then live reconciliation when apply=True."""
     cfg = build_sync_config(
@@ -175,6 +182,7 @@ def sync_photos(
         keep_backups=keep_backups,
         filter_keywords=filter_keywords,
         timestamp_tolerance=timestamp_tolerance,
+        name_prefix=name_prefix,
     )
     actions, orphaned = scan_actions(cfg)
     matched_jpgs = len({a.jpg_path for a in actions})
@@ -260,7 +268,16 @@ def tag_one(path: Path, ownership_notice: str, local_vision: bool = False) -> di
     """
     from cortex_engine.textifier import DocumentTextifier
 
-    t = DocumentTextifier(use_vision=True, prefer_local_vision=local_vision)
+    # auto_select_vision=False is a 15s/photo saving, not a tuning nicety.
+    # The constructor's _select_vision_model() probes Ollama to rank its vision
+    # models. This pipeline never uses Ollama vision — it is either Claude Haiku
+    # or the resident LM Studio VLM, and callers deliberately set OLLAMA_HOST to
+    # a dead port so the unreliable Ollama fallback cannot fire. That dead host
+    # turns the probe into a full connection timeout: measured at exactly 15.00s
+    # per photo, against ~25s total, i.e. ~60% of the entire runtime spent
+    # ranking models we will never call.
+    t = DocumentTextifier(use_vision=True, prefer_local_vision=local_vision,
+                          auto_select_vision=False)
     # Keyword extraction defaults to the first installed TEXT_MODELS entry, which
     # here is mistral-small3.2 (~23GB VRAM). Loaded per photo alongside LM Studio
     # it saturates the GPU (~44/46GB), stalling the whole machine and adding
@@ -421,6 +438,11 @@ def main(argv=None) -> None:
                     help="Comma-separated keywords to drop during sync.")
     ps.add_argument("--timestamp-tolerance", type=int, default=0,
                     help="Allow JPG/RAW capture times to differ by up to N seconds.")
+    ps.add_argument("--name-prefix", default=None,
+                    help="Only sync JPGs whose filename starts with this string. "
+                         "Export names are capture-time prefixed, so --name-prefix "
+                         "2025-10 syncs one month, letting a huge year run in "
+                         "resumable chunks.")
 
     args = parser.parse_args(argv)
 
@@ -450,6 +472,7 @@ def main(argv=None) -> None:
             keep_backups=not args.no_backups,
             filter_keywords=filter_keywords,
             timestamp_tolerance=args.timestamp_tolerance,
+            name_prefix=args.name_prefix,
         )
 
 
