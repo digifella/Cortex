@@ -120,14 +120,26 @@ configured database path.
 
 ## 🤖 Default text generation
 
-The shared Cortex text interface defaults to the OpenAI-compatible LM Studio
-server and the registered Qwen 30B model:
+The shared Cortex text interface uses the OpenAI-compatible LM Studio server.
+On this host `.env` points it at the stack-wide workhorse — the same model
+Hermes and NemoClaw use:
 
 ```bash
 CORTEX_LLM_PROVIDER=lmstudio
 CORTEX_LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
-CORTEX_LMSTUDIO_MODEL=qwen3-coder-30b-a3b-instruct
+CORTEX_LMSTUDIO_MODEL=qwen/qwen3.6-35b-a3b
 ```
+
+⚠ **Do not "restore" `qwen3-coder-30b-a3b-instruct`.** It is still the *code*
+default (`DEFAULT_LMSTUDIO_MODEL` in `cortex_engine/llm_interface.py`), used only
+when `.env` does not set the variable. Pointing Cortex at it makes LM Studio
+JIT-load a second ~18GB model beside the resident 35B on the 46GB GPU, breaking
+the one-model-loaded rule the whole stack relies on. Switched 2026-09-12; a live
+`LLMInterface.generate` returned in 0.7s with only the 35B loaded.
+
+qwen3.6 is a thinking model: every LM Studio call must send
+`extra_body={"reasoning_effort": "none"}` or it returns empty content.
+`LLMInterface.generate` and the textifier already do — keep it on any new caller.
 
 Startup checks that LM Studio is reachable and that the model is registered. It
 must not pull Ollama models or load the Qwen model merely to render the UI. LM
@@ -258,8 +270,8 @@ pip install -r requirements.txt
 # Download spaCy language model
 python -m spacy download en_core_web_sm
 
-# Start LM Studio with its local-server option enabled. Cortex defaults to the
-# registered qwen3-coder-30b-a3b-instruct model through the local relay.
+# Start LM Studio with its local-server option enabled. Set
+# CORTEX_LMSTUDIO_MODEL=qwen/qwen3.6-35b-a3b in .env (see "Default text generation").
 
 # Start the application
 streamlit run Cortex_Suite.py
