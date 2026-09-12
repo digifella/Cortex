@@ -241,7 +241,7 @@ def _run_anthropic_web_sector_sweep(
             json={
                 "model": _ANTHROPIC_WEB_MODEL,
                 "max_tokens": 2400,
-                "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": max_uses}],
+                "tools": [{"type": "web_search_20260209", "name": "web_search", "max_uses": max_uses}],
                 "messages": [{"role": "user", "content": prompt}],
             },
             timeout=120,

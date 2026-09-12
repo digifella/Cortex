@@ -610,7 +610,7 @@ def _summarise_gemini(url: str, model_name: str, output_modes: list[str], langua
             gemini_url,
         )
 
-    lang_instruction = f"\n\nIMPORTANT: Write your entire response in {language}." if language else ""
+    lang_instruction = f"\n\nWrite your entire response in {language}." if language else ""
 
     sections = {}
     for mode in output_modes:
@@ -688,7 +688,7 @@ def _summarise_gemini_transcript(transcript: str, context_label: str, model_name
     model_id = "gemini-2.5-pro" if model_name == "gemini-pro" else "gemini-2.5-flash"
     model = genai.GenerativeModel(model_id)
     transcript_excerpt = _transcript_text_excerpt(transcript)
-    lang_instruction = f"\n\nIMPORTANT: Write your entire response in {language}." if language else ""
+    lang_instruction = f"\n\nWrite your entire response in {language}." if language else ""
 
     sections = {}
     for mode in output_modes:
@@ -842,7 +842,7 @@ def _summarise_claude(transcript: str, url: str, model_name: str, output_modes: 
     # Truncate long transcripts (100k chars ≈ ~75k tokens, well within context)
     transcript_excerpt = _transcript_text_excerpt(transcript)
 
-    lang_instruction = f"\n\nIMPORTANT: Write your entire response in {language}." if language else ""
+    lang_instruction = f"\n\nWrite your entire response in {language}." if language else ""
 
     sections = {}
     for mode in output_modes:

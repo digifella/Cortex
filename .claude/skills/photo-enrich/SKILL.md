@@ -5,7 +5,7 @@ description: Enrich Lightroom catalog photos (TIF/JPG) in place with AI descript
 
 # Photo Enrichment (this laptop)
 
-Enrich Lightroom catalog masters in place so LRC can read the metadata back. Paul's laptop, WSL2, `/home/longboardfella/projects/Cortex`.
+Enrich Lightroom catalog masters in place so LRC can read the metadata back. WSL2, `~/cortex_suite`.
 
 ## The workflow (current — use this)
 
@@ -55,7 +55,7 @@ In code: `DocumentTextifier(geocode_mode="offline", prefer_local_vision=True, na
 
 Offline geocoding returns the nearest **suburb** (Toowong) rather than the metro name (Brisbane). Paul has accepted this — he adds the city tag manually when it matters. State and country are identical to online.
 
-**Local vision quality caveat:** `llava:7b` follows the format instructions perfectly but makes confident content errors (called a jalapeño "a slice of lime and a pickle"). Paul reviewed the local descriptions and preferred them, so this is his call — but flag accuracy, not formatting, as the risk when he asks about local models. `qwen3-vl:8b` is downloaded and unbenchmarked; the harness is at `scratchpad/vlm_bench.py`.
+**Local vision quality caveat:** `llava:7b` follows the format instructions perfectly but makes confident content errors (called a jalapeño "a slice of lime and a pickle"). Paul reviewed the local descriptions and preferred them, so this is his call — but flag accuracy, not formatting, as the risk when he asks about local models. `qwen3-vl:8b` is downloaded and unbenchmarked.
 
 ## ⚠️ Check VRAM before any local-model run — this dominates everything
 
@@ -219,7 +219,7 @@ r = t.keyword_image(path, generate_description=True, populate_location=True,
                     ownership_notice="All rights (c) Longboardfella. Contact longboardfella.com for info on use of photos.")
 ```
 
-Collect files with `_collect_photo_dir()` from `pages/20_Photo_Metadata_Tools.py` — it recurses, filters to supported extensions, and skips `*_original`.
+Collect files with `_collect_photo_dir()` from `cortex_pages/20_Photo_Metadata_Tools.py` — it recurses, filters to supported extensions, and skips `*_original`.
 
 Budget ~10-15s per photo (Haiku ~8-15s on large TIFs, plus ~1s Nominatim pacing). Run in the background with a log file and report progress.
 
