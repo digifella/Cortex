@@ -50,7 +50,7 @@ _PRIVATE_SUBJECT_RE = re.compile(r"(?i)\b(?:private|sensitive|confidential)\b")
 _EXTERNAL_SUBJECT_RE = re.compile(r"(?i)^(?:open|public)\b")
 _PUBLIC_COMPLEX_DOC_TYPES = {"annual_report", "strategic_plan", "org_chart"}
 _ANTHROPIC_HAIKU_MODEL = os.environ.get("CORTEX_INTEL_ANTHROPIC_DEFAULT_MODEL", "").strip() or "claude-haiku-4-5-20251001"
-_ANTHROPIC_DOCUMENT_MODEL = os.environ.get("CORTEX_INTEL_ANTHROPIC_DOCUMENT_MODEL", "").strip() or "claude-sonnet-4-6"
+_ANTHROPIC_DOCUMENT_MODEL = os.environ.get("CORTEX_INTEL_ANTHROPIC_DOCUMENT_MODEL", "").strip() or "claude-sonnet-5"
 _LOCAL_INTEL_MODEL_CANDIDATES = (
     "qwen2.5:14b-instruct-q4_K_M",
     "qwen3.5:9b",

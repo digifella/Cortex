@@ -838,7 +838,7 @@ def _included_study_default_provider() -> str:
 def _included_study_default_model(provider: str) -> str:
     provider_name = str(provider or "").strip().lower()
     if provider_name == "anthropic":
-        return "claude-sonnet-4-6"
+        return "claude-sonnet-5"
     return "gemini-2.5-flash"
 
 
@@ -4522,7 +4522,7 @@ def _render_included_study_extractor_tab():
         else:
             st.caption("Cheaper/rate-limited path: `Gemini 2.5 Flash`. Use when you explicitly want the lower-cost option.")
         fallback_to_anthropic = False
-        fallback_model = "claude-sonnet-4-6"
+        fallback_model = "claude-sonnet-5"
         if provider == "gemini":
             fallback_to_anthropic = st.checkbox(
                 "Fallback to Claude if Gemini quota/rate limit is hit",
@@ -4533,7 +4533,7 @@ def _render_included_study_extractor_tab():
             if included_study_extractor_available("anthropic"):
                 fallback_model = st.text_input(
                     "Fallback Claude model",
-                    value=st.session_state.get("included_study_fallback_model", "claude-sonnet-4-6") or "claude-sonnet-4-6",
+                    value=st.session_state.get("included_study_fallback_model", "claude-sonnet-5") or "claude-sonnet-5",
                     key="included_study_fallback_model",
                     disabled=not fallback_to_anthropic,
                 )

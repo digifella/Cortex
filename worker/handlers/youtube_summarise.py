@@ -456,13 +456,18 @@ def _generate_report_title_gemini(url: str, model_name: str, metadata: dict, sec
 def _generate_report_title_claude(url: str, model_name: str, metadata: dict, sections: dict, language: str = "") -> str:
     client = _anthropic_client()
     model_id = (
-        "claude-sonnet-4-6" if model_name == "claude-sonnet"
+        "claude-sonnet-5" if model_name == "claude-sonnet"
         else "claude-haiku-4-5-20251001"
     )
     lang_note = f" Write the title in {language}." if language else ""
+    # Sonnet 5 thinks adaptively when `thinking` is omitted and thinking shares
+    # max_tokens — a 64-token title budget would be consumed by thinking. Haiku is
+    # thinking-off by default and has no documented `disabled` value, so gate on Sonnet.
+    thinking_off = {"thinking": {"type": "disabled"}} if model_id.startswith("claude-sonnet") else {}
     response = client.messages.create(
         model=model_id,
         max_tokens=64,
+        **thinking_off,
         messages=[{
             "role": "user",
             "content": (
@@ -830,7 +835,7 @@ def _summarise_claude(transcript: str, url: str, model_name: str, output_modes: 
     client = _anthropic_client()
 
     model_id = (
-        "claude-sonnet-4-6" if model_name == "claude-sonnet"
+        "claude-sonnet-5" if model_name == "claude-sonnet"
         else "claude-haiku-4-5-20251001"
     )
 

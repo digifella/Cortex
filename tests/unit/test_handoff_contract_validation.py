@@ -116,7 +116,7 @@ def test_included_study_extract_normalizes_defaults():
     )
 
     assert payload["provider"] == "anthropic"
-    assert payload["model"] == "claude-sonnet-4-6"
+    assert payload["model"] == "claude-sonnet-5"
     assert payload["output_detail"] == "reference_map"
     assert payload["download_formats"] == ["json", "xlsx"]
     assert payload["resolver_defaults"]["check_open_access"] is False

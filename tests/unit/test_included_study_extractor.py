@@ -308,7 +308,7 @@ def test_run_included_study_extractor_anthropic_normalizes_tables(monkeypatch, t
     result = run_included_study_extractor(
         pdf_path=str(pdf_path),
         provider="anthropic",
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         review_title="Review",
     )
 
@@ -368,7 +368,7 @@ def test_run_included_study_extractor_anthropic_surfaces_non_terminal_stop_reaso
     result = run_included_study_extractor(
         pdf_path=str(pdf_path),
         provider="anthropic",
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         review_title="Review",
     )
 
@@ -458,7 +458,7 @@ def test_run_included_study_extractor_with_fallback_uses_anthropic(monkeypatch, 
             raise IncludedStudyExtractorQuotaError("gemini", 429, "Gemini quota/rate limit exceeded", body="quota")
         return {
             "provider": "anthropic",
-            "model": model or "claude-sonnet-4-6",
+            "model": model or "claude-sonnet-5",
             "tables": [
                 {
                     "table_number": "2",
@@ -501,7 +501,7 @@ def test_run_included_study_extractor_with_fallback_uses_anthropic(monkeypatch, 
         model="gemini-2.5-pro",
         review_title="Review",
         fallback_provider="anthropic",
-        fallback_model="claude-sonnet-4-6",
+        fallback_model="claude-sonnet-5",
     )
 
     assert result["provider"] == "anthropic"

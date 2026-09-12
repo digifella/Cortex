@@ -350,7 +350,7 @@ def _synthesis_call(client, system_msg: str, user_msg: str, max_tokens: int = 40
         return local_text
     logger.info("[market_radar] Synthesis via Claude API")
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         max_tokens=max_tokens,
         system=system_msg,
         messages=[{"role": "user", "content": user_msg}],

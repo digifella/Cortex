@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Sequence, Tuple
 
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
-_DEFAULT_ANTHROPIC_MODEL = os.environ.get("CORTEX_REVIEW_TABLE_ANTHROPIC_MODEL", "").strip() or "claude-sonnet-4-6"
+_DEFAULT_ANTHROPIC_MODEL = os.environ.get("CORTEX_REVIEW_TABLE_ANTHROPIC_MODEL", "").strip() or "claude-sonnet-5"
 _ROOT = Path(__file__).resolve().parent.parent
 _MAX_INLINE_PDF_BYTES = 22 * 1024 * 1024
 

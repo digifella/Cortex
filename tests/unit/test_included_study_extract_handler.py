@@ -87,7 +87,7 @@ def test_included_study_extract_handler_returns_summary_and_zip(monkeypatch, tmp
         input_pdf,
         {
             "provider": "anthropic",
-            "model": "claude-sonnet-4-6",
+            "model": "claude-sonnet-5",
             "extraction_scope": "rct_or_clinical",
             "output_detail": "reference_map",
         },
@@ -219,7 +219,7 @@ def test_included_study_extract_handler_skips_empty_table_payload_generation(mon
         input_pdf,
         {
             "provider": "anthropic",
-            "model": "claude-sonnet-4-6",
+            "model": "claude-sonnet-5",
             "extraction_scope": "rct_or_clinical",
             "output_detail": "reference_map",
         },
@@ -314,7 +314,7 @@ def test_included_study_extract_handler_skips_resolver_payload_when_all_rows_nee
         input_pdf,
         {
             "provider": "anthropic",
-            "model": "claude-sonnet-4-6",
+            "model": "claude-sonnet-5",
             "extraction_scope": "rct_or_clinical",
             "output_detail": "reference_map",
         },

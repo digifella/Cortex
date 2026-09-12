@@ -17,7 +17,7 @@ from cortex_engine.review_study_miner import _extract_authors_and_year
 _ROOT = Path(__file__).resolve().parent.parent
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 _DEFAULT_GEMINI_MODEL = os.environ.get("CORTEX_INCLUDED_STUDY_GEMINI_MODEL", "").strip() or "gemini-2.5-flash"
-_DEFAULT_ANTHROPIC_MODEL = os.environ.get("CORTEX_INCLUDED_STUDY_ANTHROPIC_MODEL", "").strip() or "claude-sonnet-4-6"
+_DEFAULT_ANTHROPIC_MODEL = os.environ.get("CORTEX_INCLUDED_STUDY_ANTHROPIC_MODEL", "").strip() or "claude-sonnet-5"
 _MAX_INLINE_PDF_BYTES = 22 * 1024 * 1024
 _COMMON_GEMINI_ACCESS_TEST_MODELS = (
     "gemini-2.5-flash",
@@ -213,9 +213,15 @@ def run_included_study_access_check(provider: str = "gemini", model: str = "") -
     if provider_name == "anthropic":
         client = _anthropic_client()
         model_name = str(model or _DEFAULT_ANTHROPIC_MODEL).strip() or _DEFAULT_ANTHROPIC_MODEL
+        # Sonnet 5 runs adaptive thinking when `thinking` is omitted (Sonnet 4.6 ran
+        # thinking-off), and thinking shares max_tokens — this 32-token probe would be
+        # spent entirely on thinking. Gated on Sonnet: `disabled` is not a documented
+        # thinking value for Haiku 4.5, which is thinking-off by default anyway.
+        thinking_off = {"thinking": {"type": "disabled"}} if model_name.startswith("claude-sonnet") else {}
         response = client.messages.create(
             model=model_name,
             max_tokens=32,
+            **thinking_off,
             messages=[{"role": "user", "content": [{"type": "text", "text": "Reply with exactly ACCESS_OK"}]}],
         )
         parts: List[str] = []

@@ -1267,7 +1267,7 @@ def test_clear_included_study_extractor_state_removes_derived_outputs(tmp_path, 
 
     module.st.session_state.clear()
     module.st.session_state["included_study_provider"] = "anthropic"
-    module.st.session_state["included_study_model"] = "claude-sonnet-4-6"
+    module.st.session_state["included_study_model"] = "claude-sonnet-5"
     module.st.session_state["included_study_upload_version"] = 2
     module.st.session_state["included_study_upload_v2"] = object()
     module.st.session_state["included_study_slice_result"] = {"work_dir": str(work_dir)}
@@ -1284,7 +1284,7 @@ def test_clear_included_study_extractor_state_removes_derived_outputs(tmp_path, 
     assert not uploaded.exists()
     assert module.st.session_state["included_study_upload_version"] == 3
     assert module.st.session_state["included_study_provider"] == "anthropic"
-    assert module.st.session_state["included_study_model"] == "claude-sonnet-4-6"
+    assert module.st.session_state["included_study_model"] == "claude-sonnet-5"
     assert "included_study_slice_result" not in module.st.session_state
     assert "included_study_upload_v2" not in module.st.session_state
     assert "research_parse_result" not in module.st.session_state
@@ -1296,7 +1296,7 @@ def test_included_study_defaults_prefer_anthropic_when_available():
     module.included_study_extractor_available = lambda provider: provider == "anthropic"
 
     assert module._included_study_default_provider() == "anthropic"
-    assert module._included_study_default_model("anthropic") == "claude-sonnet-4-6"
+    assert module._included_study_default_model("anthropic") == "claude-sonnet-5"
     assert module._included_study_default_model("gemini") == "gemini-2.5-flash"
 
 

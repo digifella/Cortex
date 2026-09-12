@@ -418,7 +418,7 @@ def validate_included_study_extract_input(input_data: Optional[Dict[str, Any]] =
     payload["provider"] = provider
 
     payload["model"] = str(
-        payload.get("model") or ("claude-sonnet-4-6" if provider == "anthropic" else "gemini-2.5-flash")
+        payload.get("model") or ("claude-sonnet-5" if provider == "anthropic" else "gemini-2.5-flash")
     ).strip()
 
     fallback_provider = str(payload.get("fallback_provider") or "").strip().lower()
