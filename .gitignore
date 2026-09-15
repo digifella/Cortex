@@ -30,6 +30,7 @@ Thumbs.db
 coverage/
 logs/
 *.Zone.Identifier
+*:Zone.Identifier
 *.orig
 *.bak-*
 
