@@ -30,6 +30,8 @@ Thumbs.db
 coverage/
 logs/
 *.Zone.Identifier
+*.orig
+*.bak-*
 
 # Large or generated data
 data/
