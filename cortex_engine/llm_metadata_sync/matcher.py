@@ -11,6 +11,20 @@ _TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})(-.+)?$")
 _TS_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})(.*)$")
 
 
+def list_source_jpgs(config: SyncConfig) -> list[Path]:
+    """Every top-level JPG in config.jpg_dir, narrowed by config.jpg_name_prefix.
+
+    Shared by the dry-run scan and the live sync so both always see the same
+    file set — a divergence would make the dry-run gate lie about the run.
+    """
+    jpgs = sorted(
+        list(config.jpg_dir.glob("*.jpg")) + list(config.jpg_dir.glob("*.JPG"))
+    )
+    if config.jpg_name_prefix:
+        jpgs = [p for p in jpgs if p.name.startswith(config.jpg_name_prefix)]
+    return jpgs
+
+
 def strip_rating_suffix(stem: str, suffix_range: tuple[int, int]) -> str:
     """Remove trailing -N rating suffix if N is within suffix_range."""
     lo, hi = suffix_range

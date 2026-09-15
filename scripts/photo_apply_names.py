@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cortex_engine.photo_name_tags import apply_names, parse_name_tags
+from cortex_engine.photo_name_tags import apply_names, load_registry, parse_name_tags
 from cortex_engine.textifier import DocumentTextifier
 from cortex_engine.utils import convert_windows_to_wsl_path
 
@@ -55,8 +55,13 @@ def main() -> int:
     if not root.is_dir():
         print(f"Not a directory: {root}")
         return 1
+    # Load the roster before parsing --tags: an explicit --tags REPLACES the
+    # defaults rather than extending them, so without this a caller passing one
+    # name would silently drop everybody else.
+    merged = load_registry()
     name_tags = parse_name_tags(args.tags)
-    print(f"tags: {name_tags} | mode: {'APPLY' if args.apply else 'dry run'}\n", flush=True)
+    print(f"registry: {merged} tags | roster: {len(name_tags)} names | "
+          f"mode: {'APPLY' if args.apply else 'dry run'}\n", flush=True)
 
     paths = sorted(p for p in root.rglob("*")
                    if p.is_file() and p.suffix.lower() in PHOTO_EXTENSIONS

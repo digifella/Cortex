@@ -66,9 +66,16 @@ def _overwrite_flags(keep_backups: bool) -> list[str]:
 
     When keep_backups is True, omit overwrite flags so ExifTool keeps the
     original file as <filename>_original when rewriting an existing target.
-    When False, rewrite in place without keeping the ExifTool backup.
+    When False, rewrite without keeping the ExifTool backup.
+
+    Uses -overwrite_original rather than -overwrite_original_in_place: the
+    in-place variant copies the rewritten temp file's contents back over the
+    original to preserve the inode, roughly doubling I/O on large targets.
+    On the drvfs-mounted catalog that dominates runtime; the plain flag renames
+    the temp over the original instead. Lightroom keys on XMP:MetadataDate, not
+    the file's inode or creation date, so the swap is invisible to the catalog.
     """
-    return [] if keep_backups else ["-overwrite_original_in_place"]
+    return [] if keep_backups else ["-overwrite_original"]
 
 
 def _uses_iptc_namespace(target: Path, target_type: TargetType) -> bool:
@@ -86,10 +93,12 @@ def clear_keyword_lists(
     """
     et = exiftool_path()
 
+    # -m here too: this is step 1 of the two-step write, so a minor warning
+    # failing HERE aborts the photo before the populate step ever runs.
     if target_type == TargetType.SIDECAR:
-        args = [et, *_overwrite_flags(keep_backups), "-xmp-dc:subject=", str(target)]
+        args = [et, "-m", *_overwrite_flags(keep_backups), "-xmp-dc:subject=", str(target)]
     else:
-        args = [et, *_overwrite_flags(keep_backups), "-xmp-dc:subject="]
+        args = [et, "-m", *_overwrite_flags(keep_backups), "-xmp-dc:subject="]
         if _uses_iptc_namespace(target, target_type):
             args.append("-iptc:Keywords=")
         args.append(str(target))
@@ -115,7 +124,12 @@ def write_metadata(
     location_fields: subset of {"city", "state", "country", "gps"} to copy.
     """
     et = exiftool_path()
-    args = [et, *_overwrite_flags(keep_backups)]
+    # -m matches the read path. Without it a *minor* warning is fatal: an old
+    # Konica DNG in the Pre-RAW catalog failed the whole write with "[minor]
+    # Maker notes could not be parsed", and the same class of warning cost a
+    # full day on the 2024/2025 keyword sync. A minor warning must never lose
+    # the metadata for a photo.
+    args = [et, "-m", *_overwrite_flags(keep_backups)]
 
     # Direct keyword writes
     if target_type == TargetType.SIDECAR:

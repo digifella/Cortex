@@ -58,6 +58,9 @@ class SyncConfig:
     embed_extensions: tuple[str, ...] = ("tif", "tiff", "psd", "psb", "dng", "png")
     jpg_extensions: tuple[str, ...] = ("jpg", "jpeg")  # catalog JPGs → JPG_REPLACE action
     timestamp_tolerance_seconds: int = 0
+    # When set, only JPGs whose filename starts with this string are synced.
+    # Export filenames are capture-time prefixed, so "2025-10" is one month.
+    jpg_name_prefix: str | None = None
     deriv_patterns: tuple[str, ...] = (
         # Compound patterns must come first so re.search matches at the leftmost
         # position (e.g. -Enhanced-NR-Edit-Edit) rather than just the trailing -Edit-Edit.

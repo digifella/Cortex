@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Generator
 
 from . import exiftool_runner
-from .matcher import build_raw_index, resolve_jpg
+from .matcher import build_raw_index, list_source_jpgs, resolve_jpg
 from .merger import (
     build_keyword_union,
     build_location_update,
@@ -24,9 +24,7 @@ def run_sync(config: SyncConfig) -> Generator[SyncResult, None, None]:
     """
     index = build_raw_index(config.raw_root, config)
 
-    jpgs = sorted(
-        list(config.jpg_dir.glob("*.jpg")) + list(config.jpg_dir.glob("*.JPG"))
-    )
+    jpgs = list_source_jpgs(config)
 
     for jpg in jpgs:
         actions = resolve_jpg(jpg, index, config)

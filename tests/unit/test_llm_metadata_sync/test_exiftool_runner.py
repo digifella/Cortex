@@ -21,6 +21,7 @@ def test_clear_keyword_lists_png_uses_xmp_only(monkeypatch, tmp_path):
 
     assert captured["args"] == [
         "/usr/bin/exiftool",
+        "-m",
         "-xmp-dc:subject=",
         str(target),
     ]
@@ -106,7 +107,7 @@ def test_write_metadata_bumps_metadata_date_after_tagsfromfile(monkeypatch, tmp_
     assert args[-1] == str(target)
 
 
-def test_clear_keyword_lists_without_backups_uses_in_place_overwrite(monkeypatch, tmp_path):
+def test_clear_keyword_lists_without_backups_uses_rename_overwrite(monkeypatch, tmp_path):
     target = tmp_path / "shot.png"
     target.touch()
     captured: dict[str, list[str]] = {}
@@ -123,7 +124,8 @@ def test_clear_keyword_lists_without_backups_uses_in_place_overwrite(monkeypatch
 
     assert captured["args"] == [
         "/usr/bin/exiftool",
-        "-overwrite_original_in_place",
+        "-m",
+        "-overwrite_original",
         "-xmp-dc:subject=",
         str(target),
     ]

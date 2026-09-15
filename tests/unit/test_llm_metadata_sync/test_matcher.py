@@ -3,6 +3,7 @@ import pytest
 from cortex_engine.llm_metadata_sync.matcher import (
     strip_rating_suffix,
     build_raw_index,
+    list_source_jpgs,
     resolve_jpg,
 )
 from cortex_engine.llm_metadata_sync.models import SyncConfig, TargetType, SidecarAction
@@ -430,3 +431,58 @@ def test_rating_suffixed_standalone_dng_matches_embedded(tmp_path):
     assert len(actions) == 1
     assert actions[0].target_type == TargetType.EMBEDDED
     assert actions[0].target_path.name == "2001-01-19 15-03-48-iPhone 13 Pro-4.DNG"
+
+
+# ── list_source_jpgs (month chunking) ────────────────────────────────────────
+
+def _touch_jpgs(d: Path, names) -> None:
+    d.mkdir(exist_ok=True)
+    for n in names:
+        (d / n).write_bytes(b"")
+
+
+def test_list_source_jpgs_no_prefix_returns_every_jpg(tmp_path):
+    jpg_dir = tmp_path / "jpg"
+    _touch_jpgs(jpg_dir, [
+        "2024-09-01 10-00-00-X-T5-4.jpg",
+        "2024-10-01 10-00-00-X-T5-4.JPG",
+        "2025-01-01 10-00-00-X-T5-4.jpg",
+    ])
+    cfg = SyncConfig(raw_root=tmp_path, jpg_dir=jpg_dir)
+    assert len(list_source_jpgs(cfg)) == 3
+
+
+def test_list_source_jpgs_prefix_selects_one_month(tmp_path):
+    jpg_dir = tmp_path / "jpg"
+    _touch_jpgs(jpg_dir, [
+        "2024-09-30 23-59-59-X-T5-4.jpg",
+        "2024-10-01 10-00-00-X-T5-4.jpg",
+        "2024-10-31 23-59-59-X-T5-4.JPG",
+        "2024-11-01 00-00-00-X-T5-4.jpg",
+    ])
+    cfg = SyncConfig(raw_root=tmp_path, jpg_dir=jpg_dir, jpg_name_prefix="2024-10")
+    names = [p.name for p in list_source_jpgs(cfg)]
+    assert names == [
+        "2024-10-01 10-00-00-X-T5-4.jpg",
+        "2024-10-31 23-59-59-X-T5-4.JPG",
+    ]
+
+
+def test_list_source_jpgs_prefixes_partition_the_whole_directory(tmp_path):
+    """Every JPG must land in exactly one month chunk - including the off-year
+    strays that sit in a year folder (the 2025 export holds 2023/2024/2026 files)."""
+    jpg_dir = tmp_path / "jpg"
+    names = [
+        "2023-12-25 17-29-45-iPhone 13 Pro-4.jpg",
+        "2024-07-10 11-21-19-X-T5-4.jpg",
+        "2025-10-01 10-00-00-X-T5-4.jpg",
+        "2025-10-02 10-00-00-X-T5-4.JPG",
+        "2026-03-13 17-45-33-Pixel 9 Pro-4.jpg",
+    ]
+    _touch_jpgs(jpg_dir, names)
+    prefixes = sorted({n[:7] for n in names})
+    seen = []
+    for pref in prefixes:
+        cfg = SyncConfig(raw_root=tmp_path, jpg_dir=jpg_dir, jpg_name_prefix=pref)
+        seen.extend(p.name for p in list_source_jpgs(cfg))
+    assert sorted(seen) == sorted(names)
