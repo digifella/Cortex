@@ -64,7 +64,7 @@ def _ingest_panel():
     status = vault_ingest_status()
     running = status["state"] == "running"
 
-    with st.expander("Ingest documents", expanded=running):
+    with st.expander("Batch ingest to private vault", expanded=True):
         st.caption(
             "Convert PDF, DOCX, PPTX and TXT files into private vault markdown, "
             "then index them. Runs in the background -- you can close this tab."
@@ -369,8 +369,11 @@ def _legacy_results_view(results):
 
 
 def main():
-    st.title("Vault GraphRAG")
-    st.caption(f"Local public/private vault search via NemoClaw RAG and Cortex graph helpers. Cortex {VERSION_STRING}.")
+    st.title("Private Vault Ingest & Search")
+    st.caption(
+        "Batch-textify document folders into the private vault, index them, and search "
+        f"the local public/private vaults. Cortex {VERSION_STRING}."
+    )
     _status_cards()
     _ingest_panel()
     _maintenance_panel()

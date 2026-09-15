@@ -30,9 +30,10 @@ import networkx as nx
 
 HOME = Path.home()
 
-for site_packages in glob.glob(str(HOME / "venvs" / "vault-rag" / "lib" / "python3*" / "site-packages")):
-    if site_packages not in sys.path:
-        sys.path.insert(0, site_packages)
+# Never add the vault-rag environment to this process's import path. Cortex
+# runs on Python 3.11 while vault-rag currently runs on Python 3.12; mixing
+# their binary packages breaks imports such as regex and pydantic. Operations
+# that need the vault-rag dependency set use VAULT_QUERY_PYTHON subprocesses.
 
 
 PRIVATE_VAULT = Path("/mnt/c/Users/paul/OneDrive - VentraIP Australia/Vault_OneDrive")

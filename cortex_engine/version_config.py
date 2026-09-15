@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.8.1"
+CORTEX_VERSION = "6.8.2"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 8,
-    "patch": 1,
+    "patch": 2,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,23 +24,18 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-08-04",
-    "release_name": "LM Studio Startup Default",
-    "description": "Uses LM Studio with Qwen 30B for shared generation without obsolete Ollama startup gating.",
+    "release_date": "2026-08-05",
+    "release_name": "Private Vault Workflow Repair",
+    "description": "Makes private-vault batch ingest easy to find and isolates its Python environment from Cortex.",
     "breaking_changes": [],
     "new_features": [],
     "improvements": [
-        "The shared LLM interface now defaults to LM Studio and qwen3-coder-30b-a3b-instruct.",
-        "Startup readiness checks inspect LM Studio registration without loading or downloading a model.",
-        "The setup wizard skips Ollama model installation when LM Studio is selected.",
-        "Page modules now live outside Streamlit's reserved pages directory when using the explicit router.",
-        "Routine page initialization messages are logged at quieter severity levels.",
+        "Private Vault Ingest & Search now appears in Core Workflow beside Knowledge Ingest.",
+        "The folder-ingest panel is expanded by default and clearly describes textification and indexing.",
     ],
     "bug_fixes": [
-        "Removed the misleading startup claim that missing legacy Ollama models were downloading.",
-        "Removed the blocking 30-second startup refresh loop.",
-        "Routed pages now execute their UI entry points under Streamlit's explicit navigation runtime.",
-        "Disabled Streamlit source watching to prevent false torch.classes path errors.",
+        "Private Vault no longer injects Python 3.12 vault-rag packages into Cortex's Python 3.11 process.",
+        "Fixed Knowledge Ingest imports failing after visiting Private Vault due to incompatible regex and pydantic binaries.",
     ],
 }
 

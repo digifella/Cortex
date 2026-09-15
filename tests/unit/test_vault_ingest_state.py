@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -12,6 +13,28 @@ from cortex_engine.private_vault_rag import (
     start_vault_ingest,
     vault_ingest_status,
 )
+
+
+def test_private_vault_import_does_not_mix_python_environments():
+    project_root = Path(__file__).resolve().parents[2]
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "import cortex_engine.private_vault_rag; "
+                "import regex; "
+                "assert not any('/venvs/vault-rag/' in p for p in sys.path); "
+                "assert '/cortex_suite/venv/' in regex.__file__"
+            ),
+        ],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert probe.returncode == 0, probe.stderr
 
 
 @pytest.fixture

@@ -146,6 +146,19 @@ must not pull Ollama models or load the Qwen model merely to render the UI. LM
 Studio may load it on the first real generation request. Specialist features
 with explicit Ollama model selectors remain opt-in fallbacks.
 
+## 🔐 Private vault environment boundary
+
+The **Private Vault Ingest & Search** page is part of Core Workflow. Folder
+ingest textifies supported documents into private-vault Markdown and then runs
+the private indexer.
+
+Cortex runs in `cortex_suite/venv` on Python 3.11. Vault query and index commands
+run through `~/venvs/vault-rag/bin/python3` on Python 3.12. Never add the
+vault-rag `site-packages` directory to Cortex's `sys.path`; compiled packages
+from the two Python versions are not compatible. Keep that integration behind
+the subprocess boundary in `cortex_engine/private_vault_rag.py` and
+`cortex_engine/vault_ingest.py`.
+
 ## 👁️ Vision (image descriptions)
 
 `DocumentTextifier.describe_image` tries providers in this order:

@@ -21,6 +21,21 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Documented provisioning, recovery, secret rotation, revocation, verification,
   Outlook expectations, and the successful 2026-08-05 commissioning test.
 
+## v6.8.2 - 2026-08-05
+
+### Private Vault Workflow Repair
+
+Makes private-vault batch ingest easy to find and isolates its Python environment from Cortex.
+
+### 🚀 Improvements
+- Moved **Private Vault Ingest & Search** into Core Workflow beside Knowledge Ingest.
+- Renamed and expanded the batch-ingest panel so the folder-to-vault workflow is immediately visible.
+
+### 🐛 Bug Fixes
+- Stopped the Private Vault module from injecting Python 3.12 `vault-rag` packages into Cortex's Python 3.11 process.
+- Fixed Knowledge Ingest failing after Private Vault was opened because incompatible `regex`, `pydantic`, and transformer binaries were selected.
+- Kept vault queries and indexing isolated in the existing `vault-rag` subprocess.
+
 ## v6.8.1 - 2026-08-04
 
 ### LM Studio Startup Default

@@ -19,6 +19,7 @@ NAVIGATION_SECTIONS: Final[tuple[NavigationSection, ...]] = (
         (
             ("cortex_pages/1_AI_Assisted_Research.py", "Discovery Research", "🤖"),
             ("cortex_pages/2_Knowledge_Ingest.py", "Knowledge Ingest", "🧠"),
+            ("cortex_pages/18_Private_Vault_GraphRAG.py", "Private Vault Ingest & Search", "🔐"),
             ("cortex_pages/3_Knowledge_Search.py", "Knowledge Search", "🔍"),
             ("cortex_pages/4_Collection_Management.py", "Collections", "📚"),
             ("cortex_pages/5_Knowledge_Analytics.py", "Analytics", "📊"),
@@ -54,7 +55,6 @@ NAVIGATION_SECTIONS: Final[tuple[NavigationSection, ...]] = (
         "Specialist Tools",
         (
             ("cortex_pages/17_Stakeholder_Signals.py", "Stakeholder Signals", "🎯"),
-            ("cortex_pages/18_Private_Vault_GraphRAG.py", "Private Vault GraphRAG", "🔐"),
         ),
     ),
     (
