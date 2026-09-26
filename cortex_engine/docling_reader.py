@@ -88,7 +88,7 @@ class DoclingDocumentReader:
                 do_table_structure=self.table_structure_recognition,
             )
             return DocumentConverter(
-                allowed_formats=[InputFormat.PDF],
+                allowed_formats=[InputFormat.PDF, InputFormat.PPTX],
                 format_options={
                     InputFormat.PDF: PdfFormatOption(
                         pipeline_options=pdf_pipeline_options
@@ -417,46 +417,69 @@ class DoclingDocumentReader:
         docling_metadata: Dict[str, Any],
         conv_result: Any
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Capture figure metadata and payloads for downstream VLM analysis."""
+        """Capture figure metadata and payloads for downstream VLM analysis.
+
+        Uses the modern DoclingDocument.pictures API (conv_result.document.pictures),
+        not the legacy dict-based 'figures'/'main-text' export_to_dict() keys -- those
+        keys no longer exist in the installed Docling's export schema (verified: its
+        top-level keys are schema_name/version/name/origin/furniture/body/groups/
+        texts/pictures/tables/key_value_items/form_items/pages), so the old extraction
+        silently found zero figures for every file, always.
+        """
         figures_summary: List[Dict[str, Any]] = []
         figure_payloads: List[Dict[str, Any]] = []
 
-        figures_data = docling_metadata.get('figures', []) or docling_metadata.get('figures'.replace('-', '_'), [])
-        main_text = docling_metadata.get('main-text', []) or docling_metadata.get('main_text', [])
-        caption_map = self._build_caption_map(main_text)
+        document = getattr(conv_result, 'document', None)
+        if document is None:
+            return figures_summary, figure_payloads
 
+        page_sizes = {}
         try:
-            rendered_figures = list(conv_result.render_element_images())
-        except Exception as render_error:
-            logger.warning(f"Docling figure rendering unavailable: {render_error}")
-            rendered_figures = []
+            for page_no, page in (document.pages or {}).items():
+                sz = getattr(page, "size", None)
+                if sz:
+                    page_sizes[page_no] = (sz.width, sz.height)
+        except Exception as page_size_error:
+            logger.debug(f"Could not read page sizes for area_frac: {page_size_error}")
 
-        total_figures = max(len(figures_data), len(rendered_figures))
-        for idx in range(total_figures):
-            rendered = rendered_figures[idx] if idx < len(rendered_figures) else None
-            element = None
-            pil_image = None
-            if rendered is not None:
+        pictures = getattr(document, 'pictures', None) or []
+        for idx, picture in enumerate(pictures):
+            prov_list = getattr(picture, 'prov', None) or []
+            prov = prov_list[0] if prov_list else None
+            page_no = getattr(prov, 'page_no', None) if prov is not None else None
+            bbox = getattr(prov, 'bbox', None) if prov is not None else None
+
+            area_frac = None
+            if bbox is not None and page_no in page_sizes:
                 try:
-                    element, pil_image = rendered
-                except ValueError:
-                    # Older Docling versions only return the image
-                    element, pil_image = None, rendered
+                    bw = abs(bbox.r - bbox.l)
+                    bh = abs(bbox.t - bbox.b)
+                    pw, ph = page_sizes[page_no]
+                    if pw and ph:
+                        area_frac = round((bw * bh) / (pw * ph), 4)
+                except Exception as area_error:
+                    logger.debug(f"Could not compute area_frac for figure {idx}: {area_error}")
 
-            figure_dict = figures_data[idx] if idx < len(figures_data) else {}
-            prov = None
-            if isinstance(figure_dict, dict):
-                prov_list = figure_dict.get('prov') or figure_dict.get('provenance') or []
-                if isinstance(prov_list, list) and prov_list:
-                    prov = prov_list[0]
+            caption_text = ""
+            try:
+                caption_text = picture.caption_text(document) or ""
+            except Exception:
+                pass
 
             figure_entry = {
                 'index': idx,
-                'page': (prov or {}).get('page'),
-                'bbox': (prov or {}).get('bbox'),
-                'object_type': figure_dict.get('type') or figure_dict.get('obj_type'),
-                'caption': caption_map.get(idx) or figure_dict.get('text') or '',
+                'page': page_no,
+                'bbox': {'l': bbox.l, 't': bbox.t, 'r': bbox.r, 'b': bbox.b} if bbox is not None else None,
+                'object_type': 'picture',
+                'caption': caption_text,
+                'area_frac': area_frac,
             }
+
+            pil_image = None
+            try:
+                pil_image = picture.get_image(document)
+            except Exception as render_error:
+                logger.debug(f"Could not render Docling picture {idx}: {render_error}")
 
             if pil_image is not None:
                 try:
@@ -468,7 +491,8 @@ class DoclingDocumentReader:
                         'image_base64': base64.b64encode(image_bytes).decode('utf-8'),
                         'image_mime_type': 'image/png',
                         'width': getattr(pil_image, 'width', None),
-                        'height': getattr(pil_image, 'height', None)
+                        'height': getattr(pil_image, 'height', None),
+                        'area_frac': area_frac,
                     }
                     figure_payloads.append(payload)
                     figure_entry['has_image_payload'] = True
@@ -481,45 +505,6 @@ class DoclingDocumentReader:
             figures_summary.append(figure_entry)
 
         return figures_summary, figure_payloads
-
-    def _build_caption_map(self, main_text: List[Dict[str, Any]]) -> Dict[int, str]:
-        """Attempt to align captions with figure indices using Docling main text."""
-        caption_map: Dict[int, str] = {}
-        pending_index: Optional[int] = None
-        fallback_counter = 0
-
-        for item in main_text:
-            if not isinstance(item, dict):
-                continue
-
-            ref_value = item.get('$ref') or item.get('ref')
-            if ref_value and '/figures/' in ref_value:
-                try:
-                    pending_index = int(ref_value.split('/')[-1])
-                    continue
-                except ValueError:
-                    pending_index = None
-                    continue
-
-            text_content = (item.get('text') or '').strip()
-            if not text_content:
-                continue
-
-            obj_type = (item.get('type') or item.get('obj_type') or item.get('name') or '').lower()
-            if obj_type != 'caption' and not text_content.lower().startswith('figure'):
-                continue
-
-            target_index: int
-            if pending_index is not None:
-                target_index = pending_index
-                pending_index = None
-            else:
-                target_index = fallback_counter
-                fallback_counter += 1
-
-            caption_map[target_index] = text_content
-
-        return caption_map
 
     def _generate_vlm_descriptions_for_figures(
         self,
