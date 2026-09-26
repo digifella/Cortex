@@ -34,6 +34,8 @@ from .utils.smart_ollama_llm import create_smart_ollama_llm
 from .docling_reader import DoclingDocumentReader, create_docling_reader
 from .entity_extractor import EntityExtractor
 from .graph_manager import EnhancedGraphManager
+from .haiku_figure_caption import caption_figure_with_haiku
+from .image_caption_cache import ImageCaptionCache, DEFAULT_DB_PATH as DEFAULT_CACHE_PATH
 
 logger = get_logger(__name__)
 
@@ -74,14 +76,18 @@ class EnhancedDocumentProcessor:
         """
         self.enable_docling = enable_docling
         self.enable_ocr = enable_ocr
-        
+        self._caption_cache = ImageCaptionCache(db_path=DEFAULT_CACHE_PATH)
+
         # Initialize Docling reader
         self.docling_reader = None
         if enable_docling:
             try:
                 self.docling_reader = create_docling_reader(
                     ocr_enabled=enable_ocr,
-                    table_structure_recognition=True
+                    table_structure_recognition=True,
+                    skip_vlm_processing=True,  # figure captioning happens once, in
+                                                # _enrich_docling_figures below, where
+                                                # its output actually reaches document.text
                 )
                 if self.docling_reader.is_available:
                     logger.info("✅ Docling reader initialized successfully")
@@ -362,8 +368,16 @@ class EnhancedDocumentProcessor:
         
         return report
 
-    def _enrich_docling_figures(self, document: Document, skip_image_processing: bool) -> None:
-        """Convert Docling figure payloads into VLM summaries when allowed."""
+    def _enrich_docling_figures(self, document: Document, skip_image_processing: bool,
+                                 min_area_frac: float = 0.10) -> None:
+        """Convert Docling figure payloads into VLM summaries when allowed.
+
+        Only figures whose bounding-box area covers >= min_area_frac of their
+        page/slide are captioned -- below that, a figure is presumed to be a
+        logo/icon/decorative graphic, not real content (verified against real
+        bounding-box data: at a 10% threshold, real diagrams/charts/photos are
+        reliably separated from template decoration).
+        """
         figures = document.metadata.get('docling_figures') or []
         payloads = document.metadata.pop('docling_figures_payload', None)
 
@@ -373,12 +387,6 @@ class EnhancedDocumentProcessor:
         if skip_image_processing:
             for figure in figures:
                 figure['vlm_status'] = 'skipped'
-            return
-
-        try:
-            from .query_cortex import describe_image_with_vlm_for_ingestion
-        except Exception as import_error:
-            logger.warning(f"VLM unavailable for Docling figures: {import_error}")
             return
 
         payload_map = {
@@ -392,8 +400,13 @@ class EnhancedDocumentProcessor:
             idx = figure.get('index')
             if idx is None or idx not in payload_map:
                 continue
+            payload = payload_map[idx]
+            area_frac = payload.get('area_frac')
+            if area_frac is None or area_frac < min_area_frac:
+                figure['vlm_status'] = 'skipped_small'
+                continue
 
-            summary = self._summarize_figure_with_vlm(payload_map[idx], describe_image_with_vlm_for_ingestion)
+            summary = self._summarize_figure_with_vlm(payload)
             if summary:
                 figure['vlm_summary'] = summary
                 figure['vlm_status'] = 'processed'
@@ -403,35 +416,32 @@ class EnhancedDocumentProcessor:
                 figure['vlm_status'] = 'error'
 
         if figure_blocks:
-            document.text += "\n\n## Figure Intelligence\n" + "\n\n".join(figure_blocks)
+            # document.text is a read-only property in the installed llama_index;
+            # the mutable field it reads from is document.text_resource.text.
+            document.text_resource.text = (
+                document.text + "\n\n## Figure Intelligence\n" + "\n\n".join(figure_blocks)
+            )
 
-    def _summarize_figure_with_vlm(self, payload: Dict[str, Any], vlm_fn) -> Optional[str]:
-        """Decode the Docling figure payload and call the shared VLM utility."""
+    def _summarize_figure_with_vlm(self, payload: Dict[str, Any]) -> Optional[str]:
+        """Decode the Docling figure payload, check the dedup cache, and call Haiku."""
         image_b64 = payload.get('image_base64')
         if not image_b64:
             return None
-
         try:
             image_bytes = base64.b64decode(image_b64)
         except Exception as decode_error:
             logger.warning(f"Invalid Docling figure payload: {decode_error}")
             return None
 
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
-                tmp_file.write(image_bytes)
-                tmp_path = tmp_file.name
-            return vlm_fn(tmp_path)
-        except Exception as vlm_error:
-            logger.warning(f"Docling figure VLM summary failed: {vlm_error}")
-            return None
-        finally:
-            if tmp_path:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
+        cached = self._caption_cache.get(image_bytes)
+        if cached is not None:
+            return cached
+
+        caption = caption_figure_with_haiku(image_bytes)
+        if caption:
+            self._caption_cache.put(image_bytes, caption)
+            return caption
+        return None
 
 
 # Factory function for easy integration
