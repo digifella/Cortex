@@ -86,6 +86,10 @@ class DoclingDocumentReader:
             pdf_pipeline_options = PdfPipelineOptions(
                 do_ocr=self.ocr_enabled,
                 do_table_structure=self.table_structure_recognition,
+                # PDFs (unlike PPTX) default this to False -- without it,
+                # PictureItem.get_image() returns None for every picture, so no
+                # figure ever gets a VLM caption regardless of its area_frac.
+                generate_picture_images=True,
             )
             return DocumentConverter(
                 allowed_formats=[InputFormat.PDF, InputFormat.PPTX],
