@@ -925,15 +925,15 @@ def _build_report(results: list[dict], output_modes: list[str], api_choice: str,
 
     lines = [
         "---",
-        f"title: {report_title}",
+        f"title: {json.dumps(report_title, ensure_ascii=False)}",
         f"date: {today}",
         "source_type: youtube_summary",
-        f"provider: {model_info['provider']}",
-        f"api: {api_label}",
-        f"modes: {mode_labels}",
+        f"provider: {json.dumps(model_info['provider'], ensure_ascii=False)}",
+        f"api: {json.dumps(api_label, ensure_ascii=False)}",
+        f"modes: {json.dumps(mode_labels, ensure_ascii=False)}",
     ]
     if language:
-        lines.append(f"language: {language}")
+        lines.append(f"language: {json.dumps(language, ensure_ascii=False)}")
     lines += [
         "---",
         "",
