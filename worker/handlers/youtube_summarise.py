@@ -312,6 +312,68 @@ def _fetch_youtube_watch_page_context(video_id: str) -> dict:
     return {"description": description, "tags": tags}
 
 
+# Description links that are channel plumbing rather than content: shorteners,
+# tip jars, courses/communities, socials. Reference domains always survive.
+PROMO_URL_DOMAINS = (
+    "bit.ly", "clickhubspot.com", "geni.us", "amzn.to", "tinyurl.com", "linktr.ee",
+    "patreon.com", "ko-fi.com", "buymeacoffee.com", "gumroad.com", "skool.com",
+    "outskill.com", "kajabi.com", "teachable.com", "discord.gg", "discord.com",
+    "twitter.com", "x.com", "instagram.com", "tiktok.com", "facebook.com",
+    "linkedin.com", "threads.net", "bsky.app", "beacons.ai", "stan.store",
+)
+REFERENCE_URL_DOMAINS = (
+    "arxiv.org", "doi.org", "github.com", "huggingface.co", "openreview.net",
+    "aclanthology.org", "nature.com", "science.org", "acm.org", "ieee.org",
+    "sciencedirect.com", "springer.com", "semanticscholar.org", "ncbi.nlm.nih.gov",
+    "paperswithcode.com", "edu",
+)
+PROMO_LINE_PATTERN = re.compile(
+    r"sponsor|affiliate|discount|coupon|promo|use code|% off|\bfree\b|\bjoin\b|"
+    r"subscribe|follow (?:me|us)|\bpatreon\b|support (?:the|my|this) channel|"
+    r"\bmerch\b|newsletter|sign up|\bcourses?\b|\bmembership\b|👉",
+    re.IGNORECASE,
+)
+
+
+def _domain_matches(url: str, domains: tuple) -> bool:
+    host = urllib.parse.urlparse(url).netloc.lower().split(":")[0]
+    host = host[4:] if host.startswith("www.") else host
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def _is_promo_line(line: str, context: str) -> bool:
+    """A description line is promo if it links a promo domain, or if it (or the
+    label line above a bare URL) reads like an ad — unless it cites a reference."""
+    urls = _extract_urls(line)
+    if any(_domain_matches(u, REFERENCE_URL_DOMAINS) for u in urls):
+        return False
+    if any(_domain_matches(u, PROMO_URL_DOMAINS) for u in urls):
+        return True
+    if any("utm_" in u or "ref=" in u or "via=" in u for u in urls):
+        return True
+    return bool(PROMO_LINE_PATTERN.search(context))
+
+
+def _clean_description(description: str) -> str:
+    """Drop ad/support/social lines from a YouTube description, keeping prose and
+    reference links (papers, repos). Paragraphs left with only 'Heading:' lines go too."""
+    kept_paragraphs = []
+    for paragraph in re.split(r"\n\s*\n", (description or "").strip()):
+        lines = paragraph.splitlines()
+        kept = []
+        for i, line in enumerate(lines):
+            bare_url = re.fullmatch(r"\s*https?://\S+\s*", line) is not None
+            context = (lines[i - 1] + " " + line) if bare_url and i > 0 else line
+            if _is_promo_line(line, context):
+                if bare_url and kept and kept[-1] == lines[i - 1]:
+                    kept.pop()  # its "Label:" line goes with it
+                continue
+            kept.append(line)
+        if kept and not all(l.strip().endswith(":") for l in kept if l.strip()):
+            kept_paragraphs.append("\n".join(kept))
+    return "\n\n".join(kept_paragraphs).strip()
+
+
 def _fetch_youtube_extra_context(url: str) -> dict:
     """Fetch description, tags, links, playlist links, and top comments when API access exists."""
     video_id = _youtube_video_id(url)
@@ -326,6 +388,7 @@ def _fetch_youtube_extra_context(url: str) -> dict:
         watch_context = _fetch_youtube_watch_page_context(video_id)
         description = watch_context.get("description", "")
         tags = watch_context.get("tags", [])
+    description = _clean_description(description)
     urls = _extract_urls(description)
     playlist_urls = [
         item for item in urls
@@ -934,16 +997,19 @@ def _build_report(results: list[dict], output_modes: list[str], api_choice: str,
     ]
     if language:
         lines.append(f"language: {json.dumps(language, ensure_ascii=False)}")
-    lines += [
-        "---",
-        "",
-        f"# {report_title}",
-        f"Generated: {today} · API: {api_label} · Modes: {mode_labels}",
-        "",
-    ]
+    lines += ["---", ""]
+    # Title/date/API already live in the frontmatter; a single-video report
+    # goes straight to its video heading instead of repeating them.
+    if len(results) > 1:
+        lines += [
+            f"# {report_title}",
+            f"Generated: {today} · API: {api_label} · Modes: {mode_labels}",
+            "",
+        ]
 
     for i, result in enumerate(results, 1):
-        lines.append(f"---\n")
+        if len(results) > 1:
+            lines.append(f"---\n")
         url = result.get("url", "")
         report_title = result.get("report_title") or result.get("video_title") or f"Video {i}"
         video_title = result.get("video_title", "")

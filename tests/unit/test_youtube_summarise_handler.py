@@ -161,8 +161,12 @@ def test_build_report_includes_report_title_and_clip_metadata():
         api_choice="gemini-flash",
     )
 
-    assert "title: Competition Reform Priorities" in report
-    assert "# Competition Reform Priorities" in report
+    assert 'title: "Competition Reform Priorities"' in report
+    assert "## Competition Reform Priorities" in report
+    # single video: no repeated H1 / Generated line / separator after frontmatter
+    assert "\n# Competition Reform Priorities" not in report
+    assert "Generated:" not in report
+    assert report.count("\n---") == 1
     assert "**Clip title:** Chair Discusses Competition Reform" in report
     assert "**Author / channel:** ACCC" in report
 
@@ -349,3 +353,40 @@ def test_handle_returns_rich_output_data(monkeypatch):
     assert result["output_file"].exists()
     rendered = result["output_file"].read_text(encoding="utf-8")
     assert "Zocdoc" not in rendered
+
+
+def test_clean_description_drops_promo_keeps_content():
+    description = (
+        "*Free dots guide:* https://clickhubspot.com/efbx\n\n"
+        "More from Futurepedia:\n"
+        "👉 Join the Skill Leap AI education platform! Try it free: https://bit.ly/futurepediaSL\n\n"
+        "Summary:\n"
+        "Open AI launched a new always on personal assistant called Dots."
+    )
+
+    cleaned = yt._clean_description(description)
+
+    assert cleaned == (
+        "Summary:\nOpen AI launched a new always on personal assistant called Dots."
+    )
+    assert yt._extract_urls(cleaned) == []
+
+
+def test_clean_description_keeps_reference_links_drops_support_links():
+    description = (
+        "Paper: https://arxiv.org/abs/2401.00001\n"
+        "Code: https://github.com/example/repo\n"
+        "Blog post: https://example.com/blog/deep-dive\n\n"
+        "Support the channel on Patreon:\n"
+        "https://www.patreon.com/somecreator\n"
+        "Follow me on X: https://x.com/somecreator\n"
+        "Try the course https://outskill.com/?utm_source=yt"
+    )
+
+    urls = yt._extract_urls(yt._clean_description(description))
+
+    assert urls == [
+        "https://arxiv.org/abs/2401.00001",
+        "https://github.com/example/repo",
+        "https://example.com/blog/deep-dive",
+    ]
