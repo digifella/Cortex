@@ -320,6 +320,9 @@ PROMO_URL_DOMAINS = (
     "outskill.com", "kajabi.com", "teachable.com", "discord.gg", "discord.com",
     "twitter.com", "x.com", "instagram.com", "tiktok.com", "facebook.com",
     "linkedin.com", "threads.net", "bsky.app", "beacons.ai", "stan.store",
+    "kgs.link", "pix.live", "industrial-leads.com", "calendly.com", "paypal.me",
+    "paypal.com", "teespring.com", "spreadshirt.com", "fourthwall.com", "drp.li",
+    "thinkific.com", "tally.so", "itemorder.com", "evannex.com", "podcasts.apple.com", "hostinger.com",
 )
 REFERENCE_URL_DOMAINS = (
     "arxiv.org", "doi.org", "github.com", "huggingface.co", "openreview.net",
@@ -330,9 +333,12 @@ REFERENCE_URL_DOMAINS = (
 PROMO_LINE_PATTERN = re.compile(
     r"sponsor|affiliate|discount|coupon|promo|use code|% off|\bfree\b|\bjoin\b|"
     r"subscribe|follow (?:me|us)|\bpatreon\b|support (?:the|my|this) channel|"
-    r"\bmerch\b|newsletter|sign up|\bcourses?\b|\bmembership\b|👉",
+    r"\bmerch\b|newsletter|sign up|\bcourses?\b|\bmembership\b|👉|check out|my book|out now|pre-?order|audio only podcast|"
+    r"^\W*(?:website|blog|podcast|shop|store|contact|business inquiries|book a call)\s*[:→-]",
     re.IGNORECASE,
 )
+# Links to the creator's own channel are plumbing; links to other videos are kept.
+YOUTUBE_CHANNEL_PATH = re.compile(r"^/(?:@|channel/|c/|user/)|sub_confirmation")
 
 
 def _domain_matches(url: str, domains: tuple) -> bool:
@@ -348,6 +354,9 @@ def _is_promo_line(line: str, context: str) -> bool:
     if any(_domain_matches(u, REFERENCE_URL_DOMAINS) for u in urls):
         return False
     if any(_domain_matches(u, PROMO_URL_DOMAINS) for u in urls):
+        return True
+    if any(YOUTUBE_CHANNEL_PATH.search(urllib.parse.urlparse(u).path + "?" + urllib.parse.urlparse(u).query)
+           for u in urls if _domain_matches(u, ("youtube.com",))):
         return True
     if any("utm_" in u or "ref=" in u or "via=" in u for u in urls):
         return True

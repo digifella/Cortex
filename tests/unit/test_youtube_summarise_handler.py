@@ -380,7 +380,10 @@ def test_clean_description_keeps_reference_links_drops_support_links():
         "Support the channel on Patreon:\n"
         "https://www.patreon.com/somecreator\n"
         "Follow me on X: https://x.com/somecreator\n"
-        "Try the course https://outskill.com/?utm_source=yt"
+        "Try the course https://outskill.com/?utm_source=yt\n"
+        "▶ Blog: https://www.creatorblog.com\n"
+        "Subscribe: https://www.youtube.com/@somecreator?sub_confirmation=1\n"
+        "Previous episode: https://www.youtube.com/watch?v=abc123"
     )
 
     urls = yt._extract_urls(yt._clean_description(description))
@@ -389,4 +392,5 @@ def test_clean_description_keeps_reference_links_drops_support_links():
         "https://arxiv.org/abs/2401.00001",
         "https://github.com/example/repo",
         "https://example.com/blog/deep-dive",
+        "https://www.youtube.com/watch?v=abc123",
     ]
