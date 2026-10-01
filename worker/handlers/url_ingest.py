@@ -65,17 +65,22 @@ def _build_markdown_report(results: List[URLIngestResult], output_data: dict) ->
         "source_type: url_ingest",
         "---",
         "",
-        "# URL Ingest Summary",
-        f"Generated: {today}",
-        "",
-        "## Overview",
-        f"- **Total URLs processed:** {total}",
-        f"- **Web pages captured:** {web_captured}",
-        f"- **PDFs downloaded:** {downloaded}",
-        f"- **Converted to Markdown:** {converted}",
-        f"- **Failed:** {failed}",
-        "",
     ]
+    # A single-URL report goes straight to its page: the title and date are in
+    # the frontmatter, and "1 URL processed" stats add nothing.
+    if len(results) != 1:
+        lines += [
+            "# URL Ingest Summary",
+            f"Generated: {today}",
+            "",
+            "## Overview",
+            f"- **Total URLs processed:** {total}",
+            f"- **Web pages captured:** {web_captured}",
+            f"- **PDFs downloaded:** {downloaded}",
+            f"- **Converted to Markdown:** {converted}",
+            f"- **Failed:** {failed}",
+            "",
+        ]
 
     for r in results:
         url = r.input_url
@@ -83,8 +88,9 @@ def _build_markdown_report(results: List[URLIngestResult], output_data: dict) ->
         status = r.status
         reason = r.reason or ""
 
-        lines.append("---")
-        lines.append("")
+        if len(results) != 1:
+            lines.append("---")
+            lines.append("")
         heading = page_title if page_title else url
         lines.append(f"## {heading}")
         lines.append(f"**URL:** {url}")
