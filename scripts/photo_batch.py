@@ -540,8 +540,12 @@ def tag_photos(
     cooldown: float = 0.0,
     limit: int = 0,
     local_vision: bool = False,
+    only_files=None,
 ) -> dict:
     """Tag every top-level JPG that needs it, with a resumable checkpoint.
+
+    only_files: optional iterable of paths -- tag ONLY those (they must sit in to_tag_dir). Used for
+    "caption only the photos that contain a face" (2026-10-02, Paul).
 
     When limit > 0, stop after that many photos have actually been processed
     (tagged or failed) this run — already-good/already-done skips don't count,
@@ -553,6 +557,9 @@ def tag_photos(
         | set(to_tag_dir.glob("*.tif")) | set(to_tag_dir.glob("*.TIF"))
         | set(to_tag_dir.glob("*.tiff")) | set(to_tag_dir.glob("*.TIFF"))
     )
+    if only_files is not None:
+        wanted = {Path(f) for f in only_files}
+        photos = [p for p in photos if p in wanted]
     checkpoint = load_checkpoint(to_tag_dir)
     total = len(photos)
     tagged = skipped = failed = processed = 0
@@ -653,6 +660,8 @@ def main(argv=None) -> None:
                     help="Ownership/copyright notice to embed.")
     pt.add_argument("--no-ownership", action="store_true",
                     help="Do not write ownership metadata.")
+    pt.add_argument("--files", type=Path, metavar="LIST",
+                    help="Tag ONLY the photos listed in this file (one path per line, inside to_tag_dir).")
     pt.add_argument("--local-vision", action="store_true",
                     help="Caption with the VLM already loaded in LM Studio instead of "
                          "the Claude Haiku API (no API cost, no extra VRAM — it reuses "
@@ -691,8 +700,13 @@ def main(argv=None) -> None:
         if not args.to_tag_dir.is_dir():
             parser.error(f"Not a directory: {args.to_tag_dir}")
         ownership = "" if args.no_ownership else args.ownership
+        only = None
+        if args.files:
+            only = [ln.strip() for ln in args.files.read_text().splitlines()
+                    if ln.strip() and not ln.lstrip().startswith("#")]
         tag_photos(
             args.to_tag_dir,
+            only_files=only,
             min_desc_len=args.min_desc_len,
             redescribe_all=args.redescribe_all,
             ownership_notice=ownership,
