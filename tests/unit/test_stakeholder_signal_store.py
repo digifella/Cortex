@@ -1047,7 +1047,7 @@ def test_llm_synthesise_falls_back_to_anthropic_when_ollama_fails(tmp_path, monk
 
     def fake_anthropic(self, system, user, model):
         assert "Carolyn Bell" in user
-        assert model == "claude-haiku-4-5-20251001"
+        assert model == "claude-haiku-5-5"
         return "# Claude Digest\n\n- Synthesised fallback output.", model
 
     monkeypatch.setattr(StakeholderSignalStore, "_call_ollama", fake_ollama)
@@ -1063,7 +1063,7 @@ def test_llm_synthesise_falls_back_to_anthropic_when_ollama_fails(tmp_path, monk
     digest_text = (tmp_path / "digests" / f"{digest['digest_id']}.md").read_text(encoding="utf-8")
     assert digest["llm_synthesised"] is True
     assert digest["llm_provider"] == "anthropic"
-    assert digest["llm_model"] == "claude-haiku-4-5-20251001"
+    assert digest["llm_model"] == "claude-haiku-5-5"
     assert "Synthesised fallback output." in digest_text
 
 

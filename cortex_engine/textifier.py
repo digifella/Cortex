@@ -102,7 +102,7 @@ class DocumentTextifier:
 
     # Claude vision model — used when ANTHROPIC_API_KEY is set.
     # Haiku is low-cost and follows complex instructions reliably.
-    CLAUDE_VISION_MODEL = "claude-haiku-4-5-20251001"
+    CLAUDE_VISION_MODEL = "claude-haiku-5-5"
 
     # Output token budget per model family. Reasoning models emit their chain of
     # thought before the answer and need headroom to reach it — at 140 tokens
@@ -984,6 +984,7 @@ class DocumentTextifier:
             response = client.messages.create(
                 model=self.CLAUDE_VISION_MODEL,
                 max_tokens=120,
+                thinking={"type": "disabled"},
                 messages=[
                     {
                         "role": "user",

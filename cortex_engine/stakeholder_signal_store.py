@@ -3582,11 +3582,11 @@ class StakeholderSignalStore:
             if ollama_text:
                 return ollama_text, "ollama", ollama_model
             logger.info("Ollama digest synthesis unavailable; falling back to Claude API")
-            anthropic_model = str(os.environ.get("CORTEX_WATCH_ANTHROPIC_MODEL") or "").strip() or "claude-haiku-4-5-20251001"
+            anthropic_model = str(os.environ.get("CORTEX_WATCH_ANTHROPIC_MODEL") or "").strip() or "claude-haiku-5-5"
             anthropic_text, actual_model = self._call_anthropic(system_prompt, user_prompt, anthropic_model)
             return anthropic_text, "anthropic", actual_model
         if provider_name == "anthropic":
-            anthropic_text, actual_model = self._call_anthropic(system_prompt, user_prompt, model or "claude-haiku-4-5-20251001")
+            anthropic_text, actual_model = self._call_anthropic(system_prompt, user_prompt, model or "claude-haiku-5-5")
             return anthropic_text, "anthropic", actual_model
         logger.warning("Unsupported digest LLM provider: %s", provider_name)
         return None, provider_name, str(model or "").strip()
@@ -3685,6 +3685,7 @@ class StakeholderSignalStore:
                 json={
                     "model": model,
                     "max_tokens": 4096,
+                    **({"thinking": {"type": "disabled"}} if str(model).startswith("claude-haiku-5") else {}),
                     "system": system,
                     "messages": [{"role": "user", "content": user}],
                 },

@@ -10,7 +10,7 @@ in full, including any text, axis labels, or data visible in it.
 import base64
 import os
 
-MODEL = "claude-haiku-4-5-20251001"
+MODEL = "claude-haiku-5-5"
 
 _PROMPT = (
     "This image is a figure extracted from a business/consulting document "
@@ -60,6 +60,7 @@ def caption_figure_with_haiku(image_bytes: bytes, context_hint: str = "") -> str
         response = client.messages.create(
             model=MODEL,
             max_tokens=200,
+            thinking={"type": "disabled"},
             messages=[{
                 "role": "user",
                 "content": [

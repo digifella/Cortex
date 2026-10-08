@@ -49,7 +49,7 @@ _PRIVATE_SUBJECT_MARKERS = ("private", "sensitive", "confidential")
 _PRIVATE_SUBJECT_RE = re.compile(r"(?i)\b(?:private|sensitive|confidential)\b")
 _EXTERNAL_SUBJECT_RE = re.compile(r"(?i)^(?:open|public)\b")
 _PUBLIC_COMPLEX_DOC_TYPES = {"annual_report", "strategic_plan", "org_chart"}
-_ANTHROPIC_HAIKU_MODEL = os.environ.get("CORTEX_INTEL_ANTHROPIC_DEFAULT_MODEL", "").strip() or "claude-haiku-4-5-20251001"
+_ANTHROPIC_HAIKU_MODEL = os.environ.get("CORTEX_INTEL_ANTHROPIC_DEFAULT_MODEL", "").strip() or "claude-haiku-5-5"
 _ANTHROPIC_DOCUMENT_MODEL = os.environ.get("CORTEX_INTEL_ANTHROPIC_DOCUMENT_MODEL", "").strip() or "claude-sonnet-4-6"
 _LOCAL_INTEL_MODEL_CANDIDATES = (
     "qwen2.5:14b-instruct-q4_K_M",
@@ -704,6 +704,7 @@ def _call_anthropic_extract(payload: Dict[str, Any], combined_text: str, model: 
     response = client.messages.create(
         model=model,
         max_tokens=1800,
+        **({"thinking": {"type": "disabled"}} if str(model).startswith("claude-haiku-5") else {}),
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}],
     )
@@ -874,6 +875,7 @@ def _call_anthropic_image_extract(payload: Dict[str, Any], attachment: Dict[str,
     response = client.messages.create(
         model=model,
         max_tokens=1600,
+        **({"thinking": {"type": "disabled"}} if str(model).startswith("claude-haiku-5") else {}),
         system=system_prompt,
         messages=[
             {

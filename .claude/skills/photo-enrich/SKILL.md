@@ -39,7 +39,7 @@ WSL form: `/mnt/c/Users/paul/...`. Always run paths through `convert_windows_to_
    - `anthropic` missing → Claude silently falls back to local Ollama, captions look fine but are worse
    - `geopy` missing → location comes back empty with only a log warning; GPS still reads fine
    - `ANTHROPIC_API_KEY` missing/invalid/no-credit → same silent Ollama fallback
-3. **Confirm Haiku is actually being used** — watch for `Claude vision (claude-haiku-4-5-20251001) returned N chars`. Its absence, or `Claude vision returned empty — falling back to local Ollama model`, means it is not.
+3. **Confirm Haiku is actually being used** — watch for `Claude vision (claude-haiku-5-5) returned N chars`. Its absence, or `Claude vision returned empty — falling back to local Ollama model`, means it is not.
 
 ## Offline / travelling mode
 

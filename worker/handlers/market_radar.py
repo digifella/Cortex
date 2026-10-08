@@ -388,8 +388,9 @@ def _run_web_search(client, system_msg: str, user_query: str, web_tool: dict) ->
 
         for _loop in range(max_loops):
             response = client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-haiku-5-5",
                 max_tokens=3000,
+                thinking={"type": "disabled"},
                 system=system_msg,
                 tools=[web_tool],
                 messages=messages,
@@ -443,8 +444,9 @@ def _run_web_search(client, system_msg: str, user_query: str, web_tool: dict) ->
             # Last resort: ask Claude to extract signals from its own prose summary
             logger.info("[market_radar] Extracting signals from prose response")
             extract = client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-haiku-5-5",
                 max_tokens=2000,
+                thinking={"type": "disabled"},
                 system=(
                     "Extract market intelligence signals from the research text provided. "
                     "Return a JSON array where each item has: headline (string), "

@@ -529,12 +529,13 @@ def _generate_report_title_claude(url: str, model_name: str, metadata: dict, sec
     client = _anthropic_client()
     model_id = (
         "claude-sonnet-4-6" if model_name == "claude-sonnet"
-        else "claude-haiku-4-5-20251001"
+        else "claude-haiku-5-5"
     )
     lang_note = f" Write the title in {language}." if language else ""
     response = client.messages.create(
         model=model_id,
         max_tokens=64,
+        thinking={"type": "disabled"},
         messages=[{
             "role": "user",
             "content": (
@@ -903,7 +904,7 @@ def _summarise_claude(transcript: str, url: str, model_name: str, output_modes: 
 
     model_id = (
         "claude-sonnet-4-6" if model_name == "claude-sonnet"
-        else "claude-haiku-4-5-20251001"
+        else "claude-haiku-5-5"
     )
 
     # Truncate long transcripts (100k chars ≈ ~75k tokens, well within context)
@@ -923,6 +924,7 @@ def _summarise_claude(transcript: str, url: str, model_name: str, output_modes: 
             response = client.messages.create(
                 model=model_id,
                 max_tokens=4096,
+                thinking={"type": "disabled"},
                 messages=[{"role": "user", "content": user_message}],
             )
             sections[mode] = response.content[0].text.strip()
