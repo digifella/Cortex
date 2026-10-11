@@ -6,14 +6,14 @@
 # for the Cortex Suite knowledge management system.
 
 # Core transformers (minimum version for Qwen3-VL support)
-transformers>=4.57.0
+transformers>=5.10.1   # raised 2026-10-10: older releases have known vulnerabilities (5.10.0 was yanked)
 
 # Qwen VL utilities for image/video processing
 qwen-vl-utils>=0.0.14
 
 # PyTorch with CUDA support (adjust for your CUDA version)
 # For CUDA 12.1:
-torch>=2.8.0
+torch>=2.13.0   # raised 2026-10-10: older releases have known vulnerabilities
 # For CUDA 11.8, use: pip install torch --index-url https://download.pytorch.org/whl/cu118
 
 # Flash Attention 2 for memory optimization (optional but recommended)
@@ -23,7 +23,7 @@ torch>=2.8.0
 
 # Additional utilities
 numpy>=1.24.0
-pillow>=10.0.0  # For image processing
+pillow>=12.3.0  # For image processing; raised 2026-10-10: older releases have known vulnerabilities
 
 # vLLM for high-performance inference (optional)
 # vllm>=0.14.0
