@@ -4,10 +4,16 @@
 #   source .venv-docling/bin/activate
 #   pip install -r requirements-docling.txt
 
-docling==2.73.1
-docling-core==2.65.1
-docling-ibm-models==3.11.0
-docling-parse==4.7.3
+docling==2.137.0
+docling-core==2.101.1
+docling-ibm-models==4.0.3
+docling-parse==7.22.2
 
 # Keep core numeric stack compatible with current Cortex baseline.
 numpy==1.26.4
+# Floors (added 2026-10-10) on transitive packages whose older releases have known vulnerabilities. pip and uv
+# already pick the newest release; these stop a scanner or a constrained install settling on an old one.
+# transformers 5.10.0 was yanked on PyPI, so the floor is 5.10.1.
+transformers>=5.10.1
+torch>=2.13.0
+anyio>=4.14.2
