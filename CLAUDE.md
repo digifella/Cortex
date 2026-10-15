@@ -122,7 +122,10 @@ configured database path.
 
 1. **Claude Haiku** — when `ANTHROPIC_API_KEY` is set and `prefer_local_vision` is False.
 2. **LM Studio** — a VLM **already loaded** there. Added v6.6.0.
-3. **Ollama** — the VRAM-adaptive local selection.
+3. **Ollama** — the VRAM-adaptive local selection. **Ollama was removed from the system
+   (2026-10)**, so on the current host this step is a dead fall-through: LM Studio is the
+   local path and Haiku the fallback. See `docs/operations/LOCAL_VISION_AND_EMBEDDING.md`
+   (also covers EmbeddingGemma 2, the preferred multimodal embedder for media search).
 
 **LM Studio only ever uses an already-loaded model.** It never asks LM Studio to
 load one: the entire point is to reuse a resident VLM rather than making Ollama
