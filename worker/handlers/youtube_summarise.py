@@ -100,6 +100,7 @@ MODE_PROMPTS = {
 }
 
 MODEL_DETAILS = {
+    "gemini-3.5-flash-lite": {"provider": "Google", "label": "Gemini 3.5 Flash-Lite"},
     "gemini-flash": {"provider": "Google", "label": "Gemini 2.5 Flash"},
     "gemini-pro": {"provider": "Google", "label": "Gemini 2.5 Pro"},
     "claude-haiku": {"provider": "Anthropic", "label": "Claude Haiku"},
