@@ -949,10 +949,12 @@ class DocumentTextifier:
     ) -> str:
         """Describe an image using the Anthropic Claude vision API.
 
-        Requires ANTHROPIC_API_KEY in the environment.  Returns an empty string
+        Reads ANTHROPIC_API_KEY from the environment or private Cortex .env. Returns an empty string
         on any error so the caller can fall back to local Ollama models.
         """
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        from .haiku_figure_caption import _load_api_key
+
+        api_key = _load_api_key()
         if not api_key:
             return ""
         try:
@@ -983,8 +985,8 @@ class DocumentTextifier:
             client = anthropic.Anthropic(api_key=api_key)
             response = client.messages.create(
                 model=self.CLAUDE_VISION_MODEL,
-                max_tokens=120,
-                thinking={"type": "disabled"},
+                max_tokens=350,
+                output_config={"effort": "low"},
                 messages=[
                     {
                         "role": "user",
@@ -1037,31 +1039,14 @@ class DocumentTextifier:
         self._lmstudio_vlm_cached = True
         self._lmstudio_vlm = None
 
-        override = os.environ.get("CORTEX_LMSTUDIO_VISION_MODEL", "").strip()
-        base = os.environ.get("CORTEX_LMSTUDIO_BASE_URL", "http://localhost:1234/v1").strip()
-        if override:
-            self._lmstudio_vlm = override
-            return self._lmstudio_vlm
+        from .lmstudio_vision import loaded_qwen_model
 
-        # The loaded/type fields live on LM Studio's native API, not /v1.
-        root = base[: -len("/v1")] if base.endswith("/v1") else base
-        try:
-            import urllib.request
-
-            with urllib.request.urlopen(f"{root}/api/v0/models", timeout=5) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except Exception as exc:
-            logger.debug("LM Studio not reachable at %s: %s", root, exc)
-            return None
-
-        for entry in payload.get("data", []):
-            if entry.get("type") == "vlm" and entry.get("state") == "loaded":
-                self._lmstudio_vlm = entry.get("id")
-                logger.info("LM Studio vision model in use: %s", self._lmstudio_vlm)
-                return self._lmstudio_vlm
-
-        logger.debug("LM Studio reachable but no vision model is loaded")
-        return None
+        self._lmstudio_vlm = loaded_qwen_model()
+        if self._lmstudio_vlm:
+            logger.info("LM Studio Qwen vision model in use: %s", self._lmstudio_vlm)
+        else:
+            logger.debug("No loaded LM Studio Qwen vision model is reachable")
+        return self._lmstudio_vlm
 
     def _describe_with_lmstudio(
         self,
@@ -1076,12 +1061,6 @@ class DocumentTextifier:
         model = self._lmstudio_loaded_vlm()
         if not model:
             return ""
-        try:
-            from openai import OpenAI
-        except ImportError:
-            logger.debug("openai package not installed — LM Studio vision unavailable")
-            return ""
-
         prompt = (
             "Describe this image in 1-2 short plain declarative sentences (max 35 words total). "
             "Write as flowing prose — do NOT use structural labels like "
@@ -1098,31 +1077,12 @@ class DocumentTextifier:
 
         started = time.monotonic()
         try:
-            client = OpenAI(
-                base_url=os.environ.get("CORTEX_LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
-                api_key=os.environ.get("CORTEX_LMSTUDIO_API_KEY", "lm-studio"),
-                timeout=timeout,
-            )
-            response = client.chat.completions.create(
-                model=model,
-                max_tokens=200,
-                temperature=0,
-                # Without this, qwen3.6 spends the entire budget on reasoning
-                # tokens and returns empty content. Verified against the live
-                # endpoint: 30-token cap returned "", disabling reasoning
-                # returned the answer in 5 tokens.
-                extra_body={"reasoning_effort": "none"},
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url",
-                         "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"}},
-                    ],
-                }],
-            )
-            raw = (response.choices[0].message.content or "") if response.choices else ""
-            cleaned = self._normalize_vlm_text(raw.strip())
+            from .lmstudio_vision import describe_encoded_image
+
+            raw = describe_encoded_image(
+                encoded_image, mime_type="image/jpeg", prompt=prompt, model=model,
+                max_tokens=200, timeout=timeout)
+            cleaned = self._normalize_vlm_text(raw)
             logger.info(
                 "LM Studio vision (%s) returned %d chars in %.1fs",
                 model, len(cleaned), time.monotonic() - started,
@@ -1295,28 +1255,16 @@ class DocumentTextifier:
         by the photo pipeline to pass local-time / sun-phase context so the
         VLM can distinguish dawn from dusk and sunrise from sunset.
 
-        If ANTHROPIC_API_KEY is set, Claude Haiku is tried first.  On failure
-        or empty result the pipeline falls through to the local Ollama models.
+        The loaded LM Studio Qwen vision model is tried first. Claude Haiku
+        is used if Qwen is unavailable or returns no description.
         """
         if not self.use_vision:
             return "[Image: vision model disabled]"
         try:
+            from .haiku_figure_caption import _load_api_key
+
             prepared_bytes = self._prepare_vlm_image_bytes(image_bytes)
             encoded = base64.b64encode(prepared_bytes).decode("utf-8")
-
-            # ── Claude Haiku (tried first when API key is available) ──────────
-            # prefer_local_vision skips Claude entirely — the offline/travelling
-            # configuration, where reaching the API would fail or cost roaming data.
-            if self.prefer_local_vision:
-                logger.info("Local vision preferred — skipping Claude")
-            elif os.environ.get("ANTHROPIC_API_KEY", "").strip():
-                claude_result = self._describe_with_claude(encoded, context_hint=context_hint)
-                if claude_result:
-                    self.last_vision_model_used = self.CLAUDE_VISION_MODEL
-                    if self._looks_like_logo_icon_description(claude_result):
-                        return "[Image: logo/icon omitted]"
-                    return claude_result
-                logger.info("Claude vision returned empty — falling back to local vision")
 
             # ── LM Studio (a VLM already resident in VRAM) ─────────────────────
             # Preferred over Ollama: reuses a loaded model instead of making
@@ -1329,6 +1277,19 @@ class DocumentTextifier:
                 if self._looks_like_logo_icon_description(lmstudio_result):
                     return "[Image: logo/icon omitted]"
                 return lmstudio_result
+
+            # ── Claude Haiku only when Qwen is unavailable or failed ──────────
+            # prefer_local_vision is the offline/travelling configuration.
+            if self.prefer_local_vision:
+                logger.info("Local vision preferred — skipping Claude fallback")
+            elif _load_api_key():
+                claude_result = self._describe_with_claude(encoded, context_hint=context_hint)
+                if claude_result:
+                    self.last_vision_model_used = self.CLAUDE_VISION_MODEL
+                    if self._looks_like_logo_icon_description(claude_result):
+                        return "[Image: logo/icon omitted]"
+                    return claude_result
+                logger.info("Claude vision returned empty — falling back to local vision")
 
             # ── Local Ollama models ───────────────────────────────────────────
             self._init_vlm()

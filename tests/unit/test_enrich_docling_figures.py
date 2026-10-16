@@ -4,8 +4,10 @@ from unittest.mock import patch
 
 from llama_index.core import Document
 from PIL import Image
+import pytest
 
 from cortex_engine.enhanced_ingest_cortex import EnhancedDocumentProcessor
+from cortex_engine.lmstudio_vision import LocalVisionUnavailableError
 
 
 def _png_b64(size=(400, 400)) -> str:
@@ -32,8 +34,10 @@ def test_small_figure_below_threshold_is_never_captioned(tmp_path, monkeypatch):
                          str(tmp_path / "cache.db"))
     processor = EnhancedDocumentProcessor(enable_docling=False)
     doc = _make_doc_with_figures([0.02])  # 2% -- below the 10% threshold
-    with patch("cortex_engine.enhanced_ingest_cortex.caption_figure_with_haiku") as mock_caption:
+    with patch("cortex_engine.enhanced_ingest_cortex.caption_figure_with_qwen") as mock_qwen, \
+         patch("cortex_engine.enhanced_ingest_cortex.caption_figure_with_haiku") as mock_caption:
         processor._enrich_docling_figures(doc, skip_image_processing=False)
+        mock_qwen.assert_not_called()
         mock_caption.assert_not_called()
     assert "Figure Intelligence" not in doc.text
 
@@ -43,9 +47,12 @@ def test_large_figure_above_threshold_is_captioned(tmp_path, monkeypatch):
                          str(tmp_path / "cache.db"))
     processor = EnhancedDocumentProcessor(enable_docling=False)
     doc = _make_doc_with_figures([0.35])  # 35% -- above the 10% threshold
-    with patch("cortex_engine.enhanced_ingest_cortex.caption_figure_with_haiku",
+    with patch("cortex_engine.enhanced_ingest_cortex.caption_figure_with_qwen",
+               return_value="") as mock_qwen, \
+         patch("cortex_engine.enhanced_ingest_cortex.caption_figure_with_haiku",
                return_value="A blue rectangle.") as mock_caption:
         processor._enrich_docling_figures(doc, skip_image_processing=False)
+        mock_qwen.assert_called_once()
         mock_caption.assert_called_once()
     assert "Figure Intelligence" in doc.text
     assert "A blue rectangle." in doc.text
@@ -65,10 +72,38 @@ def test_dedup_cache_prevents_second_haiku_call(tmp_path, monkeypatch):
     doc2.metadata["docling_figures"] = [{"index": 0, "caption": "", "area_frac": 0.5}]
     doc2.metadata["docling_figures_payload"] = [{"index": 0, "image_base64": same_png, "area_frac": 0.5}]
 
-    with patch("cortex_engine.enhanced_ingest_cortex.caption_figure_with_haiku",
+    with patch("cortex_engine.enhanced_ingest_cortex.caption_figure_with_qwen",
+               return_value="") as mock_qwen, \
+         patch("cortex_engine.enhanced_ingest_cortex.caption_figure_with_haiku",
                return_value="A shared logo.") as mock_caption:
         processor._enrich_docling_figures(doc1, skip_image_processing=False)
         processor._enrich_docling_figures(doc2, skip_image_processing=False)
+        assert mock_qwen.call_count == 1
         assert mock_caption.call_count == 1, "second identical image must hit the dedup cache, not call Haiku again"
     assert "A shared logo." in doc1.text
     assert "A shared logo." in doc2.text
+
+
+def test_qwen_figure_caption_does_not_call_haiku(tmp_path, monkeypatch):
+    monkeypatch.setattr("cortex_engine.enhanced_ingest_cortex.DEFAULT_CACHE_PATH",
+                        str(tmp_path / "cache.db"))
+    processor = EnhancedDocumentProcessor(enable_docling=False)
+    doc = _make_doc_with_figures([0.35])
+    with patch("cortex_engine.enhanced_ingest_cortex.caption_figure_with_qwen",
+               return_value="Qwen sees a blue rectangle.") as mock_qwen, \
+         patch("cortex_engine.enhanced_ingest_cortex.caption_figure_with_haiku") as mock_haiku:
+        processor._enrich_docling_figures(doc, skip_image_processing=False)
+    mock_qwen.assert_called_once()
+    mock_haiku.assert_not_called()
+    assert "Qwen sees a blue rectangle." in doc.text
+
+
+def test_missing_figure_vision_stops_extraction(tmp_path, monkeypatch):
+    monkeypatch.setattr("cortex_engine.enhanced_ingest_cortex.DEFAULT_CACHE_PATH",
+                        str(tmp_path / "cache.db"))
+    processor = EnhancedDocumentProcessor(enable_docling=False)
+    doc = _make_doc_with_figures([0.35])
+    with patch("cortex_engine.enhanced_ingest_cortex.caption_figure_with_qwen", return_value=""), \
+         patch("cortex_engine.enhanced_ingest_cortex.caption_figure_with_haiku", return_value=""):
+        with pytest.raises(LocalVisionUnavailableError):
+            processor._enrich_docling_figures(doc, skip_image_processing=False)

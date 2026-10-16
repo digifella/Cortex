@@ -34,7 +34,8 @@ from .utils.smart_ollama_llm import create_smart_ollama_llm
 from .docling_reader import DoclingDocumentReader, create_docling_reader
 from .entity_extractor import EntityExtractor
 from .graph_manager import EnhancedGraphManager
-from .haiku_figure_caption import caption_figure_with_haiku
+from .haiku_figure_caption import caption_figure_with_haiku, caption_figure_with_qwen
+from .lmstudio_vision import LocalVisionUnavailableError
 from .image_caption_cache import ImageCaptionCache, DEFAULT_DB_PATH as DEFAULT_CACHE_PATH
 
 logger = get_logger(__name__)
@@ -423,7 +424,7 @@ class EnhancedDocumentProcessor:
             )
 
     def _summarize_figure_with_vlm(self, payload: Dict[str, Any]) -> Optional[str]:
-        """Decode the Docling figure payload, check the dedup cache, and call Haiku."""
+        """Decode the Docling figure, then try local Qwen before Haiku."""
         image_b64 = payload.get('image_base64')
         if not image_b64:
             return None
@@ -437,11 +438,13 @@ class EnhancedDocumentProcessor:
         if cached is not None:
             return cached
 
-        caption = caption_figure_with_haiku(image_bytes)
+        caption = caption_figure_with_qwen(image_bytes)
+        if not caption:
+            caption = caption_figure_with_haiku(image_bytes)
         if caption:
             self._caption_cache.put(image_bytes, caption)
             return caption
-        return None
+        raise LocalVisionUnavailableError("Qwen and Haiku returned no document figure caption")
 
 
 # Factory function for easy integration
