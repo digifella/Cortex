@@ -1,4 +1,8 @@
 from pathlib import Path
+import base64
+import hashlib
+
+import pytest
 
 from worker.notes_mailbox_worker import NotesGraphClient, NotesMailboxConfig, NotesMailboxProcessor, _normalize_graph_message
 
@@ -20,26 +24,102 @@ def _notes_config(tmp_path) -> NotesMailboxConfig:
         graph_mailbox="notes@longboardfella.com.au",
         graph_page_size=10,
         graph_timeout=30,
+        public_review_vault_dir=str(tmp_path / "vault_private" / "Public_Review" / "notes"),
     )
 
 
-def test_notes_mailbox_processor_writes_public_note(tmp_path):
+def test_notes_mailbox_processor_defaults_to_private_note(tmp_path):
     cfg = _notes_config(tmp_path)
     processor = NotesMailboxProcessor(cfg)
 
     result = processor.process_message(
         {
             "subject": "Meeting notes from today",
-            "text_body": "Capture this in the public stash.",
+            "text_body": "Capture this privately by default.",
             "from_email": "paul@example.com",
         }
     )
 
     assert result["status"] == "outbox_written"
-    assert result["route"] == "public_stash"
+    assert result["route"] == "private_vault"
     assert Path(result["path"]).exists()
     assert Path(result["vault_path"]).exists()
     assert result["vault_path"].endswith(".md")
+    assert "vault_private" in result["vault_path"]
+    assert "wiki-ready: false" in Path(result["vault_path"]).read_text(encoding="utf-8")
+    assert not list((tmp_path / "vault_public").rglob("*.md"))
+
+
+def test_notes_mailbox_preserves_source_date_and_receipt_fallback(tmp_path):
+    processor = NotesMailboxProcessor(_notes_config(tmp_path))
+    dated = processor.process_message({
+        "subject": "Research article", "text_body": "Published: 12 September 2026\nFindings follow.",
+        "received_at": "2026-10-15T04:00:00Z", "from_email": "paul@example.com",
+    })
+    markdown = Path(dated["vault_path"]).read_text(encoding="utf-8")
+    assert 'source_date: "2026-09-12"' in markdown
+    assert 'source_date_source: "header_publication"' in markdown
+
+    undated = processor.process_message({
+        "subject": "Undated personal note", "text_body": "A thought with no date.",
+        "received_at": "2026-10-15T05:00:00Z", "from_email": "paul@example.com",
+    })
+    markdown = Path(undated["vault_path"]).read_text(encoding="utf-8")
+    assert 'source_date: "2026-10-15"' in markdown
+    assert 'source_date_source: "email_received_fallback"' in markdown
+
+
+def test_notes_mailbox_explicit_public_goes_to_private_review(tmp_path):
+    processor = NotesMailboxProcessor(_notes_config(tmp_path))
+    result = processor.process_message({
+        "subject": "PUBLIC: Museum trip notes",
+        "text_body": "Candidate for the public wiki.",
+        "from_email": "paul@example.com",
+    })
+    assert result["route"] == "public_review"
+    assert "Public_Review" in result["vault_path"]
+    assert "wiki-ready: false" in Path(result["vault_path"]).read_text(encoding="utf-8")
+    assert not list((tmp_path / "vault_public").rglob("*.md"))
+
+
+def test_notes_mailbox_private_marker_overrides_public_candidate(tmp_path):
+    processor = NotesMailboxProcessor(_notes_config(tmp_path))
+    result = processor.process_message({
+        "subject": "PUBLIC: PRIVATE client meeting",
+        "text_body": "Client details must stay private.",
+        "from_email": "paul@example.com",
+    })
+    assert result["route"] == "private_vault"
+    assert "Public_Review" not in result["vault_path"]
+    assert not list((tmp_path / "vault_public").rglob("*.md"))
+
+
+def test_notes_mailbox_preserves_file_attachments_privately(tmp_path):
+    processor = NotesMailboxProcessor(_notes_config(tmp_path))
+    body = b"Private report contents"
+    result = processor.process_message({
+        "subject": "Notes with report",
+        "text_body": "See attached report.",
+        "from_email": "paul@example.com",
+        "attachments": [{"@odata.type": "#microsoft.graph.fileAttachment",
+                         "name": "../report.pdf", "contentBytes": base64.b64encode(body).decode()}],
+    })
+    attachment = tmp_path / "attachments" / f"{hashlib.sha256(body).hexdigest()[:16]}-report.pdf"
+    assert attachment.read_bytes() == body
+    assert attachment.stat().st_mode & 0o077 == 0
+    markdown = Path(result["vault_path"]).read_text(encoding="utf-8")
+    assert str(attachment) in markdown
+    assert not list((tmp_path / "vault_public").rglob("*.pdf"))
+
+
+def test_notes_mailbox_does_not_file_unsupported_attachment(tmp_path):
+    processor = NotesMailboxProcessor(_notes_config(tmp_path))
+    with pytest.raises(ValueError, match="Unsupported Graph attachment"):
+        processor.process_message({
+            "subject": "Calendar invite", "text_body": "See attached",
+            "attachments": [{"@odata.type": "#microsoft.graph.itemAttachment", "name": "invite"}],
+        })
+    assert not list(tmp_path.rglob("*.md"))
 
 
 def test_notes_mailbox_processor_writes_private_note(tmp_path):
@@ -107,10 +187,11 @@ def test_notes_mailbox_processor_tracks_processed_graph_ids(tmp_path):
 
     assert not processor.has_processed_graph_id("graph-1")
 
-    processor.record_processed_graph_id("graph-1")
+    processor.record_processed_graph_id("graph-1", "2026-10-15T07:00:00Z")
 
     reloaded = NotesMailboxProcessor(cfg)
     assert reloaded.has_processed_graph_id("graph-1")
+    assert reloaded.state["last_received_at"] == "2026-10-15T07:00:00Z"
 
 
 class _FakeResponse:
@@ -140,7 +221,7 @@ def test_normalize_graph_message_strips_html_body():
 
     assert message["message_id"] == "<msg@example.com>"
     assert message["graph_message_id"] == "graph-1"
-    assert message["text_body"] == "Hello World"
+    assert message["text_body"] == "Hello\nWorld"
     assert message["html_body"] == "<p>Hello<br>World</p>"
 
 
@@ -190,3 +271,44 @@ def test_graph_client_lists_unread_and_marks_read(monkeypatch):
     assert calls[1][3]["$filter"] == "isRead eq false"
     assert calls[2][0] == "PATCH"
     assert calls[2][3] == {"isRead": True}
+
+
+def test_graph_client_pages_unread_notes(monkeypatch):
+    cfg = _notes_config(Path("/tmp/notes-graph-test"))
+    cfg.transport_mode = "graph"
+    cfg.graph_client_id = "client"
+    cfg.graph_client_secret = "secret"
+    cfg.graph_tenant_id = "tenant"
+    calls = []
+    monkeypatch.setattr(NotesGraphClient, "_headers", lambda self: {"Authorization": "Bearer token"})
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs.get("params")))
+        if len(calls) == 1:
+            return _FakeResponse({"value": [{"id": "one"}],
+                                  "@odata.nextLink": "https://graph.microsoft.com/v1.0/next?page=2"})
+        return _FakeResponse({"value": [{"id": "two"}]})
+
+    monkeypatch.setattr("worker.notes_mailbox_worker.requests.get", fake_get)
+    assert [item["id"] for item in NotesGraphClient(cfg).list_unread_messages(
+        since="2026-10-15T06:15:00Z")] == ["one", "two"]
+    assert "receivedDateTime ge 2026-10-15T06:15:00Z" in calls[0][1]["$filter"]
+    assert calls[1][1] is None
+
+
+def test_graph_client_reads_attachment_pages_without_leaving_graph(monkeypatch):
+    cfg = _notes_config(Path("/tmp/notes-attachments-test"))
+    monkeypatch.setattr(NotesGraphClient, "_headers", lambda self: {"Authorization": "Bearer token"})
+    calls = []
+
+    def fake_get(url, **_kwargs):
+        calls.append(url)
+        if len(calls) == 1:
+            return _FakeResponse({"value": [{"name": "one.pdf", "contentBytes": "YQ=="}],
+                                  "@odata.nextLink": "https://graph.microsoft.com/v1.0/next?page=2"})
+        return _FakeResponse({"value": [{"name": "two.pdf", "contentBytes": "Yg=="}]})
+
+    monkeypatch.setattr("worker.notes_mailbox_worker.requests.get", fake_get)
+    attachments = NotesGraphClient(cfg).list_attachments("message/1")
+    assert [item["name"] for item in attachments] == ["one.pdf", "two.pdf"]
+    assert "message%2F1" in calls[0]

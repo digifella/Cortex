@@ -821,9 +821,9 @@ def test_mailbox_poller_suppresses_nemoclaw_vault_prefix_and_marks_seen(tmp_path
     assert _FakeNemoClawVaultIMAP.instances[0].stored == [(b"1", "+FLAGS", "\\Seen")]
 
 
-def test_notes_mailbox_route_defaults_to_public_stash():
+def test_notes_mailbox_route_defaults_to_private_vault():
     route = classify_notes_mailbox_route("Meeting notes from today", "Need to remember this")
-    assert route["route"] == "public_stash"
+    assert route["route"] == "private_vault"
 
 
 def test_notes_mailbox_route_marks_private_subjects_for_private_vault():

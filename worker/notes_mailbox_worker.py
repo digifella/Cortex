@@ -7,19 +7,23 @@ import threading
 import html
 import hashlib
 import re
+import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
+from urllib.parse import urlparse
 
 import requests
 
 ROOT = Path(__file__).resolve().parent.parent
+NOTES_CUTOVER = "2026-10-15T06:15:00Z"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from cortex_engine.notes_mailbox import NOTES_MAILBOX_IDENTITY, classify_notes_mailbox_route
+from cortex_engine.document_date import infer_document_date
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -52,6 +56,7 @@ class NotesMailboxConfig:
     graph_mailbox: str
     graph_page_size: int
     graph_timeout: int
+    public_review_vault_dir: str = "/mnt/c/Users/paul/OneDrive - VentraIP Australia/Vault_OneDrive/Public_Review/notes"
 
     @classmethod
     def from_env(cls, env: dict[str, str]) -> "NotesMailboxConfig":
@@ -66,8 +71,8 @@ class NotesMailboxConfig:
             poll_interval=max(15, int(get("NOTES_POLL_INTERVAL", "60") or "60")),
             transport_mode=get("NOTES_TRANSPORT_MODE", "manual").lower() or "manual",
             mailbox_identity=get("NOTES_MAILBOX_IDENTITY", NOTES_MAILBOX_IDENTITY),
-            public_outbox_dir=get("NOTES_PUBLIC_OUTBOX_DIR", str(ROOT / "tmp" / "notes_public_outbox")),
-            private_outbox_dir=get("NOTES_PRIVATE_OUTBOX_DIR", str(ROOT / "tmp" / "notes_private_outbox")),
+            public_outbox_dir=get("NOTES_PUBLIC_OUTBOX_DIR", str(Path.home() / "vault-rag-db" / "notes-mailbox" / "public")),
+            private_outbox_dir=get("NOTES_PRIVATE_OUTBOX_DIR", str(Path.home() / "vault-rag-db" / "notes-mailbox" / "private")),
             public_vault_dir=get("NOTES_PUBLIC_VAULT_DIR", "/mnt/c/Users/paul/Documents/AI-Vault/Inbox"),
             private_vault_dir=get("NOTES_PRIVATE_VAULT_DIR", "/mnt/c/Users/paul/OneDrive - VentraIP Australia/Vault_OneDrive/notes"),
             write_vault_markdown=get_bool("NOTES_WRITE_VAULT_MARKDOWN", "1"),
@@ -77,23 +82,28 @@ class NotesMailboxConfig:
             graph_mailbox=get("NOTES_GRAPH_MAILBOX", get("NOTES_MAILBOX_IDENTITY", NOTES_MAILBOX_IDENTITY)),
             graph_page_size=max(1, min(25, int(get("NOTES_GRAPH_PAGE_SIZE", "10") or "10"))),
             graph_timeout=max(5, int(get("NOTES_GRAPH_TIMEOUT", "30") or "30")),
+            public_review_vault_dir=get("NOTES_PUBLIC_REVIEW_VAULT_DIR", "/mnt/c/Users/paul/OneDrive - VentraIP Australia/Vault_OneDrive/Public_Review/notes"),
         )
 
 
 class NotesMailboxProcessor:
-    def __init__(self, config: NotesMailboxConfig):
+    def __init__(self, config: NotesMailboxConfig, classifier=classify_notes_mailbox_route):
         self.config = config
+        self.classifier = classifier
         self.public_dir = Path(config.public_outbox_dir)
         self.private_dir = Path(config.private_outbox_dir)
         self.public_vault_dir = Path(config.public_vault_dir)
         self.private_vault_dir = Path(config.private_vault_dir)
+        self.public_review_vault_dir = Path(config.public_review_vault_dir)
         self.state_path = self.public_dir.parent / "notes_mailbox_state.json"
         self.public_dir.mkdir(parents=True, exist_ok=True)
         self.private_dir.mkdir(parents=True, exist_ok=True)
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        for directory in (self.public_dir, self.private_dir, self.state_path.parent):
+            directory.chmod(0o700)
         if config.write_vault_markdown:
-            self.public_vault_dir.mkdir(parents=True, exist_ok=True)
             self.private_vault_dir.mkdir(parents=True, exist_ok=True)
+            self.public_review_vault_dir.mkdir(parents=True, exist_ok=True)
         self.state = self._load_state()
 
     def _load_state(self) -> dict:
@@ -111,18 +121,21 @@ class NotesMailboxProcessor:
     def _save_state(self) -> None:
         tmp = self.state_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(self.state, ensure_ascii=True, indent=2), encoding="utf-8")
+        tmp.chmod(0o600)
         tmp.replace(self.state_path)
 
     def has_processed_graph_id(self, graph_id: str) -> bool:
         return bool(graph_id and graph_id in set(self.state.get("processed_graph_ids") or []))
 
-    def record_processed_graph_id(self, graph_id: str) -> None:
+    def record_processed_graph_id(self, graph_id: str, received_at: str = "") -> None:
         if not graph_id:
             return
         ids = list(self.state.get("processed_graph_ids") or [])
         if graph_id not in ids:
             ids.append(graph_id)
         self.state["processed_graph_ids"] = ids[-5000:]
+        if received_at and received_at > str(self.state.get("last_received_at") or ""):
+            self.state["last_received_at"] = received_at
         self._save_state()
 
     def _safe_subject(self, subject: str, default: str = "note") -> str:
@@ -131,7 +144,7 @@ class NotesMailboxProcessor:
 
     def _title_from_message(self, message: dict[str, str], route: str) -> str:
         subject = str(message.get("subject") or "").strip()
-        title = re.sub(r"^\s*(?:private|vault|note|notes|memo)\s*:\s*", "", subject, flags=re.IGNORECASE).strip()
+        title = re.sub(r"^\s*(?:public|private|vault|note|notes|memo)\s*:\s*", "", subject, flags=re.IGNORECASE).strip()
         if not title:
             title = "Private note" if route == "private_vault" else "Inbox note"
         return title
@@ -154,12 +167,14 @@ class NotesMailboxProcessor:
 
     def _render_markdown(self, *, title: str, route: str, reason: str, message: dict[str, str]) -> str:
         now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        source_type = "private-email-note" if route == "private_vault" else "email-note"
-        tags = ["private", "email-note"] if route == "private_vault" else ["inbox", "email-note"]
+        source_type = "public-review-email-note" if route == "public_review" else "private-email-note"
+        tags = ["public-review", "email-note"] if route == "public_review" else ["private", "email-note"]
         body = str(message.get("text_body") or "").strip() or "(empty note)"
         subject = str(message.get("subject") or "").replace('"', "'")
         from_email = str(message.get("from_email") or "").replace('"', "'")
         message_id = str(message.get("message_id") or "").replace('"', "'")
+        date_meta = self._source_date_meta(message)
+        attachment_lines = [f"- {item['name']}: `{item['path']}`" for item in message.get("saved_attachments", [])]
         return "\n".join(
             [
                 "---",
@@ -173,26 +188,74 @@ class NotesMailboxProcessor:
                 f"mailbox_identity: {self.config.mailbox_identity}",
                 f"original_subject: \"{subject}\"",
                 f"message_id: \"{message_id}\"",
+                *[f'{key}: "{value}"' for key, value in date_meta.items()],
                 f"tags: [{', '.join(tags)}]",
-                f"wiki-ready: {'false' if route == 'private_vault' else 'true'}",
+                "wiki-ready: false",
                 "---",
                 "",
                 f"# {title}",
                 "",
                 body,
                 "",
+                *( ["## Attachments", "", *attachment_lines, ""] if attachment_lines else [] ),
             ]
         )
 
+    def _save_attachments(self, message: dict) -> list[dict[str, str]]:
+        attachments = message.get("attachments") or []
+        if not attachments:
+            return []
+        target = self.private_dir.parent / "attachments"
+        target.mkdir(parents=True, exist_ok=True)
+        target.chmod(0o700)
+        saved = []
+        total = 0
+        for item in attachments:
+            if str(item.get("@odata.type") or "").lower() not in {"#microsoft.graph.fileattachment", ""}:
+                raise ValueError("Unsupported Graph attachment type; message remains unprocessed")
+            encoded = item.get("contentBytes")
+            if not isinstance(encoded, str):
+                raise ValueError("Graph file attachment lacks contentBytes; message remains unprocessed")
+            raw = base64.b64decode(encoded, validate=True)
+            total += len(raw)
+            if len(raw) > 30 * 1024 * 1024 or total > 60 * 1024 * 1024:
+                raise ValueError("Notes attachment size limit exceeded; message remains unprocessed")
+            name = Path(str(item.get("name") or "attachment").replace("\\", "/")).name
+            name = re.sub(r"[^\w .()\-]", "_", name, flags=re.UNICODE)[:120].strip(" .") or "attachment"
+            digest = hashlib.sha256(raw).hexdigest()
+            path = target / f"{digest[:16]}-{name}"
+            if path.exists():
+                if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                    raise ValueError("Existing attachment path has different content")
+            else:
+                path.write_bytes(raw)
+                path.chmod(0o600)
+            saved.append({"name": name, "path": str(path), "sha256": digest})
+        return saved
+
+    def _source_date_meta(self, message: dict[str, str]) -> dict[str, str]:
+        """Use source text/subject dates first, then the message receipt date."""
+        subject = str(message.get("subject") or "").strip()
+        body = str(message.get("text_body") or "").strip()
+        inferred = infer_document_date(subject + "\n" + body, subject or "untitled")
+        if inferred:
+            return inferred
+        received = str(message.get("received_at") or "")[:10]
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", received):
+            return {"source_date": received,
+                    "source_date_source": "email_received_fallback",
+                    "source_date_precision": "day"}
+        return {}
+
     def _write_vault_markdown(self, route: str, reason: str, message: dict[str, str]) -> str:
-        target_dir = self.private_vault_dir if route == "private_vault" else self.public_vault_dir
+        target_dir = self.public_review_vault_dir if route == "public_review" else self.private_vault_dir
         title = self._title_from_message(message, route)
         output_path = self._markdown_path(target_dir, title, message)
         output_path.write_text(self._render_markdown(title=title, route=route, reason=reason, message=message), encoding="utf-8")
         return str(output_path)
 
     def process_message(self, message: dict[str, str]) -> dict[str, str]:
-        route = classify_notes_mailbox_route(message.get("subject", ""), message.get("text_body", ""))
+        route = self.classifier(message.get("subject", ""), message.get("text_body", ""))
         if route["route"] in {"unsupported_market_intel", "rejected_lab_result_error"}:
             return {
                 "status": "rejected",
@@ -201,7 +264,9 @@ class NotesMailboxProcessor:
                 "mailbox_identity": self.config.mailbox_identity,
             }
 
-        target_dir = self.private_dir if route["route"] == "private_vault" else self.public_dir
+        target_dir = self.private_dir
+        message = dict(message)
+        message["saved_attachments"] = self._save_attachments(message)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         safe_subject = self._safe_subject(message.get("subject", "note"))
         output_path = target_dir / f"{timestamp}_{safe_subject}.json"
@@ -214,8 +279,10 @@ class NotesMailboxProcessor:
             "reason": route["reason"],
             "vault_path": vault_path,
             "message": message,
+            "source_date": self._source_date_meta(message),
         }
         output_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+        output_path.chmod(0o600)
         return {
             "status": "outbox_written",
             "route": route["route"],
@@ -231,7 +298,10 @@ def _strip_html(value: str) -> str:
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</p\s*>", "\n", text)
     text = re.sub(r"<[^>]+>", " ", text)
-    return re.sub(r"\s+", " ", html.unescape(text)).strip()
+    text = html.unescape(text).replace("\r\n", "\n")
+    text = re.sub(r"[ \t\f\v]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 class NotesGraphClient:
@@ -276,22 +346,29 @@ class NotesGraphClient:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token()}", "Accept": "application/json"}
 
-    def list_unread_messages(self) -> list[dict]:
+    def list_unread_messages(self, since: str = "", unread_only: bool = True) -> list[dict]:
         url = f"https://graph.microsoft.com/v1.0/users/{self.config.graph_mailbox}/mailFolders/inbox/messages"
-        response = requests.get(
-            url,
-            headers=self._headers(),
-            params={
-                "$filter": "isRead eq false",
-                "$orderby": "receivedDateTime asc",
-                "$top": str(self.config.graph_page_size),
-                "$select": "id,subject,from,toRecipients,receivedDateTime,body,internetMessageId,hasAttachments",
-            },
-            timeout=self.config.graph_timeout,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        return list(payload.get("value") or [])
+        params = {
+            "$filter": (("isRead eq false" + (f" and receivedDateTime ge {since}" if since else ""))
+                        if unread_only else f"receivedDateTime ge {since}"),
+            "$orderby": "receivedDateTime asc",
+            "$top": str(self.config.graph_page_size),
+            "$select": "id,subject,from,toRecipients,receivedDateTime,body,internetMessageId,hasAttachments",
+        }
+        messages: list[dict] = []
+        for _page in range(100):
+            response = requests.get(url, headers=self._headers(), params=params,
+                                    timeout=self.config.graph_timeout)
+            response.raise_for_status()
+            payload = response.json()
+            messages.extend(payload.get("value") or [])
+            url = str(payload.get("@odata.nextLink") or "")
+            if not url:
+                return messages
+            if urlparse(url).netloc != "graph.microsoft.com":
+                raise RuntimeError("Unexpected Graph pagination host")
+            params = None
+        raise RuntimeError("Notes unread inbox exceeded 100 Graph pages; no mail processed")
 
     def mark_read(self, message_id: str) -> None:
         url = f"https://graph.microsoft.com/v1.0/users/{self.config.graph_mailbox}/messages/{message_id}"
@@ -302,6 +379,24 @@ class NotesGraphClient:
             timeout=self.config.graph_timeout,
         )
         response.raise_for_status()
+
+    def list_attachments(self, message_id: str) -> list[dict]:
+        from urllib.parse import quote
+
+        url = (f"https://graph.microsoft.com/v1.0/users/{quote(self.config.graph_mailbox, safe='')}"
+               f"/messages/{quote(message_id, safe='')}/attachments")
+        attachments = []
+        for _page in range(10):
+            response = requests.get(url, headers=self._headers(), timeout=self.config.graph_timeout)
+            response.raise_for_status()
+            payload = response.json()
+            attachments.extend(payload.get("value") or [])
+            url = str(payload.get("@odata.nextLink") or "")
+            if not url:
+                return attachments
+            if urlparse(url).scheme != "https" or urlparse(url).netloc != "graph.microsoft.com":
+                raise RuntimeError("Unexpected Graph attachment pagination host")
+        raise RuntimeError("Notes attachments exceeded ten Graph pages; no mail processed")
 
 
 def _email_address(value: dict) -> tuple[str, str]:
@@ -329,6 +424,7 @@ def _normalize_graph_message(item: dict) -> dict[str, str]:
         "received_at": str(item.get("receivedDateTime") or "").strip(),
         "text_body": text_body,
         "html_body": html_body,
+        "has_attachments": bool(item.get("hasAttachments")),
     }
 
 
@@ -375,14 +471,19 @@ def main() -> int:
         try:
             processed = 0
             rejected = 0
-            for item in graph_client.list_unread_messages():
+            since = str(processor.state.get("last_received_at") or NOTES_CUTOVER)
+            for item in graph_client.list_unread_messages(since=since):
                 message = _normalize_graph_message(item)
                 graph_id = str(message.get("graph_message_id") or "").strip()
                 if processor.has_processed_graph_id(graph_id):
                     logging.debug("Notes mailbox skipping already processed graph message id=%s subject=%s", graph_id, message.get("subject", ""))
                     continue
+                if message["has_attachments"]:
+                    message["attachments"] = graph_client.list_attachments(graph_id)
+                    if not message["attachments"]:
+                        raise RuntimeError("Graph flagged attachments but returned none; message remains unprocessed")
                 result = processor.process_message(message)
-                processor.record_processed_graph_id(graph_id)
+                processor.record_processed_graph_id(graph_id, message.get("received_at", ""))
                 if result["status"] == "rejected":
                     rejected += 1
                     logging.warning(
