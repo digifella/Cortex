@@ -2,7 +2,8 @@
 
 `cortex_engine/attachment_reader.py` (v6.7.0, 2026-10-23) turns an untrusted attachment
 (photo, screenshot, PDF, Word/Excel/PowerPoint, text) into a **summary, a risk verdict and,
-only when safe, sanitised text**. It was built for Hermes/SlowClaw's live Gmail lookups. The
+only when safe, sanitised text**. It serves Hermes/SlowClaw's live Gmail (paul@project-143.com) and Microsoft 365
+(paul@longboardfella.com.au) lookups. The
 system-side wiring (bridge, sender gate, sp4 taint guard) is in
 `~/nemoclaw_ops/docs/2026-10-23-email-attachment-security.md`.
 
@@ -45,6 +46,8 @@ CLI: `venv/bin/python -m cortex_engine.attachment_reader <file> --name F [--no-r
      shape: summary, key_points, asks_reader_to, injection_attempt, phishing_signs, reason.
    - A summary that repeats instruction-like text is withheld.
    - Raw text is returned only when nothing is suspected and `allow_raw` is set.
+   - `warning_for_paul` is a ready-made one-line warning (empty when the risk is low). Callers
+     recompute it when they raise the risk level, e.g. for an untrusted sender.
 
 LM Studio endpoint: `CORTEX_VLM_URL` (default `http://100.97.82.98:1234`); model `CORTEX_VLM_MODEL`.
 As everywhere, `reasoning_effort: "none"` is mandatory for qwen3.6.

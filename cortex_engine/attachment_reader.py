@@ -459,13 +459,25 @@ def _clamav(path):
     return None, None
 
 
+def warning_for_paul(risk, sender=None):
+    """One line Hermes must open its reply with; '' when nothing needs saying."""
+    risk = risk or {}
+    if risk.get("level", "low") == "low" and (sender is None or sender.get("trusted")):
+        return ""
+    what = ("BLOCKED" if risk.get("blocked") else "possible prompt injection, ignored"
+            if risk.get("injection_suspected") else "possible phishing"
+            if risk.get("phishing_suspected") else str(risk.get("level", "")) + " risk")
+    flags = [f for f in (risk.get("flags") or []) if not f.startswith("filter:")][:3]
+    return ("WARNING: attachment " + what + (" - " + "; ".join(flags) if flags else ""))[:400]
+
+
 def read_attachment(path, filename: str = "", mime: str = "", allow_raw: bool = True) -> dict:
     """Triage in the sandbox, then describe, sanitise and judge on the host."""
     filename = filename or Path(path).name
     result = {"kind": "", "summary": "", "key_points": [], "asks_reader_to": "", "text": "",
               "raw_text_included": False, "links": [], "link_domains": [], "pages": None,
               "risk": {"level": "low", "blocked": False, "injection_suspected": False,
-                       "phishing_suspected": False, "flags": []}}
+                       "phishing_suspected": False, "flags": []}, "warning_for_paul": ""}
     risk = result["risk"]
     with tempfile.TemporaryDirectory(prefix="attach-") as tmp:
         work = Path(tmp)
@@ -475,6 +487,7 @@ def read_attachment(path, filename: str = "", mime: str = "", allow_raw: bool = 
         if signature:
             risk.update(level="blocked", blocked=True)
             risk["flags"].append(f"ClamAV detected malware: {signature}"[:300])
+            result["warning_for_paul"] = warning_for_paul(risk)
             return result
         if scan_error:
             risk["flags"].append(scan_error)
@@ -491,6 +504,7 @@ def read_attachment(path, filename: str = "", mime: str = "", allow_raw: bool = 
         risk["flags"] += [str(f)[:300] for f in report.get("flags", [])]
         if report.get("blocked"):
             risk.update(level="blocked", blocked=True)
+            result["warning_for_paul"] = warning_for_paul(risk)
             return result
         text = str(report.get("text", ""))
         for img in report.get("images", [])[:MAX_PDF_VLM_PAGES + 1]:
@@ -535,6 +549,7 @@ def read_attachment(path, filename: str = "", mime: str = "", allow_raw: bool = 
     result.update(summary=summary, key_points=points, asks_reader_to=asks)
     if allow_raw and not injection and not phishing:
         result["text"], result["raw_text_included"] = _defang(text), True
+    result["warning_for_paul"] = warning_for_paul(risk)
     return result
 
 
