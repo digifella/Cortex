@@ -6,6 +6,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+
+## v6.7.0 - 2026-10-23
+
+### Safe Attachment Reader
+
+Read untrusted email attachments (photos, screenshots, PDFs, Office, text) through ClamAV, a no-network bubblewrap sandbox and a tool-less injection/phishing judge
+
+### ✨ New Features
+- cortex_engine.attachment_reader: ClamAV scan, sandboxed triage (real type, macros, DDE, PDF active content, zip bombs, encryption, HTML smuggling) and visible-text extraction; local Qwen VLM for images and scanned pages; hidden-text, invisible-character and URL defanging; summary plus risk verdict
+- tests/security: harmless attack corpus (EICAR, JS PDF, macro, DDE, hidden text, injection image, phishing PDF) with pytest
+
 ### Hermes fixed-recipient document delivery
 
 - Added a Tailscale-only Fastfella broker for outbound Hermes attachments using

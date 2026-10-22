@@ -150,6 +150,12 @@ Gotchas:
   answer in 5 tokens.
 - First call costs ~30s of warmup; steady state is ~1.2-1.9s per image.
 
+## 🛡️ Untrusted attachments
+
+Never parse an email/web attachment in-process. Use `cortex_engine.attachment_reader.read_attachment`
+(ClamAV → no-network bubblewrap sandbox → tool-less injection/phishing judge). It returns a
+summary + risk verdict; raw text only when safe. See `docs/operations/ATTACHMENT_READER_SECURITY.md`.
+
 ## 📋 Major Release Workflow
 
 ### Complete Release Process for Major Updates

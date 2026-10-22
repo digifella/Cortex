@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.6.1"
+CORTEX_VERSION = "6.7.0"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
-    "minor": 6,
-    "patch": 1,
+    "minor": 7,
+    "patch": 0,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -24,15 +24,16 @@ VERSION_INFO = {
 # Version metadata
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
-    "release_date": "2026-08-01",
-    "release_name": "Reclaimable VRAM in Vision Model Selection",
-    "description": "Count VRAM held by Ollama's own idle models as available, since Ollama evicts them on demand",
+    "release_date": "2026-10-23",
+    "release_name": "Safe Attachment Reader",
+    "description": "Read untrusted email attachments (photos, screenshots, PDFs, Office, text) through ClamAV, a no-network bubblewrap sandbox and a tool-less injection/phishing judge",
     "breaking_changes": [],
-    "new_features": [],
-    "improvements": [],
-    "bug_fixes": [
-        "Vision model selection no longer drops to the weakest installed model on a workstation whose VRAM is held by Ollama's own idle models; nvidia-smi cannot distinguish reclaimable memory from another app's, so ollama ps is now consulted. Measured on the RTX 8000: llava:7b -> qwen3-vl:32b",
+    "new_features": [
+        "cortex_engine.attachment_reader: ClamAV scan, sandboxed triage (real type, macros, DDE, PDF active content, zip bombs, encryption, HTML smuggling) and visible-text extraction; local Qwen VLM for images and scanned pages; hidden-text, invisible-character and URL defanging; summary plus risk verdict",
+        "tests/security: harmless attack corpus (EICAR, JS PDF, macro, DDE, hidden text, injection image, phishing PDF) with pytest",
     ],
+    "improvements": [],
+    "bug_fixes": [],
 }
 
 # ============================================================================
