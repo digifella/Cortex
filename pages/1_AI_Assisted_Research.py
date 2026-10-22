@@ -1,5 +1,5 @@
 # AI-Assisted Research Page
-# Version: v6.7.0
+# Version: v6.7.1
 # Multi-agent research and synthesis engine UI
 
 import streamlit as st

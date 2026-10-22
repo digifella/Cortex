@@ -36,12 +36,22 @@ CLI: `venv/bin/python -m cortex_engine.attachment_reader <file> --name F [--no-r
        hidden/white/tiny runs and hidden Excel sheets are counted and flagged, not returned.
      - **Image rendering** to raw RGB for images and for scanned PDF pages (under 40 visible
        characters).
+   - Audio, video and archives are refused outright, by extension and by real type (Paul's
+     rule: media files can carry exploits; archives hide files from scanners).
 3. **Host half.**
    - Rebuilds images from raw pixels (no image parser touches attacker bytes) and sends them
      to the loaded LM Studio Qwen VLM.
    - Strips zero-width and bidi characters and defangs URLs (`hxxps://x[.]com`).
+   - **Decodes hidden instructions** before judging: invisible Unicode tag characters (ASCII
+     smuggling), variation-selector payloads, Morse code, base64, hex, letter-spaced text,
+     Cyrillic/Greek homoglyphs mixed into Latin words, ROT13, reversed text and leetspeak. Any
+     finding is a risk flag. The decoded payload goes through the heuristics and into the judge,
+     and raw text is then never returned.
    - Runs regex injection heuristics: strong patterns mean injection; credential and shell
      words are a flag only.
+   - **Other languages:** the judge is told to translate any language (and decode any
+     encoding) before deciding. Non-Latin scripts are reported in `notes`, not as a risk on
+     their own.
    - Makes one **tool-less** Qwen call with nonce-delimited content. It returns a fixed JSON
      shape: summary, key_points, asks_reader_to, injection_attempt, phishing_signs, reason.
    - A summary that repeats instruction-like text is withheld.
@@ -55,10 +65,11 @@ As everywhere, `reasoning_effort: "none"` is mandatory for qwen3.6.
 ## Tests
 
 ```bash
-venv/bin/python -m pytest tests/security -q      # 19 tests; model/clamd cases skip if those are down
+venv/bin/python -m pytest tests/security -q      # 30 tests; model/clamd cases skip if those are down
 venv/bin/python tests/security/make_attachment_corpus.py /tmp/corpus   # build the files to inspect
 ```
-The corpus is harmless: EICAR test strings, a PDF with a JS alert, a fake macro blob, a DDE
+The corpus is harmless: EICAR test strings, fake audio/video/zip files, French, Morse, base64,
+homoglyph, Unicode-tag, ROT13 and leetspeak injections, a benign German letter, a PDF with a JS alert, a fake macro blob, a DDE
 field, white hidden text, an injection image and text, and a fake bank-phishing PDF.
 
 ## Limits

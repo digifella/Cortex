@@ -10,13 +10,13 @@ from typing import Dict, Any
 # ============================================================================
 
 # Main application version - increment this for any significant changes
-CORTEX_VERSION = "6.7.0"
+CORTEX_VERSION = "6.7.1"
 
 # Version details
 VERSION_INFO = {
     "major": 6,
     "minor": 7,
-    "patch": 0,
+    "patch": 1,
     "pre_release": None,  # e.g., "alpha", "beta", "rc1"
     "build": None,        # e.g., build number for CI/CD
 }
@@ -25,14 +25,18 @@ VERSION_INFO = {
 VERSION_METADATA = {
     "version": CORTEX_VERSION,
     "release_date": "2026-10-23",
-    "release_name": "Safe Attachment Reader",
-    "description": "Read untrusted email attachments (photos, screenshots, PDFs, Office, text) through ClamAV, a no-network bubblewrap sandbox and a tool-less injection/phishing judge",
+    "release_name": "Obfuscated Injection Defence",
+    "description": "attachment_reader decodes hidden instructions (Morse, base64, hex, ROT13, leetspeak, reversed/letter-spaced, homoglyphs, Unicode tag smuggling) and refuses audio, video and archives; dependency pins match the working venv",
     "breaking_changes": [],
     "new_features": [
-        "cortex_engine.attachment_reader: ClamAV scan, sandboxed triage (real type, macros, DDE, PDF active content, zip bombs, encryption, HTML smuggling) and visible-text extraction; local Qwen VLM for images and scanned pages; hidden-text, invisible-character and URL defanging; summary plus risk verdict",
-        "tests/security: harmless attack corpus (EICAR, JS PDF, macro, DDE, hidden text, injection image, phishing PDF) with pytest",
+        "attachment_reader: decoders for Morse, base64, hex, ROT13, leetspeak, reversed and letter-spaced text, Cyrillic/Greek homoglyphs, invisible Unicode tag characters and variation-selector payloads; decoded payloads go through the heuristics and the judge",
+        "attachment_reader: judge translates any language before deciding; non-Latin scripts reported as notes",
+        "attachment_reader: audio, video and archive attachments are refused explicitly",
     ],
-    "improvements": [],
+    "improvements": [
+        "requirements.txt moved to the 2026Q4 resolved set (matches the working venv) with certifi, GitPython and pypdf security bumps",
+        "attachment_reader source is pure ASCII (no literal invisible or look-alike characters)",
+    ],
     "bug_fixes": [],
 }
 

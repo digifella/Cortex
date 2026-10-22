@@ -7,6 +7,22 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+
+## v6.7.1 - 2026-10-23
+
+### Obfuscated Injection Defence
+
+attachment_reader decodes hidden instructions (Morse, base64, hex, ROT13, leetspeak, reversed/letter-spaced, homoglyphs, Unicode tag smuggling) and refuses audio, video and archives; dependency pins match the working venv
+
+### ✨ New Features
+- attachment_reader: decoders for Morse, base64, hex, ROT13, leetspeak, reversed and letter-spaced text, Cyrillic/Greek homoglyphs, invisible Unicode tag characters and variation-selector payloads; decoded payloads go through the heuristics and the judge
+- attachment_reader: judge translates any language before deciding; non-Latin scripts reported as notes
+- attachment_reader: audio, video and archive attachments are refused explicitly
+
+### 🚀 Improvements
+- requirements.txt moved to the 2026Q4 resolved set (matches the working venv) with certifi, GitPython and pypdf security bumps
+- attachment_reader source is pure ASCII (no literal invisible or look-alike characters)
+
 ## v6.7.0 - 2026-10-23
 
 ### Safe Attachment Reader
