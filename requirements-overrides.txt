@@ -1,0 +1,10 @@
+# Security overrides: install AFTER requirements.txt with --no-deps
+#   pip install --no-deps -r requirements-overrides.txt
+#
+# pillow 13.0.0 (2026-10-23): fixes 35 advisories in 12.3.0; Pillow parses untrusted email
+# attachment images in cortex_engine.attachment_reader. streamlit 1.65 and docling 2.x still
+# declare pillow<13, so pip cannot resolve it inside requirements.txt; `pip check` will report
+# that conflict. Tested: unit + security suites identical to 12.3.0 (888 pass, same 19 known
+# failures), docling PDF conversion and streamlit image encoding unchanged.
+# Remove this line once streamlit/docling allow pillow 13. Undo: pip install pillow==12.3.0
+pillow==13.0.0

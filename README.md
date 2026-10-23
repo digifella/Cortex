@@ -133,6 +133,8 @@ source venv/bin/activate
 **3. Install Python Dependencies:**
 ```bash
 pip install -r requirements.txt
+# Security overrides pip cannot resolve inside requirements.txt (see the file's header)
+pip install --no-deps -r requirements-overrides.txt
 # Download spaCy language model for entity extraction
 python -m spacy download en_core_web_sm
 ```
