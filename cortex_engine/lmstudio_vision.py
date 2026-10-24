@@ -47,24 +47,26 @@ def loaded_qwen_model() -> str | None:
     try:
         for entry in _models("/api/v1/models").get("models", []):
             key = str(entry.get("key") or "")
-            if "qwen" not in key.lower() or not entry.get("capabilities", {}).get("vision"):
+            if "qwen" not in key.lower() or not (entry.get("capabilities") or {}).get("vision"):
                 continue
-            for instance in entry.get("loaded_instances", []):
+            for instance in entry.get("loaded_instances") or []:
                 model = str(instance.get("id") or key)
                 if model:
                     return model
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
         pass
 
     # Older LM Studio releases expose loaded VLMs only through v0.
     try:
         for entry in _models("/api/v0/models").get("data", []):
             model = str(entry.get("id") or "")
+            # v0 capabilities is a list such as ["tool_use"], not a dict.
+            caps = entry.get("capabilities") or []
             vision = (entry.get("type") == "vlm" or entry.get("vision") is True
-                      or entry.get("capabilities", {}).get("vision") is True)
+                      or (caps.get("vision") is True if isinstance(caps, dict) else "vision" in caps))
             if "qwen" in model.lower() and entry.get("state") == "loaded" and vision:
                 return model
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
         pass
     return None
 
